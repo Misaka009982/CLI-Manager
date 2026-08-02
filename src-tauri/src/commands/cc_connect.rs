@@ -51,8 +51,10 @@ const CONFIG_FORMAT_TIMEOUT: Duration = Duration::from_secs(8);
 const CODEX_APP_SERVER_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
 const CODEX_MODEL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(4);
 const MAX_CODEX_MODEL_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CODEX_MODEL_CACHE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_MANAGED_CODEX_MODELS: usize = 200;
 const CODEX_MODEL_CATALOG_FILE_NAME: &str = "cli-manager-model-catalog.json";
+const CODEX_MODELS_CACHE_FILE_NAME: &str = "models_cache.json";
 const LOCAL_PROXY_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 const DEFAULT_MAX_TURN_TIME_MINS: u32 = 15;
 const MAX_TURN_TIME_MINS: u32 = 24 * 60;
@@ -974,15 +976,7 @@ struct CodexModelDiscoveryConfig<'a> {
 }
 #[derive(Serialize)]
 struct CodexModelCatalog {
-    models: Vec<CodexModelCatalogEntry>,
-}
-#[derive(Serialize)]
-struct CodexModelCatalogEntry {
-    slug: String,
-    display_name: String,
-    description: String,
-    visibility: &'static str,
-    supported_in_api: bool,
+    models: Vec<serde_json::Value>,
 }
 #[derive(Serialize)]
 struct ManagedPlatform {
@@ -2496,8 +2490,145 @@ fn normalize_managed_codex_models(
     models
 }
 
+fn fallback_codex_model_catalog_entry() -> serde_json::Value {
+    serde_json::json!({
+        "slug": "",
+        "display_name": "",
+        "description": "",
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": [
+            { "effort": "low", "description": "Fast responses with lighter reasoning" },
+            { "effort": "medium", "description": "Balances speed and reasoning depth" },
+            { "effort": "high", "description": "Greater reasoning depth for complex tasks" },
+            { "effort": "xhigh", "description": "Extra reasoning depth for complex tasks" }
+        ],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": 0,
+        "availability_nux": null,
+        "upgrade": null,
+        "base_instructions": "You are Codex, a coding agent. Follow the user's instructions and work carefully in the provided workspace.",
+        "supports_reasoning_summaries": true,
+        "default_reasoning_summary": "auto",
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": "freeform",
+        "truncation_policy": { "mode": "tokens", "limit": 10000 },
+        "supports_parallel_tool_calls": true,
+        "supports_image_detail_original": true,
+        "context_window": 272000,
+        "effective_context_window_percent": 95,
+        "experimental_supported_tools": [],
+        "input_modalities": ["text", "image"],
+        "prefer_websockets": false
+    })
+}
+
+fn is_usable_codex_model_catalog_entry(entry: &serde_json::Map<String, serde_json::Value>) -> bool {
+    [
+        "slug",
+        "display_name",
+        "description",
+        "default_reasoning_level",
+        "shell_type",
+        "visibility",
+        "base_instructions",
+    ]
+    .iter()
+    .all(|key| entry.get(*key).is_some_and(serde_json::Value::is_string))
+        && entry
+            .get("supported_reasoning_levels")
+            .is_some_and(serde_json::Value::is_array)
+        && entry
+            .get("supported_in_api")
+            .is_some_and(serde_json::Value::is_boolean)
+        && entry
+            .get("priority")
+            .is_some_and(serde_json::Value::is_number)
+        && entry
+            .get("input_modalities")
+            .is_some_and(serde_json::Value::is_array)
+}
+
+fn load_codex_model_catalog_templates(
+    codex_home: Option<&Path>,
+) -> Vec<serde_json::Map<String, serde_json::Value>> {
+    let Some(cache_path) = codex_home.map(|home| home.join(CODEX_MODELS_CACHE_FILE_NAME)) else {
+        return Vec::new();
+    };
+    let Ok(metadata) = fs::metadata(&cache_path) else {
+        return Vec::new();
+    };
+    if !metadata.is_file() || metadata.len() > MAX_CODEX_MODEL_CACHE_BYTES {
+        return Vec::new();
+    }
+    let Ok(payload) = fs::read(cache_path) else {
+        return Vec::new();
+    };
+    let Ok(catalog) = serde_json::from_slice::<serde_json::Value>(&payload) else {
+        return Vec::new();
+    };
+    catalog
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_object)
+        .filter(|entry| is_usable_codex_model_catalog_entry(entry))
+        .cloned()
+        .collect()
+}
+
+fn build_codex_model_catalog(
+    codex_home: Option<&Path>,
+    provider: &RemoteCodexProviderLaunch,
+) -> CodexModelCatalog {
+    let templates = load_codex_model_catalog_templates(codex_home);
+    let preferred_template = provider
+        .model
+        .as_deref()
+        .and_then(|model| {
+            templates
+                .iter()
+                .find(|entry| entry.get("slug").and_then(serde_json::Value::as_str) == Some(model))
+        })
+        .or_else(|| templates.first());
+    let models = provider
+        .models
+        .iter()
+        .enumerate()
+        .map(|(priority, model)| {
+            let template = templates
+                .iter()
+                .find(|entry| {
+                    entry.get("slug").and_then(serde_json::Value::as_str) == Some(model.as_str())
+                })
+                .or(preferred_template);
+            let mut entry = template
+                .cloned()
+                .map(serde_json::Value::Object)
+                .unwrap_or_else(fallback_codex_model_catalog_entry);
+            let object = entry
+                .as_object_mut()
+                .expect("Codex model catalog template must be an object");
+            object.insert("slug".to_string(), model.clone().into());
+            object.insert("display_name".to_string(), model.clone().into());
+            object.insert("description".to_string(), provider.name.clone().into());
+            object.insert("visibility".to_string(), "list".into());
+            object.insert("supported_in_api".to_string(), true.into());
+            object.insert("priority".to_string(), (priority as u64).into());
+            object.insert("availability_nux".to_string(), serde_json::Value::Null);
+            object.insert("upgrade".to_string(), serde_json::Value::Null);
+            entry
+        })
+        .collect();
+    CodexModelCatalog { models }
+}
+
 fn write_codex_model_discovery_home(
     directory: &Path,
+    codex_home: Option<&Path>,
     provider: &RemoteCodexProviderLaunch,
 ) -> Result<(), String> {
     fs::create_dir_all(directory)
@@ -2506,19 +2637,7 @@ fn write_codex_model_discovery_home(
         model_catalog_json: CODEX_MODEL_CATALOG_FILE_NAME,
     })
     .map_err(|err| format!("serialize Codex model discovery config failed: {err}"))?;
-    let catalog = CodexModelCatalog {
-        models: provider
-            .models
-            .iter()
-            .map(|model| CodexModelCatalogEntry {
-                slug: model.clone(),
-                display_name: model.clone(),
-                description: provider.name.clone(),
-                visibility: "list",
-                supported_in_api: true,
-            })
-            .collect(),
-    };
+    let catalog = build_codex_model_catalog(codex_home, provider);
     let mut catalog = serde_json::to_vec_pretty(&catalog)
         .map_err(|err| format!("serialize Codex model discovery catalog failed: {err}"))?;
     catalog.push(b'\n');
@@ -2719,7 +2838,7 @@ fn prepare_remote_codex_launch(
     let discovery_codex_home = match provider.as_ref() {
         Some(provider) => {
             let path = remote_manager_dir()?.join("codex-model-discovery");
-            write_codex_model_discovery_home(&path, provider)?;
+            write_codex_model_discovery_home(&path, codex_home.as_deref(), provider)?;
             Some(path)
         }
         None => None,
@@ -2824,12 +2943,23 @@ fn apply_remote_codex_launch_environment(
     Ok(())
 }
 
+fn codex_app_server_probe_args(strict_config: bool) -> Vec<&'static str> {
+    let mut args = vec!["app-server"];
+    if strict_config {
+        args.push("--strict-config");
+    }
+    args.extend(["--listen", "stdio://"]);
+    args
+}
+
 fn probe_remote_codex_app_server(launch: &RemoteCodexLaunch) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = silent_command(&path_string(&launch.wrapper_dir.join("codex.exe")));
     #[cfg(not(target_os = "windows"))]
     let mut command = silent_command(&path_string(&launch.wrapper_dir.join("codex")));
-    command.args(["app-server", "--listen", "stdio://"]);
+    command.args(codex_app_server_probe_args(
+        launch.discovery_codex_home.is_some(),
+    ));
     if let Some(provider) = launch.provider.as_ref() {
         command.env(&provider.env_key, &provider.secret);
     }
@@ -6157,7 +6287,7 @@ allow_from = ""
         let directory = tempfile::tempdir().unwrap();
         let launch = sample_remote_codex_launch(true);
         let provider = launch.provider.as_ref().unwrap();
-        write_codex_model_discovery_home(directory.path(), provider).unwrap();
+        write_codex_model_discovery_home(directory.path(), None, provider).unwrap();
 
         let config = fs::read_to_string(directory.path().join(CONFIG_FILE_NAME)).unwrap();
         let config = toml::from_str::<toml::Value>(&config).unwrap();
@@ -6173,6 +6303,15 @@ allow_from = ""
         assert_eq!(catalog["models"][0]["description"], "Project Provider");
         assert_eq!(catalog["models"][0]["visibility"], "list");
         assert_eq!(catalog["models"][0]["supported_in_api"], true);
+        assert_eq!(catalog["models"][0]["default_reasoning_level"], "medium");
+        assert!(catalog["models"][0]["supported_reasoning_levels"]
+            .as_array()
+            .is_some_and(|levels| !levels.is_empty()));
+        assert_eq!(catalog["models"][0]["shell_type"], "shell_command");
+        assert!(catalog["models"][0]["base_instructions"]
+            .as_str()
+            .is_some_and(|instructions| !instructions.is_empty()));
+        assert_eq!(catalog["models"][0]["input_modalities"][0], "text");
         for secret in [
             "sk-provider-secret",
             "https://provider.example.com/v1",
@@ -6180,6 +6319,46 @@ allow_from = ""
         ] {
             assert!(!raw_catalog.contains(secret));
         }
+    }
+
+    #[test]
+    fn codex_model_discovery_reuses_installed_catalog_capabilities() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let mut cached_model = fallback_codex_model_catalog_entry();
+        cached_model["slug"] = "gpt-5.4".into();
+        cached_model["display_name"] = "gpt-5.4".into();
+        cached_model["description"] = "Installed model".into();
+        cached_model["base_instructions"] = "installed Codex instructions".into();
+        cached_model["context_window"] = 123_456.into();
+        fs::write(
+            source.path().join(CODEX_MODELS_CACHE_FILE_NAME),
+            serde_json::to_vec(&serde_json::json!({ "models": [cached_model] })).unwrap(),
+        )
+        .unwrap();
+
+        let launch = sample_remote_codex_launch(true);
+        let provider = launch.provider.as_ref().unwrap();
+        write_codex_model_discovery_home(destination.path(), Some(source.path()), provider)
+            .unwrap();
+        let catalog = serde_json::from_slice::<serde_json::Value>(
+            &fs::read(destination.path().join(CODEX_MODEL_CATALOG_FILE_NAME)).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(catalog["models"][0]["slug"], "gpt-5.4");
+        assert_eq!(catalog["models"][1]["slug"], "gpt-5.3-codex");
+        assert_eq!(
+            catalog["models"][0]["base_instructions"],
+            "installed Codex instructions"
+        );
+        assert_eq!(
+            catalog["models"][1]["base_instructions"],
+            "installed Codex instructions"
+        );
+        assert_eq!(catalog["models"][1]["context_window"], 123_456);
+        assert_eq!(catalog["models"][0]["priority"], 0);
+        assert_eq!(catalog["models"][1]["priority"], 1);
     }
 
     #[test]
@@ -6319,6 +6498,18 @@ allow_from = ""
         assert!(detail.contains("provider startup rejected"));
         assert!(!detail.contains("sk-provider-secret"));
         assert!(detail.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn codex_provider_probe_uses_strict_config_only_for_managed_catalog() {
+        assert_eq!(
+            codex_app_server_probe_args(true),
+            vec!["app-server", "--strict-config", "--listen", "stdio://"]
+        );
+        assert_eq!(
+            codex_app_server_probe_args(false),
+            vec!["app-server", "--listen", "stdio://"]
+        );
     }
 
     #[test]
