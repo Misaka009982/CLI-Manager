@@ -1,5 +1,6 @@
 mod database;
 mod migration;
+pub(crate) mod repository;
 
 pub(crate) use database::initialize;
 pub(crate) use migration::{

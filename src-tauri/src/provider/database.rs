@@ -140,20 +140,34 @@ CREATE INDEX IF NOT EXISTS idx_provider_migration_issues_open
 
 pub(crate) async fn initialize() -> Result<(), String> {
     let path = app_paths::providers_db_path()?;
-    initialize_at(&path).await
+    initialize_at(path).await
 }
 
-async fn initialize_at(path: &Path) -> Result<(), String> {
+pub(crate) async fn open_connection() -> Result<SqliteConnection, String> {
+    let path = app_paths::providers_db_path()?;
+    open_connection_at(path).await
+}
+
+pub(crate) async fn open_connection_at(path: PathBuf) -> Result<SqliteConnection, String> {
+    initialize_at(path.clone()).await?;
+    let mut connection = SqliteConnection::connect_with(&connection_options(&path))
+        .await
+        .map_err(|err| format!("provider_db_open_failed: {err}"))?;
+    configure_connection(&mut connection).await?;
+    Ok(connection)
+}
+
+async fn initialize_at(path: PathBuf) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "provider_db_parent_unavailable".to_string())?;
     fs::create_dir_all(parent).map_err(|err| format!("provider_db_directory_failed: {err}"))?;
 
     let existing_database = path.is_file()
-        && fs::metadata(path)
+        && fs::metadata(&path)
             .map(|metadata| metadata.len() > 0)
             .unwrap_or(false);
-    let options = connection_options(path);
+    let options = connection_options(&path);
     let mut connection = SqliteConnection::connect_with(&options)
         .await
         .map_err(|err| format!("provider_db_open_failed: {err}"))?;
@@ -168,7 +182,7 @@ async fn initialize_at(path: &Path) -> Result<(), String> {
 
     if current_version < PROVIDER_SCHEMA_VERSION && existing_database {
         checkpoint_before_backup(&mut connection).await?;
-        backup_existing_database(path)?;
+        backup_existing_database(&path)?;
     }
 
     sqlx::raw_sql(PROVIDER_SCHEMA_SQL)
@@ -187,7 +201,7 @@ async fn initialize_at(path: &Path) -> Result<(), String> {
 
 fn connection_options(path: &Path) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
-        .filename(path)
+        .filename(path.to_path_buf())
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(PROVIDER_DB_BUSY_TIMEOUT)
@@ -347,7 +361,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let path = temp.path().join("providers.db");
 
-        initialize_at(&path).await.unwrap();
+        initialize_at(path.clone()).await.unwrap();
 
         let mut connection = open_test_connection(&path).await;
         let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
@@ -394,7 +408,7 @@ mod tests {
     async fn composite_identity_and_active_key_index_are_enforced() {
         let temp = tempdir().unwrap();
         let path = temp.path().join("providers.db");
-        initialize_at(&path).await.unwrap();
+        initialize_at(path.clone()).await.unwrap();
         let mut connection = open_test_connection(&path).await;
 
         insert_provider(&mut connection, "same-id", "claude", 1).await;
@@ -472,7 +486,7 @@ mod tests {
             .unwrap();
         old_connection.close().await.unwrap();
 
-        initialize_at(&path).await.unwrap();
+        initialize_at(path.clone()).await.unwrap();
 
         let backup_dir = temp.path().join("backups").join("providers");
         let backups: Vec<PathBuf> = fs::read_dir(&backup_dir)
@@ -499,8 +513,8 @@ mod tests {
         let temp = tempdir().unwrap();
         let path = temp.path().join("providers.db");
 
-        initialize_at(&path).await.unwrap();
-        initialize_at(&path).await.unwrap();
+        initialize_at(path.clone()).await.unwrap();
+        initialize_at(path.clone()).await.unwrap();
 
         let backup_dir = temp.path().join("backups").join("providers");
         assert!(!backup_dir.exists());

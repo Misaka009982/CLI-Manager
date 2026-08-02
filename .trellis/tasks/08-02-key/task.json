@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Planning and prototype are complete. Phase 0 baseline is implemented: providers.db path/opener/schema, WAL and backup boundary, composite identity, manual-key constraints, and fixture tests. The minimal native-provider implementation remains removed; retained cli-manager.db provider migrations are compatibility tombstones. Continue with implement.md Phase 1.",
+  "notes": "Planning and prototype are complete. Phase 0 baseline is implemented: providers.db path/opener/schema, WAL and backup boundary, composite identity, manual-key constraints, and fixture tests. Phase 1 vertical slice is now implemented: native catalog/key repository and Tauri commands, secret-redacted DTOs, key projection/invariants, type-local settings, and a localized Settings -> Native Providers catalog/editor with split-responsibility components. The legacy CCS read-only page remains isolated as an import source. Continue Phase 1/Phase 5 follow-up work for complete document editors, common-config editor, Home apply, scope resolution, environment checks, and import wizard.",
   "meta": {}
 }

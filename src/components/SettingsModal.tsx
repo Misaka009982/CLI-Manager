@@ -35,6 +35,7 @@ import { HookSettingsPage } from "./settings/pages/HookSettingsPage";
 import { StatuslineSettingsPage } from "./settings/pages/StatuslineSettingsPage";
 import { CommandSuggestionSettingsPage } from "./settings/pages/CommandSuggestionSettingsPage";
 import { ProviderSettingsPage } from "./settings/pages/ProviderSettingsPage";
+import { NativeProviderSettingsPage } from "./settings/pages/NativeProviderSettingsPage";
 import { ModelPricingSettingsPage } from "./settings/pages/ModelPricingSettingsPage";
 import { AboutSettingsPage } from "./settings/pages/AboutSettingsPage";
 import { DesktopPetSettingsPage } from "./settings/pages/DesktopPetSettingsPage";
@@ -53,6 +54,7 @@ export type SettingsTab =
   | "shortcuts"
   | "templates"
   | "providers"
+  | "native-providers"
   | "model-pricing"
   | "cc-connect"
   | "ssh-hosts"
@@ -77,6 +79,7 @@ const SETTINGS_TAB_ORDER: SettingsTab[] = [
   "shortcuts",
   "templates",
   "providers",
+  "native-providers",
   "model-pricing",
   "cc-connect",
   "ssh-hosts",
@@ -142,6 +145,13 @@ const SETTINGS_TAB_CONFIG: Record<SettingsTab, SettingsTabConfig> = {
     description: "settings.tabs.providers.description",
     icon: ServerCog,
     searchPlaceholder: "settings.tabs.providers.search",
+  },
+  "native-providers": {
+    label: "settings.tabs.nativeProviders.label",
+    title: "settings.tabs.nativeProviders.title",
+    description: "settings.tabs.nativeProviders.description",
+    icon: Sparkles,
+    searchPlaceholder: "settings.tabs.nativeProviders.search",
   },
   "model-pricing": {
     label: "settings.tabs.modelPricing.label",
@@ -285,6 +295,7 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
     if (activeTab === "shortcuts") return <ShortcutSettingsPage searchValue={searchValue} />;
     if (activeTab === "templates") return <TemplateSettingsPage searchValue={searchValue} />;
     if (activeTab === "providers") return <ProviderSettingsPage searchValue={searchValue} />;
+    if (activeTab === "native-providers") return <NativeProviderSettingsPage searchValue={searchValue} />;
     if (activeTab === "model-pricing") return <ModelPricingSettingsPage searchValue={searchValue} />;
     if (activeTab === "cc-connect") return <CcConnectSettingsPage />;
     if (activeTab === "ssh-hosts") return <SshHostsSettingsPage searchValue={searchValue} onTerminalOpened={onClose} />;
