@@ -7,6 +7,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 const APP_HOME_DIR_NAME: &str = ".cli-manager";
 const DB_FILE_NAME: &str = "cli-manager.db";
+const PROVIDERS_DB_FILE_NAME: &str = "providers.db";
 const SETTINGS_STORE_FILE_NAME: &str = "settings.json";
 const SESSIONS_STORE_FILE_NAME: &str = "sessions.json";
 const DEV_SESSIONS_STORE_FILE_NAME: &str = "sessions.dev.json";
@@ -86,6 +87,14 @@ pub fn claude_providers_dir() -> Result<PathBuf, String> {
 
 pub fn db_path() -> Result<PathBuf, String> {
     Ok(cli_manager_data_dir()?.join(DB_FILE_NAME))
+}
+
+pub fn providers_db_path() -> Result<PathBuf, String> {
+    Ok(cli_manager_data_dir()?.join(PROVIDERS_DB_FILE_NAME))
+}
+
+pub fn providers_db_url() -> Result<String, String> {
+    Ok(format!("sqlite:{}", providers_db_path()?.to_string_lossy()))
 }
 
 pub fn db_url() -> Result<String, String> {

@@ -20,6 +20,98 @@
 - Keep historical provider migrations in `cli-manager.db` registered exactly
   as shipped. They are compatibility tombstones, not a schema to extend.
 
+## Phase 0 verified persistence boundary
+
+### 1. Scope / Trigger
+
+The provider domain must have a durable storage boundary before any catalog or
+launch command is migrated away from CCS. This boundary is initialized during
+desktop startup, after legacy app-file migration, while the existing
+`cli-manager.db` provider migrations remain untouched.
+
+### 2. Signatures
+
+```text
+app_paths::providers_db_path() -> Result<PathBuf, String>
+app_paths::providers_db_url() -> Result<String, String>
+provider::initialize() -> Result<(), String>
+```
+
+The initializer is an internal startup operation; it does not expose a
+provider command or permit the frontend to open SQLite directly.
+
+### 3. Contracts
+
+- The database path is `<home>/.cli-manager/providers.db`.
+- The connection uses WAL, `foreign_keys = ON`, `synchronous = NORMAL`, and a
+  bounded 5-second busy timeout.
+- Schema version 1 creates the CCS-shaped `providers` and `settings` tables,
+  the composite `(provider_id, app_type)` manual-key table, and the
+  Home/import/repair/apply-journal tables. `settings` is seeded with empty
+  `common_config_claude`, `common_config_codex`, and
+  `common_config_grokbuild` documents.
+- Before applying a schema to an existing version-0 database, the WAL is
+  checkpointed and the database is copied to
+  `.cli-manager/backups/providers/providers.db.backup-<unix-ms>-<pid>.db`.
+- Provider-domain initialization failure is logged as a warning and does not
+  stop `cli-manager.db`, PTY, history, or the rest of desktop startup.
+- No production provider command reads `providers.db` in Phase 0; later phases
+  must add the domain repository/commands before removing CCS runtime reads.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Existing provider DB version is newer than the binary | `provider_db_version_unsupported`; preserve the file and continue app startup |
+| Existing DB needs schema initialization | checkpoint, backup, apply schema, record checksum, then set version |
+| Backup or schema initialization fails | `provider_db_backup_failed` / `provider_db_schema_failed`; preserve the main app startup |
+| Required domain table is absent after initialization | `provider_db_table_missing`; do not expose the incomplete store |
+| Two current providers share one app type | partial unique-index violation; later command layer maps it to a stable provider error |
+| Two active keys share one provider/type | partial unique-index violation; later command layer maps it to `provider_key_active_conflict` |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a fresh data root creates `providers.db`, seeds the three common
+  documents, and leaves the historical `cli-manager.db` migration checksum
+  unchanged.
+- Base: an existing version-0 provider DB is backed up before schema creation;
+  reopening a version-1 DB is idempotent and creates no second backup.
+- Bad: putting the CCS-compatible tables into `cli-manager.db` or making
+  startup fail because an optional provider DB cannot be opened.
+
+### 6. Tests Required
+
+- Assert WAL, foreign keys, schema version/checksum, required table presence,
+  and the three common-config seed rows on a fresh database.
+- Assert the same provider ID can exist for Claude and Codex, while a
+  duplicate composite identity fails.
+- Assert the composite key foreign key, cascade deletion, current-provider
+  uniqueness, and active-key uniqueness.
+- Assert a version-0 database is checkpointed/backed up and preserves its
+  pre-existing marker; assert version-1 reopen is idempotent.
+- Keep the historical v25/v26 migration checksum/registration tests passing.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+open cli-manager.db -> add/alter the old provider tables -> mark provider current
+```
+
+This couples project/session startup to the removed prototype schema and can
+invalidate existing SQLx migration checksums.
+
+#### Correct
+
+```text
+legacy cli-manager.db migration unchanged
+  -> open .cli-manager/providers.db with WAL/foreign keys/busy timeout
+  -> checkpoint + backup before first schema write
+  -> create independent provider-domain schema
+  -> warn and continue if this optional store cannot initialize
+```
+
 ## Core data invariants
 
 - Providers contain CCS-compatible `settings_config`, provider metadata,

@@ -2,6 +2,10 @@
 
 ## [TEMP]
 
+### Provider Domain Phase 0
+
+- Added an independent `providers.db` initialization boundary with CCS composite identity, manual multi-key storage, Home/import/repair/apply journal tables, and pre-migration backups; runtime provider commands still use the legacy CCS path until later cutover phases.
+
 ### 新增
 
 - **供应商域重建规划**：完成 CCS 兼容供应商域的需求、设计、分阶段计划、验收计划和原型评审包；目标覆盖完整配置编辑、类型通用配置、手动多 Key、全局 Home 写入、原生项目/Worktree 切换、环境检查与 CCS 导入。实现将在后续任务开始。

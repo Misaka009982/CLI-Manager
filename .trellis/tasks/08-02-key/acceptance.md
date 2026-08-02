@@ -2,14 +2,23 @@
 
 ## Gate 0 — Removal and baseline
 
-- [ ] The shallow native-provider UI/store/commands are absent.
-- [ ] Settings returns to the stable CCS read-only page until the rebuilt
+- [x] The shallow native-provider UI/store/commands are absent.
+- [x] Settings returns to the stable CCS read-only page until the rebuilt
   native UI is delivered; no half-working native screen remains reachable.
-- [ ] Historical v25/v26 provider migration registrations remain immutable and
+- [x] Historical v25/v26 provider migration registrations remain immutable and
   existing `cli-manager.db` starts successfully.
-- [ ] The high-risk Hook status behavior remains intact.
-- [ ] `npx tsc --noEmit` and `cd src-tauri && cargo check` pass after
+- [x] The high-risk Hook status behavior remains intact.
+- [x] `npx tsc --noEmit` and `cd src-tauri && cargo check` pass after
   cleanup.
+
+Phase 0 implementation evidence (2026-08-02): the independent `providers.db`
+opener creates the CCS-compatible core plus manual-key, type-common,
+Home/import/repair, and apply-journal tables; configures WAL, foreign keys, a
+5-second busy timeout, and migration-before-backup handling. The historical
+v25/v26 migration source is unchanged, and no production provider command
+reads the new database yet. Rust tests cover fresh initialization, common
+config seeds, composite identity, foreign-key cascade, active-key uniqueness,
+backup preservation, and idempotent re-open.
 
 ## Gate 1 — Provider-domain database and catalog
 

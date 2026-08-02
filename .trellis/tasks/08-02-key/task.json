@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Planning and prototype are complete. The minimal native-provider implementation was removed; retained provider migrations are compatibility tombstones. Begin implementation from implement.md Phase 0.",
+  "notes": "Planning and prototype are complete. Phase 0 baseline is implemented: providers.db path/opener/schema, WAL and backup boundary, composite identity, manual-key constraints, and fixture tests. The minimal native-provider implementation remains removed; retained cli-manager.db provider migrations are compatibility tombstones. Continue with implement.md Phase 1.",
   "meta": {}
 }
