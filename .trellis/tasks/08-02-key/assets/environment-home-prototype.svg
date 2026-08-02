@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820" role="img" aria-labelledby="title desc">
+  <title id="title">CLI-Manager 环境检查与手动 Home 选择原型</title>
+  <desc id="desc">环境检查弹层支持自动检测、手动 Home、Windows 与 WSL 路径、派生配置、Hook 与历史目录跟随和重新应用提示。</desc>
+  <defs>
+    <style>
+      .ui { font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; fill: #f8fafc; }
+      .mono { font-family: "Cascadia Code", monospace; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .h2 { font-size: 16px; font-weight: 650; }
+      .body { font-size: 14px; }
+      .small { font-size: 12px; }
+      .tiny { font-size: 11px; }
+      .muted { fill: #94a3b8; }
+      .subtle { fill: #cbd5e1; }
+      .primary { fill: #c4b5fd; }
+      .success { fill: #4ade80; }
+      .warning { fill: #fbbf24; }
+    </style>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="28" flood-color="#020617" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <!-- Dimmed settings page -->
+  <rect width="1400" height="820" fill="#07101e"/>
+  <rect x="0" y="0" width="210" height="820" fill="#0f172a"/>
+  <rect x="24" y="24" width="32" height="32" rx="10" fill="#7c3aed"/>
+  <path d="M33 35h14M33 41h10M33 47h14" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+  <g class="ui" opacity="0.34">
+    <text x="68" y="46" class="h2">CLI-Manager</text>
+    <text x="24" y="100" class="small">设置</text>
+    <text x="52" y="145" class="body">通用</text>
+    <text x="52" y="190" class="body">CLI 工具</text>
+    <rect x="14" y="214" width="182" height="42" rx="10" fill="#4c1d95"/>
+    <text x="52" y="241" class="body">供应商</text>
+    <text x="52" y="286" class="body">Hooks</text>
+    <text x="52" y="331" class="body">同步与备份</text>
+    <text x="244" y="52" class="h1">供应商管理</text>
+    <rect x="244" y="84" width="1124" height="64" rx="14" fill="#172033"/>
+    <rect x="244" y="168" width="340" height="600" rx="16" fill="#172033"/>
+    <rect x="604" y="168" width="764" height="600" rx="16" fill="#172033"/>
+  </g>
+  <rect width="1400" height="820" fill="#020617" fill-opacity="0.54"/>
+
+  <!-- Modal -->
+  <g class="ui" filter="url(#shadow)">
+    <rect x="215" y="54" width="970" height="712" rx="20" fill="#101b2d" stroke="#475569"/>
+    <text x="247" y="94" class="h1">本地环境检查</text>
+    <text x="247" y="119" class="small muted">环境检测、全局写入、Hook 与会话历史默认共用同一个 Home。</text>
+    <rect x="1128" y="75" width="32" height="32" rx="9" fill="#172033" stroke="#334155"/>
+    <path d="M1138 85l12 12M1150 85l-12 12" stroke="#cbd5e1" stroke-width="1.6" stroke-linecap="round"/>
+    <line x1="239" y1="140" x2="1161" y2="140" stroke="#334155"/>
+
+    <!-- Target selector -->
+    <text x="247" y="174" class="small muted">检测目标</text>
+    <rect x="247" y="186" width="914" height="46" rx="11" fill="#0b1526" stroke="#334155"/>
+    <rect x="253" y="192" width="202" height="34" rx="8" fill="#312e81" stroke="#7c3aed"/>
+    <circle cx="272" cy="209" r="5" fill="#4ade80"/>
+    <text x="286" y="214" class="body" font-weight="650">本地 Windows</text>
+    <text x="484" y="214" class="body muted">WSL · Ubuntu-24.04</text>
+    <text x="686" y="214" class="body muted">WSL · Debian</text>
+
+    <!-- Home source -->
+    <text x="247" y="268" class="h2">Home 地址</text>
+    <text x="247" y="290" class="small muted">请选择用户 Home 根目录，不要直接选择 .claude、.codex 或 .grok。</text>
+    <rect x="247" y="306" width="914" height="180" rx="13" fill="#0b1526" stroke="#334155"/>
+
+    <text x="267" y="338" class="small muted">来源</text>
+    <rect x="329" y="316" width="242" height="34" rx="9" fill="#111c30" stroke="#334155"/>
+    <rect x="333" y="320" width="108" height="26" rx="7" fill="#312e81"/>
+    <text x="354" y="338" class="small primary" font-weight="650">手动 Home</text>
+    <text x="467" y="338" class="small muted">自动检测</text>
+
+    <text x="267" y="382" class="small muted">Home 路径</text>
+    <rect x="267" y="394" width="652" height="42" rx="9" fill="#07101e" stroke="#7c3aed" stroke-width="1.7"/>
+    <text x="283" y="420" class="body mono">D:\Users\dev</text>
+    <rect x="931" y="394" width="104" height="42" rx="9" fill="#172033" stroke="#475569"/>
+    <path d="M950 407h17l4 5v12h-21zM950 412h21" fill="none" stroke="#cbd5e1" stroke-width="1.5" stroke-linejoin="round"/>
+    <text x="978" y="420" class="small subtle">选择目录</text>
+    <rect x="1047" y="394" width="94" height="42" rx="9" fill="#172033" stroke="#475569"/>
+    <text x="1062" y="420" class="small subtle">恢复自动</text>
+
+    <circle cx="274" cy="458" r="5" fill="#4ade80"/>
+    <text x="287" y="462" class="small success">目录可访问且可写</text>
+    <text x="431" y="462" class="small muted">Hook/历史默认跟随；已有自定义目录保留并提示差异。</text>
+
+    <!-- Derived paths -->
+    <text x="247" y="522" class="h2">派生配置路径</text>
+    <text x="247" y="544" class="small muted">全局配置、Hook/Statusline 与会话历史默认使用以下目标。</text>
+
+    <rect x="247" y="560" width="286" height="82" rx="12" fill="#0b1526" stroke="#334155"/>
+    <circle cx="269" cy="582" r="6" fill="#4ade80"/>
+    <text x="284" y="587" class="body" font-weight="650">Claude Code</text>
+    <text x="267" y="616" class="tiny mono muted">D:\Users\dev\.claude\settings.json</text>
+    <text x="267" y="632" class="tiny success">配置合法 · Hook/历史跟随</text>
+
+    <rect x="547" y="560" width="286" height="82" rx="12" fill="#0b1526" stroke="#334155"/>
+    <circle cx="569" cy="582" r="6" fill="#4ade80"/>
+    <text x="584" y="587" class="body" font-weight="650">Codex</text>
+    <text x="567" y="616" class="tiny mono muted">D:\Users\dev\.codex\config.toml</text>
+    <text x="567" y="632" class="tiny success">配置合法 · Hook/历史跟随</text>
+
+    <rect x="847" y="560" width="314" height="82" rx="12" fill="#0b1526" stroke="#334155"/>
+    <circle cx="869" cy="582" r="6" fill="#fbbf24"/>
+    <text x="884" y="587" class="body" font-weight="650">Grok</text>
+    <text x="867" y="616" class="tiny mono muted">D:\Users\dev\.grok\config.toml</text>
+    <text x="867" y="632" class="tiny warning">CLI 未安装 · Hook/历史跟随</text>
+
+    <!-- Reapply warning -->
+    <rect x="247" y="660" width="914" height="54" rx="11" fill="#451a03" fill-opacity="0.5" stroke="#d97706" stroke-opacity="0.65"/>
+    <path d="M269 675l9 17h-18zM269 682v4M269 689v1" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="294" y="681" class="small" fill="#fde68a" font-weight="650">Home 已变更，尚未写入全局供应商</text>
+    <text x="294" y="701" class="tiny" fill="#fcd34d">已重检 Hook 并刷新跟随的历史；配置写入与 Hook 迁移仍需显式操作。</text>
+    <rect x="950" y="670" width="191" height="34" rx="9" fill="#d97706"/>
+    <text x="978" y="692" class="small" fill="#fff" font-weight="650">重新应用全局供应商</text>
+
+    <rect x="944" y="728" width="104" height="38" rx="10" fill="#172033" stroke="#475569"/>
+    <text x="971" y="752" class="body subtle">关闭</text>
+    <rect x="1059" y="728" width="102" height="38" rx="10" fill="#7c3aed"/>
+    <text x="1085" y="752" class="body" font-weight="650">重新检测</text>
+  </g>
+</svg>

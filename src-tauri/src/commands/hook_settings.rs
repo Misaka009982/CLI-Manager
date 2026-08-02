@@ -3355,8 +3355,8 @@ fn build_pi_status(pi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus, St
         failure_hook_required: false,
         subagent_start_hook_installed: false,
         subagent_start_hook_required: false,
-        hooks_feature_installed: true,
-        hooks_trusted: true,
+        hooks_feature_installed: owned,
+        hooks_trusted: owned,
     };
 
     Ok(status_from_checks(

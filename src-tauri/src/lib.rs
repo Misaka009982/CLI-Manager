@@ -18,6 +18,7 @@ pub mod hook_client;
 mod linux_graphics;
 mod log_rotation;
 mod process_job;
+mod provider;
 pub mod pty;
 mod runtime_diagnostics;
 mod shell_resolver;
@@ -672,6 +673,12 @@ fn migrations() -> Vec<Migration> {
             sql: MIGRATION_EXTEND_SSH_AGENT_INSTALLATIONS_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: provider::MIGRATION_CREATE_NATIVE_PROVIDERS_VERSION,
+            description: provider::MIGRATION_CREATE_NATIVE_PROVIDERS_DESCRIPTION,
+            sql: provider::MIGRATION_CREATE_NATIVE_PROVIDERS_SQL,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -1099,6 +1106,21 @@ pub fn run() {
             commands::ccswitch::ccswitch_cleanup_codex_profiles,
             commands::ccswitch::ccswitch_probe_projects,
             commands::ccswitch::ccswitch_list_common_configs,
+            commands::provider::provider_list,
+            commands::provider::provider_get,
+            commands::provider::provider_create,
+            commands::provider::provider_update,
+            commands::provider::provider_duplicate,
+            commands::provider::provider_delete,
+            commands::provider::provider_set_status,
+            commands::provider::provider_key_create,
+            commands::provider::provider_key_update,
+            commands::provider::provider_key_activate,
+            commands::provider::provider_key_delete,
+            commands::provider::provider_common_get,
+            commands::provider::provider_common_update,
+            commands::provider::provider_validate_config,
+            commands::provider::provider_preview_effective,
             commands::command_suggestion::command_suggestion_test_model,
             commands::command_suggestion::command_suggestion_generate,
             commands::command_suggestion::command_suggestion_list_path_entries,

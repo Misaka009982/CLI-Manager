@@ -929,6 +929,11 @@ Stable conflict error: pi_extension_conflict
 - Bad: reuse Claude/Codex required-module assumptions for Pi and require an attention hook that Pi does not provide.
 - Bad: listen to both `before_agent_start` and `agent_start` for the same running event; this duplicates replay and notification traffic.
 
+> **Warning**: Pi status must derive `hooks_feature_installed` and `hooks_trusted`
+> from marker ownership. Leaving either flag true after the managed extension is
+> removed makes `status_from_checks` report an installed or partial Hook after
+> uninstall.
+
 ### 6. Tests Required
 
 - Rust: full install reports `HookInstallStatus::Installed`, contains `session_start`, `agent_start`, and `agent_settled`, and does not contain `before_agent_start`.

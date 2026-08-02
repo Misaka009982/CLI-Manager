@@ -1,0 +1,249 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">CLI-Manager 原生供应商管理高保真原型</title>
+  <desc id="desc">Claude Code 供应商管理页，展示全局供应商、手动多 Key、配置继承、环境检查和 CC Switch 导入。</desc>
+  <defs>
+    <style>
+      .ui { font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; fill: #f8fafc; }
+      .mono { font-family: "Cascadia Code", "JetBrains Mono", monospace; }
+      .h1 { font-size: 24px; font-weight: 700; }
+      .h2 { font-size: 16px; font-weight: 650; }
+      .body { font-size: 14px; }
+      .small { font-size: 12px; }
+      .tiny { font-size: 11px; }
+      .muted { fill: #94a3b8; }
+      .subtle { fill: #cbd5e1; }
+      .primary { fill: #a78bfa; }
+      .success { fill: #4ade80; }
+      .warning { fill: #fbbf24; }
+      .stroke { stroke: #334155; stroke-width: 1; }
+      .icon { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="12" flood-color="#020617" flood-opacity="0.34"/>
+    </filter>
+    <linearGradient id="activeTab" x1="0" x2="1">
+      <stop offset="0" stop-color="#7c3aed" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#4f46e5" stop-opacity="0.14"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="#0b1220"/>
+
+  <!-- Settings navigation -->
+  <rect x="0" y="0" width="220" height="900" fill="#0f172a"/>
+  <line x1="219.5" y1="0" x2="219.5" y2="900" stroke="#263449"/>
+  <g class="ui">
+    <rect x="24" y="24" width="32" height="32" rx="10" fill="#7c3aed"/>
+    <path d="M33 35h14M33 41h10M33 47h14" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+    <text x="68" y="46" class="h2">CLI-Manager</text>
+    <text x="24" y="92" class="tiny muted">设置</text>
+
+    <g class="body subtle">
+      <text x="54" y="133">通用</text>
+      <text x="54" y="177">终端</text>
+      <text x="54" y="221">CLI 工具</text>
+      <rect x="14" y="239" width="192" height="42" rx="10" fill="#312e81" fill-opacity="0.58"/>
+      <rect x="14" y="239" width="3" height="42" rx="1.5" fill="#a78bfa"/>
+      <text x="54" y="266" fill="#f8fafc" font-weight="600">供应商</text>
+      <text x="54" y="309">Hooks</text>
+      <text x="54" y="353">状态栏</text>
+      <text x="54" y="397">同步与备份</text>
+    </g>
+    <g fill="none" stroke="#94a3b8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="32" cy="128" r="7"/><path d="M32 117v3M32 136v3M21 128h3M40 128h3"/>
+      <path d="M25 166h14v13H25zM28 162h8"/>
+      <path d="M25 210h14v14H25zM28 214h8M28 219h5"/>
+      <path d="M25 254h14v13H25zM29 251h6M29 270h6" stroke="#c4b5fd"/>
+      <path d="M24 298h16M27 294v16M37 294v16"/>
+      <path d="M24 342h16v12H24zM28 338h8"/>
+      <path d="M24 389h16M32 381v16M27 386l5-5 5 5M27 394l5 5 5-5"/>
+    </g>
+    <text x="24" y="855" class="tiny muted">原生供应商 · 规划原型</text>
+  </g>
+
+  <!-- Header -->
+  <g class="ui">
+    <text x="252" y="48" class="h1">供应商管理</text>
+    <text x="252" y="72" class="small muted">全局默认与项目覆盖均由 CLI-Manager 管理</text>
+
+    <rect x="1250" y="28" width="130" height="38" rx="10" fill="#172033" stroke="#334155"/>
+    <path d="M1270 43a8 8 0 1 0 0 8M1270 39v4h4" fill="none" stroke="#cbd5e1" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="1290" y="52" class="body subtle">环境检查</text>
+    <rect x="1392" y="28" width="176" height="38" rx="10" fill="#172033" stroke="#334155"/>
+    <path d="M1412 39v16M1406 49l6 6 6-6M1405 58h14" fill="none" stroke="#cbd5e1" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="1430" y="52" class="body subtle">从 CC Switch 导入</text>
+  </g>
+
+  <!-- CLI type tabs -->
+  <g class="ui">
+    <rect x="252" y="96" width="1316" height="58" rx="14" fill="#111b2d" stroke="#263449"/>
+    <rect x="264" y="106" width="178" height="38" rx="10" fill="url(#activeTab)" stroke="#7c3aed" stroke-opacity="0.65"/>
+    <circle cx="284" cy="125" r="5" fill="#4ade80"/>
+    <text x="300" y="130" class="body" font-weight="650">Claude Code</text>
+    <circle cx="480" cy="125" r="5" fill="#4ade80"/>
+    <text x="496" y="130" class="body subtle">Codex</text>
+    <circle cx="590" cy="125" r="5" fill="#fbbf24"/>
+    <text x="606" y="130" class="body subtle">Grok</text>
+
+    <text x="1070" y="117" class="tiny muted">全局供应商 · 写入 ~/.claude/settings.json</text>
+    <text x="1132" y="139" class="small" font-weight="600">Anthropic Official</text>
+    <rect x="1328" y="112" width="218" height="27" rx="8" fill="#0f172a" stroke="#334155"/>
+    <text x="1342" y="130" class="small subtle">切换全局供应商</text>
+    <path d="M1528 122l5 5 5-5" fill="none" stroke="#94a3b8" stroke-width="1.5"/>
+  </g>
+
+  <!-- Provider master list -->
+  <g class="ui">
+    <rect x="252" y="174" width="374" height="672" rx="16" fill="#111b2d" stroke="#263449" filter="url(#shadow)"/>
+    <text x="272" y="207" class="h2">供应商</text>
+    <text x="272" y="229" class="small muted">Claude Code · 3 个</text>
+    <rect x="465" y="190" width="141" height="36" rx="9" fill="#7c3aed"/>
+    <path d="M482 208h12M488 202v12" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>
+    <text x="503" y="213" class="body" font-weight="650">新建供应商</text>
+
+    <rect x="272" y="246" width="334" height="38" rx="10" fill="#0c1526" stroke="#334155"/>
+    <circle cx="292" cy="265" r="6" fill="none" stroke="#64748b" stroke-width="1.6"/>
+    <path d="M296.5 269.5l5 5" stroke="#64748b" stroke-width="1.6" stroke-linecap="round"/>
+    <text x="314" y="270" class="small muted">搜索名称、模型或地址</text>
+
+    <rect x="270" y="300" width="338" height="94" rx="13" fill="#0d1729" stroke="#334155"/>
+    <rect x="286" y="318" width="42" height="42" rx="12" fill="#1e293b"/>
+    <path d="M297 339h20M307 329v20" stroke="#cbd5e1" stroke-width="1.7" stroke-linecap="round"/>
+    <text x="342" y="332" class="body" font-weight="650">Anthropic Official</text>
+    <text x="342" y="355" class="small muted">api.anthropic.com</text>
+    <rect x="516" y="316" width="68" height="23" rx="11.5" fill="#14532d" fill-opacity="0.62" stroke="#22c55e" stroke-opacity="0.45"/>
+    <circle cx="529" cy="327.5" r="3.5" fill="#4ade80"/>
+    <text x="538" y="332" class="tiny success">全局</text>
+    <text x="286" y="378" class="tiny muted">1 Key · 继承通用配置</text>
+
+    <rect x="270" y="406" width="338" height="104" rx="13" fill="#211d42" stroke="#8b5cf6" stroke-width="1.4"/>
+    <rect x="276" y="417" width="3" height="82" rx="1.5" fill="#a78bfa"/>
+    <rect x="286" y="425" width="42" height="42" rx="12" fill="#312e81"/>
+    <path d="M297 446h20M301 440l6 6 10-12" fill="none" stroke="#ddd6fe" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="342" y="440" class="body" font-weight="650">OpenRouter</text>
+    <text x="342" y="463" class="small muted">openrouter.ai/api</text>
+    <rect x="526" y="423" width="58" height="23" rx="11.5" fill="#312e81" stroke="#7c3aed" stroke-opacity="0.6"/>
+    <text x="540" y="439" class="tiny primary">3 项目</text>
+    <text x="286" y="492" class="tiny muted">3 Keys · 当前 Production</text>
+
+    <rect x="270" y="522" width="338" height="94" rx="13" fill="#0d1729" stroke="#334155"/>
+    <rect x="286" y="540" width="42" height="42" rx="12" fill="#1e293b"/>
+    <path d="M298 553h18v16h-18zM303 549h8" fill="none" stroke="#cbd5e1" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="342" y="554" class="body" font-weight="650">Company Gateway</text>
+    <text x="342" y="577" class="small muted">gateway.example.com</text>
+    <rect x="530" y="538" width="54" height="23" rx="11.5" fill="#451a03" fill-opacity="0.7" stroke="#d97706" stroke-opacity="0.45"/>
+    <text x="542" y="554" class="tiny warning">草稿</text>
+    <text x="286" y="600" class="tiny muted">未配置 Key</text>
+
+    <line x1="272" y1="640" x2="606" y2="640" stroke="#263449"/>
+    <text x="272" y="670" class="small muted">类型级操作</text>
+    <rect x="272" y="686" width="334" height="44" rx="10" fill="#0d1729" stroke="#334155"/>
+    <path d="M290 699h14v14h-14zM294 696h6" fill="none" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="316" y="713" class="body subtle">Claude Code 通用配置</text>
+    <text x="565" y="713" class="small muted">编辑</text>
+    <rect x="272" y="742" width="334" height="44" rx="10" fill="#0d1729" stroke="#334155"/>
+    <path d="M289 763h16M297 755v16" stroke="#a78bfa" stroke-width="1.5" stroke-linecap="round"/>
+    <text x="316" y="769" class="body subtle">导入与迁移记录</text>
+    <rect x="544" y="752" width="40" height="22" rx="11" fill="#312e81"/>
+    <text x="559" y="767" class="tiny primary">2</text>
+  </g>
+
+  <!-- Detail panel -->
+  <g class="ui">
+    <rect x="646" y="174" width="922" height="672" rx="16" fill="#111b2d" stroke="#263449" filter="url(#shadow)"/>
+    <rect x="670" y="198" width="48" height="48" rx="14" fill="#312e81"/>
+    <path d="M682 222h24M686 216l8 8 12-15" fill="none" stroke="#ddd6fe" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="734" y="220" class="h2">OpenRouter</text>
+    <text x="734" y="242" class="small muted">Claude Code · 供应商覆盖 · 3 个 Key</text>
+    <text x="1180" y="211" class="tiny muted">当前全局</text>
+    <text x="1180" y="231" class="small subtle">Anthropic Official</text>
+    <text x="1298" y="211" class="tiny muted">项目覆盖</text>
+    <text x="1298" y="231" class="small subtle">3 个项目</text>
+    <rect x="1392" y="203" width="124" height="38" rx="10" fill="#7c3aed"/>
+    <text x="1420" y="227" class="body" font-weight="650">设为全局</text>
+    <rect x="1526" y="203" width="32" height="38" rx="10" fill="#172033" stroke="#334155"/>
+    <circle cx="1542" cy="216" r="1.6" fill="#cbd5e1"/><circle cx="1542" cy="222" r="1.6" fill="#cbd5e1"/><circle cx="1542" cy="228" r="1.6" fill="#cbd5e1"/>
+
+    <!-- detail tabs -->
+    <line x1="670" y1="272" x2="1544" y2="272" stroke="#263449"/>
+    <text x="674" y="302" class="body muted">概览</text>
+    <text x="748" y="302" class="body" font-weight="650">Keys</text>
+    <text x="818" y="302" class="body muted">供应商配置</text>
+    <text x="932" y="302" class="body muted">有效配置</text>
+    <rect x="742" y="314" width="50" height="2.5" rx="1.25" fill="#a78bfa"/>
+
+    <!-- Key panel -->
+    <rect x="670" y="332" width="874" height="244" rx="13" fill="#0d1729" stroke="#334155"/>
+    <text x="690" y="362" class="h2">API Keys</text>
+    <text x="690" y="384" class="small muted">手动启用一个 Key；不会自动轮换、检测或故障切换。</text>
+    <rect x="1405" y="348" width="119" height="34" rx="9" fill="#172033" stroke="#475569"/>
+    <path d="M1422 365h10M1427 360v10" stroke="#cbd5e1" stroke-width="1.6" stroke-linecap="round"/>
+    <text x="1440" y="370" class="small subtle">添加 Key</text>
+
+    <rect x="690" y="400" width="814" height="48" rx="10" fill="#181b36" stroke="#7c3aed" stroke-opacity="0.7"/>
+    <circle cx="711" cy="424" r="8" fill="#7c3aed"/>
+    <path d="M707 424l3 3 5-7" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="730" y="420" class="body" font-weight="650">Production</text>
+    <text x="730" y="438" class="tiny muted mono">sk-or…91a7</text>
+    <rect x="1395" y="412" width="88" height="25" rx="12.5" fill="#312e81" stroke="#8b5cf6" stroke-opacity="0.7"/>
+    <circle cx="1410" cy="424.5" r="3.5" fill="#4ade80"/>
+    <text x="1420" y="429" class="tiny" fill="#ddd6fe">已启用</text>
+
+    <rect x="690" y="456" width="814" height="48" rx="10" fill="#101a2c" stroke="#263449"/>
+    <circle cx="711" cy="480" r="8" fill="#1e293b" stroke="#475569"/>
+    <text x="730" y="476" class="body" font-weight="600">Personal</text>
+    <text x="730" y="494" class="tiny muted mono">sk-or…74c2</text>
+    <rect x="1413" y="468" width="70" height="25" rx="8" fill="#172033" stroke="#475569"/>
+    <text x="1436" y="485" class="tiny subtle">启用</text>
+
+    <rect x="690" y="512" width="814" height="48" rx="10" fill="#101a2c" stroke="#263449"/>
+    <circle cx="711" cy="536" r="8" fill="#1e293b" stroke="#475569"/>
+    <text x="730" y="532" class="body" font-weight="600">Backup</text>
+    <text x="730" y="550" class="tiny muted mono">sk-or…3bd8</text>
+    <rect x="1413" y="524" width="70" height="25" rx="8" fill="#172033" stroke="#475569"/>
+    <text x="1436" y="541" class="tiny subtle">启用</text>
+
+    <!-- Config inheritance and preview -->
+    <rect x="670" y="592" width="874" height="186" rx="13" fill="#0d1729" stroke="#334155"/>
+    <rect x="690" y="611" width="18" height="18" rx="5" fill="#7c3aed"/>
+    <path d="M694 620l3 3 6-8" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="718" y="625" class="body" font-weight="600">继承 Claude Code 通用配置</text>
+
+    <rect x="1060" y="608" width="436" height="30" rx="9" fill="#111b2d" stroke="#263449"/>
+    <text x="1080" y="628" class="tiny muted">通用配置</text>
+    <path d="M1145 623h30M1169 619l6 4-6 4" fill="none" stroke="#64748b" stroke-width="1.3"/>
+    <text x="1188" y="628" class="tiny muted">供应商覆盖</text>
+    <path d="M1270 623h30M1294 619l6 4-6 4" fill="none" stroke="#64748b" stroke-width="1.3"/>
+    <text x="1313" y="628" class="tiny primary">当前 Key</text>
+
+    <text x="690" y="665" class="small muted">供应商</text>
+    <text x="756" y="665" class="small muted">通用</text>
+    <text x="810" y="665" class="small" font-weight="650">最终结果</text>
+    <text x="892" y="665" class="small muted">Live Diff</text>
+    <rect x="806" y="675" width="62" height="2" rx="1" fill="#a78bfa"/>
+    <rect x="690" y="690" width="806" height="68" rx="9" fill="#080f1d" stroke="#263449"/>
+    <text x="708" y="714" class="tiny mono" fill="#93c5fd">"env"</text>
+    <text x="744" y="714" class="tiny mono muted">: {</text>
+    <text x="724" y="734" class="tiny mono" fill="#93c5fd">"ANTHROPIC_BASE_URL"</text>
+    <text x="872" y="734" class="tiny mono muted">:</text>
+    <text x="884" y="734" class="tiny mono" fill="#fca5a5">"https://openrouter.ai/api"</text>
+    <text x="724" y="752" class="tiny mono" fill="#93c5fd">"ANTHROPIC_AUTH_TOKEN"</text>
+    <text x="872" y="752" class="tiny mono muted">:</text>
+    <text x="884" y="752" class="tiny mono" fill="#fca5a5">"••••••••••••••••"</text>
+
+    <!-- Info callout -->
+    <rect x="670" y="794" width="874" height="34" rx="9" fill="#172554" fill-opacity="0.52" stroke="#3b82f6" stroke-opacity="0.42"/>
+    <circle cx="690" cy="811" r="7" fill="none" stroke="#93c5fd" stroke-width="1.4"/>
+    <text x="688" y="815" class="tiny" fill="#93c5fd" font-weight="700">i</text>
+    <text x="708" y="816" class="small" fill="#bfdbfe">Key 以明文保存在本地 CLI-Manager 数据库；界面与日志默认脱敏。</text>
+  </g>
+
+  <!-- Footer -->
+  <g class="ui">
+    <line x1="220" y1="866" x2="1600" y2="866" stroke="#263449"/>
+    <circle cx="252" cy="883" r="4" fill="#4ade80"/>
+    <text x="266" y="887" class="small muted">全局切换写入用户 Home 配置；新启动进程生效，已运行终端保持不变。</text>
+    <rect x="1434" y="873" width="134" height="26" rx="8" fill="#172033" stroke="#a78bfa" stroke-width="2"/>
+    <text x="1460" y="891" class="small subtle">保存供应商</text>
+  </g>
+</svg>

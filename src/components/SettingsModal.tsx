@@ -34,7 +34,7 @@ import { HistorySourceSettingsPage } from "./settings/pages/HistorySourceSetting
 import { HookSettingsPage } from "./settings/pages/HookSettingsPage";
 import { StatuslineSettingsPage } from "./settings/pages/StatuslineSettingsPage";
 import { CommandSuggestionSettingsPage } from "./settings/pages/CommandSuggestionSettingsPage";
-import { ProviderSettingsPage } from "./settings/pages/ProviderSettingsPage";
+import { NativeProviderSettingsPage } from "./settings/pages/NativeProviderSettingsPage";
 import { ModelPricingSettingsPage } from "./settings/pages/ModelPricingSettingsPage";
 import { AboutSettingsPage } from "./settings/pages/AboutSettingsPage";
 import { DesktopPetSettingsPage } from "./settings/pages/DesktopPetSettingsPage";
@@ -284,7 +284,7 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
     if (activeTab === "terminal-theme") return <ThemeSettingsPage />;
     if (activeTab === "shortcuts") return <ShortcutSettingsPage searchValue={searchValue} />;
     if (activeTab === "templates") return <TemplateSettingsPage searchValue={searchValue} />;
-    if (activeTab === "providers") return <ProviderSettingsPage searchValue={searchValue} />;
+    if (activeTab === "providers") return <NativeProviderSettingsPage searchValue={searchValue} />;
     if (activeTab === "model-pricing") return <ModelPricingSettingsPage searchValue={searchValue} />;
     if (activeTab === "cc-connect") return <CcConnectSettingsPage />;
     if (activeTab === "ssh-hosts") return <SshHostsSettingsPage searchValue={searchValue} onTerminalOpened={onClose} />;
