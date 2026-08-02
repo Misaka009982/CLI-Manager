@@ -1,1 +1,3 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/tasks/08-02-key/acceptance.md","reason":"Acceptance gates and manual/automated verification matrix."}
+{"file":".trellis/tasks/08-02-key/research/cc-switch-and-multikey.md","reason":"Pinned upstream CCS and multi-key evidence."}
+{"file":".trellis/tasks/08-02-key/research/implementation-touchpoints.md","reason":"Existing CCS runtime touchpoints that must be cut over."}

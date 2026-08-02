@@ -1,6 +1,7 @@
-// Version 25 was already shipped by an earlier provider-management prototype.
-// Keep its exact SQL in the migration registry so SQLx can validate existing
-// databases instead of treating the old migration as modified or missing.
+// Historical migration tombstones only. Version 25 and the subsequent removed
+// prototype schema were already shipped; keep their exact SQL in the registry
+// so SQLx can validate existing databases. New provider-domain work must use
+// its independent providers.db and must not query or extend these tables.
 pub(crate) const MIGRATION_LEGACY_PROVIDERS_VERSION: i64 = 25;
 pub(crate) const MIGRATION_LEGACY_PROVIDERS_DESCRIPTION: &str = "create_providers_and_keys_tables";
 pub(crate) const MIGRATION_LEGACY_PROVIDERS_SQL: &str = "

@@ -4,6 +4,23 @@
 - Scope: mixed
 - Date: 2026-08-02
 
+## Superseding implementation decision
+
+This evidence is retained for source links and writer behavior. The task’s
+final decision supersedes its earlier “logical contract” proposal:
+
+- copy the complete CCS supplier-domain schema/configuration conventions into
+  a separate CLI-Manager-owned `providers.db`;
+- extend it with the compatible manual subset of `provider_api_keys`;
+- retain complete raw configuration editor surfaces, including Codex
+  `auth.json` and `config.toml`, rather than a redacted minimal form;
+- use CCS only as a read-only import source after cutover;
+- support a type-level common config for Claude, Codex, and Grok Build even
+  where current CCS does not expose the Grok common-config feature.
+
+The definitive requirements and implementation rules are now
+`../prd.md`, `../design.md`, and the provider-domain contracts.
+
 ## Findings
 
 ### Executive conclusion

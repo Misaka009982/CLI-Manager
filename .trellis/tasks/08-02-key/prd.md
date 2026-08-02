@@ -1,146 +1,279 @@
-# CLI-Manager 原生供应商管理与多 Key 架构调研
+# Provider Domain Rebuild — Requirements Research
 
-## Changelog Target
+## Changelog target
 
 `[TEMP]`
 
-## 问题陈述
+## Decision
 
-CLI-Manager 当前的供应商能力强依赖 cc-switch（CCS）。本任务先完成需求调研和实施规划，目标是让 CLI-Manager 成为供应商配置的权威数据源，同时保留从 CCS 导入的迁移路径，并参考 CCS 的成熟交互进行增强。
+CLI-Manager will own the complete CC Switch-compatible provider domain. It will
+not use CC Switch as a runtime provider catalog, switch engine, or project
+launch dependency. CC Switch remains an explicit, read-only import source.
 
-## 用户价值
+The target is deliberately a **complete provider domain**, not a reduced
+“provider + URL + key” form:
 
-- 不安装或不运行 CCS，也能完整管理并切换 CLI 供应商。
-- 在一个供应商下维护多个 API Key，降低手工改配置和密钥轮换成本。
-- 在 Claude Code、Codex、Grok 三类 CLI 之间获得一致但符合各自配置格式的管理体验。
-- 通过环境检查提前发现 CLI、配置目录、凭据和代理等问题。
-- 通过“通用配置 + 供应商覆盖”减少重复配置，同时保留精细控制能力。
+- provider CRUD, copy, ordering, notes, icons, enabled/current state;
+- all provider configuration for Claude Code, Codex, and Grok Build;
+- a type-level common configuration with per-provider inheritance;
+- multiple plaintext keys and manual selection of one active key;
+- global switching that writes the selected provider into the selected user
+  Home’s real CLI configuration files;
+- project and Worktree overrides resolved from CLI-Manager’s database;
+- local/WSL environment inspection and one authoritative, user-selectable
+  Home root;
+- CCS import, preview, conflict handling, and legacy override migration.
 
-## 已知需求
+This scope copies the supplier-oriented tables, configuration shapes, command
+semantics, and screen depth of CC Switch. It does **not** copy CC Switch’s
+unrelated proxy, MCP, prompt, quota, payment, usage, or automatic key-routing
+subsystems.
 
-### R1. 原生供应商管理
+## Product problem
 
-- CLI-Manager 自主管理供应商，不再以 CCS 数据为运行时依赖或唯一来源。
-- 第一阶段支持三类：Claude Code、Codex、Grok。
-- 供应商需支持新增、编辑、复制、启用/停用、删除、排序或搜索等基础管理能力；最终范围待结合现有 UI 和 CCS 能力确认。
+Today provider selection is coupled to `.cc-switch/cc-switch.db`. That causes
+an external program’s installation, schema, and IDs to decide whether
+CLI-Manager can list providers, launch a project override, or recover a
+session. The brief native-provider attempt was intentionally removed because
+it provided only a shallow text form and did not match the full configuration
+experience users rely on in CC Switch.
 
-### R2. 多 Key 模式
+The replacement must preserve the powerful part of CCS: a provider is a real
+configuration profile, including endpoint, models, credentials, raw config
+documents, common configuration, and a globally materialized live state.
 
-- 单个供应商可以维护多个 Key。
-- 用户手动选择并启用某个 Key；MVP 不做 Key 自动轮换、失败自动切换或有效性检测。
-- 同一供应商在任一时刻仅有一个已启用 Key；启用另一个 Key 时替换当前启用项，并触发对应 CLI 全局配置更新。
-- Key 支持名称/备注、脱敏展示、手动启用；删除或停用当前 Key 时必须先显式选择替代 Key，否则拒绝操作。
-- 按产品决定，Key 在 CLI-Manager SQLite 中明文存储，不使用系统凭据库。前端列表/详情 DTO、日志、诊断和普通导出仍只返回脱敏值；只有新增/替换 Key 的写入请求携带明文。
+## User-facing outcomes
 
-### R3. 全局与项目级供应商切换
+1. A user can maintain Claude Code, Codex, and Grok Build providers without
+   installing or opening CC Switch.
+2. One provider can contain multiple account/API keys. The user explicitly
+   chooses the active key. There is no automatic validation, rotation,
+   failover, cooldown, quota, or health-based switching.
+3. A user can select a global provider for each CLI type and CLI-Manager writes
+   that provider into the selected Home’s actual CLI files. A newly opened CLI
+   outside CLI-Manager sees that choice too.
+4. A user can optionally select a provider for a project or Worktree. The
+   launch uses CLI-Manager’s provider database, never a CCS lookup.
+5. A user can inspect and edit the complete type-specific configuration:
+   models, endpoint/base URL, auth file, main config file, advanced fields,
+   and effective merged output. Existing non-provider configuration such as
+   MCP, hooks, projects, and permissions is retained when applying globally.
+6. A user can choose the Home used for diagnosis and global application. The
+   same Home drives default hook targets and session-history roots unless a
+   user has explicitly configured a more-specific override.
+7. Existing CCS data can be imported safely and repeatedly, with a preview
+   rather than becoming a permanent external runtime dependency.
 
-- 每个 CLI 类型维护一个全局当前供应商；“全局切换”必须与 CCS 能力一致，直接写入用户 Home 下对应 CLI 的真实配置文件，而不是只更新 CLI-Manager 数据库、只影响 CLI-Manager 创建的终端，或写入 `~/.cli-manager` 的隔离文件。
-- 目标文件至少包括 Claude Code `~/.claude/settings.json`、Codex `~/.codex/config.toml`（以及该版本所需认证载体）、Grok `~/.grok/config.toml`；路径通过实际用户 Home/CLI 配置根解析，不硬编码用户名。
-- 全局写入成功后，从 CLI-Manager 外部新启动的对应 CLI 也必须使用所选供应商；CLI-Manager 退出后配置仍持续生效。
-- 项目可选择 CLI-Manager 原生供应商作为覆盖；未设置项目覆盖时跟随该 CLI 类型的全局当前供应商。
-- 现有项目级切换从“运行时读取 CCS”迁移为“运行时读取 CLI-Manager 原生供应商库”，并保留“恢复跟随全局”。
-- 全局切换不得覆盖已有项目 override；项目 override 也不得改变全局当前供应商。
-- 需要明确切换对已运行终端/进程与新启动进程的生效边界。
+## Functional requirements
 
-### R4. 本地环境检查
+### R1. CC Switch-compatible catalog
 
-- 检查三类 CLI 的安装/可执行性、版本、配置文件或目录、当前激活供应商，以及必要的环境变量/凭据状态。
-- 检查结果应区分正常、警告、错误，并提供可执行的修复建议。
-- MVP 为只读检查：允许刷新、复制诊断、打开配置目录或安装文档，不自动安装 CLI、不删除环境变量、不改写系统代理。
-- 环境检查必须允许用户选择 Home 来源：自动检测、手动选择目录、手动输入绝对路径、恢复自动检测。
-- 手动选择的是用户 Home 根目录，不是 `.claude` / `.codex` / `.grok` 子目录；界面实时展示由该 Home 推导出的三类配置目标路径。
-- 手动 Home 是 CLI 配置根的公共路径权威：环境检查、全局供应商写入、Hook/Statusline 安装目标和会话历史默认读取目录都必须由它派生。例如选择 `D:\Users\dev` 后，Claude/Codex/Grok 分别使用其 `.claude`、`.codex`、`.grok` 子目录，不能出现“检查 A 路径、写入 B 路径、Hook 装到 C 路径、历史读取 D 路径”。
-- 支持本地 Windows Home 和 WSL Home。WSL 可通过目录选择或手动粘贴 UNC/WSL 路径，并按发行版分别保存；无效、相对、文件路径、不可访问或只读 Home 必须提示错误。
-- 未配置功能级自定义目录时，Hook/Statusline 目标默认派生为 `<home>/.claude`、`<home>/.codex`、`<home>/.grok`；会话历史默认读取 `<home>/.claude/projects`、`<home>/.codex/sessions`、`<home>/.grok/sessions` 及 Codex 同配置根下的索引/状态文件。
-- 已存在的 Hook 自定义配置目录和会话来源自定义根目录优先于公共 Home，切换 Home 时不得静默覆盖；界面要明确显示“未跟随当前 Home”，并提供“跟随当前 Home”操作。
-- 选择 Home 立即重新检测 Hook 状态并让自动跟随的历史来源刷新/重建索引，但不自动安装、卸载或迁移 Hook，也不移动/删除旧 Home 的历史文件。若已有全局供应商，显示“需要重新应用到新 Home”，由用户显式确认后再写入。
+- The catalog database is app-owned at
+  `<CLI-Manager data root>/providers.db`; on the current Windows layout this
+  is `~/.cli-manager/providers.db`.
+- It contains the CCS supplier-domain tables and JSON/TOML settings shapes,
+  with CCS’s composite identity `(id, app_type)` retained.
+- Public UI type names are `claude`, `codex`, and `grok`. Storage and
+  import normalize Grok to CCS `grokbuild` while accepting its documented
+  aliases.
+- A provider has name, note, website, category, icon/color, ordering,
+  enabled/current state, endpoint/base URL, model settings, full
+  `settings_config`, and metadata.
+- List cards are reorderable and show name, base URL, selected model, active
+  key label/count, and global/current status. They are not merely table rows.
+- Create, edit, duplicate, reorder, delete, enable/disable, and explicit
+  global switch are complete operations. Deleting a current/referenced provider
+  is rejected with the references that must be changed first.
 
-### R5. 分类型配置文件编辑与继承
+### R2. Configuration completeness by CLI type
 
-- Claude Code、Codex、Grok 分类型编辑各自配置。
-- 每种类型支持一份通用配置。
-- 编辑供应商配置时可继承通用配置，并允许供应商级覆盖。
-- 需要定义对象/数组/空值的合并语义、预览最终配置、格式校验、冲突提示、原始编辑模式和安全写入/回滚机制。
+The editor is configuration-first and follows the CCS supplier-editing model.
+It must provide structured fields **and** raw documents; neither is a
+replacement for the other.
 
-### R6. CCS 导入与解耦
+| Type | Required editor surfaces | Global live targets |
+| --- | --- | --- |
+| Claude Code | provider name/note/website, API base URL, active API key, model family fields, advanced options, complete `settings.json` JSON, effective JSON/diff | `<home>/.claude/settings.json` |
+| Codex | provider name/note/website, API base URL/request URL, active API key, `model`, `model_provider`, model-provider fields, advanced options, full `auth.json` JSON, full `config.toml` TOML, effective config/diff | `<home>/.codex/auth.json` and `<home>/.codex/config.toml` |
+| Grok Build | provider name/note/website, API base URL, active API key, model/default-model fields, advanced options, full `config.toml` TOML, effective config/diff | `<home>/.grok/config.toml` |
 
-- 支持从 CCS 导入供应商、配置和多 Key 数据（若源数据具备）。
-- 导入是迁移/同步入口，不构成 CLI-Manager 运行时依赖。
-- 需要定义重复项匹配、冲突处理、导入预览、密钥导入授权和重复导入的幂等行为。
-- CCS 导入完成后，供应商列表、全局切换、项目/Worktree 覆盖、终端启动和 CC Connect 均不得再读取 CCS；CCS 路径仅保留在“导入来源”设置中。
+- API base URL, active key, and at least the type’s model selection are visible
+  at the top of a provider editor. They are validated before a provider can be
+  globally applied; draft providers may remain incomplete.
+- The raw documents are full editable documents, not a restricted set of
+  fields. Codex’s editor must retain/round-trip `auth.json` and
+  `config.toml`, including model providers, MCP, hooks, project trust, and
+  unknown fields.
+- API key input and auth/config document represent the same active credential.
+  The UI may reveal and edit it in the explicit full-config editor because
+  plaintext storage is a product decision; on save the backend reconciles it
+  with the selected key record in one transaction. A key must not silently
+  diverge between a raw document and the key table.
+- Typed helper controls update the corresponding raw document fields and show
+  where the field is written. Raw edits update structured controls after
+  successful parsing. If a document cannot be parsed, the field controls show
+  the parse error and cannot overwrite it.
 
-### R7. 备份、同步与恢复边界
+### R3. Type-level common configuration
 
-- MVP 的 WebDAV/普通导出只同步供应商元数据、非敏感配置和 Key 占位信息，不同步 Key 明文。
-- 在另一台设备恢复后，缺少凭据的 Key 显示“需要重新录入”，对应供应商不可激活；不得静默写入空 Key。
-- 加密 Key 导出、跨设备密钥同步和用户口令恢复包作为后续独立需求，不混入本任务。
+- Common configuration belongs to a CLI **type**, never to a provider.
+- Each type has a dedicated common-config editor reachable from its type tab:
+  Claude JSON; Codex shared TOML plus the supported authentication/common
+  document; Grok TOML.
+- Each provider has a visible `inherit common configuration` switch. Its own
+  settings override common settings; disabling inheritance uses only that
+  provider’s settings.
+- The UI exposes Source / Type common / Provider / Effective / Live diff
+  views. It must show which source wins for each conflicting field.
+- Merge policy: recursively merge objects/tables; provider scalar/table values
+  win; arrays are replaced; JSON `null` explicitly overrides a common value.
+  Key material is injected only after the common/provider merge.
+- Although current CCS does not provide a Grok common snippet, this product
+  explicitly requires one. Its format and merge behavior are the Grok Build
+  TOML equivalent; it must not be emulated as a provider-specific config.
 
-## 仓库已确认事实
+### R4. Manual multi-key mode
 
-- 当前 `ProviderSettingsPage` 是 CCS 数据库的只读浏览器，调用 `ccswitch_list_providers` 和 `ccswitch_list_common_configs`，不能原生新增或编辑供应商。
-- 当前 Rust `ccswitch.rs` 会直接读取 `~/.cc-switch/cc-switch.db`，并为项目级 Claude/Codex override 在启动时再次读取 CCS；因此 CCS 目前不仅是导入源，也是运行时依赖。
-- 当前项目表 migration v12 已有 `provider_overrides`，用于项目级 Claude/Codex 供应商；终端启动链会把这些 override 交给 `pty_prepare_create`。
-- 当前 CCS 集成已经实现 JSON 深合并、Codex TOML 分段合并、同目录临时文件替换、WSL SQLite 快照读取和敏感字段脱敏，可作为原生实现的复用基础。
-- 当前 CLI-Manager 已有 Grok Build Hook 与 `~/.grok/config.toml` 配置目录处理，因此本需求中的 Grok 按 Grok Build CLI 设计，不新增另一套“Grok API CLI”概念。
-- 当前仓库虽已有跨平台系统凭据存储封装，但本需求明确不用于供应商 Key；Key 直接进入原生 provider key 表的明文字段。
-- 上一次同主题会话曾按 `LuckerYan/cc-switch` 设计自动故障切换；该方向已被本次确认推翻，只保留多 Key 保存与手动启用。
-- 目标多 Key 参考的高置信候选是 cc-switch 未合并 PR #4957（`feat/multi-api-keys`）；可复用子表和手动激活结构，但明确拒绝其轮询、限额、冷却、429 切换和明文前端传输。
-- Grok Build 官方源码确认支持 `GROK_HOME` 覆盖用户配置根目录，因此项目级 Grok 覆盖可以像 Claude/Codex 一样生成隔离目录，并在单个新进程环境中设置 `GROK_HOME`，无需改写全局配置。
+- A provider can contain zero or more keys. A non-draft enabled provider has
+  exactly one active key; first key creation may make it active after user
+  confirmation.
+- Every key has label, note, optional tags, enabled flag, sort order, creation
+  time, and plaintext `api_key`. The product explicitly chooses plaintext
+  SQLite storage.
+- The user can add, edit, reorder, disable, delete, and manually activate a
+  key. Activating a key updates the selected provider’s credential projection
+  and, if that provider is current, offers to reapply the live config.
+- Deleting/disabling the active key requires an explicit replacement key or
+  turns the provider into a draft only after a destructive confirmation. No
+  background process chooses another key.
+- Excluded: automatic key validation, retry, rotation, round-robin,
+  rate-limit detection, health state, cooldown, failover, balance/usage
+  polling, and proxy/key-pool runtime.
 
-## 初步非功能约束
+### R5. Global provider switching
 
-- Windows 桌面环境优先，并覆盖本地 PowerShell/CMD/Pwsh、WSL/Bash 等现有终端场景。
-- 配置写入必须原子化、可备份、可回滚，不能因部分失败破坏用户已有配置。
-- 用户可见文案必须同时支持 `zh-CN` 与 `en-US`，时间显示保持 24 小时制。
-- 不在日志、错误详情、遥测或前端状态快照中泄露完整 Key。
-- 配置解析/生成和密钥处理应在可信边界内完成，前后端职责在设计阶段确定。
+- Global is one current provider per CLI type and is an externally observable
+  live-config state, not only a row in a database.
+- Applying globally resolves the selected Home, creates required directories,
+  stages every target file, parses/validates each staged file, writes backups,
+  replaces the live targets, then commits the current-provider state.
+- Codex is a multi-file apply and must compensate both `auth.json` and
+  `config.toml` if either target fails. No database state may claim success
+  while live files still represent the previous provider.
+- Existing files are owner-aware: provider-owned values are updated, while
+  user/CLI-Manager-owned hooks, permissions, MCP, projects, statusline, and
+  unknown fields are preserved according to the type writer contract.
+- A provider switch changes future processes only. Existing terminal sessions,
+  panes, Workspaces, minimized windows, and tray background state keep their
+  launch-time environment/config snapshot.
 
-## 场景矩阵（调研必须覆盖）
+### R6. Project and Worktree switching
 
-| 维度 | 场景 |
-|---|---|
-| 应用状态 | 当前窗口聚焦 / 其他窗口聚焦 / 应用未聚焦 / 最小化 / 托盘 |
-| 终端状态 | 无会话 / 单会话 / 多会话 / 分屏 / 跨 Workspan |
-| 运行环境 | PowerShell / CMD / Pwsh / Git Bash / WSL |
-| 项目位置 | 主仓库 / Worktree / 路径失效 |
-| CLI 状态 | 已安装 / 未安装 / 版本不兼容 / 正在运行 |
-| Hook 状态 | 对应 Hook 已安装 / 未安装 / 部分安装 / 被第三方管理 |
-| CCS 状态 | 未安装 / 已安装无数据 / 有单 Key 数据 / 有多 Key 数据 / 数据损坏 |
-| 配置状态 | 文件不存在 / 合法 / 含未知字段 / 语法损坏 / 只读 / 被外部同时修改 |
-| Home 来源 | 自动检测 / 手动本地目录 / 手动绝对路径 / WSL UNC / 不存在 / 选成 CLI 子目录 / 恢复自动检测 |
-| Key 状态 | 单 Key / 多 Key / 禁用 / 过期或验证失败 / 重复 / 部分导入失败 |
-| 切换结果 | 写入成功 / 部分失败 / CLI 占用文件 / 回滚成功 / 回滚失败 |
+- Existing project/Worktree provider selectors are migrated to read the native
+  catalog and reference `{ schemaVersion, source: "cli-manager",
+  providerId, appType }`.
+- Resolution is `Worktree override > project override > type global current`.
+  Reset restores the next lower layer; it never alters the global current
+  provider.
+- A local launch materializes an isolated provider configuration:
+  Claude uses a generated settings file and `--settings`; Codex uses an
+  generated profile; Grok Build uses a per-process `GROK_HOME`. These are
+  project-only mechanics and cannot substitute for the global Home write.
+- The active native key is injected into the target process/config, never
+  embedded in a shell command. SSH/remote launch continues to reject local
+  provider-key injection until a separately approved remote-secret design
+  exists.
+- Migration from existing CCS override IDs is done through an import mapping
+  table. There is no name, UUID-shape, or “first provider” heuristic fallback.
+  Unmapped records remain visible as repair issues.
 
-## 验收方向（待调研后细化）
+### R7. Home selection and environment diagnostics
 
-- [ ] 形成当前 CLI-Manager 供应商/CCS 集成触点和数据流清单。
-- [ ] 形成 CCS 官方仓库及目标多 Key 实现的可核验对比调研。
-- [ ] 明确 Claude Code、Codex、Grok 的配置来源、写入边界和切换语义。
-- [ ] 明确原生数据模型、多 Key 模型、继承/合并规则和密钥安全边界。
-- [ ] 明确全局默认、项目覆盖、现有 `provider_overrides` 迁移和终端启动解析优先级。
-- [ ] 明确 CCS 导入流程、冲突策略、幂等规则和失败回滚。
-- [ ] 提供产品交互原型或可评审线框图。
-- [ ] 产出 `design.md`、`implement.md` 和独立验收计划。
-- [ ] 本任务只进入规划，不开始业务代码实现，除非用户另行批准。
+- The provider domain owns a `CliHomeResolver` with automatic and manual
+  modes. Manual mode accepts a Home root, not `.claude`, `.codex`, or
+  `.grok` directly.
+- Home choices are stored per execution environment: local Windows and each
+  WSL distribution. A Windows path is never copied to a WSL profile.
+- The resolver exposes the three derived config roots and history roots before
+  the user saves. It rejects relative, file, inaccessible, or read-only Home
+  selections and explains the remedy.
+- Environment check reports CLI availability/version, config target/file
+  syntax, active provider/key presence, write access, environment-variable
+  conflicts, Home source, and Hook/history target alignment. It returns
+  presence/masked fingerprints only, never environment variable values.
+- Hook install/statusline targets and automatic history roots consume the same
+  resolver. Explicit Hook config roots and explicit history source instances
+  remain higher-priority and are labelled `not following selected Home`;
+  users can explicitly adopt the selected Home. Selecting a Home never moves,
+  deletes, installs, or uninstalls a Hook.
 
-## 初步排除项
+### R8. CCS import and cutover
 
-- 跨设备云同步供应商或 Key。
-- 自动购买、创建或刷新第三方供应商 Key。
-- Key 自动轮换、随机/顺序调度、失败自动切换、配额感知和有效性检测。
-- 未经确认扩展到 Claude Code、Codex、Grok 之外的 CLI 类型。
-- 自动安装/升级 CLI，自动删除冲突环境变量，自动修改代理或 Shell 配置。
-- 普通备份/WebDAV 中同步 Key 明文；加密密钥导出另立需求。
-- SSH 远端供应商下发与远端凭据管理；本任务的供应商解析只作用于本地启动链。
+- Import reads a selected/default CCS SQLite file as an external, read-only
+  source; SQLite snapshot handling supports local and WSL paths.
+- Preview lists source provider identity, type, settings/config documents,
+  current state, discoverable legacy key, key import result, conflicts, and
+  affected project/Worktree references. Secrets are shown only after an
+  explicit “include keys” acknowledgement.
+- Existing CCS single-key provider credentials become one manual active key.
+  When importing a CCS multi-key database compatible with PR #4957, all keys,
+  labels, notes, enabled/order, and active selection transfer; rotation,
+  quota, cooldown, errors, and usage data are ignored.
+- Import uses `(source path identity, app_type, source provider id,
+  fingerprint)` for idempotency. Same-name providers never silently merge.
+- Import current-provider flags into native global current state only after
+  confirmation to apply to the selected Home.
+- After cutover all production list, select, launch, badge, CC Connect,
+  session restore, and configuration operations resolve native data. CCS
+  commands are reduced to import/repair and no production path reads CCS.
 
-## 已收敛的关键决策
+## Non-functional constraints
 
-- 多 Key 是“一个供应商保存多个、手动启用一个”，不是运行时 Key 池。
-- 选择层级为 `Worktree 覆盖 > 项目覆盖 > 类型全局默认`；覆盖只选供应商，使用该供应商当前手动启用的 Key。
-- 切换对新启动进程生效；已运行进程不注入新配置、不重启。全局实际配置文件会在全局切换成功后更新。
-- “全局”是目标 CLI 用户 Home 配置的实际状态，不是 CLI-Manager 内部逻辑默认值；DB 只记录期望/已应用状态，Home 配置写入失败时不得宣告切换成功。
-- Home override 是本机环境偏好，不随 WebDAV/普通配置同步到其他设备；本机每个环境目标独立保存，避免把 Windows 路径同步到另一台机器或 WSL 发行版。
-- 旧 CCS override 先通过 `(source, appType, externalId)` 导入映射为稳定 native ID，再迁移项目/Worktree JSON；无法映射时保留隔离记录并在 UI 标红，不静默回退全局。
-- 配置合并顺序为“通用配置打底、供应商覆盖、活动 Key 最后投影”，数组默认整体替换，`null` 为显式覆盖；密钥字段不得参与通用合并。
-- Grok 指当前仓库和 cc-switch 已集成的 Grok Build CLI；项目覆盖通过每进程 `GROK_HOME` 隔离。
-- Key 的静态存储采用 SQLite 明文；数据库文件、WAL、全量数据库备份和能读取数据库的本机进程均可能看到 Key，这是已接受的产品安全边界。
+- Desktop-first Windows UI; local PowerShell, CMD, Pwsh, Git Bash and WSL
+  launch paths are supported.
+- All user-visible copy, error code translations, tooltips, and ARIA labels
+  are present in `zh-CN` and `en-US`; English remains 24-hour time.
+- Plaintext storage is disclosed in the provider editor and backup/export UI.
+  Despite plaintext storage, logs, diagnostics, ordinary UI state, masks,
+  crash reports, and default sync/export must not leak full values.
+- Provider management commands are Rust/Tauri commands; frontend SQL cannot
+  bypass parse, atomicity, reference, Home, or redaction rules.
+- No automatic installation/removal of CLIs, environment variables, proxies,
+  Hook files, history files, or configuration directories.
+
+## Explicit exclusions
+
+- CC Switch’s proxy service, key ring, usage/billing, balance checks, prompt
+  library, MCP library, marketplace, and account automation.
+- Automated API key validation, automatic switch/rotation/failover, rate-limit
+  management, key health checks, or traffic scheduling.
+- Cross-device plaintext key sync/export. Default backup/sync includes
+  metadata/config only and restores key placeholders.
+- Remote SSH provider or credential deployment.
+
+## Scenario matrix
+
+| Dimension | Required cases |
+| --- | --- |
+| CLI type | Claude Code, Codex, Grok Build; incomplete draft and complete provider |
+| Key state | none, one, several, disabled, active replacement, imported single/multi key |
+| Scope | global, project, Worktree, reset to inherited; existing terminal remains unchanged |
+| Home | auto local, manual local, manual WSL UNC, each WSL distro, invalid/read-only, restore auto |
+| Live files | absent, valid, unknown fields, parse error, external concurrent modification, write failure/rollback |
+| Terminal | PowerShell, CMD, Pwsh, Git Bash, WSL; single/multiple panes and Workspaces |
+| Hook/history | follow Home, explicit Hook root, explicit history source, install missing/partial/third-party |
+| CCS | absent, empty, valid single-key, compatible multi-key, corrupt, conflicts, repeated import |
+| UI | list search/reorder, keyboard, 1024/1440 widths, Chinese/English, unsaved editor draft |
+
+## Success criteria
+
+- The provider settings page is a complete CCS-class maintenance surface,
+  including visible base URL, API key/key list, models, full documents and
+  type common configuration—not a minimal config textarea.
+- A global switch demonstrably changes the real Home files for all three
+  types and survives restarting CLI-Manager.
+- Project/Worktree launch is native-only; removing/renaming
+  `.cc-switch/cc-switch.db` does not impair native list, switch, or launch.
+- Manual activation selects exactly one key without any automated key behavior.
+- Home diagnostics, Hook status/install target, and automatic history source
+  derive from one chosen Home and preserve explicit overrides.

@@ -1,8 +1,8 @@
 {
   "id": "key",
   "name": "key",
-  "title": "调研原生供应商管理与多 Key 架构",
-  "description": "",
+  "title": "CCS-compatible provider domain rebuild",
+  "description": "Planning package for a complete CLI-Manager-owned provider domain: full configuration editors, type common config, manual multi-key, global Home switching, native project/Worktree resolution, Home diagnostics, and CCS import.",
   "status": "in_progress",
   "dev_type": null,
   "scope": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
+  "notes": "Planning and prototype are complete. The minimal native-provider implementation was removed; retained provider migrations are compatibility tombstones. Begin implementation from implement.md Phase 0.",
   "meta": {}
 }
