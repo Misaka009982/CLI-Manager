@@ -33,7 +33,11 @@ const ERROR_TRANSLATIONS: Partial<Record<string, TranslationKey>> = {
   provider_key_disabled_cannot_activate: "providerCatalog.errors.keyDisabledCannotActivate",
   provider_key_active_cannot_delete: "providerCatalog.errors.activeKeyCannotDelete",
   provider_key_active_cannot_disable: "providerCatalog.errors.activeKeyCannotDisable",
+  provider_key_active_requires_replacement: "providerCatalog.errors.activeKeyRequiresReplacement",
+  provider_key_replacement_invalid: "providerCatalog.errors.invalidKeyReplacement",
   provider_settings_invalid: "providerCatalog.errors.invalidSettings",
+  provider_settings_invalid_json: "providerCatalog.errors.invalidSettings",
+  provider_settings_must_be_object: "providerCatalog.errors.invalidSettings",
 };
 
 function ignoreProviderError(promise: Promise<unknown>): void {
@@ -166,9 +170,12 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
               keys={selectedDetail.keys}
               action={catalog.action}
               onCreate={catalog.createKey}
+              onUpdate={catalog.updateKey}
+              onReveal={(keyId) => catalog.revealKey(selectedDetail.card.id, keyId)}
               onActivate={(keyId) => catalog.activateKey(selectedDetail.card.id, keyId)}
               onSetEnabled={(keyId, enabled) => catalog.setKeyEnabled(selectedDetail.card.id, keyId, enabled)}
-              onDelete={(keyId) => catalog.deleteKey(selectedDetail.card.id, keyId)}
+              onDelete={(keyId, replacementKeyId) => catalog.deleteKey(selectedDetail.card.id, keyId, replacementKeyId)}
+              onReorder={(keyIds) => catalog.reorderKeys(selectedDetail.card.id, keyIds)}
             />
           )}
         </Stack>

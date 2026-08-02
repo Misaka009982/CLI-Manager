@@ -87,6 +87,17 @@ export interface NativeProviderKeyCreateInput {
   activate?: boolean;
 }
 
+export interface NativeProviderKeyUpdateInput {
+  id: string;
+  providerId: string;
+  appType: NativeProviderAppType;
+  label?: string;
+  apiKey?: string;
+  tags?: string[];
+  notes?: string;
+  enabled?: boolean;
+}
+
 export function providerErrorCode(error: unknown): string {
   const message = typeof error === "string"
     ? error

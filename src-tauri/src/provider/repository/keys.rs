@@ -255,32 +255,86 @@ pub(crate) async fn delete_key(
     app_type: String,
     provider_id: String,
     key_id: String,
+    replacement_key_id: Option<String>,
 ) -> Result<(), String> {
     let app_type = normalize_app_type(&app_type)?;
     let mut connection = database::open_connection().await?;
+    let provider_id = provider_id.trim().to_string();
+    let key_id = key_id.trim().to_string();
+    let replacement_key_id = replacement_key_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let mut transaction = connection
+        .begin()
+        .await
+        .map_err(|err| map_database_error("provider_key_delete_begin_failed", err))?;
+    delete_key_in_transaction(
+        &mut transaction,
+        &provider_id,
+        &app_type,
+        &key_id,
+        replacement_key_id.as_deref(),
+    )
+    .await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|err| map_database_error("provider_key_delete_commit_failed", err))?;
+    Ok(())
+}
+
+pub(crate) async fn delete_key_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    provider_id: &str,
+    app_type: &str,
+    key_id: &str,
+    replacement_key_id: Option<&str>,
+) -> Result<(), String> {
     let row = sqlx::query(
         "SELECT is_active FROM provider_api_keys
          WHERE id = ?1 AND provider_id = ?2 AND app_type = ?3",
     )
-    .bind(key_id.trim())
-    .bind(provider_id.trim())
-    .bind(&app_type)
-    .fetch_optional(&mut connection)
+    .bind(key_id)
+    .bind(provider_id)
+    .bind(app_type)
+    .fetch_optional(&mut **transaction)
     .await
     .map_err(|err| map_database_error("provider_key_load_failed", err))?
-    .ok_or_else(|| error("provider_key_not_found", key_id.trim()))?;
-    if row.try_get::<i64, _>("is_active").unwrap_or(0) != 0 {
-        return Err(error("provider_key_active_cannot_delete", key_id.trim()));
+    .ok_or_else(|| error("provider_key_not_found", key_id))?;
+    let is_active = row.try_get::<i64, _>("is_active").unwrap_or(0) != 0;
+
+    if is_active {
+        let replacement_key_id = replacement_key_id
+            .ok_or_else(|| error("provider_key_active_requires_replacement", key_id))?;
+        if replacement_key_id == key_id {
+            return Err(error("provider_key_replacement_invalid", key_id));
+        }
+        activate_key_in_transaction(transaction, provider_id, app_type, &replacement_key_id)
+            .await?;
+        sqlx::query(
+            "DELETE FROM provider_api_keys
+             WHERE id = ?1 AND provider_id = ?2 AND app_type = ?3",
+        )
+        .bind(key_id)
+        .bind(provider_id)
+        .bind(app_type)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|err| map_database_error("provider_key_delete_failed", err))?;
+    } else {
+        sqlx::query(
+            "DELETE FROM provider_api_keys
+             WHERE id = ?1 AND provider_id = ?2 AND app_type = ?3",
+        )
+        .bind(key_id)
+        .bind(provider_id)
+        .bind(app_type)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|err| map_database_error("provider_key_delete_failed", err))?;
     }
-    sqlx::query(
-        "DELETE FROM provider_api_keys WHERE id = ?1 AND provider_id = ?2 AND app_type = ?3",
-    )
-    .bind(key_id.trim())
-    .bind(provider_id.trim())
-    .bind(&app_type)
-    .execute(&mut connection)
-    .await
-    .map_err(|err| map_database_error("provider_key_delete_failed", err))?;
     Ok(())
 }
 

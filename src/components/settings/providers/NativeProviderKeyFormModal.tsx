@@ -1,15 +1,22 @@
 import { useEffect, useState } from "react";
 import { Button, Group, Modal, PasswordInput, Stack, Switch, TextInput, Textarea } from "@mantine/core";
 import { useI18n } from "@/lib/i18n";
-import type { NativeProviderAppType, NativeProviderKeyCreateInput } from "./nativeProviderTypes";
+import type {
+  NativeProviderAppType,
+  NativeProviderKeyCreateInput,
+  NativeProviderKeySummary,
+  NativeProviderKeyUpdateInput,
+} from "./nativeProviderTypes";
 
 interface NativeProviderKeyFormModalProps {
   opened: boolean;
+  mode: "create" | "edit";
   appType: NativeProviderAppType;
   providerId: string;
+  providerKey?: NativeProviderKeySummary | null;
   loading: boolean;
   onClose: () => void;
-  onSubmit: (input: NativeProviderKeyCreateInput) => Promise<void>;
+  onSubmit: (input: NativeProviderKeyCreateInput | NativeProviderKeyUpdateInput) => Promise<void>;
 }
 
 interface KeyDraft {
@@ -30,8 +37,10 @@ const EMPTY_DRAFT: KeyDraft = {
 
 export function NativeProviderKeyFormModal({
   opened,
+  mode,
   appType,
   providerId,
+  providerKey,
   loading,
   onClose,
   onSubmit,
@@ -42,10 +51,16 @@ export function NativeProviderKeyFormModal({
 
   useEffect(() => {
     if (opened) {
-      setDraft(EMPTY_DRAFT);
+      setDraft(mode === "edit" && providerKey ? {
+        label: providerKey.label,
+        apiKey: "",
+        tags: providerKey.tags.join(", "),
+        notes: providerKey.notes,
+        activate: false,
+      } : EMPTY_DRAFT);
       setError(null);
     }
-  }, [opened]);
+  }, [mode, opened, providerKey]);
 
   const updateDraft = <K extends keyof KeyDraft>(key: K, value: KeyDraft[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -61,24 +76,43 @@ export function NativeProviderKeyFormModal({
       setError("label");
       return;
     }
-    if (!apiKey) {
+    if (mode === "create" && !apiKey) {
       setError("apiKey");
       return;
     }
 
-    await onSubmit({
-      providerId,
-      appType,
-      label,
-      apiKey,
-      tags: draft.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
-      notes: draft.notes.trim() || undefined,
-      activate: draft.activate,
-    });
+    const tags = draft.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
+    if (mode === "edit" && providerKey) {
+      await onSubmit({
+        id: providerKey.id,
+        providerId,
+        appType,
+        label,
+        apiKey: apiKey || undefined,
+        tags,
+        notes: draft.notes.trim() || undefined,
+      });
+    } else {
+      await onSubmit({
+        providerId,
+        appType,
+        label,
+        apiKey,
+        tags,
+        notes: draft.notes.trim() || undefined,
+        activate: draft.activate,
+      });
+    }
   };
 
   return (
-    <Modal opened={opened} onClose={onClose} title={t("providerCatalog.addKeyTitle")} centered size="lg">
+    <Modal
+      opened={opened}
+      onClose={onClose}
+      title={t(mode === "create" ? "providerCatalog.addKeyTitle" : "providerCatalog.editKeyTitle")}
+      centered
+      size="lg"
+    >
       <Stack gap="sm">
         <TextInput
           label={t("providerCatalog.keyLabel")}
@@ -91,10 +125,10 @@ export function NativeProviderKeyFormModal({
         />
         <PasswordInput
           label={t("providerCatalog.apiKeyLabel")}
-          placeholder={t("providerCatalog.apiKeyPlaceholder")}
+          placeholder={t(mode === "create" ? "providerCatalog.apiKeyPlaceholder" : "providerCatalog.apiKeyKeepExisting")}
           value={draft.apiKey}
           error={error === "apiKey" ? t("providerCatalog.apiKeyRequired") : undefined}
-          required
+          required={mode === "create"}
           onChange={(event) => updateDraft("apiKey", event.currentTarget.value)}
         />
         <TextInput
@@ -111,13 +145,15 @@ export function NativeProviderKeyFormModal({
           value={draft.notes}
           onChange={(event) => updateDraft("notes", event.currentTarget.value)}
         />
-        <Switch
-          color="cliPrimary"
-          label={t("providerCatalog.activateKeyLabel")}
-          description={t("providerCatalog.activateKeyDescription")}
-          checked={draft.activate}
-          onChange={(event) => updateDraft("activate", event.currentTarget.checked)}
-        />
+        {mode === "create" && (
+          <Switch
+            color="cliPrimary"
+            label={t("providerCatalog.activateKeyLabel")}
+            description={t("providerCatalog.activateKeyDescription")}
+            checked={draft.activate}
+            onChange={(event) => updateDraft("activate", event.currentTarget.checked)}
+          />
+        )}
         <Group justify="flex-end" mt="xs">
           <Button variant="subtle" color="gray" onClick={onClose}>{t("common.cancel")}</Button>
           <Button color="cliPrimary" loading={loading} onClick={() => void handleSubmit().catch(() => undefined)}>

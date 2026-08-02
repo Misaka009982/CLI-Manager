@@ -98,8 +98,14 @@ pub fn provider_key_delete(
     app_type: String,
     provider_id: String,
     key_id: String,
+    replacement_key_id: Option<String>,
 ) -> Result<(), String> {
-    block_on(repository::delete_key(app_type, provider_id, key_id))
+    block_on(repository::delete_key(
+        app_type,
+        provider_id,
+        key_id,
+        replacement_key_id,
+    ))
 }
 
 #[tauri::command]

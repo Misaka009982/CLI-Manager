@@ -1,5 +1,5 @@
 use super::common::merge_json_documents;
-use super::keys::activate_key_in_transaction;
+use super::keys::{activate_key_in_transaction, delete_key_in_transaction};
 use super::support::{
     apply_config_fields, contains_secret_fields, duplicate_settings_config, normalize_app_type,
     project_key_into_settings, redact_settings_config,
@@ -137,4 +137,70 @@ async fn catalog_and_key_projection_round_trip_without_ccs() {
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert!(!rows[0].masked_api_key.contains("sk-secret"));
+}
+
+#[tokio::test]
+async fn replacing_active_key_is_atomic_and_reprojects_credentials() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("providers.db");
+    database::open_connection_at(path.clone()).await.unwrap();
+
+    let mut connection = database::open_connection_at(path).await.unwrap();
+    sqlx::query(
+        "INSERT INTO providers
+         (id, app_type, name, settings_config, created_at, meta)
+         VALUES ('p1', 'codex', 'Codex', '{}', 1, '{\"enabled\":true}')",
+    )
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    for (id, secret) in [("k1", "sk-old"), ("k2", "sk-new")] {
+        sqlx::query(
+            "INSERT INTO provider_api_keys
+             (id, provider_id, app_type, label, api_key, enabled, created_at, updated_at)
+             VALUES (?1, 'p1', 'codex', ?1, ?2, 1, 1, 1)",
+        )
+        .bind(id)
+        .bind(secret)
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    }
+
+    let mut transaction = connection.begin().await.unwrap();
+    activate_key_in_transaction(&mut transaction, "p1", "codex", "k1")
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
+
+    let mut transaction = connection.begin().await.unwrap();
+    delete_key_in_transaction(&mut transaction, "p1", "codex", "k1", Some("k2"))
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
+
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM provider_api_keys WHERE provider_id = 'p1' AND app_type = 'codex'",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .unwrap();
+    let active_id: String = sqlx::query_scalar(
+        "SELECT id FROM provider_api_keys
+         WHERE provider_id = 'p1' AND app_type = 'codex' AND is_active = 1",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .unwrap();
+    let settings: String = sqlx::query_scalar(
+        "SELECT settings_config FROM providers WHERE id = 'p1' AND app_type = 'codex'",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .unwrap();
+
+    assert_eq!(remaining, 1);
+    assert_eq!(active_id, "k2");
+    assert!(settings.contains("sk-new"));
+    assert!(!settings.contains("sk-old"));
 }

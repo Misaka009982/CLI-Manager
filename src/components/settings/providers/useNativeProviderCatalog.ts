@@ -8,6 +8,7 @@ import {
   type NativeProviderDetail,
   type NativeProviderKeyCreateInput,
   type NativeProviderKeySummary,
+  type NativeProviderKeyUpdateInput,
   type NativeProviderUpdateInput,
 } from "./nativeProviderTypes";
 
@@ -28,9 +29,12 @@ interface UseNativeProviderCatalogResult {
   setProviderEnabled: (providerId: string, enabled: boolean) => Promise<void>;
   setCurrentProvider: (providerId: string) => Promise<void>;
   createKey: (input: NativeProviderKeyCreateInput) => Promise<void>;
+  updateKey: (input: NativeProviderKeyUpdateInput) => Promise<void>;
   activateKey: (providerId: string, keyId: string) => Promise<void>;
   setKeyEnabled: (providerId: string, keyId: string, enabled: boolean) => Promise<void>;
-  deleteKey: (providerId: string, keyId: string) => Promise<void>;
+  deleteKey: (providerId: string, keyId: string, replacementKeyId?: string) => Promise<void>;
+  reorderKeys: (providerId: string, keyIds: string[]) => Promise<void>;
+  revealKey: (providerId: string, keyId: string) => Promise<string>;
   clearError: () => void;
 }
 
@@ -108,11 +112,11 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
     void fetchDetail(selectedProviderId);
   }, [fetchDetail, selectedProviderId]);
 
-  const runAction = useCallback(async (name: string, work: () => Promise<void>) => {
+  const runAction = useCallback(async <T,>(name: string, work: () => Promise<T>): Promise<T> => {
     setAction(name);
     setErrorCode(null);
     try {
-      await work();
+      return await work();
     } catch (error) {
       setErrorCode(providerErrorCode(error));
       throw error;
@@ -184,6 +188,13 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
     });
   }, [refreshSelection, runAction]);
 
+  const updateKey = useCallback(async (input: NativeProviderKeyUpdateInput) => {
+    await runAction("update-key", async () => {
+      await invoke<NativeProviderKeySummary>("provider_key_update", { input });
+      await refreshSelection(input.providerId);
+    });
+  }, [refreshSelection, runAction]);
+
   const activateKey = useCallback(async (providerId: string, keyId: string) => {
     await runAction("activate-key", async () => {
       await invoke<NativeProviderKeySummary>("provider_key_activate", {
@@ -207,12 +218,36 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
     });
   }, [appType, refreshSelection, runAction]);
 
-  const deleteKey = useCallback(async (providerId: string, keyId: string) => {
+  const deleteKey = useCallback(async (providerId: string, keyId: string, replacementKeyId?: string) => {
     await runAction("delete-key", async () => {
-      await invoke<void>("provider_key_delete", { appType, providerId, keyId });
+      await invoke<void>("provider_key_delete", {
+        appType,
+        providerId,
+        keyId,
+        replacementKeyId: replacementKeyId ?? null,
+      });
       await refreshSelection(providerId);
     });
   }, [appType, refreshSelection, runAction]);
+
+  const reorderKeys = useCallback(async (providerId: string, keyIds: string[]) => {
+    await runAction("reorder-keys", async () => {
+      await invoke<NativeProviderKeySummary[]>("provider_key_reorder", {
+        appType,
+        providerId,
+        keyIds,
+      });
+      await refreshSelection(providerId);
+    });
+  }, [appType, refreshSelection, runAction]);
+
+  const revealKey = useCallback(async (providerId: string, keyId: string) => (
+    runAction("reveal-key", () => invoke<string>("provider_key_reveal", {
+      appType,
+      providerId,
+      keyId,
+    }))
+  ), [appType, runAction]);
 
   return {
     providers,
@@ -231,9 +266,12 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
     setProviderEnabled,
     setCurrentProvider,
     createKey,
+    updateKey,
     activateKey,
     setKeyEnabled,
     deleteKey,
+    reorderKeys,
+    revealKey,
     clearError: () => setErrorCode(null),
   };
 }
