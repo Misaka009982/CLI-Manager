@@ -261,13 +261,14 @@ async fn record_schema_migration(connection: &mut SqliteConnection) -> Result<()
 }
 
 async fn ensure_common_config_settings(connection: &mut SqliteConnection) -> Result<(), String> {
-    for key in [
-        "common_config_claude",
-        "common_config_codex",
-        "common_config_grokbuild",
+    for (key, value) in [
+        ("common_config_claude", "{}"),
+        ("common_config_codex", ""),
+        ("common_config_grokbuild", ""),
     ] {
-        sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES (?1, '{}')")
+        sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)")
             .bind(key)
+            .bind(value)
             .execute(&mut *connection)
             .await
             .map_err(|err| format!("provider_db_common_config_seed_failed: {err}"))?;

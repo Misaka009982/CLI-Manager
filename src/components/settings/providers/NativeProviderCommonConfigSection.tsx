@@ -15,6 +15,8 @@ const ERROR_TRANSLATIONS: Partial<Record<string, TranslationKey>> = {
   provider_common_config_invalid_json: "providerCatalog.commonConfig.errors.invalidJson",
   provider_common_config_must_be_object: "providerCatalog.commonConfig.errors.mustBeObject",
   provider_common_config_contains_secret: "providerCatalog.commonConfig.errors.containsSecret",
+  provider_common_config_invalid_toml: "providerCatalog.commonConfig.errors.invalidToml",
+  provider_common_config_format_invalid: "providerCatalog.commonConfig.errors.formatInvalid",
 };
 
 function appTypeLabel(appType: NativeProviderAppType, t: (key: TranslationKey) => string): string {
@@ -25,8 +27,10 @@ function appTypeLabel(appType: NativeProviderAppType, t: (key: TranslationKey) =
 
 export function NativeProviderCommonConfigSection({ appType, state }: NativeProviderCommonConfigSectionProps) {
   const { t } = useI18n();
+  const format = state.document?.format ?? (appType === "claude" ? "json" : "toml");
   const validation = useMemo(() => {
     if (!state.draft.trim()) return "required" as const;
+    if (format === "toml") return "valid" as const;
     try {
       const parsed: unknown = JSON.parse(state.draft);
       return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
@@ -35,7 +39,7 @@ export function NativeProviderCommonConfigSection({ appType, state }: NativeProv
     } catch {
       return "invalid" as const;
     }
-  }, [state.draft]);
+  }, [format, state.draft]);
 
   const localError = validation === "required"
     ? t("providerCatalog.commonConfig.errors.required")
@@ -87,8 +91,12 @@ export function NativeProviderCommonConfigSection({ appType, state }: NativeProv
         )}
         {localError && <Text size="xs" c="red">{localError}</Text>}
         <Textarea
-          aria-label={t("providerCatalog.commonConfig.editorLabel")}
-          placeholder={t("providerCatalog.commonConfig.placeholder")}
+          aria-label={t(format === "json"
+            ? "providerCatalog.commonConfig.editorLabelJson"
+            : "providerCatalog.commonConfig.editorLabelToml")}
+          placeholder={t(format === "json"
+            ? "providerCatalog.commonConfig.placeholderJson"
+            : "providerCatalog.commonConfig.placeholderToml")}
           value={state.draft}
           disabled={state.loading}
           minRows={5}

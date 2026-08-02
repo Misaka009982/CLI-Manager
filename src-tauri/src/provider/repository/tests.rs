@@ -1,8 +1,8 @@
-use super::common::merge_json_documents;
+use super::documents::merge_json_documents;
 use super::keys::{activate_key_in_transaction, delete_key_in_transaction};
 use super::support::{
-    apply_config_fields, contains_secret_fields, duplicate_settings_config, normalize_app_type,
-    project_key_into_settings, redact_settings_config,
+    apply_config_fields, config_summary, contains_secret_fields, duplicate_settings_config,
+    normalize_app_type, project_key_into_settings, redact_settings_config,
 };
 use crate::provider::database;
 use serde_json::Value;
@@ -89,6 +89,16 @@ fn common_config_merge_keeps_provider_override() {
     assert_eq!(value["env"]["A"], "provider");
     assert_eq!(value["env"]["B"], "common");
     assert_eq!(value["timeout"], 2);
+}
+
+#[test]
+fn config_summary_reads_nested_toml_document_fields() {
+    let summary = config_summary(
+        "codex",
+        r##"{"config":"# provider\nmodel = \"gpt-test\"\n[model_providers.custom]\nbase_url = \"https://api.example.test\"\n"}"##,
+    );
+    assert_eq!(summary.0.as_deref(), Some("https://api.example.test"));
+    assert_eq!(summary.1.as_deref(), Some("gpt-test"));
 }
 
 #[tokio::test]

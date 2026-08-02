@@ -295,13 +295,13 @@ fn first_json_string(value: &Value, keys: &[&str]) -> Option<String> {
     }
 }
 
-fn first_toml_string(value: &toml::Value, keys: &[&str]) -> Option<String> {
-    match value {
-        toml::Value::Table(table) => {
+fn first_toml_edit_string(item: &toml_edit::Item, keys: &[&str]) -> Option<String> {
+    match item {
+        toml_edit::Item::Table(table) => {
             for key in keys {
                 if let Some(found) = table
-                    .get(*key)
-                    .and_then(toml::Value::as_str)
+                    .get(key)
+                    .and_then(toml_edit::Item::as_str)
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                 {
@@ -309,12 +309,22 @@ fn first_toml_string(value: &toml::Value, keys: &[&str]) -> Option<String> {
                 }
             }
             table
-                .values()
-                .find_map(|child| first_toml_string(child, keys))
+                .iter()
+                .find_map(|(_, child)| first_toml_edit_string(child, keys))
         }
-        toml::Value::Array(items) => items
-            .iter()
-            .find_map(|child| first_toml_string(child, keys)),
+        toml_edit::Item::Value(value) => value.as_inline_table().and_then(|table| {
+            table.iter().find_map(|(key, child)| {
+                if keys.iter().any(|candidate| *candidate == key) {
+                    child
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                } else {
+                    None
+                }
+            })
+        }),
         _ => None,
     }
 }
@@ -351,11 +361,15 @@ pub(crate) fn config_summary(
         ],
     );
     if let Some(config) = value.get("config").and_then(Value::as_str) {
-        if let Ok(toml_value) = toml::from_str::<toml::Value>(config) {
-            base_url = base_url
-                .or_else(|| first_toml_string(&toml_value, &["base_url", "baseUrl", "endpoint"]));
+        if let Ok(toml_value) = config.parse::<toml_edit::DocumentMut>() {
+            base_url = base_url.or_else(|| {
+                first_toml_edit_string(toml_value.as_item(), &["base_url", "baseUrl", "endpoint"])
+            });
             model = model.or_else(|| {
-                first_toml_string(&toml_value, &["model", "default_model", "model_provider"])
+                first_toml_edit_string(
+                    toml_value.as_item(),
+                    &["model", "default_model", "model_provider"],
+                )
             });
         }
     }

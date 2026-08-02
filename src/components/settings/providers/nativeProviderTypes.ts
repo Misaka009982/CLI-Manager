@@ -48,7 +48,23 @@ export interface NativeProviderDetail {
   settingsConfig: string;
   effectiveSettingsConfig: string;
   settingsHasSecret: boolean;
+  documents: NativeProviderDocument[];
   keys: NativeProviderKeySummary[];
+}
+
+export interface NativeProviderDocument {
+  kind: string;
+  format: "json" | "toml";
+  value: string;
+  hasSecret: boolean;
+  valid: boolean;
+}
+
+export interface NativeProviderDocumentUpdateInput {
+  appType: NativeProviderAppType;
+  providerId: string;
+  kind: string;
+  value: string;
 }
 
 export interface NativeProviderCommonConfig {

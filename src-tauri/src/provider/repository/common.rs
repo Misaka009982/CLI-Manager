@@ -1,7 +1,6 @@
+use super::documents::{redact_common_document, redact_toml_document};
 use super::dto::{CommonConfigDocument, CommonConfigSetInput};
-use super::support::{
-    contains_secret_fields, error, map_database_error, normalize_app_type, redact_settings_config,
-};
+use super::support::{contains_secret_fields, error, map_database_error, normalize_app_type};
 use crate::provider::database;
 use serde_json::Value;
 use sqlx::SqliteConnection;
@@ -10,48 +9,27 @@ pub(crate) async fn get_common_config_value(
     connection: &mut SqliteConnection,
     app_type: &str,
 ) -> Result<String, String> {
-    sqlx::query_scalar("SELECT value FROM settings WHERE key = ?1")
+    let value = sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?1")
         .bind(format!("common_config_{app_type}"))
         .fetch_optional(&mut *connection)
         .await
         .map_err(|err| map_database_error("provider_common_config_read_failed", err))?
-        .ok_or_else(|| error("provider_common_config_not_found", app_type))
-}
-
-fn merge_json_values(common: &mut Value, provider: Value) {
-    if let (Some(common_object), Some(provider_object)) =
-        (common.as_object_mut(), provider.as_object())
-    {
-        for (key, value) in provider_object {
-            if let Some(existing) = common_object.get_mut(key) {
-                merge_json_values(existing, value.clone());
-            } else {
-                common_object.insert(key.clone(), value.clone());
-            }
-        }
-    } else {
-        *common = provider;
+        .ok_or_else(|| error("provider_common_config_not_found", app_type))?;
+    if app_type != "claude" && value.trim() == "{}" {
+        return Ok(String::new());
     }
-}
-
-pub(crate) fn merge_json_documents(common: &str, provider: &str) -> Result<String, String> {
-    let mut common = serde_json::from_str::<Value>(common)
-        .map_err(|_| error("provider_common_config_invalid_json", "common"))?;
-    let provider = serde_json::from_str::<Value>(provider)
-        .map_err(|_| error("provider_settings_invalid_json", "provider"))?;
-    merge_json_values(&mut common, provider);
-    serde_json::to_string_pretty(&common).map_err(|_| error("provider_config_merge_failed", ""))
+    Ok(value)
 }
 
 pub(crate) async fn get_common_config(app_type: String) -> Result<CommonConfigDocument, String> {
     let app_type = normalize_app_type(&app_type)?;
     let mut connection = database::open_connection().await?;
     let value = get_common_config_value(&mut connection, &app_type).await?;
-    let (value, _, valid_json) = redact_settings_config(&value);
+    let (value, _, _, format) = redact_common_document(&app_type, &value);
     Ok(CommonConfigDocument {
         app_type,
         value,
-        format: if valid_json { "json" } else { "text" }.to_string(),
+        format,
     })
 }
 
@@ -63,14 +41,32 @@ pub(crate) async fn set_common_config(
     if value.is_empty() {
         return Err(error("provider_common_config_required", "value"));
     }
-    let format = input.format.unwrap_or_else(|| "json".to_string());
-    if format.eq_ignore_ascii_case("json") {
+    let expected_format = if app_type == "claude" { "json" } else { "toml" };
+    let format = input
+        .format
+        .map(|format| format.trim().to_ascii_lowercase())
+        .unwrap_or_else(|| expected_format.to_string());
+    if format != expected_format {
+        return Err(error(
+            "provider_common_config_format_invalid",
+            expected_format,
+        ));
+    }
+    if app_type == "claude" {
         let parsed = serde_json::from_str::<Value>(&value)
             .map_err(|_| error("provider_common_config_invalid_json", "value"))?;
         if !parsed.is_object() {
             return Err(error("provider_common_config_must_be_object", "value"));
         }
         if contains_secret_fields(&parsed) {
+            return Err(error("provider_common_config_contains_secret", "value"));
+        }
+    } else {
+        let (_, has_secret, valid) = redact_toml_document(&value);
+        if !valid {
+            return Err(error("provider_common_config_invalid_toml", "value"));
+        }
+        if has_secret {
             return Err(error("provider_common_config_contains_secret", "value"));
         }
     }
@@ -81,10 +77,10 @@ pub(crate) async fn set_common_config(
         .execute(&mut connection)
         .await
         .map_err(|err| map_database_error("provider_common_config_write_failed", err))?;
-    let (value, _, _) = redact_settings_config(&value);
+    let (value, _, _, _) = redact_common_document(&app_type, &value);
     Ok(CommonConfigDocument {
         app_type,
         value,
-        format,
+        format: expected_format.to_string(),
     })
 }

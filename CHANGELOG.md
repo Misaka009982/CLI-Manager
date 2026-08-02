@@ -9,7 +9,7 @@
 ### Provider Domain Phase 1 (vertical slice)
 
 - Added native provider catalog/key Tauri commands backed by `providers.db`, including composite app identity, CRUD, duplicate, enable/current state, explicit key activation, masked read DTOs, secret reveal boundary, common-config persistence, and atomic active-key replacement; CCS remains an import source and the existing read-only CCS page is preserved.
-- Added a visible Settings → Native Providers entry with separate catalog, provider editor, metadata/Base URL/model fields, common-config JSON editor, multi-key create/edit/reveal/reorder/activation/replacement flow, localized error states, and independent React components organized by page orchestration, data hooks, catalog/card, editor, key section, reveal/replacement dialogs, and forms. Full document editors, Home apply, project/Worktree resolution, environment diagnostics, and CCS import remain later phases.
+- Added a visible Settings → Native Providers entry with separate catalog, provider editor, metadata/Base URL/model fields, type-specific common-config JSON/TOML editor, complete Claude/Codex/Grok document editors, multi-key create/edit/reveal/reorder/activation/replacement flow, localized error states, and independent React components organized by page orchestration, data hooks, catalog/card, editor, document editor, key section, reveal/replacement dialogs, and forms. Home apply, project/Worktree resolution, environment diagnostics, and CCS import remain later phases.
 
 ### 新增
 

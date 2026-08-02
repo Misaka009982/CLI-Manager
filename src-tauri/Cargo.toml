@@ -36,6 +36,7 @@ cli-manager-history-core = { path = "history-core" }
 regex = "1"
 semver = "1"
 toml = "0.9"
+toml_edit = "0.25"
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
 tauri-plugin-dialog = "2"

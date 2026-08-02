@@ -1119,6 +1119,7 @@ pub fn run() {
             commands::provider::provider_catalog_get,
             commands::provider::provider_catalog_create,
             commands::provider::provider_catalog_update,
+            commands::provider::provider_document_update,
             commands::provider::provider_catalog_duplicate,
             commands::provider::provider_catalog_delete,
             commands::provider::provider_catalog_set_enabled,

@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { providerErrorCode, type NativeProviderAppType, type NativeProviderCommonConfig } from "./nativeProviderTypes";
 
+function commonConfigFormat(appType: NativeProviderAppType): "json" | "toml" {
+  return appType === "claude" ? "json" : "toml";
+}
+
 export interface UseNativeProviderCommonConfigResult {
   document: NativeProviderCommonConfig | null;
   draft: string;
@@ -62,7 +66,7 @@ export function useNativeProviderCommonConfig(appType: NativeProviderAppType): U
         input: {
           appType,
           value: draft,
-          format: "json",
+          format: document?.format ?? commonConfigFormat(appType),
         },
       });
       setDocument(next);
@@ -73,7 +77,7 @@ export function useNativeProviderCommonConfig(appType: NativeProviderAppType): U
     } finally {
       setSaving(false);
     }
-  }, [appType, draft]);
+  }, [appType, document?.format, draft]);
 
   return {
     document,

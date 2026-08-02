@@ -1,7 +1,7 @@
 use crate::provider::repository::{
     self, CommonConfigDocument, CommonConfigSetInput, ProviderCard, ProviderCreateInput,
-    ProviderDetail, ProviderKeyCreateInput, ProviderKeySummary, ProviderKeyUpdateInput,
-    ProviderUpdateInput,
+    ProviderDetail, ProviderDocumentUpdateInput, ProviderKeyCreateInput, ProviderKeySummary,
+    ProviderKeyUpdateInput, ProviderUpdateInput,
 };
 use std::future::Future;
 
@@ -30,6 +30,13 @@ pub fn provider_catalog_create(input: ProviderCreateInput) -> Result<ProviderDet
 #[tauri::command]
 pub fn provider_catalog_update(input: ProviderUpdateInput) -> Result<ProviderDetail, String> {
     block_on(repository::update_provider(input))
+}
+
+#[tauri::command]
+pub fn provider_document_update(
+    input: ProviderDocumentUpdateInput,
+) -> Result<ProviderDetail, String> {
+    block_on(repository::update_provider_document(input))
 }
 
 #[tauri::command]

@@ -31,7 +31,18 @@ pub(crate) struct ProviderDetail {
     pub settings_config: String,
     pub effective_settings_config: String,
     pub settings_has_secret: bool,
+    pub documents: Vec<ProviderDocument>,
     pub keys: Vec<ProviderKeySummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderDocument {
+    pub kind: String,
+    pub format: String,
+    pub value: String,
+    pub has_secret: bool,
+    pub valid: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -126,6 +137,15 @@ pub(crate) struct CommonConfigSetInput {
     pub app_type: String,
     pub value: String,
     pub format: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderDocumentUpdateInput {
+    pub app_type: String,
+    pub provider_id: String,
+    pub kind: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone)]

@@ -5,6 +5,7 @@ import { useI18n, type TranslationKey } from "@/lib/i18n";
 import { useAppConfirm } from "@/components/ui/useAppConfirm";
 import { NativeProviderCatalog } from "../providers/NativeProviderCatalog";
 import { NativeProviderCommonConfigSection } from "../providers/NativeProviderCommonConfigSection";
+import { NativeProviderDocumentEditor } from "../providers/NativeProviderDocumentEditor";
 import { NativeProviderEditor } from "../providers/NativeProviderEditor";
 import { NativeProviderFormModal } from "../providers/NativeProviderFormModal";
 import { NativeProviderKeySection } from "../providers/NativeProviderKeySection";
@@ -38,6 +39,10 @@ const ERROR_TRANSLATIONS: Partial<Record<string, TranslationKey>> = {
   provider_settings_invalid: "providerCatalog.errors.invalidSettings",
   provider_settings_invalid_json: "providerCatalog.errors.invalidSettings",
   provider_settings_must_be_object: "providerCatalog.errors.invalidSettings",
+  provider_config_invalid: "providerCatalog.errors.invalidDocument",
+  provider_config_must_be_object: "providerCatalog.errors.invalidDocumentObject",
+  provider_document_kind_invalid: "providerCatalog.errors.invalidDocumentKind",
+  provider_document_secret_edit_requires_key_manager: "providerCatalog.errors.documentSecretEdit",
 };
 
 function ignoreProviderError(promise: Promise<unknown>): void {
@@ -49,6 +54,7 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
   const { confirm, confirmDialog } = useAppConfirm();
   const [appType, setAppType] = useState<NativeProviderAppType>(NATIVE_PROVIDER_APP_TYPES[0]);
   const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
+  const [documentDirty, setDocumentDirty] = useState(false);
   const catalog = useNativeProviderCatalog(appType);
   const commonConfig = useNativeProviderCommonConfig(appType);
 
@@ -75,15 +81,16 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
 
   const handleAppTypeChange = async (next: NativeProviderAppType) => {
     if (next === appType) return;
-    if (commonConfig.dirty) {
+    if (commonConfig.dirty || documentDirty) {
       const confirmed = await confirm({
-        title: t("providerCatalog.commonConfig.unsavedTitle"),
-        message: t("providerCatalog.commonConfig.unsavedMessage"),
-        confirmText: t("providerCatalog.commonConfig.discard"),
+        title: t("providerCatalog.unsavedChanges.title"),
+        message: t("providerCatalog.unsavedChanges.message"),
+        confirmText: t("providerCatalog.unsavedChanges.discard"),
         danger: true,
       });
       if (!confirmed) return;
     }
+    setDocumentDirty(false);
     setAppType(next);
     setFormMode(null);
     catalog.clearError();
@@ -176,6 +183,22 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
               onSetEnabled={(keyId, enabled) => catalog.setKeyEnabled(selectedDetail.card.id, keyId, enabled)}
               onDelete={(keyId, replacementKeyId) => catalog.deleteKey(selectedDetail.card.id, keyId, replacementKeyId)}
               onReorder={(keyIds) => catalog.reorderKeys(selectedDetail.card.id, keyIds)}
+            />
+          )}
+
+          {selectedDetail && (
+            <NativeProviderDocumentEditor
+              appType={appType}
+              providerId={selectedDetail.card.id}
+              documents={selectedDetail.documents}
+              action={catalog.action}
+              onDirtyChange={setDocumentDirty}
+              onSave={(kind, value) => catalog.updateDocument({
+                appType,
+                providerId: selectedDetail.card.id,
+                kind,
+                value,
+              })}
             />
           )}
         </Stack>

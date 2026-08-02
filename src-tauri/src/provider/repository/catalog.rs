@@ -1,4 +1,6 @@
-use super::common::{get_common_config_value, merge_json_documents};
+use super::common::get_common_config_value;
+use super::documents::documents_from_settings;
+use super::documents::merge_common_into_settings;
 use super::dto::{ProviderCard, ProviderCreateInput, ProviderDetail, ProviderUpdateInput};
 use super::support::{
     active_key_label, apply_config_fields, card_from_record_with_connection,
@@ -49,7 +51,7 @@ pub(crate) async fn get_provider(
         super::support::redact_settings_config(&record.settings_config);
     let common = get_common_config_value(&mut connection, &app_type).await?;
     let effective_settings_config = if card.common_config_enabled {
-        merge_json_documents(&common, &record.settings_config)
+        merge_common_into_settings(&app_type, &common, &record.settings_config)
             .unwrap_or_else(|_| settings_config.clone())
     } else {
         settings_config.clone()
@@ -61,6 +63,7 @@ pub(crate) async fn get_provider(
         settings_config,
         effective_settings_config,
         settings_has_secret,
+        documents: documents_from_settings(&app_type, &record.settings_config),
         keys,
     })
 }

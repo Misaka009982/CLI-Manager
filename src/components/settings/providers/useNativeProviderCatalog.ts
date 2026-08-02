@@ -9,6 +9,7 @@ import {
   type NativeProviderKeyCreateInput,
   type NativeProviderKeySummary,
   type NativeProviderKeyUpdateInput,
+  type NativeProviderDocumentUpdateInput,
   type NativeProviderUpdateInput,
 } from "./nativeProviderTypes";
 
@@ -24,6 +25,7 @@ interface UseNativeProviderCatalogResult {
   refresh: () => Promise<void>;
   createProvider: (input: NativeProviderCreateInput) => Promise<void>;
   updateProvider: (input: NativeProviderUpdateInput) => Promise<void>;
+  updateDocument: (input: NativeProviderDocumentUpdateInput) => Promise<void>;
   duplicateProvider: (providerId: string, name?: string) => Promise<void>;
   deleteProvider: (providerId: string) => Promise<void>;
   setProviderEnabled: (providerId: string, enabled: boolean) => Promise<void>;
@@ -145,6 +147,13 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
     });
   }, [refreshSelection, runAction]);
 
+  const updateDocument = useCallback(async (input: NativeProviderDocumentUpdateInput) => {
+    await runAction("update-document", async () => {
+      const updated = await invoke<NativeProviderDetail>("provider_document_update", { input });
+      await refreshSelection(updated.card.id);
+    });
+  }, [refreshSelection, runAction]);
+
   const duplicateProvider = useCallback(async (providerId: string, name?: string) => {
     await runAction("duplicate-provider", async () => {
       const duplicated = await invoke<NativeProviderDetail>("provider_catalog_duplicate", {
@@ -261,6 +270,7 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
     refresh,
     createProvider,
     updateProvider,
+    updateDocument,
     duplicateProvider,
     deleteProvider,
     setProviderEnabled,
