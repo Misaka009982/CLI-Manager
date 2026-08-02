@@ -31,6 +31,7 @@ pub(crate) const CODEX_REMOTE_PROVIDER_NAME: &str = "cli_manager_remote";
 const MAX_PROTOCOL_LINE_BYTES: usize = 512 * 1024 * 1024;
 const STRICT_RESUME_ERROR_CODE: i64 = -32091;
 const SSH_HANDOFF_HOOK_QUEUE_CAPACITY: usize = 32;
+const LOCAL_HANDOFF_DELIVERY_INSTRUCTION: &str = "CLI-Manager remote handoff: deliver output files with `cc-connect send --file <absolute-path>` and output images with `cc-connect send --image <absolute-path>`.";
 
 #[derive(Debug, Deserialize)]
 struct RpcProbe {
@@ -508,6 +509,8 @@ fn forward_parent_input(
 ) -> Result<(), String> {
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
+    let mut delivery_instruction_pending =
+        expected_thread_id.is_some() && remote_work_dir.is_none();
     while let Some(line) = read_protocol_line(&mut reader, MAX_PROTOCOL_LINE_BYTES)
         .map_err(|err| format!("read cc-connect request failed: {err}"))?
     {
@@ -515,7 +518,13 @@ fn forward_parent_input(
             let mut pending = pending
                 .lock()
                 .map_err(|_| "resume request state lock poisoned".to_string())?;
-            inspect_client_line(&line, expected_thread_id, remote_work_dir, &mut pending)
+            inspect_client_line(
+                &line,
+                expected_thread_id,
+                remote_work_dir,
+                &mut pending,
+                &mut delivery_instruction_pending,
+            )
         };
         match action {
             ClientLineAction::Forward(line) => {
@@ -561,6 +570,7 @@ fn inspect_client_line(
     expected_thread_id: Option<&str>,
     remote_work_dir: Option<&str>,
     pending: &mut HashMap<String, PendingResume>,
+    delivery_instruction_pending: &mut bool,
 ) -> ClientLineAction {
     let Ok(mut message) = serde_json::from_slice::<Value>(trim_line_ending(line)) else {
         return ClientLineAction::Forward(line.to_vec());
@@ -569,6 +579,17 @@ fn inspect_client_line(
         return ClientLineAction::Forward(line.to_vec());
     };
     let method = method.to_string();
+
+    if method == "turn/start"
+        && *delivery_instruction_pending
+        && expected_thread_id.is_some()
+        && remote_work_dir.is_none()
+        && prepend_local_handoff_delivery_instruction(&mut message)
+    {
+        *delivery_instruction_pending = false;
+        return ClientLineAction::Forward(json_line(&message));
+    }
+
     let Some(id) = message.get("id") else {
         return ClientLineAction::Forward(line.to_vec());
     };
@@ -636,6 +657,28 @@ fn inspect_client_line(
     } else {
         ClientLineAction::Forward(line.to_vec())
     }
+}
+
+fn prepend_local_handoff_delivery_instruction(message: &mut Value) -> bool {
+    let Some(inputs) = message
+        .pointer_mut("/params/input")
+        .and_then(Value::as_array_mut)
+    else {
+        return false;
+    };
+    let Some(text) = inputs.iter_mut().find_map(|input| {
+        if input.get("type").and_then(Value::as_str) != Some("text") {
+            return None;
+        }
+        input.get_mut("text").filter(|value| value.is_string())
+    }) else {
+        return false;
+    };
+    let original = text.as_str().unwrap_or_default();
+    *text = Value::String(format!(
+        "{LOCAL_HANDOFF_DELIVERY_INSTRUCTION}\n\n{original}"
+    ));
+    true
 }
 
 fn ssh_handoff_hook_payload(
@@ -1023,11 +1066,16 @@ mod tests {
     #[test]
     fn strict_handoff_rejects_session_drift_and_fresh_thread_fallback() {
         let mut pending = HashMap::new();
+        let mut delivery_instruction_pending = false;
         let drifted = br#"{"jsonrpc":"2.0","id":3,"method":"thread/resume","params":{"threadId":"thread-new"}}
 "#;
-        let ClientLineAction::Reject(response) =
-            inspect_client_line(drifted, Some("thread-original"), None, &mut pending)
-        else {
+        let ClientLineAction::Reject(response) = inspect_client_line(
+            drifted,
+            Some("thread-original"),
+            None,
+            &mut pending,
+            &mut delivery_instruction_pending,
+        ) else {
             panic!("drifted resume must be rejected");
         };
         let response: Value = serde_json::from_slice(trim_line_ending(&response)).unwrap();
@@ -1041,7 +1089,13 @@ mod tests {
         let fresh = br#"{"jsonrpc":"2.0","id":4,"method":"thread/start","params":{}}
 "#;
         assert!(matches!(
-            inspect_client_line(fresh, Some("thread-original"), None, &mut pending),
+            inspect_client_line(
+                fresh,
+                Some("thread-original"),
+                None,
+                &mut pending,
+                &mut delivery_instruction_pending,
+            ),
             ClientLineAction::Reject(_)
         ));
     }
@@ -1049,10 +1103,17 @@ mod tests {
     #[test]
     fn matching_resume_is_forwarded_and_tracked() {
         let mut pending = HashMap::new();
+        let mut delivery_instruction_pending = false;
         let request = br#"{"jsonrpc":"2.0","id":7,"method":"thread/resume","params":{"threadId":"thread-original"}}
 "#;
         assert!(matches!(
-            inspect_client_line(request, Some("thread-original"), None, &mut pending),
+            inspect_client_line(
+                request,
+                Some("thread-original"),
+                None,
+                &mut pending,
+                &mut delivery_instruction_pending,
+            ),
             ClientLineAction::Forward(_)
         ));
         assert_eq!(
@@ -1066,6 +1127,7 @@ mod tests {
     #[test]
     fn ssh_resume_rewrites_placeholder_cwd_to_remote_directory() {
         let mut pending = HashMap::new();
+        let mut delivery_instruction_pending = false;
         let request = br#"{"jsonrpc":"2.0","id":8,"method":"thread/resume","params":{"threadId":"thread-original","cwd":"C:\\placeholder"}}
 "#;
         let ClientLineAction::Forward(forwarded) = inspect_client_line(
@@ -1073,12 +1135,119 @@ mod tests {
             Some("thread-original"),
             Some("/srv/project"),
             &mut pending,
+            &mut delivery_instruction_pending,
         ) else {
             panic!("matching SSH resume must be forwarded");
         };
         let forwarded: Value = serde_json::from_slice(trim_line_ending(&forwarded)).unwrap();
         assert_eq!(forwarded["params"]["cwd"], "/srv/project");
         assert!(pending.contains_key("8"));
+    }
+
+    #[test]
+    fn local_managed_resume_injects_delivery_instruction_only_once() {
+        let mut pending = HashMap::new();
+        let mut delivery_instruction_pending = true;
+        let first = br#"{"jsonrpc":"2.0","id":9,"method":"turn/start","params":{"threadId":"thread-original","input":[{"type":"localImage","path":"C:\\tmp\\source.png"},{"type":"text","text":"Create the report"}]}}
+"#;
+        let ClientLineAction::Forward(first) = inspect_client_line(
+            first,
+            Some("thread-original"),
+            None,
+            &mut pending,
+            &mut delivery_instruction_pending,
+        ) else {
+            panic!("managed local turn must be forwarded");
+        };
+        let first: Value = serde_json::from_slice(trim_line_ending(&first)).unwrap();
+        assert_eq!(first["params"]["input"][0]["path"], r"C:\tmp\source.png");
+        assert_eq!(
+            first["params"]["input"][1]["text"],
+            format!("{LOCAL_HANDOFF_DELIVERY_INSTRUCTION}\n\nCreate the report")
+        );
+        assert!(!delivery_instruction_pending);
+
+        let second = br#"{"jsonrpc":"2.0","id":10,"method":"turn/start","params":{"threadId":"thread-original","input":[{"type":"text","text":"Continue"}]}}
+"#;
+        let ClientLineAction::Forward(forwarded) = inspect_client_line(
+            second,
+            Some("thread-original"),
+            None,
+            &mut pending,
+            &mut delivery_instruction_pending,
+        ) else {
+            panic!("subsequent managed local turn must be forwarded");
+        };
+        assert_eq!(forwarded, second);
+    }
+
+    #[test]
+    fn delivery_instruction_ignores_ssh_and_unmanaged_turns() {
+        let request = br#"{"jsonrpc":"2.0","id":11,"method":"turn/start","params":{"threadId":"thread-original","input":[{"type":"text","text":"Create a file"}]}}
+"#;
+        let mut pending = HashMap::new();
+        let mut ssh_instruction_pending = true;
+        let ClientLineAction::Forward(ssh_forwarded) = inspect_client_line(
+            request,
+            Some("thread-original"),
+            Some("/srv/project"),
+            &mut pending,
+            &mut ssh_instruction_pending,
+        ) else {
+            panic!("SSH turn must be forwarded");
+        };
+        assert_eq!(ssh_forwarded, request);
+        assert!(ssh_instruction_pending);
+
+        let mut unmanaged_instruction_pending = true;
+        let ClientLineAction::Forward(unmanaged_forwarded) = inspect_client_line(
+            request,
+            None,
+            None,
+            &mut pending,
+            &mut unmanaged_instruction_pending,
+        ) else {
+            panic!("unmanaged turn must be forwarded");
+        };
+        assert_eq!(unmanaged_forwarded, request);
+        assert!(unmanaged_instruction_pending);
+    }
+
+    #[test]
+    fn delivery_instruction_waits_for_the_first_text_input() {
+        let mut pending = HashMap::new();
+        let mut delivery_instruction_pending = true;
+        let image_only = br#"{"jsonrpc":"2.0","id":12,"method":"turn/start","params":{"threadId":"thread-original","input":[{"type":"localImage","path":"C:\\tmp\\source.png"}]}}
+"#;
+        let ClientLineAction::Forward(forwarded) = inspect_client_line(
+            image_only,
+            Some("thread-original"),
+            None,
+            &mut pending,
+            &mut delivery_instruction_pending,
+        ) else {
+            panic!("image-only turn must be forwarded");
+        };
+        assert_eq!(forwarded, image_only);
+        assert!(delivery_instruction_pending);
+
+        let text_turn = br#"{"jsonrpc":"2.0","id":13,"method":"turn/start","params":{"threadId":"thread-original","input":[{"type":"text","text":"Now create it"}]}}
+"#;
+        let ClientLineAction::Forward(forwarded) = inspect_client_line(
+            text_turn,
+            Some("thread-original"),
+            None,
+            &mut pending,
+            &mut delivery_instruction_pending,
+        ) else {
+            panic!("text turn must be forwarded");
+        };
+        let forwarded: Value = serde_json::from_slice(trim_line_ending(&forwarded)).unwrap();
+        assert_eq!(
+            forwarded["params"]["input"][0]["text"],
+            format!("{LOCAL_HANDOFF_DELIVERY_INSTRUCTION}\n\nNow create it")
+        );
+        assert!(!delivery_instruction_pending);
     }
 
     #[test]

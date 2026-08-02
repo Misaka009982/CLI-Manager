@@ -916,6 +916,8 @@ pub fn run() {
             commands::terminal::pty_daemon_sessions,
             commands::cc_connect::cc_connect_get_status,
             commands::cc_connect::cc_connect_inspect_executable,
+            commands::cc_connect::cc_connect_check_update,
+            commands::cc_connect::cc_connect_update,
             commands::cc_connect::cc_connect_save_profile,
             commands::cc_connect::cc_connect_clear_credentials,
             commands::cc_connect::cc_connect_weixin_authorization_start,

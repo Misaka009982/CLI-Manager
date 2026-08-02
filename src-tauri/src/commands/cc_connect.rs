@@ -28,6 +28,7 @@ use tauri::{AppHandle, Manager, State};
 pub(crate) mod handoff;
 pub(crate) mod handoff_notification;
 mod handoff_session;
+pub(crate) mod update;
 
 const PROFILE_FILE_NAME: &str = "profile.json";
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -48,6 +49,10 @@ const MAX_CAPTURED_LOG_LINE_BYTES: usize = 8 * 1024;
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
 const CONFIG_FORMAT_TIMEOUT: Duration = Duration::from_secs(8);
 const CODEX_APP_SERVER_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
+const CODEX_MODEL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(4);
+const MAX_CODEX_MODEL_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_MANAGED_CODEX_MODELS: usize = 200;
+const CODEX_MODEL_CATALOG_FILE_NAME: &str = "cli-manager-model-catalog.json";
 const LOCAL_PROXY_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 const DEFAULT_MAX_TURN_TIME_MINS: u32 = 15;
 const MAX_TURN_TIME_MINS: u32 = 24 * 60;
@@ -788,14 +793,14 @@ fn inspect_binary(path: &Path) -> Result<DetectedBinary, String> {
         }
     }
     let sha256 = sha256_file(&canonical)?;
-    if !is_verified_binary_hash(&sha256) {
+    let Some(trusted_version) = trusted_binary_version(&sha256) else {
         return Ok(DetectedBinary {
             path: canonical,
             version: None,
             sha256,
             compatible: false,
         });
-    }
+    };
     let mut command = silent_command(&path_string(&canonical));
     command.arg("--version");
     let output = output_with_timeout(command, VERSION_PROBE_TIMEOUT)
@@ -810,6 +815,7 @@ fn inspect_binary(path: &Path) -> Result<DetectedBinary, String> {
     let version_output = output_text(&output.stdout, &output.stderr);
     let (version, compatible) = parse_version(&version_output)
         .ok_or_else(|| format!("unrecognized version output: {version_output}"))?;
+    let compatible = compatible && version == trusted_version;
     Ok(DetectedBinary {
         sha256,
         path: canonical,
@@ -818,10 +824,14 @@ fn inspect_binary(path: &Path) -> Result<DetectedBinary, String> {
     })
 }
 
-fn is_verified_binary_hash(sha256: &str) -> bool {
-    VERIFIED_V1_4_1_BINARY_SHA256
+fn trusted_binary_version(sha256: &str) -> Option<String> {
+    if VERIFIED_V1_4_1_BINARY_SHA256
         .iter()
         .any(|expected| expected.eq_ignore_ascii_case(sha256))
+    {
+        return Some("1.4.1".to_string());
+    }
+    update::trusted_version_for_sha256(sha256).ok().flatten()
 }
 
 fn output_text(stdout: &[u8], stderr: &[u8]) -> String {
@@ -870,22 +880,15 @@ fn probe_codex_app_server() -> Result<(), String> {
 }
 
 fn parse_version(output: &str) -> Option<(String, bool)> {
-    let token = output.split_whitespace().find(|token| {
-        token
-            .trim_start_matches('v')
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_digit())
+    let version = output.split_whitespace().find_map(|token| {
+        let clean = token
+            .trim_matches(|value: char| matches!(value, '(' | ')' | '[' | ']' | ',' | ';'))
+            .trim_start_matches(['v', 'V']);
+        semver::Version::parse(clean).ok()
     })?;
-    let clean = token.trim_matches(|c: char| !(c.is_ascii_digit() || c == '.'));
-    let mut parts = clean.split('.');
-    let major = parts.next()?.parse::<u64>().ok()?;
-    let minor = parts.next()?.parse::<u64>().ok()?;
-    let patch = parts.next().unwrap_or("0").parse::<u64>().ok()?;
-    Some((
-        format!("{major}.{minor}.{patch}"),
-        major == 1 && minor == 4 && patch == 1,
-    ))
+    let version = version.to_string();
+    let compatible = update::is_compatible_version(&version);
+    Some((version, compatible))
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
@@ -959,7 +962,27 @@ struct ManagedAgentOptions {
     backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     app_server_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codex_home: Option<String>,
     env: BTreeMap<String, String>,
+}
+#[derive(Serialize)]
+struct CodexModelDiscoveryConfig<'a> {
+    model_catalog_json: &'a str,
+}
+#[derive(Serialize)]
+struct CodexModelCatalog {
+    models: Vec<CodexModelCatalogEntry>,
+}
+#[derive(Serialize)]
+struct CodexModelCatalogEntry {
+    slug: String,
+    display_name: String,
+    description: String,
+    visibility: &'static str,
+    supported_in_api: bool,
 }
 #[derive(Serialize)]
 struct ManagedPlatform {
@@ -1153,6 +1176,15 @@ fn build_managed_config(
     project_list_path: &Path,
     project_switch_script_path: &Path,
 ) -> Result<ManagedConfig, String> {
+    build_managed_config_with_codex(profile, project_list_path, project_switch_script_path, None)
+}
+
+fn build_managed_config_with_codex(
+    profile: &CcConnectProfile,
+    project_list_path: &Path,
+    project_switch_script_path: &Path,
+    codex_launch: Option<&RemoteCodexLaunch>,
+) -> Result<ManagedConfig, String> {
     let configured_platforms = enabled_platforms(profile);
     if configured_platforms.is_empty() {
         return Err("at least one messaging platform must be enabled".to_string());
@@ -1172,6 +1204,17 @@ fn build_managed_config(
     let admin_from = admin_users.join(",");
     let (commands, aliases) =
         build_remote_project_commands(profile, project_list_path, project_switch_script_path)?;
+    let codex_home = (profile.agent == CcConnectAgent::Codex)
+        .then(|| codex_launch.and_then(|launch| launch.codex_home.as_ref()))
+        .flatten()
+        .map(|path| config_path_value(path));
+    let active_model = (profile.agent == CcConnectAgent::Codex)
+        .then(|| {
+            codex_launch
+                .and_then(|launch| launch.provider.as_ref())
+                .and_then(|provider| provider.model.clone())
+        })
+        .flatten();
     Ok(ManagedConfig {
         data_dir: config_path_value(&data_dir()?),
         language: match profile.language {
@@ -1245,6 +1288,8 @@ fn build_managed_config(
                         .to_string(),
                     backend: profile.agent.backend().map(str::to_string),
                     app_server_url: profile.agent.app_server_url().map(str::to_string),
+                    model: active_model,
+                    codex_home,
                     // cc-connect resolves platform placeholders in its own process,
                     // then MergeEnv lets these empty values override inheritance into
                     // Claude/Codex child processes.
@@ -1866,6 +1911,13 @@ fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
 }
 
 fn write_managed_config(profile: &CcConnectProfile) -> Result<PathBuf, String> {
+    write_managed_config_with_codex(profile, None)
+}
+
+fn write_managed_config_with_codex(
+    profile: &CcConnectProfile,
+    codex_launch: Option<&RemoteCodexLaunch>,
+) -> Result<PathBuf, String> {
     let dir = remote_manager_dir()?;
     fs::create_dir_all(&dir).map_err(|err| format!("create remote manager dir failed: {err}"))?;
     fs::create_dir_all(data_dir()?)
@@ -1876,10 +1928,11 @@ fn write_managed_config(profile: &CcConnectProfile) -> Result<PathBuf, String> {
     let registered_projects = load_registered_projects(Some(profile))?;
     let cli_manager_executable = std::env::current_exe()
         .map_err(|err| format!("resolve CLI-Manager executable failed: {err}"))?;
-    let payload = toml::to_string_pretty(&build_managed_config(
+    let payload = toml::to_string_pretty(&build_managed_config_with_codex(
         profile,
         &list_path,
         &switch_script_path,
+        codex_launch,
     )?)
     .map_err(|err| format!("serialize cc-connect config failed: {err}"))?;
     let list_payload = render_project_list(profile, &registered_projects);
@@ -2219,6 +2272,9 @@ fn configured_cc_switch_db_path(profile: Option<&CcConnectProfile>) -> Option<Pa
 }
 
 struct RemoteCodexProviderLaunch {
+    name: String,
+    model: Option<String>,
+    models: Vec<String>,
     base_url_override: String,
     env_key_override: String,
     model_override: Option<String>,
@@ -2233,6 +2289,7 @@ struct RemoteCodexLaunch {
     proxy_executable: PathBuf,
     expected_session_id: Option<String>,
     codex_home: Option<PathBuf>,
+    discovery_codex_home: Option<PathBuf>,
     provider: Option<RemoteCodexProviderLaunch>,
     ssh_launch: Option<SshCodexLaunch>,
 }
@@ -2372,6 +2429,187 @@ fn codex_model_override(value: Option<&str>) -> Result<Option<String>, String> {
         .transpose()
 }
 
+fn codex_models_endpoint(base_url: &str) -> Result<reqwest::Url, String> {
+    let normalized = format!("{}/", base_url.trim().trim_end_matches('/'));
+    let base_url = reqwest::Url::parse(&normalized)
+        .map_err(|_| "Codex Provider models URL is invalid".to_string())?;
+    if !matches!(base_url.scheme(), "http" | "https") || base_url.host_str().is_none() {
+        return Err("Codex Provider models URL must use HTTP or HTTPS".to_string());
+    }
+    base_url
+        .join("models")
+        .map_err(|_| "Codex Provider models URL is invalid".to_string())
+}
+
+fn normalize_managed_codex_models(
+    current_model: Option<&str>,
+    discovered_models: impl IntoIterator<Item = String>,
+) -> Vec<String> {
+    const NON_CHAT_MARKERS: [&str; 12] = [
+        "embedding",
+        "whisper",
+        "tts",
+        "moderation",
+        "dall-e",
+        "realtime",
+        "transcribe",
+        "search-preview",
+        "image",
+        "audio-preview",
+        "rerank",
+        "speech",
+    ];
+    let current_model = current_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let mut seen = HashSet::new();
+    let mut models = Vec::new();
+    if let Some(model) = current_model {
+        seen.insert(model.to_string());
+        models.push(model.to_string());
+    }
+    let mut discovered = discovered_models
+        .into_iter()
+        .map(|model| model.trim().to_string())
+        .filter(|model| {
+            !model.is_empty()
+                && model.len() <= 256
+                && !model.chars().any(|character| character.is_control())
+                && !NON_CHAT_MARKERS
+                    .iter()
+                    .any(|marker| model.to_ascii_lowercase().contains(marker))
+        })
+        .collect::<Vec<_>>();
+    discovered.sort_by(|left, right| {
+        left.to_ascii_lowercase()
+            .cmp(&right.to_ascii_lowercase())
+            .then_with(|| left.cmp(right))
+    });
+    for model in discovered {
+        if seen.insert(model.clone()) {
+            models.push(model);
+            if models.len() == MAX_MANAGED_CODEX_MODELS {
+                break;
+            }
+        }
+    }
+    models
+}
+
+fn write_codex_model_discovery_home(
+    directory: &Path,
+    provider: &RemoteCodexProviderLaunch,
+) -> Result<(), String> {
+    fs::create_dir_all(directory)
+        .map_err(|err| format!("create Codex model discovery directory failed: {err}"))?;
+    let config = toml::to_string_pretty(&CodexModelDiscoveryConfig {
+        model_catalog_json: CODEX_MODEL_CATALOG_FILE_NAME,
+    })
+    .map_err(|err| format!("serialize Codex model discovery config failed: {err}"))?;
+    let catalog = CodexModelCatalog {
+        models: provider
+            .models
+            .iter()
+            .map(|model| CodexModelCatalogEntry {
+                slug: model.clone(),
+                display_name: model.clone(),
+                description: provider.name.clone(),
+                visibility: "list",
+                supported_in_api: true,
+            })
+            .collect(),
+    };
+    let mut catalog = serde_json::to_vec_pretty(&catalog)
+        .map_err(|err| format!("serialize Codex model discovery catalog failed: {err}"))?;
+    catalog.push(b'\n');
+    write_file_atomically(
+        &directory.join(CODEX_MODEL_CATALOG_FILE_NAME),
+        &catalog,
+        "Codex model discovery catalog",
+    )?;
+    write_file_atomically(
+        &directory.join(CONFIG_FILE_NAME),
+        config.as_bytes(),
+        "Codex model discovery config",
+    )
+}
+
+fn parse_codex_models_response(payload: &[u8]) -> Vec<String> {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(payload) else {
+        return Vec::new();
+    };
+    let Some(items) = value
+        .get("data")
+        .or_else(|| value.get("models"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            item.as_str().map(str::to_string).or_else(|| {
+                ["id", "model", "name"]
+                    .into_iter()
+                    .find_map(|key| item.get(key).and_then(serde_json::Value::as_str))
+                    .map(str::to_string)
+            })
+        })
+        .collect()
+}
+
+async fn discover_codex_provider_models(
+    base_url: &str,
+    secret: &str,
+    proxy_enabled: bool,
+    proxy: Option<&ResolvedProxy>,
+) -> Result<Vec<String>, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(CODEX_MODEL_DISCOVERY_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none());
+    if !proxy_enabled {
+        builder = builder.no_proxy();
+    } else if let Some(proxy) = proxy {
+        builder = builder.proxy(
+            reqwest::Proxy::all(&proxy.url)
+                .map_err(|err| format!("configure Codex model proxy failed: {err}"))?,
+        );
+    }
+    let client = builder
+        .build()
+        .map_err(|err| format!("build Codex model client failed: {err}"))?;
+    let mut response = client
+        .get(codex_models_endpoint(base_url)?)
+        .bearer_auth(secret)
+        .send()
+        .await
+        .map_err(|err| format!("query Codex Provider models failed: {err}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "query Codex Provider models returned HTTP {}",
+            response.status()
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_CODEX_MODEL_RESPONSE_BYTES as u64)
+    {
+        return Err("Codex Provider models response is too large".to_string());
+    }
+    let mut payload = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|err| format!("read Codex Provider models failed: {err}"))?
+    {
+        if payload.len().saturating_add(chunk.len()) > MAX_CODEX_MODEL_RESPONSE_BYTES {
+            return Err("Codex Provider models response is too large".to_string());
+        }
+        payload.extend_from_slice(&chunk);
+    }
+    Ok(parse_codex_models_response(&payload))
+}
+
 #[cfg(target_os = "windows")]
 fn write_codex_profile_wrapper() -> Result<PathBuf, String> {
     // cc-connect v1.4.1 hardcodes `codex` for its app-server backend. A native
@@ -2422,20 +2660,47 @@ fn prepare_remote_codex_launch(
         (true, Some(provider_id)) => {
             let database_path = configured_cc_switch_db_path(Some(profile))
                 .ok_or_else(|| "home_dir_unavailable".to_string())?;
-            let runtime = tokio::runtime::Builder::new_current_thread()
+            let query_runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|err| format!("create provider query runtime failed: {err}"))?
-                .block_on(
-                    crate::commands::ccswitch::load_codex_runtime_config_from_path(
-                        provider_id,
-                        &database_path,
-                    ),
-                )?;
+                .map_err(|err| format!("create provider query runtime failed: {err}"))?;
+            let runtime = query_runtime.block_on(
+                crate::commands::ccswitch::load_codex_runtime_config_from_path(
+                    provider_id,
+                    &database_path,
+                ),
+            )?;
+            let proxy = resolve_proxy_url_if_enabled(
+                profile.proxy_enabled,
+                profile.proxy_url.as_deref(),
+                &LOCAL_PROXY_PORTS,
+            )?;
+            let discovered_models = query_runtime
+                .block_on(discover_codex_provider_models(
+                    &runtime.base_url,
+                    &runtime.secret_value,
+                    profile.proxy_enabled,
+                    proxy.as_ref(),
+                ))
+                .unwrap_or_default();
+            let model = runtime
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
             Some(RemoteCodexProviderLaunch {
+                name: project
+                    .provider_name
+                    .as_deref()
+                    .map(single_line)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| provider_id.to_string()),
+                models: normalize_managed_codex_models(model.as_deref(), discovered_models),
+                model: model.clone(),
                 base_url_override: codex_base_url_override(&runtime.base_url)?,
                 env_key_override: codex_env_key_override(&runtime.env_key)?,
-                model_override: codex_model_override(runtime.model.as_deref())?,
+                model_override: codex_model_override(model.as_deref())?,
                 wire_api_override: codex_wire_api_override(runtime.wire_api.as_deref())?,
                 env_key: runtime.env_key,
                 secret: runtime.secret_value,
@@ -2451,6 +2716,14 @@ fn prepare_remote_codex_launch(
         .is_none()
         .then(|| codex_config_dir(profile))
         .transpose()?;
+    let discovery_codex_home = match provider.as_ref() {
+        Some(provider) => {
+            let path = remote_manager_dir()?.join("codex-model-discovery");
+            write_codex_model_discovery_home(&path, provider)?;
+            Some(path)
+        }
+        None => None,
+    };
     let wrapper_path = write_codex_profile_wrapper()?;
     let wrapper_dir = wrapper_path
         .parent()
@@ -2470,6 +2743,7 @@ fn prepare_remote_codex_launch(
         proxy_executable,
         expected_session_id,
         codex_home,
+        discovery_codex_home,
         provider,
         ssh_launch,
     }))
@@ -2496,7 +2770,11 @@ fn apply_remote_codex_launch_environment(
             command.env_remove(CODEX_LAUNCHER_ENV);
         }
     }
-    match launch.codex_home.as_ref() {
+    match launch
+        .discovery_codex_home
+        .as_ref()
+        .or(launch.codex_home.as_ref())
+    {
         Some(codex_home) => {
             command.env("CODEX_HOME", codex_home);
         }
@@ -3862,7 +4140,7 @@ impl CcConnectManager {
         let binary = self.detect(profile.executable_path.as_deref(), true)?;
         if !binary.compatible {
             return Err(format!(
-                "cc-connect {} is not the verified v1.4.1 build",
+                "cc-connect {} is outside the supported range or failed official checksum verification",
                 binary.version.as_deref().unwrap_or("binary")
             ));
         }
@@ -4473,11 +4751,11 @@ impl CcConnectManager {
         let binary = self.detect(profile.executable_path.as_deref(), true)?;
         if !binary.compatible {
             return Err(format!(
-                "cc-connect {} is not the verified v1.4.1 build",
+                "cc-connect {} is outside the supported range or failed official checksum verification",
                 binary.version.as_deref().unwrap_or("binary")
             ));
         }
-        let config_path = write_managed_config(&profile)?;
+        let config_path = write_managed_config_with_codex(&profile, codex_launch.as_ref())?;
         format_and_check_config_syntax(&binary.path, &config_path)?;
         let (mut environment, mut secrets) = credential_environment_for_profile(&profile)?;
         if let Some(provider) = codex_launch
@@ -4654,6 +4932,72 @@ impl CcConnectManager {
             .map_err(|_| "cc-connect operation lock poisoned".to_string())?;
         self.stop_inner()?;
         self.start_inner()
+    }
+
+    fn apply_prepared_update(
+        &self,
+        prepared: update::CcConnectPreparedUpdate,
+    ) -> Result<update::CcConnectUpdateResult, String> {
+        let _operation = self
+            .operation
+            .lock()
+            .map_err(|_| "cc-connect operation lock poisoned".to_string())?;
+        self.refresh_process_state();
+        let was_running = {
+            let state = self
+                .process
+                .lock()
+                .map_err(|_| "cc-connect process lock poisoned".to_string())?;
+            if state.starting {
+                return Err("cc_connect_update_process_starting".to_string());
+            }
+            state.process.is_some()
+        };
+        if self
+            .weixin_authorization
+            .lock()
+            .map_err(|_| "Weixin authorization lock poisoned".to_string())?
+            .as_ref()
+            .is_some_and(|state| matches!(state, WeixinAuthorizationState::Running(_)))
+        {
+            return Err("cc_connect_update_weixin_authorization_active".to_string());
+        }
+        if was_running {
+            let profile =
+                load_profile()?.ok_or_else(|| "cc_connect_update_profile_missing".to_string())?;
+            let active = self.detect(profile.executable_path.as_deref(), true)?;
+            if active.path != prepared.executable_path() {
+                return Err("cc_connect_update_running_target_mismatch".to_string());
+            }
+        }
+
+        self.stop_inner()?;
+        let update_result = update::apply_prepared_update(prepared);
+        if let Ok(mut detection) = self.detection.lock() {
+            *detection = None;
+        }
+        let restart_result = if was_running {
+            self.start_inner()
+        } else {
+            Ok(())
+        };
+
+        match (update_result, restart_result) {
+            (Ok(result), Ok(())) => {
+                self.append_system_log(format!(
+                    "cc-connect executable updated to {}",
+                    result.installed_version
+                ));
+                Ok(result)
+            }
+            (Ok(_), Err(restart_error)) => Err(format!(
+                "cc_connect_update_installed_restart_failed:{restart_error}"
+            )),
+            (Err(update_error), Ok(())) => Err(update_error),
+            (Err(update_error), Err(restart_error)) => Err(format!(
+                "{update_error}; cc_connect_update_restore_restart_failed:{restart_error}"
+            )),
+        }
     }
 
     fn auto_start_if_enabled(&self) -> Result<(), String> {
@@ -4895,6 +5239,26 @@ pub async fn cc_connect_inspect_executable(
         .await
         .map_err(|err| format!("cc-connect executable inspection task failed: {err}"))
 }
+
+#[tauri::command]
+pub async fn cc_connect_check_update(
+    request: update::CcConnectCheckUpdateRequest,
+) -> Result<update::CcConnectUpdateCheck, String> {
+    update::check_update(request).await
+}
+
+#[tauri::command]
+pub async fn cc_connect_update(
+    manager: State<'_, CcConnectManager>,
+    request: update::CcConnectInstallUpdateRequest,
+) -> Result<update::CcConnectUpdateResult, String> {
+    let prepared = update::prepare_update(request).await?;
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.apply_prepared_update(prepared))
+        .await
+        .map_err(|err| format!("cc-connect update task failed: {err}"))?
+}
+
 #[tauri::command]
 pub async fn cc_connect_save_profile(
     manager: State<'_, CcConnectManager>,
@@ -5098,16 +5462,26 @@ mod tests {
         );
         assert_eq!(
             parse_version("cc-connect v1.4.2"),
-            Some(("1.4.2".to_string(), false))
+            Some(("1.4.2".to_string(), true))
+        );
+        assert_eq!(
+            parse_version("cc-connect v1.5.0-beta.2 (commit abc)"),
+            Some(("1.5.0-beta.2".to_string(), true))
         );
         assert_eq!(
             parse_version("cc-connect v2.0.0"),
             Some(("2.0.0".to_string(), false))
         );
-        assert!(is_verified_binary_hash(VERIFIED_V1_4_1_BINARY_SHA256[0]));
-        assert!(!is_verified_binary_hash(
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        ));
+        assert_eq!(
+            trusted_binary_version(VERIFIED_V1_4_1_BINARY_SHA256[0]).as_deref(),
+            Some("1.4.1")
+        );
+        assert_eq!(
+            trusted_binary_version(
+                "0000000000000000000000000000000000000000000000000000000000000000"
+            ),
+            None
+        );
     }
 
     #[cfg(unix)]
@@ -5712,6 +6086,9 @@ allow_from = ""
 
     fn sample_remote_codex_launch(provider: bool) -> RemoteCodexLaunch {
         let provider = provider.then(|| RemoteCodexProviderLaunch {
+            name: "Project Provider".to_string(),
+            model: Some("gpt-5.4".to_string()),
+            models: vec!["gpt-5.4".to_string(), "gpt-5.3-codex".to_string()],
             base_url_override:
                 "model_providers.cli_manager_remote.base_url=https://provider.example.com/v1"
                     .to_string(),
@@ -5729,9 +6106,101 @@ allow_from = ""
             proxy_executable: PathBuf::from(r"C:\Program Files\CLI-Manager\cli-manager.exe"),
             expected_session_id: Some("thread-original".to_string()),
             codex_home: Some(PathBuf::from(r"C:\Users\test\.codex")),
+            discovery_codex_home: provider.is_some().then(|| {
+                PathBuf::from(r"C:\Users\test\.cli-manager\remote-manager\codex-model-discovery")
+            }),
             provider,
             ssh_launch: None,
         }
+    }
+
+    #[test]
+    fn managed_codex_config_keeps_provider_runtime_out_of_cc_connect_config() {
+        let project = tempfile::tempdir().unwrap();
+        let mut profile = sample_profile(project.path());
+        profile.agent = CcConnectAgent::Codex;
+        let launch = sample_remote_codex_launch(true);
+        let raw = toml::to_string_pretty(
+            &build_managed_config_with_codex(
+                &profile,
+                Path::new(r"C:\Users\test\cli-manager-projects.txt"),
+                Path::new(r"C:\Users\test\cli-manager-switch.ps1"),
+                Some(&launch),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let config = toml::from_str::<toml::Value>(&raw).unwrap();
+        let agent = &config["projects"][0]["agent"];
+        assert_eq!(agent["options"]["model"].as_str(), Some("gpt-5.4"));
+        assert_eq!(
+            agent["options"]["codex_home"].as_str(),
+            Some("C:/Users/test/.codex")
+        );
+        assert!(!agent["options"]
+            .as_table()
+            .unwrap()
+            .contains_key("provider"));
+        assert!(!agent.as_table().unwrap().contains_key("providers"));
+        for secret in [
+            "sk-provider-secret",
+            "https://provider.example.com/v1",
+            "CLI_MANAGER_CODEX_PROVIDER_API_KEY",
+            "Project Provider",
+        ] {
+            assert!(!raw.contains(secret));
+        }
+    }
+
+    #[test]
+    fn codex_model_discovery_catalog_is_isolated_and_contains_no_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let launch = sample_remote_codex_launch(true);
+        let provider = launch.provider.as_ref().unwrap();
+        write_codex_model_discovery_home(directory.path(), provider).unwrap();
+
+        let config = fs::read_to_string(directory.path().join(CONFIG_FILE_NAME)).unwrap();
+        let config = toml::from_str::<toml::Value>(&config).unwrap();
+        assert_eq!(
+            config["model_catalog_json"].as_str(),
+            Some(CODEX_MODEL_CATALOG_FILE_NAME)
+        );
+        let raw_catalog =
+            fs::read_to_string(directory.path().join(CODEX_MODEL_CATALOG_FILE_NAME)).unwrap();
+        let catalog = serde_json::from_str::<serde_json::Value>(&raw_catalog).unwrap();
+        assert_eq!(catalog["models"][0]["slug"], "gpt-5.4");
+        assert_eq!(catalog["models"][1]["slug"], "gpt-5.3-codex");
+        assert_eq!(catalog["models"][0]["description"], "Project Provider");
+        assert_eq!(catalog["models"][0]["visibility"], "list");
+        assert_eq!(catalog["models"][0]["supported_in_api"], true);
+        for secret in [
+            "sk-provider-secret",
+            "https://provider.example.com/v1",
+            "CLI_MANAGER_CODEX_PROVIDER_API_KEY",
+        ] {
+            assert!(!raw_catalog.contains(secret));
+        }
+    }
+
+    #[test]
+    fn codex_model_discovery_parses_filters_and_deduplicates_models() {
+        assert_eq!(
+            codex_models_endpoint("https://provider.example.com/v1")
+                .unwrap()
+                .as_str(),
+            "https://provider.example.com/v1/models"
+        );
+        let discovered = parse_codex_models_response(
+            br#"{"data":[{"id":"gpt-5.4"},{"id":"text-embedding-3-large"},{"id":"deepseek-r1"},{"model":"gpt-5.3-codex"},{"id":"gpt-5.4"}]}"#,
+        );
+        assert_eq!(
+            normalize_managed_codex_models(Some("gpt-5.4"), discovered),
+            vec![
+                "gpt-5.4".to_string(),
+                "deepseek-r1".to_string(),
+                "gpt-5.3-codex".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -5761,7 +6230,13 @@ allow_from = ""
         );
         assert_eq!(
             environment.get("CODEX_HOME"),
-            Some(&Some(r"C:\Users\test\.codex".to_string()))
+            Some(&Some(
+                r"C:\Users\test\.cli-manager\remote-manager\codex-model-discovery".to_string()
+            ))
+        );
+        assert_eq!(
+            launch.codex_home.as_deref(),
+            Some(Path::new(r"C:\Users\test\.codex"))
         );
         assert_eq!(
             environment.get(EXPECTED_SESSION_ID_ENV),
@@ -6191,6 +6666,16 @@ allow_from = ""
             &profile,
             Path::new(r"C:Users	estAppDataLocalCLI-Managercli-manager-projects.txt"),
             Path::new(r"C:Users	estAppDataLocalCLI-Managercli-manager-switch.ps1"),
+        )
+        .unwrap();
+        fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+        format_and_check_config_syntax(Path::new(&binary), &config_path).unwrap();
+        let launch = sample_remote_codex_launch(true);
+        let config = build_managed_config_with_codex(
+            &profile,
+            Path::new(r"C:\Users\test\cli-manager-projects.txt"),
+            Path::new(r"C:\Users\test\cli-manager-switch.ps1"),
+            Some(&launch),
         )
         .unwrap();
         fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();

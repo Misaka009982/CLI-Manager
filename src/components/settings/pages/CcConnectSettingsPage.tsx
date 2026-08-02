@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { projectSupportsCapability } from "../../../lib/projectCapabilities";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Badge,
   Button,
@@ -13,6 +14,7 @@ import {
   Modal,
   NumberInput,
   PasswordInput,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
@@ -24,6 +26,7 @@ import {
   AlertTriangle,
   BellRing,
   Copy,
+  Download,
   ExternalLink,
   FolderSearch,
   Play,
@@ -44,6 +47,7 @@ import { ConfirmDialog } from "../../ConfirmDialog";
 type AgentKind = "claude" | "codex";
 type PlatformKind = "telegram" | "feishu" | "weixin" | "wecom";
 type ReplyLanguage = "zh" | "en";
+type CcConnectUpdateChannel = "stable" | "prerelease";
 
 interface CcConnectPlatformProfile {
   platform: PlatformKind;
@@ -154,6 +158,27 @@ interface CcConnectExecutableStatus {
   sha256: string | null;
   compatible: boolean;
   detectionError: string | null;
+}
+
+interface CcConnectUpdateInfo {
+  channel: CcConnectUpdateChannel;
+  currentVersion: string | null;
+  latestVersion: string;
+  updateAvailable: boolean;
+  releaseUrl: string;
+  publishedAt: string | null;
+  assetName: string;
+  checksumSha256: string;
+}
+
+interface CcConnectUpdateResult {
+  channel: CcConnectUpdateChannel;
+  previousVersion: string | null;
+  installedVersion: string;
+  executablePath: string;
+  sha256: string;
+  releaseUrl: string;
+  updated: boolean;
 }
 
 interface CcConnectLogLine {
@@ -301,6 +326,13 @@ export function CcConnectSettingsPage() {
   const [yoloConfirmOpen, setYoloConfirmOpen] = useState(false);
   const [weixinAuthorizationOpen, setWeixinAuthorizationOpen] = useState(false);
   const [weixinAuthorization, setWeixinAuthorization] = useState<CcConnectWeixinAuthorizationStatus | null>(null);
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [updateChannel, setUpdateChannel] = useState<CcConnectUpdateChannel>("stable");
+  const [updateInfo, setUpdateInfo] = useState<CcConnectUpdateInfo | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [prereleaseConfirmOpen, setPrereleaseConfirmOpen] = useState(false);
   const logCursorRef = useRef(0);
   const statusRequestRef = useRef(0);
   const executableInspectionRequestRef = useRef(0);
@@ -873,7 +905,7 @@ export function CcConnectSettingsPage() {
   const displayedExecutable = executableInspection ?? (!executableDirty ? status : null);
   const displayedDetectionError = executableInspection?.detectionError
     ?? (!executableDirty ? status?.detectionError : null);
-  const busy = working !== null || executableChecking || Boolean(status?.starting);
+  const busy = working !== null || executableChecking || updateChecking || Boolean(status?.starting);
   const weixinAuthorizationActive = weixinAuthorization?.phase === "preparing"
     || weixinAuthorization?.phase === "starting"
     || weixinAuthorization?.phase === "waiting";
@@ -906,6 +938,95 @@ export function CcConnectSettingsPage() {
   const notificationPlatform = handoffNotificationStatus?.lastPlatform
     ? platformOptions.find((option) => option.value === handoffNotificationStatus.lastPlatform)?.label
     : null;
+
+  const updateTargetPath = profile.executablePath?.trim()
+    || status?.executablePath?.trim()
+    || "";
+
+  const checkForCcConnectUpdate = async (channel: CcConnectUpdateChannel) => {
+    if (updateChecking || updateInstalling) return;
+    setUpdateChecking(true);
+    setUpdateError(null);
+    setUpdateInfo(null);
+    try {
+      const next = await invoke<CcConnectUpdateInfo>("cc_connect_check_update", {
+        request: {
+          channel,
+          currentVersion: displayedExecutable?.version ?? null,
+          proxyEnabled: profile.proxyEnabled,
+          proxyUrl: profile.proxyUrl,
+        },
+      });
+      setUpdateInfo(next);
+    } catch (error) {
+      setUpdateError(t("settings.ccConnect.update.errorDetail", {
+        detail: errorMessage(error),
+      }));
+    } finally {
+      setUpdateChecking(false);
+    }
+  };
+
+  const openUpdateDialog = () => {
+    if (!displayedExecutable?.installed || !updateTargetPath || busy) return;
+    setUpdateModalOpen(true);
+    void checkForCcConnectUpdate(updateChannel);
+  };
+
+  const installCcConnectUpdate = async () => {
+    if (!updateInfo?.updateAvailable || !updateTargetPath || updateInstalling) return;
+    setPrereleaseConfirmOpen(false);
+    setUpdateInstalling(true);
+    setUpdateError(null);
+    setWorkingState("cc-connect-update");
+    let completed = false;
+    try {
+      const result = await invoke<CcConnectUpdateResult>("cc_connect_update", {
+        request: {
+          channel: updateInfo.channel,
+          executablePath: updateTargetPath,
+          currentVersion: displayedExecutable?.version ?? null,
+          proxyEnabled: profile.proxyEnabled,
+          proxyUrl: profile.proxyUrl,
+        },
+      });
+      setProfile((current) => ({
+        ...current,
+        executablePath: normalizeWindowsExtendedPath(result.executablePath),
+      }));
+      setExecutableInspection({
+        installed: true,
+        executablePath: result.executablePath,
+        version: result.installedVersion,
+        sha256: result.sha256,
+        compatible: true,
+        detectionError: null,
+      });
+      setExecutableDirty(false);
+      setUpdateInfo((current) => current ? {
+        ...current,
+        currentVersion: result.installedVersion,
+        updateAvailable: false,
+        releaseUrl: result.releaseUrl,
+      } : current);
+      completed = true;
+      toast.success(t("settings.ccConnect.update.success"), {
+        description: t("settings.ccConnect.update.successDescription", {
+          version: result.installedVersion,
+        }),
+      });
+    } catch (error) {
+      const message = t("settings.ccConnect.update.errorDetail", {
+        detail: errorMessage(error),
+      });
+      setUpdateError(message);
+      toast.error(t("settings.ccConnect.update.failed"), { description: message });
+    } finally {
+      setWorkingState(null);
+      setUpdateInstalling(false);
+    }
+    if (completed) await refreshStatus(true, false, true);
+  };
 
   return (
     <Stack gap="md" maw={1040}>
@@ -951,6 +1072,15 @@ export function CcConnectSettingsPage() {
               </Button>
               <Button size="xs" variant="subtle" disabled={busy} onClick={() => void rescanExecutable()} leftSection={<RefreshCw size={14} />}>
                 {t("settings.ccConnect.rescan")}
+              </Button>
+              <Button
+                size="xs"
+                variant="subtle"
+                disabled={busy || !displayedExecutable?.installed || !updateTargetPath}
+                onClick={openUpdateDialog}
+                leftSection={<Download size={14} />}
+              >
+                {t("settings.ccConnect.update.action")}
               </Button>
             </Group>
           </Stack>
@@ -1288,6 +1418,134 @@ export function CcConnectSettingsPage() {
         </pre>
       </Card>}
       <Modal
+        opened={updateModalOpen}
+        onClose={() => {
+          if (!updateInstalling) setUpdateModalOpen(false);
+        }}
+        title={t("settings.ccConnect.update.title")}
+        centered
+        size="md"
+        zIndex={90}
+        closeOnClickOutside={!updateInstalling}
+        closeOnEscape={!updateInstalling}
+        withCloseButton={!updateInstalling}
+      >
+        <Stack gap="md">
+          <Text size="sm" c="var(--text-muted)">
+            {t("settings.ccConnect.update.description")}
+          </Text>
+          <SegmentedControl
+            fullWidth
+            value={updateChannel}
+            disabled={updateChecking || updateInstalling}
+            data={[
+              { value: "stable", label: t("settings.ccConnect.update.channelStable") },
+              { value: "prerelease", label: t("settings.ccConnect.update.channelPrerelease") },
+            ]}
+            onChange={(value) => {
+              const channel = value as CcConnectUpdateChannel;
+              setUpdateChannel(channel);
+              void checkForCcConnectUpdate(channel);
+            }}
+          />
+          {status?.running && (
+            <Text size="xs" c="yellow">
+              {t("settings.ccConnect.update.runningNotice")}
+            </Text>
+          )}
+          {updateChecking ? (
+            <Center mih={96}>
+              <Stack gap="xs" align="center">
+                <Loader size="sm" />
+                <Text size="sm">{t("settings.ccConnect.update.checking")}</Text>
+              </Stack>
+            </Center>
+          ) : updateInfo ? (
+            <Stack gap="sm">
+              <SimpleGrid cols={2} spacing="sm">
+                <div>
+                  <Text size="xs" c="var(--text-muted)">{t("settings.ccConnect.update.currentVersion")}</Text>
+                  <Text size="sm" fw={600}>{updateInfo.currentVersion ?? "—"}</Text>
+                </div>
+                <div>
+                  <Text size="xs" c="var(--text-muted)">{t("settings.ccConnect.update.latestVersion")}</Text>
+                  <Text size="sm" fw={600}>{updateInfo.latestVersion}</Text>
+                </div>
+              </SimpleGrid>
+              <Badge
+                color={updateInfo.updateAvailable ? "blue" : "green"}
+                variant="light"
+                w="fit-content"
+              >
+                {updateInfo.updateAvailable
+                  ? t("settings.ccConnect.update.available")
+                  : t("settings.ccConnect.update.upToDate")}
+              </Badge>
+              <Text size="xs" c="var(--text-muted)" style={{ overflowWrap: "anywhere" }}>
+                {t("settings.ccConnect.update.asset")}: {updateInfo.assetName}
+              </Text>
+              <Text size="xs" c="var(--text-muted)" style={{ overflowWrap: "anywhere" }}>
+                {t("settings.ccConnect.sha256")}: {updateInfo.checksumSha256}
+              </Text>
+              <Button
+                size="xs"
+                variant="subtle"
+                w="fit-content"
+                leftSection={<ExternalLink size={14} />}
+                onClick={() => {
+                  void openUrl(updateInfo.releaseUrl).catch((error) => {
+                    toast.error(t("settings.ccConnect.update.releaseOpenFailed"), {
+                      description: errorMessage(error),
+                    });
+                  });
+                }}
+              >
+                {t("settings.ccConnect.update.releaseNotes")}
+              </Button>
+            </Stack>
+          ) : null}
+          {updateError && (
+            <Text size="xs" c="red" style={{ overflowWrap: "anywhere" }}>
+              {updateError}
+            </Text>
+          )}
+          <Group justify="flex-end">
+            <Button
+              variant="default"
+              disabled={updateInstalling}
+              onClick={() => setUpdateModalOpen(false)}
+            >
+              {t("common.close")}
+            </Button>
+            <Button
+              variant="light"
+              disabled={updateChecking || updateInstalling}
+              loading={updateChecking}
+              leftSection={<RefreshCw size={14} />}
+              onClick={() => void checkForCcConnectUpdate(updateChannel)}
+            >
+              {t("settings.ccConnect.update.checkAgain")}
+            </Button>
+            <Button
+              disabled={!updateInfo?.updateAvailable || updateChecking || updateInstalling}
+              loading={updateInstalling}
+              leftSection={<Download size={14} />}
+              onClick={() => {
+                if (updateChannel === "prerelease") {
+                  setPrereleaseConfirmOpen(true);
+                } else {
+                  void installCcConnectUpdate();
+                }
+              }}
+            >
+              {updateInstalling
+                ? t("settings.ccConnect.update.installing")
+                : t("settings.ccConnect.update.install")}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+      <Modal
         opened={weixinAuthorizationOpen}
         onClose={() => void cancelWeixinAuthorization()}
         title={t("settings.ccConnect.weixinAuthTitle")}
@@ -1360,6 +1618,17 @@ export function CcConnectSettingsPage() {
           </Group>
         </Stack>
       </Modal>
+      <ConfirmDialog
+        open={prereleaseConfirmOpen}
+        title={t("settings.ccConnect.update.prereleaseConfirmTitle")}
+        message={t("settings.ccConnect.update.prereleaseConfirmMessage")}
+        confirmText={t("settings.ccConnect.update.install")}
+        cancelText={t("common.cancel")}
+        danger
+        zIndex={100}
+        onClose={() => setPrereleaseConfirmOpen(false)}
+        onConfirm={() => void installCcConnectUpdate()}
+      />
       <ConfirmDialog
         open={yoloConfirmOpen}
         title={t("settings.ccConnect.yoloConfirmTitle")}
