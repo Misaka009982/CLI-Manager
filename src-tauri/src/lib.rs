@@ -674,6 +674,12 @@ fn migrations() -> Vec<Migration> {
             kind: MigrationKind::Up,
         },
         Migration {
+            version: provider::MIGRATION_LEGACY_PROVIDERS_VERSION,
+            description: provider::MIGRATION_LEGACY_PROVIDERS_DESCRIPTION,
+            sql: provider::MIGRATION_LEGACY_PROVIDERS_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
             version: provider::MIGRATION_CREATE_NATIVE_PROVIDERS_VERSION,
             description: provider::MIGRATION_CREATE_NATIVE_PROVIDERS_DESCRIPTION,
             sql: provider::MIGRATION_CREATE_NATIVE_PROVIDERS_SQL,
@@ -1456,5 +1462,29 @@ mod ssh_migration_tests {
             .await
             .unwrap();
         assert_eq!(row.get::<String, _>("config_file"), "");
+    }
+}
+
+#[cfg(test)]
+mod provider_migration_tests {
+    use super::migrations;
+    use crate::provider::{
+        MIGRATION_CREATE_NATIVE_PROVIDERS_VERSION, MIGRATION_LEGACY_PROVIDERS_VERSION,
+    };
+
+    #[test]
+    fn registry_keeps_legacy_v25_before_native_v26() {
+        let registry = migrations();
+        let legacy = registry
+            .iter()
+            .find(|migration| migration.version == MIGRATION_LEGACY_PROVIDERS_VERSION)
+            .expect("legacy provider migration must remain registered");
+        let native = registry
+            .iter()
+            .find(|migration| migration.version == MIGRATION_CREATE_NATIVE_PROVIDERS_VERSION)
+            .expect("native provider migration must be registered");
+        assert_eq!(legacy.description, "create_providers_and_keys_tables");
+        assert_eq!(native.description, "create_native_provider_management");
+        assert!(legacy.version < native.version);
     }
 }

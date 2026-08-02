@@ -19,6 +19,7 @@
 - A partial unique index enforces at most one active key per provider.
 - Foreign keys are enabled; deleting an unreferenced provider cascades to its keys.
 - Global/import/issues/journal tables are created with the native schema so later phases do not require incompatible bootstrap tables, but Phase 1 CRUD does not write global live state.
+- Migration compatibility: version 25 is reserved for the previously shipped `providers/provider_keys` prototype and its SQL/checksum must remain immutable; the native `managed_*` schema is introduced by version 26. Never reuse an applied migration version for a different provider schema.
 
 ### 3. Provider state machine
 

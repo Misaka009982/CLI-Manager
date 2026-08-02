@@ -1,4 +1,41 @@
-pub(crate) const MIGRATION_CREATE_NATIVE_PROVIDERS_VERSION: i64 = 25;
+// Version 25 was already shipped by an earlier provider-management prototype.
+// Keep its exact SQL in the migration registry so SQLx can validate existing
+// databases instead of treating the old migration as modified or missing.
+pub(crate) const MIGRATION_LEGACY_PROVIDERS_VERSION: i64 = 25;
+pub(crate) const MIGRATION_LEGACY_PROVIDERS_DESCRIPTION: &str = "create_providers_and_keys_tables";
+pub(crate) const MIGRATION_LEGACY_PROVIDERS_SQL: &str = "
+                CREATE TABLE IF NOT EXISTS providers (
+                    id           TEXT PRIMARY KEY,
+                    name         TEXT NOT NULL,
+                    app_type     TEXT NOT NULL,
+                    api_base_url TEXT NOT NULL,
+                    model        TEXT NOT NULL DEFAULT '',
+                    api_format   TEXT NOT NULL DEFAULT '',
+                    extra_config TEXT NOT NULL DEFAULT '{}',
+                    vendor       TEXT NOT NULL DEFAULT '',
+                    sort_index   INTEGER NOT NULL DEFAULT 0,
+                    is_builtin   INTEGER NOT NULL DEFAULT 0,
+                    created_at   TEXT NOT NULL,
+                    updated_at   TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_providers_app_type ON providers(app_type);
+
+                CREATE TABLE IF NOT EXISTS provider_keys (
+                    id                 TEXT PRIMARY KEY,
+                    provider_id        TEXT NOT NULL,
+                    name               TEXT NOT NULL DEFAULT '',
+                    api_key            TEXT NOT NULL,
+                    status             TEXT NOT NULL DEFAULT 'active',
+                    sort_index         INTEGER NOT NULL DEFAULT 0,
+                    usage_query_config TEXT NOT NULL DEFAULT '{}',
+                    created_at         TEXT NOT NULL,
+                    updated_at         TEXT NOT NULL,
+                    FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_provider_keys_provider ON provider_keys(provider_id);
+              ";
+
+pub(crate) const MIGRATION_CREATE_NATIVE_PROVIDERS_VERSION: i64 = 26;
 pub(crate) const MIGRATION_CREATE_NATIVE_PROVIDERS_DESCRIPTION: &str =
     "create_native_provider_management";
 pub(crate) const MIGRATION_CREATE_NATIVE_PROVIDERS_SQL: &str = r#"
@@ -98,7 +135,17 @@ CREATE TABLE IF NOT EXISTS provider_apply_journal (
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha384};
     use sqlx::{Connection, Executor, Row, SqliteConnection};
+
+    #[test]
+    fn legacy_provider_migration_keeps_the_shipped_v25_checksum() {
+        let checksum = Sha384::digest(MIGRATION_LEGACY_PROVIDERS_SQL.as_bytes());
+        assert_eq!(
+            format!("{checksum:x}"),
+            "739c40c1d5a2fd5420c5475a984fb0f7e9c86af4083f76e66b658af0bf36c8c79f2d63b766fed482d8d987060566f82e"
+        );
+    }
 
     #[tokio::test]
     async fn native_provider_schema_enforces_active_key_and_cascade_contracts() {
@@ -148,6 +195,37 @@ mod tests {
             .unwrap()
             .get("count");
         assert_eq!(remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn native_provider_schema_applies_after_legacy_v25_schema() {
+        let mut conn = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        conn.execute("PRAGMA foreign_keys = ON").await.unwrap();
+        sqlx::raw_sql(MIGRATION_LEGACY_PROVIDERS_SQL)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::raw_sql(MIGRATION_CREATE_NATIVE_PROVIDERS_SQL)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        for table in [
+            "providers",
+            "provider_keys",
+            "managed_providers",
+            "managed_provider_keys",
+            "managed_provider_global_state",
+        ] {
+            let exists: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            )
+            .bind(table)
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+            assert_eq!(exists, 1, "expected migration table {table}");
+        }
     }
 
     #[tokio::test]
