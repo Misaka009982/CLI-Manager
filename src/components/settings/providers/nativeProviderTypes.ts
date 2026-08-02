@@ -51,6 +51,12 @@ export interface NativeProviderDetail {
   keys: NativeProviderKeySummary[];
 }
 
+export interface NativeProviderCommonConfig {
+  appType: string;
+  value: string;
+  format: string;
+}
+
 export interface NativeProviderCreateInput {
   appType: NativeProviderAppType;
   name: string;

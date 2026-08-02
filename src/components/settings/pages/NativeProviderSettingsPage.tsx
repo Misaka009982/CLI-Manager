@@ -4,11 +4,13 @@ import { AlertTriangle } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
 import { useAppConfirm } from "@/components/ui/useAppConfirm";
 import { NativeProviderCatalog } from "../providers/NativeProviderCatalog";
+import { NativeProviderCommonConfigSection } from "../providers/NativeProviderCommonConfigSection";
 import { NativeProviderEditor } from "../providers/NativeProviderEditor";
 import { NativeProviderFormModal } from "../providers/NativeProviderFormModal";
 import { NativeProviderKeySection } from "../providers/NativeProviderKeySection";
 import { NativeProviderTypeTabs } from "../providers/NativeProviderTypeTabs";
 import { useNativeProviderCatalog } from "../providers/useNativeProviderCatalog";
+import { useNativeProviderCommonConfig } from "../providers/useNativeProviderCommonConfig";
 import {
   NATIVE_PROVIDER_APP_TYPES,
   type NativeProviderAppType,
@@ -44,6 +46,7 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
   const [appType, setAppType] = useState<NativeProviderAppType>(NATIVE_PROVIDER_APP_TYPES[0]);
   const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
   const catalog = useNativeProviderCatalog(appType);
+  const commonConfig = useNativeProviderCommonConfig(appType);
 
   const query = searchValue.trim().toLocaleLowerCase();
   const filteredProviders = useMemo(() => {
@@ -66,7 +69,17 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
   const errorMessage = t(errorKey ?? "providerCatalog.errors.generic");
   const busy = Boolean(catalog.action);
 
-  const handleAppTypeChange = (next: NativeProviderAppType) => {
+  const handleAppTypeChange = async (next: NativeProviderAppType) => {
+    if (next === appType) return;
+    if (commonConfig.dirty) {
+      const confirmed = await confirm({
+        title: t("providerCatalog.commonConfig.unsavedTitle"),
+        message: t("providerCatalog.commonConfig.unsavedMessage"),
+        confirmText: t("providerCatalog.commonConfig.discard"),
+        danger: true,
+      });
+      if (!confirmed) return;
+    }
     setAppType(next);
     setFormMode(null);
     catalog.clearError();
@@ -108,6 +121,8 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
           {errorMessage}
         </Alert>
       )}
+
+      <NativeProviderCommonConfigSection appType={appType} state={commonConfig} />
 
       <div className="grid min-h-[520px] grid-cols-1 gap-4 xl:grid-cols-[minmax(280px,0.78fr)_minmax(0,1.42fr)]">
         <NativeProviderCatalog
