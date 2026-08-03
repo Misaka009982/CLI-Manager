@@ -2,8 +2,9 @@
 use crate::codex_app_server_proxy::HELPER_SUBCOMMAND as CODEX_PROXY_SUBCOMMAND;
 use crate::codex_app_server_proxy::{
     SshCodexLaunch, CODEX_BASE_URL_OVERRIDE_ENV, CODEX_ENV_KEY_OVERRIDE_ENV, CODEX_LAUNCHER_ENV,
-    CODEX_MODEL_OVERRIDE_ENV, CODEX_REMOTE_PROVIDER_NAME, CODEX_SSH_LAUNCH_ENV,
-    CODEX_WIRE_API_OVERRIDE_ENV, EXPECTED_SESSION_ID_ENV, PROXY_EXECUTABLE_ENV,
+    CODEX_MODEL_CATALOG_OVERRIDE_ENV, CODEX_MODEL_OVERRIDE_ENV, CODEX_REMOTE_PROVIDER_NAME,
+    CODEX_SSH_LAUNCH_ENV, CODEX_WIRE_API_OVERRIDE_ENV, EXPECTED_SESSION_ID_ENV,
+    PROXY_EXECUTABLE_ENV,
 };
 #[cfg(target_os = "windows")]
 use crate::process_job::ChildJob;
@@ -2355,7 +2356,7 @@ fn resolve_codex_launcher_from_path(
 #[cfg(not(target_os = "windows"))]
 fn codex_profile_wrapper_payload() -> String {
     format!(
-        "#!/bin/sh\nif [ -n \"${{{CODEX_SSH_LAUNCH_ENV}:-}}\" ]; then\n  exec \"${PROXY_EXECUTABLE_ENV}\" {CODEX_PROXY_SUBCOMMAND} \"$@\"\nfi\nif [ \"${{1:-}}\" = \"app-server\" ]; then\n  exec \"${PROXY_EXECUTABLE_ENV}\" {CODEX_PROXY_SUBCOMMAND} \"$@\"\nfi\nif [ -z \"${{{CODEX_BASE_URL_OVERRIDE_ENV}:-}}\" ]; then\n  exec \"${CODEX_LAUNCHER_ENV}\" \"$@\"\nfi\nif [ -n \"${{{CODEX_MODEL_OVERRIDE_ENV}:-}}\" ]; then\n  exec \"${CODEX_LAUNCHER_ENV}\" -c \"model_provider={CODEX_REMOTE_PROVIDER_NAME}\" -c \"model_providers.{CODEX_REMOTE_PROVIDER_NAME}.name=CLI-Manager remote\" -c \"${CODEX_BASE_URL_OVERRIDE_ENV}\" -c \"${CODEX_ENV_KEY_OVERRIDE_ENV}\" -c \"${CODEX_WIRE_API_OVERRIDE_ENV}\" -c \"${CODEX_MODEL_OVERRIDE_ENV}\" \"$@\"\nelse\n  exec \"${CODEX_LAUNCHER_ENV}\" -c \"model_provider={CODEX_REMOTE_PROVIDER_NAME}\" -c \"model_providers.{CODEX_REMOTE_PROVIDER_NAME}.name=CLI-Manager remote\" -c \"${CODEX_BASE_URL_OVERRIDE_ENV}\" -c \"${CODEX_ENV_KEY_OVERRIDE_ENV}\" -c \"${CODEX_WIRE_API_OVERRIDE_ENV}\" \"$@\"\nfi\n"
+        "#!/bin/sh\nif [ -n \"${{{CODEX_SSH_LAUNCH_ENV}:-}}\" ]; then\n  exec \"${PROXY_EXECUTABLE_ENV}\" {CODEX_PROXY_SUBCOMMAND} \"$@\"\nfi\nif [ \"${{1:-}}\" = \"app-server\" ]; then\n  exec \"${PROXY_EXECUTABLE_ENV}\" {CODEX_PROXY_SUBCOMMAND} \"$@\"\nfi\nif [ -z \"${{{CODEX_BASE_URL_OVERRIDE_ENV}:-}}\" ]; then\n  exec \"${CODEX_LAUNCHER_ENV}\" \"$@\"\nfi\nif [ -n \"${{{CODEX_MODEL_OVERRIDE_ENV}:-}}\" ]; then\n  exec \"${CODEX_LAUNCHER_ENV}\" -c \"model_provider={CODEX_REMOTE_PROVIDER_NAME}\" -c \"model_providers.{CODEX_REMOTE_PROVIDER_NAME}.name=CLI-Manager remote\" -c \"${CODEX_BASE_URL_OVERRIDE_ENV}\" -c \"${CODEX_ENV_KEY_OVERRIDE_ENV}\" -c \"${CODEX_WIRE_API_OVERRIDE_ENV}\" -c \"${CODEX_MODEL_CATALOG_OVERRIDE_ENV}\" -c \"${CODEX_MODEL_OVERRIDE_ENV}\" \"$@\"\nelse\n  exec \"${CODEX_LAUNCHER_ENV}\" -c \"model_provider={CODEX_REMOTE_PROVIDER_NAME}\" -c \"model_providers.{CODEX_REMOTE_PROVIDER_NAME}.name=CLI-Manager remote\" -c \"${CODEX_BASE_URL_OVERRIDE_ENV}\" -c \"${CODEX_ENV_KEY_OVERRIDE_ENV}\" -c \"${CODEX_WIRE_API_OVERRIDE_ENV}\" -c \"${CODEX_MODEL_CATALOG_OVERRIDE_ENV}\" \"$@\"\nfi\n"
     )
 }
 
@@ -2421,6 +2422,13 @@ fn codex_model_override(value: Option<&str>) -> Result<Option<String>, String> {
         .filter(|value| !value.is_empty())
         .map(|value| codex_wrapper_override("model", value))
         .transpose()
+}
+
+fn codex_model_catalog_override(directory: &Path) -> Result<String, String> {
+    let catalog_path = directory.join(CODEX_MODEL_CATALOG_FILE_NAME);
+    let encoded_path = serde_json::to_string(&path_string(&catalog_path))
+        .map_err(|err| format!("encode Codex model catalog path failed: {err}"))?;
+    Ok(format!("model_catalog_json={encoded_path}"))
 }
 
 fn codex_models_endpoint(base_url: &str) -> Result<reqwest::Url, String> {
@@ -2889,11 +2897,9 @@ fn apply_remote_codex_launch_environment(
             command.env_remove(CODEX_LAUNCHER_ENV);
         }
     }
-    match launch
-        .discovery_codex_home
-        .as_ref()
-        .or(launch.codex_home.as_ref())
-    {
+    // The generated catalog directory is not a Codex home: redirecting CODEX_HOME
+    // there hides the rollout database needed by thread/resume.
+    match launch.codex_home.as_ref() {
         Some(codex_home) => {
             command.env("CODEX_HOME", codex_home);
         }
@@ -2919,9 +2925,15 @@ fn apply_remote_codex_launch_environment(
     }
     match launch.provider.as_ref() {
         Some(provider) => {
+            let model_catalog_override = launch
+                .discovery_codex_home
+                .as_deref()
+                .ok_or_else(|| "Codex model discovery directory is missing".to_string())
+                .and_then(codex_model_catalog_override)?;
             command
                 .env(CODEX_BASE_URL_OVERRIDE_ENV, &provider.base_url_override)
                 .env(CODEX_ENV_KEY_OVERRIDE_ENV, &provider.env_key_override)
+                .env(CODEX_MODEL_CATALOG_OVERRIDE_ENV, model_catalog_override)
                 .env(CODEX_WIRE_API_OVERRIDE_ENV, &provider.wire_api_override);
             match provider.model_override.as_ref() {
                 Some(model_override) => {
@@ -2936,6 +2948,7 @@ fn apply_remote_codex_launch_environment(
             command
                 .env_remove(CODEX_BASE_URL_OVERRIDE_ENV)
                 .env_remove(CODEX_ENV_KEY_OVERRIDE_ENV)
+                .env_remove(CODEX_MODEL_CATALOG_OVERRIDE_ENV)
                 .env_remove(CODEX_MODEL_OVERRIDE_ENV)
                 .env_remove(CODEX_WIRE_API_OVERRIDE_ENV);
         }
@@ -2964,6 +2977,11 @@ fn probe_remote_codex_app_server(launch: &RemoteCodexLaunch) -> Result<(), Strin
         command.env(&provider.env_key, &provider.secret);
     }
     apply_remote_codex_launch_environment(&mut command, launch)?;
+    if let Some(discovery_home) = launch.discovery_codex_home.as_ref() {
+        // Strict validation remains isolated from the user's config. The managed
+        // cc-connect process itself keeps the registered CODEX_HOME.
+        command.env("CODEX_HOME", discovery_home);
+    }
     let probe_timeout = launch
         .ssh_launch
         .as_ref()
@@ -6409,8 +6427,13 @@ allow_from = ""
         );
         assert_eq!(
             environment.get("CODEX_HOME"),
+            Some(&Some(r"C:\Users\test\.codex".to_string()))
+        );
+        assert_eq!(
+            environment.get(CODEX_MODEL_CATALOG_OVERRIDE_ENV),
             Some(&Some(
-                r"C:\Users\test\.cli-manager\remote-manager\codex-model-discovery".to_string()
+                codex_model_catalog_override(launch.discovery_codex_home.as_deref().unwrap())
+                    .unwrap()
             ))
         );
         assert_eq!(
@@ -6444,6 +6467,7 @@ allow_from = ""
         for key in [
             CODEX_BASE_URL_OVERRIDE_ENV,
             CODEX_ENV_KEY_OVERRIDE_ENV,
+            CODEX_MODEL_CATALOG_OVERRIDE_ENV,
             CODEX_MODEL_OVERRIDE_ENV,
             CODEX_WIRE_API_OVERRIDE_ENV,
         ] {

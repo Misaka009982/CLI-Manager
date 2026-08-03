@@ -353,15 +353,18 @@ env_key = "CLI_MANAGER_CODEX_PROVIDER_<hash>_API_KEY"
   project's `provider_overrides.codex.providerId` directly from the CLI-Manager
   database and prepend a CLI-Manager-owned `codex` wrapper to the cc-connect child
   process `PATH`. The app-server proxy adds validated `-c` provider overrides before
-  `app-server`; `CODEX_HOME` and the provider's secret env key are scoped to the
-  managed process tree. This path must not depend on a local terminal session having
-  been opened first.
+  `app-server`; `CODEX_HOME` remains the registered real Codex home so resumed threads
+  retain access to their rollout files, state database, auth, and memories. The Provider
+  secret env key is scoped to the managed process tree. This path must not depend on a
+  local terminal session having been opened first.
 - **Managed model catalog**: build isolated model entries from the installed Codex
   `models_cache.json` capability schema when available, with a complete conservative
   fallback that includes every field required by the supported Codex app-server.
-  Validate the isolated catalog with app-server `--strict-config` before starting
-  cc-connect so an incompatible schema fails closed instead of silently dropping the
-  injected Provider and continuing with Codex defaults.
+  Pass the generated catalog to the real Codex home through an absolute
+  `-c model_catalog_json=...` override; never make the catalog directory the runtime
+  `CODEX_HOME`. Validate the catalog in the isolated directory with app-server
+  `--strict-config` before starting cc-connect so an incompatible schema fails closed
+  instead of silently dropping the injected Provider and continuing with Codex defaults.
 - **Remote wrapper contents**: the wrapper may contain only environment-variable
   names and command routing. It must never contain the Provider secret, modify
   cc-connect source, or rewrite the user's base `config.toml` / `auth.json`.

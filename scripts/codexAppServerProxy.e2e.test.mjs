@@ -18,6 +18,7 @@ const proxyEnvironmentKeys = [
   "CLI_MANAGER_CODEX_LAUNCHER",
   "CLI_MANAGER_CODEX_BASE_URL_OVERRIDE",
   "CLI_MANAGER_CODEX_ENV_KEY_OVERRIDE",
+  "CLI_MANAGER_CODEX_MODEL_CATALOG_OVERRIDE",
   "CLI_MANAGER_CODEX_MODEL_OVERRIDE",
   "CLI_MANAGER_CODEX_WIRE_API_OVERRIDE",
   "CLI_MANAGER_CODEX_SSH_LAUNCH",
@@ -110,6 +111,8 @@ function runProxy({
         "model_providers.cli_manager_remote.base_url=https://provider.example.com/v1",
       CLI_MANAGER_CODEX_ENV_KEY_OVERRIDE:
         "model_providers.cli_manager_remote.env_key=CLI_MANAGER_TEST_API_KEY",
+      CLI_MANAGER_CODEX_MODEL_CATALOG_OVERRIDE:
+        'model_catalog_json="C:/Users/test/CLI Manager/cli-manager-model-catalog.json"',
       CLI_MANAGER_CODEX_MODEL_OVERRIDE: "model=gpt-5.4",
       CLI_MANAGER_CODEX_WIRE_API_OVERRIDE:
         "model_providers.cli_manager_remote.wire_api=responses",
@@ -234,6 +237,8 @@ process.exitCode = Number(process.env.FAKE_CODEX_EXIT_CODE || "0");
     "-c",
     "model_providers.cli_manager_remote.wire_api=responses",
     "-c",
+    'model_catalog_json="C:/Users/test/CLI Manager/cli-manager-model-catalog.json"',
+    "-c",
     "model=gpt-5.4",
     "app-server",
     "--listen",
@@ -267,6 +272,8 @@ process.exitCode = Number(process.env.FAKE_CODEX_EXIT_CODE || "0");
     "model_providers.cli_manager_remote.env_key=CLI_MANAGER_TEST_API_KEY",
     "-c",
     "model_providers.cli_manager_remote.wire_api=responses",
+    "-c",
+    'model_catalog_json="C:/Users/test/CLI Manager/cli-manager-model-catalog.json"',
     "-c",
     "model=gpt-5.4",
     "--version",

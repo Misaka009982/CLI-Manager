@@ -22,6 +22,8 @@ pub(crate) const CODEX_LAUNCHER_ENV: &str = "CLI_MANAGER_CODEX_LAUNCHER";
 pub(crate) const CODEX_BASE_URL_OVERRIDE_ENV: &str = "CLI_MANAGER_CODEX_BASE_URL_OVERRIDE";
 pub(crate) const CODEX_ENV_KEY_OVERRIDE_ENV: &str = "CLI_MANAGER_CODEX_ENV_KEY_OVERRIDE";
 pub(crate) const CODEX_MODEL_OVERRIDE_ENV: &str = "CLI_MANAGER_CODEX_MODEL_OVERRIDE";
+pub(crate) const CODEX_MODEL_CATALOG_OVERRIDE_ENV: &str =
+    "CLI_MANAGER_CODEX_MODEL_CATALOG_OVERRIDE";
 pub(crate) const CODEX_WIRE_API_OVERRIDE_ENV: &str = "CLI_MANAGER_CODEX_WIRE_API_OVERRIDE";
 pub(crate) const CODEX_SSH_LAUNCH_ENV: &str = "CLI_MANAGER_CODEX_SSH_LAUNCH";
 pub(crate) const CODEX_REMOTE_PROVIDER_NAME: &str = "cli_manager_remote";
@@ -411,6 +413,7 @@ struct CodexProviderOverrides {
     base_url: Option<String>,
     env_key: Option<String>,
     model: Option<String>,
+    model_catalog: Option<String>,
     wire_api: Option<String>,
 }
 
@@ -420,6 +423,7 @@ impl CodexProviderOverrides {
             base_url: optional_unicode_env(CODEX_BASE_URL_OVERRIDE_ENV)?,
             env_key: optional_unicode_env(CODEX_ENV_KEY_OVERRIDE_ENV)?,
             model: optional_unicode_env(CODEX_MODEL_OVERRIDE_ENV)?,
+            model_catalog: optional_unicode_env(CODEX_MODEL_CATALOG_OVERRIDE_ENV)?,
             wire_api: optional_unicode_env(CODEX_WIRE_API_OVERRIDE_ENV)?,
         })
     }
@@ -428,6 +432,7 @@ impl CodexProviderOverrides {
         let has_any = self.base_url.is_some()
             || self.env_key.is_some()
             || self.model.is_some()
+            || self.model_catalog.is_some()
             || self.wire_api.is_some();
         if !has_any {
             return Ok(Vec::new());
@@ -444,6 +449,10 @@ impl CodexProviderOverrides {
             .wire_api
             .as_ref()
             .ok_or_else(|| "Codex Provider wire API override is missing".to_string())?;
+        let model_catalog = self
+            .model_catalog
+            .as_ref()
+            .ok_or_else(|| "Codex model catalog override is missing".to_string())?;
         let mut args = vec![
             "-c".to_string(),
             format!("model_provider={CODEX_REMOTE_PROVIDER_NAME}"),
@@ -455,6 +464,8 @@ impl CodexProviderOverrides {
             env_key.clone(),
             "-c".to_string(),
             wire_api.clone(),
+            "-c".to_string(),
+            model_catalog.clone(),
         ];
         if let Some(model) = self.model.as_ref() {
             args.extend(["-c".to_string(), model.clone()]);
@@ -984,6 +995,10 @@ mod tests {
                         .to_string(),
                 ),
                 model: Some("model=gpt-5.4".to_string()),
+                model_catalog: Some(
+                    r#"model_catalog_json="C:/Users/test/CLI Manager/cli-manager-model-catalog.json""#
+                        .to_string(),
+                ),
                 wire_api: Some("model_providers.cli_manager_remote.wire_api=responses".to_string()),
             },
         )
@@ -1002,6 +1017,8 @@ mod tests {
                 "model_providers.cli_manager_remote.env_key=CLI_MANAGER_CODEX_PROVIDER_API_KEY",
                 "-c",
                 "model_providers.cli_manager_remote.wire_api=responses",
+                "-c",
+                r#"model_catalog_json="C:/Users/test/CLI Manager/cli-manager-model-catalog.json""#,
                 "-c",
                 "model=gpt-5.4",
                 "app-server",
@@ -1046,6 +1063,24 @@ mod tests {
         .command_args()
         .unwrap_err();
         assert!(error.contains("environment key"));
+    }
+
+    #[test]
+    fn provider_overrides_require_the_managed_model_catalog() {
+        let error = CodexProviderOverrides {
+            base_url: Some(
+                "model_providers.cli_manager_remote.base_url=https://example.com".into(),
+            ),
+            env_key: Some(
+                "model_providers.cli_manager_remote.env_key=CLI_MANAGER_CODEX_PROVIDER_API_KEY"
+                    .into(),
+            ),
+            wire_api: Some("model_providers.cli_manager_remote.wire_api=responses".into()),
+            ..CodexProviderOverrides::default()
+        }
+        .command_args()
+        .unwrap_err();
+        assert!(error.contains("model catalog"));
     }
 
     #[test]
