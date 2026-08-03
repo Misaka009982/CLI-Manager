@@ -4,7 +4,7 @@ import type { DragEndEvent } from "@dnd-kit/core";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore, type SessionStatus, type SplitTerminalOptions } from "../../stores/terminalStore";
-import { isProjectFileDirty, useFileExplorerStore } from "../../stores/fileExplorerStore";
+import { useFileExplorerStore } from "../../stores/fileExplorerStore";
 import { useHistoryStore } from "../../stores/historyStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import {
@@ -265,6 +265,7 @@ export function Sidebar({
   const persistedSidebarWidth = useSettingsStore((s) => s.sidebarWidth);
   const openFileProject = useFileExplorerStore((s) => s.openProject);
   const fileProject = useFileExplorerStore((s) => s.project);
+  const openFiles = useFileExplorerStore((s) => s.openFiles);
   const closeHistory = useHistoryStore((s) => s.closeHistory);
   const openHistory = useHistoryStore((s) => s.openHistory);
   const triggerGlobalSearchFocus = useHistoryStore((s) => s.triggerGlobalSearchFocus);
@@ -1336,9 +1337,13 @@ export function Sidebar({
   const handleOpenProjectFiles = useCallback(async (project: Project) => {
     if (rejectUnsupportedCapability(project, "files")) return;
     try {
-      if (!isSameProjectFileContext(fileProject, project) && isProjectFileDirty()) {
+      const dirtyFiles = openFiles.filter((file) => file.content !== file.savedContent);
+      if (!isSameProjectFileContext(fileProject, project) && dirtyFiles.length > 0) {
         const confirmed = await confirm({
           title: t("sidebar.toast.unsavedFileConfirm"),
+          message: t("files.editor.unsavedSwitchWithFiles", {
+            files: dirtyFiles.map((file) => file.path).join("\n"),
+          }),
           danger: true,
         });
         if (!confirmed) return;
@@ -1350,7 +1355,7 @@ export function Sidebar({
       logError("Failed to open project file browser", err);
       toast.error(t("sidebar.toast.openProjectFilesFailed"), { description: String(err) });
     }
-  }, [closeHistory, confirm, fileProject, openFileProject, rejectUnsupportedCapability, t]);
+  }, [closeHistory, confirm, fileProject, openFileProject, openFiles, rejectUnsupportedCapability, t]);
 
   const handleOpenWorktreeFiles = useCallback(async (project: Project, worktree: WorktreeRecord) => {
     if (rejectMissingWorktree(worktree)) return;

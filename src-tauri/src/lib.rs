@@ -945,6 +945,7 @@ pub fn run() {
             commands::desktop_pet::desktop_pet_window_hide,
             commands::desktop_pet::desktop_pet_window_reset_position,
             commands::terminal_shell::terminal_shell_scan,
+            commands::terminal_shell::terminal_shell_icon,
             commands::ssh::ssh_client_status,
             commands::ssh::ssh_test_connection,
             commands::ssh::ssh_agent_probe,

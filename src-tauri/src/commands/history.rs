@@ -1274,10 +1274,12 @@ pub async fn history_get_session(
     source: String,
     project_key: String,
     aggregate_subtasks: Option<bool>,
+    fresh: Option<bool>,
 ) -> Result<HistorySessionDetail, String> {
     let source_normalized = source.trim().to_lowercase();
     let aggregate_subtasks = aggregate_subtasks.unwrap_or(false);
-    if !aggregate_subtasks {
+    let fresh = fresh.unwrap_or(false);
+    if !aggregate_subtasks && !fresh {
         let started_at = Instant::now();
         let roots = history_roots(claude_config_dir.clone(), codex_config_dir.clone());
         match catalog::get_session_detail_from_v2(
@@ -1328,11 +1330,12 @@ pub async fn history_get_session(
         );
         let file_ref = validate_session_file_ref(&file_path, &source, &project_key, &roots)?;
         debug!(
-            "history_get_session reading file: source={}, project_key={}, path={}, aggregate_subtasks={}",
+            "history_get_session reading file: source={}, project_key={}, path={}, aggregate_subtasks={}, fresh={}",
             file_ref.source,
             file_ref.project_key,
             file_ref.path.to_string_lossy(),
-            aggregate_subtasks
+            aggregate_subtasks,
+            fresh
         );
         let detail = build_session_detail(&file_ref, aggregate_subtasks)?;
         log_history_detail_oom_diagnostic(

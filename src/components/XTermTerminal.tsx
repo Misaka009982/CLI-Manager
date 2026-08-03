@@ -66,6 +66,14 @@ import { Portal } from "./ui/Portal";
 import { useProjectStore } from "../stores/projectStore";
 import { formatStartupInputForPty, useTerminalStore } from "../stores/terminalStore";
 import {
+  Eye,
+  EyeOff,
+} from "./icons";
+import {
+  isTerminalMarkdownPreviewSupported,
+  TerminalMarkdownPreview,
+} from "./terminal/TerminalMarkdownPreview";
+import {
   createTerminalCliContext,
   isCodexTerminalContext,
 } from "../terminal/browser/TerminalCliContext";
@@ -447,12 +455,26 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     }))
   );
   const hiddenForThisSession = useTerminalStore((s) => s.hiddenBackgroundSessionIds.has(sessionId));
+  const terminalSession = useTerminalStore((state) => state.sessions.find((item) => item.id === sessionId) ?? null);
+  const terminalProject = useProjectStore((state) => (
+    terminalSession?.projectId
+      ? state.projects.find((item) => item.id === terminalSession.projectId) ?? null
+      : null
+  ));
+  const markdownPreviewSupported = isTerminalMarkdownPreviewSupported(terminalSession, terminalProject);
+  const markdownPreviewHookStatus = useTerminalStore((state) => state.tabStatuses[sessionId]?.hook ?? "none");
+  const markdownPreviewCanOpen = markdownPreviewSupported
+    && Boolean(terminalSession?.cliSessionId?.trim())
+    && (markdownPreviewHookStatus === "done" || markdownPreviewHookStatus === "failed");
 
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
   const [visibilityRestorePending, setVisibilityRestorePending] = useState(false);
   const [suggestionGhost, setSuggestionGhost] = useState<TerminalSuggestionGhostState | null>(null);
   const [linuxGraphicsConstrained, setLinuxGraphicsConstrained] = useState(false);
   const [linuxGraphicsDisableWebgl, setLinuxGraphicsDisableWebgl] = useState(false);
+  const [markdownPreviewOpen, setMarkdownPreviewOpen] = useState(false);
+  const [markdownPreviewRatio, setMarkdownPreviewRatio] = useState(0.5);
+  const markdownPreviewDragCleanupRef = useRef<(() => void) | null>(null);
   const { menuState, menuRef, openMenu, closeContextMenu } = useTerminalContextMenu();
   const osPlatformRef = useRef<OsPlatform>("unknown");
   const codexImeDebugRef = useRef<CodexImeDebugState>({
@@ -580,6 +602,62 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   useEffect(() => {
     clearSuggestionGhost();
   }, [terminalInputSuggestionProvider]);
+
+  useEffect(() => () => {
+    markdownPreviewDragCleanupRef.current?.();
+    markdownPreviewDragCleanupRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (!markdownPreviewOpen) return;
+    const frame = window.requestAnimationFrame(() => fitAddonRef.current?.fit());
+    return () => window.cancelAnimationFrame(frame);
+  }, [markdownPreviewOpen, markdownPreviewRatio]);
+
+  const handleMarkdownPreviewResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+
+    markdownPreviewDragCleanupRef.current?.();
+    const startX = event.clientX;
+    const startRatio = markdownPreviewRatio;
+    let frame: number | null = null;
+    let pendingRatio: number | null = null;
+
+    const updateRatio = (clientX: number) => {
+      const width = wrapper.getBoundingClientRect().width;
+      if (width <= 0) return;
+      const next = Math.min(0.68, Math.max(0.28, startRatio + (startX - clientX) / width));
+      pendingRatio = next;
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        if (pendingRatio !== null) setMarkdownPreviewRatio(pendingRatio);
+      });
+    };
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      updateRatio(moveEvent.clientX);
+    };
+    const finish = () => {
+      if (pendingRatio !== null) setMarkdownPreviewRatio(pendingRatio);
+      cleanup();
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cleanup);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = null;
+      markdownPreviewDragCleanupRef.current = null;
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cleanup);
+    markdownPreviewDragCleanupRef.current = cleanup;
+  }, [markdownPreviewRatio]);
 
   const getSessionToolContext = useCallback(() => {
     const session = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
@@ -1586,12 +1664,21 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     : searchResult.resultCount > 0 && searchResult.resultIndex >= 0
       ? `${searchResult.resultIndex + 1}/${searchResult.resultCount}`
       : searchMatched === false
-        ? "0/0"
-        : "";
+      ? "0/0"
+      : "";
+  const markdownPreviewPanelPercent = markdownPreviewRatio * 100;
+  const markdownPreviewRightOffset = markdownPreviewOpen
+    ? `calc(${markdownPreviewPanelPercent}% + 12px)`
+    : "12px";
+  const searchRightOffset = markdownPreviewOpen
+    ? `calc(${markdownPreviewPanelPercent}% + 56px)`
+    : markdownPreviewSupported
+      ? "56px"
+      : "12px";
 
   const terminalSearchShellStyle: CSSProperties = {
     position: "absolute",
-    right: 12,
+    right: searchRightOffset,
     top: 12,
     zIndex: 20,
     backgroundColor: hexToRgba(searchBackground, showBackgroundImage ? 0.78 : 0.92, "rgba(0, 0, 0, 0.86)"),
@@ -1698,6 +1785,31 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       data-bg-fit={showBackgroundImage ? background.fit : undefined}
       data-bg-position={showBackgroundImage ? background.position : undefined}
     >
+      {markdownPreviewSupported && (
+        <button
+          type="button"
+          onClick={() => {
+            if (!markdownPreviewOpen && !markdownPreviewCanOpen) return;
+            setMarkdownPreviewOpen((open) => !open);
+          }}
+          disabled={!markdownPreviewOpen && !markdownPreviewCanOpen}
+          className="ui-focus-ring absolute top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-md border backdrop-blur-md transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+          style={{ ...terminalSearchButtonStyle, right: markdownPreviewRightOffset }}
+          aria-label={markdownPreviewOpen
+            ? t("terminal.markdownPreview.close")
+            : markdownPreviewCanOpen
+              ? t("terminal.markdownPreview.open")
+              : t("terminal.markdownPreview.unavailable")}
+          title={markdownPreviewOpen
+            ? t("terminal.markdownPreview.close")
+            : markdownPreviewCanOpen
+              ? t("terminal.markdownPreview.open")
+              : t("terminal.markdownPreview.unavailable")}
+          aria-pressed={markdownPreviewOpen}
+        >
+          {markdownPreviewOpen ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
+        </button>
+      )}
       {searchOpen && (
         <div
           className="absolute right-3 top-3 z-20 flex h-8 items-center gap-1 rounded-md border px-2 text-[12px] backdrop-blur-md"
@@ -1774,7 +1886,35 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           </button>
         </div>
       )}
-      <div ref={containerRef} className="relative h-full w-full overflow-hidden pl-2" style={terminalContainerStyle} />
+      <div className="absolute inset-0 overflow-hidden">
+        <div
+          className="absolute inset-y-0 left-0 min-w-0 overflow-hidden"
+          style={{ width: markdownPreviewOpen ? `${100 - markdownPreviewPanelPercent}%` : "100%" }}
+        >
+          <div ref={containerRef} className="relative h-full w-full overflow-hidden pl-2" style={terminalContainerStyle} />
+        </div>
+        {markdownPreviewOpen && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t("terminal.markdownPreview.resize")}
+            className="absolute inset-y-0 z-20 w-1 -translate-x-1/2 cursor-col-resize bg-transparent transition-colors hover:bg-[color-mix(in_srgb,var(--primary)_55%,transparent)]"
+            style={{ left: `${100 - markdownPreviewPanelPercent}%` }}
+            onPointerDown={handleMarkdownPreviewResizeStart}
+          />
+        )}
+        <div
+          className="absolute inset-y-0 right-0 min-w-0 overflow-hidden"
+          style={{ width: markdownPreviewOpen ? `${markdownPreviewPanelPercent}%` : "0%", pointerEvents: markdownPreviewOpen ? "auto" : "none" }}
+        >
+          <TerminalMarkdownPreview
+            sessionId={sessionId}
+            open={markdownPreviewOpen}
+            onClose={() => setMarkdownPreviewOpen(false)}
+            terminalTheme={terminalTheme}
+          />
+        </div>
+      </div>
       {terminalInputSuggestionsEnabled && isActive && isVisible && !searchOpen && suggestionGhost && (
         <div
           aria-hidden="true"

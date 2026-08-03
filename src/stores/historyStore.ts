@@ -806,15 +806,17 @@ export async function fetchLatestProjectSessionDetail(
   prev?: { filePath: string; updatedAt: number },
   source?: HistorySource | null,
   cliSessionId?: string | null,
-  options?: { forceCatalogRefresh?: boolean }
+  options?: { forceCatalogRefresh?: boolean; freshDetail?: boolean }
 ): Promise<HistorySessionDetail | "unchanged" | null> {
   try {
     const forceCatalogRefresh = Boolean(options?.forceCatalogRefresh);
+    const freshDetail = Boolean(options?.freshDetail);
     logInfo("history.realtime.lookup.start", {
       source: source ?? null,
       projectPath,
       cliSessionId: cliSessionId ?? null,
       forceCatalogRefresh,
+      freshDetail,
       previousFilePath: prev?.filePath ?? null,
       previousUpdatedAt: prev?.updatedAt ?? null,
     });
@@ -907,6 +909,7 @@ export async function fetchLatestProjectSessionDetail(
       source: summary.source,
       projectKey: summary.project_key,
       aggregateSubtasks: false,
+      fresh: freshDetail,
     });
     const detail = normalizeDetail(detailRaw);
     logInfo("history.realtime.lookup.detail", {
