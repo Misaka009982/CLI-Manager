@@ -893,7 +893,9 @@ export async function fetchLatestProjectSessionDetail(
       });
       return null;
     }
-    if (prev && summary.file_path === prev.filePath && summary.updated_at === prev.updatedAt) {
+    const summaryChanged =
+      !prev || summary.file_path !== prev.filePath || summary.updated_at !== prev.updatedAt;
+    if (prev && !summaryChanged && !freshDetail) {
       logInfo("history.realtime.lookup.unchanged", {
         source: summary.source,
         projectPath,
@@ -909,7 +911,7 @@ export async function fetchLatestProjectSessionDetail(
       source: summary.source,
       projectKey: summary.project_key,
       aggregateSubtasks: false,
-      fresh: freshDetail,
+      fresh: freshDetail || summaryChanged,
     });
     const detail = normalizeDetail(detailRaw);
     logInfo("history.realtime.lookup.detail", {
