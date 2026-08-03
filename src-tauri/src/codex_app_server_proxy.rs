@@ -283,19 +283,13 @@ fn run_proxy(child_args: &[String]) -> Result<i32, String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let (mut command, managed_provider_id) = if let Some(ssh_launch) = ssh_launch.as_ref() {
-        (
-            command_from_ssh_launch(ssh_launch.build_launch(child_args)?),
-            None,
-        )
+    let mut command = if let Some(ssh_launch) = ssh_launch.as_ref() {
+        command_from_ssh_launch(ssh_launch.build_launch(child_args)?)
     } else {
         let launcher = codex_launcher_from_environment()?;
         let provider_overrides = CodexProviderOverrides::from_environment()?;
         let child_args = build_codex_child_args(child_args, &provider_overrides)?;
-        let managed_provider_id = (expected_thread_id.is_some()
-            && provider_overrides.base_url.is_some())
-        .then(|| CODEX_REMOTE_PROVIDER_NAME.to_string());
-        (codex_command(&launcher, &child_args), managed_provider_id)
+        codex_command(&launcher, &child_args)
     };
     command
         .stdin(Stdio::piped())
@@ -326,7 +320,6 @@ fn run_proxy(child_args: &[String]) -> Result<i32, String> {
             child_stdin,
             expected_thread_id.as_deref(),
             remote_work_dir.as_deref(),
-            managed_provider_id.as_deref(),
             &input_pending,
             &input_output,
         ) {
@@ -522,7 +515,6 @@ fn forward_parent_input(
     mut child_stdin: impl Write,
     expected_thread_id: Option<&str>,
     remote_work_dir: Option<&str>,
-    managed_provider_id: Option<&str>,
     pending: &Arc<Mutex<HashMap<String, PendingResume>>>,
     parent_output: &Arc<Mutex<io::Stdout>>,
 ) -> Result<(), String> {
@@ -541,7 +533,6 @@ fn forward_parent_input(
                 &line,
                 expected_thread_id,
                 remote_work_dir,
-                managed_provider_id,
                 &mut pending,
                 &mut delivery_instruction_pending,
             )
@@ -589,7 +580,6 @@ fn inspect_client_line(
     line: &[u8],
     expected_thread_id: Option<&str>,
     remote_work_dir: Option<&str>,
-    managed_provider_id: Option<&str>,
     pending: &mut HashMap<String, PendingResume>,
     delivery_instruction_pending: &mut bool,
 ) -> ClientLineAction {
@@ -653,7 +643,7 @@ fn inspect_client_line(
         }
     }
     let mut request_changed = false;
-    if remote_work_dir.is_some() || managed_provider_id.is_some() {
+    if remote_work_dir.is_some() {
         let Some(params) = message.get_mut("params").and_then(Value::as_object_mut) else {
             return ClientLineAction::Reject(rpc_error_response(
                 &id,
@@ -664,13 +654,6 @@ fn inspect_client_line(
             params.insert(
                 "cwd".to_string(),
                 Value::String(remote_work_dir.to_string()),
-            );
-            request_changed = true;
-        }
-        if let Some(managed_provider_id) = managed_provider_id {
-            params.insert(
-                "modelProvider".to_string(),
-                Value::String(managed_provider_id.to_string()),
             );
             request_changed = true;
         }
@@ -1129,7 +1112,6 @@ mod tests {
             drifted,
             Some("thread-original"),
             None,
-            None,
             &mut pending,
             &mut delivery_instruction_pending,
         ) else {
@@ -1150,7 +1132,6 @@ mod tests {
                 fresh,
                 Some("thread-original"),
                 None,
-                None,
                 &mut pending,
                 &mut delivery_instruction_pending,
             ),
@@ -1169,7 +1150,6 @@ mod tests {
                 request,
                 Some("thread-original"),
                 None,
-                None,
                 &mut pending,
                 &mut delivery_instruction_pending,
             ),
@@ -1184,26 +1164,22 @@ mod tests {
     }
 
     #[test]
-    fn local_handoff_resume_forces_registered_provider() {
+    fn local_handoff_resume_does_not_inject_synthetic_provider() {
         let mut pending = HashMap::new();
         let mut delivery_instruction_pending = false;
-        let request = br#"{"jsonrpc":"2.0","id":14,"method":"thread/resume","params":{"threadId":"thread-original","modelProvider":"custom"}}
+        let request = br#"{"jsonrpc":"2.0","id":14,"method":"thread/resume","params":{"threadId":"thread-original"}}
 "#;
         let ClientLineAction::Forward(forwarded) = inspect_client_line(
             request,
             Some("thread-original"),
             None,
-            Some(CODEX_REMOTE_PROVIDER_NAME),
             &mut pending,
             &mut delivery_instruction_pending,
         ) else {
             panic!("managed local resume must be forwarded");
         };
         let forwarded: Value = serde_json::from_slice(trim_line_ending(&forwarded)).unwrap();
-        assert_eq!(
-            forwarded["params"]["modelProvider"],
-            CODEX_REMOTE_PROVIDER_NAME
-        );
+        assert!(forwarded["params"].get("modelProvider").is_none());
         assert_eq!(forwarded["params"]["threadId"], "thread-original");
         assert!(pending.contains_key("14"));
     }
@@ -1218,7 +1194,6 @@ mod tests {
             request,
             Some("thread-original"),
             Some("/srv/project"),
-            None,
             &mut pending,
             &mut delivery_instruction_pending,
         ) else {
@@ -1239,7 +1214,6 @@ mod tests {
             first,
             Some("thread-original"),
             None,
-            None,
             &mut pending,
             &mut delivery_instruction_pending,
         ) else {
@@ -1259,7 +1233,6 @@ mod tests {
             second,
             Some("thread-original"),
             None,
-            None,
             &mut pending,
             &mut delivery_instruction_pending,
         ) else {
@@ -1278,7 +1251,6 @@ mod tests {
             request,
             Some("thread-original"),
             Some("/srv/project"),
-            None,
             &mut pending,
             &mut ssh_instruction_pending,
         ) else {
@@ -1290,7 +1262,6 @@ mod tests {
         let mut unmanaged_instruction_pending = true;
         let ClientLineAction::Forward(unmanaged_forwarded) = inspect_client_line(
             request,
-            None,
             None,
             None,
             &mut pending,
@@ -1312,7 +1283,6 @@ mod tests {
             image_only,
             Some("thread-original"),
             None,
-            None,
             &mut pending,
             &mut delivery_instruction_pending,
         ) else {
@@ -1326,7 +1296,6 @@ mod tests {
         let ClientLineAction::Forward(forwarded) = inspect_client_line(
             text_turn,
             Some("thread-original"),
-            None,
             None,
             &mut pending,
             &mut delivery_instruction_pending,

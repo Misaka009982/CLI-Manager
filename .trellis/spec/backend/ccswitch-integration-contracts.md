@@ -355,8 +355,11 @@ env_key = "CLI_MANAGER_CODEX_PROVIDER_<hash>_API_KEY"
   process `PATH`. The app-server proxy adds validated `-c` provider overrides before
   `app-server`; `CODEX_HOME` remains the registered real Codex home so resumed threads
   retain access to their rollout files, state database, auth, and memories. The Provider
-  secret env key is scoped to the managed process tree. This path must not depend on a
-  local terminal session having been opened first.
+  secret env key is scoped to the managed process tree. A synthetic Provider that exists
+  only in those CLI overrides must not be copied into the `thread/resume.modelProvider`
+  request field: Codex resolves that request field against its persisted config layers and
+  rejects the otherwise valid temporary Provider. This path must not depend on a local
+  terminal session having been opened first.
 - **Managed model catalog**: build isolated model entries from the installed Codex
   `models_cache.json` capability schema when available, with a complete conservative
   fallback that includes every field required by the supported Codex app-server.
