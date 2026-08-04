@@ -861,23 +861,26 @@ export async function fetchRemoteHistoryStatsPayload(
 // source 非空时只匹配对应 CLI（claude/codex），供按终端工具区分的场景使用。
 // 传入 prev（上次结果的 file_path/updated_at）时，若最近会话未变化则返回 "unchanged"，
 // 跳过整个 jsonl 的重新解析，供轮询场景使用。
-// forceCatalogRefresh：Hook 刚绑定 sessionId / 用量仍为 0 时后台触发扫盘索引；查询保持非阻塞。
+// forceCatalogRefresh：Hook 刚绑定 sessionId / 用量仍为 0 时触发扫盘索引。
+// waitForCatalogRefresh：需要严格绑定当前 session 的实时预览时，等待这次扫盘完成；默认不等待，保留统计轮询的非阻塞行为。
 export async function fetchLatestProjectSessionDetail(
   projectPath: string,
   prev?: { filePath: string; updatedAt: number },
   source?: HistorySource | null,
   cliSessionId?: string | null,
-  options?: { forceCatalogRefresh?: boolean; freshDetail?: boolean }
+  options?: { forceCatalogRefresh?: boolean; freshDetail?: boolean; waitForCatalogRefresh?: boolean }
 ): Promise<HistorySessionDetail | "unchanged" | null> {
   try {
     const forceCatalogRefresh = Boolean(options?.forceCatalogRefresh);
     const freshDetail = Boolean(options?.freshDetail);
+    const waitForCatalogRefresh = Boolean(options?.waitForCatalogRefresh);
     logInfo("history.realtime.lookup.start", {
       source: source ?? null,
       projectPath,
       cliSessionId: cliSessionId ?? null,
       forceCatalogRefresh,
       freshDetail,
+      waitForCatalogRefresh,
       previousFilePath: prev?.filePath ?? null,
       previousUpdatedAt: prev?.updatedAt ?? null,
     });
@@ -921,7 +924,7 @@ export async function fetchLatestProjectSessionDetail(
       if (summary?.session_id === sessionQuery) return summary;
       if (!forceCatalogRefresh) return null;
       try {
-        await invoke("history_refresh_index", { ...pathArgs, wait: false });
+        await invoke("history_refresh_index", { ...pathArgs, wait: waitForCatalogRefresh });
       } catch (error) {
         logWarn("history.realtime.lookup.refreshFailed", {
           source: source ?? null,

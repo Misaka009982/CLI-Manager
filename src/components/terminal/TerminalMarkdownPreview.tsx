@@ -151,6 +151,7 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
   const remoteContextRef = useRef<SshAgentHistoryContext | null>(null);
   const requestSeqRef = useRef(0);
   const loadedTriggerRef = useRef<string | null>(null);
+  const previewLoadTrigger = `${cliSessionId ?? ""}:${source ?? ""}:${lookupProjectPath}:${hookStatus}:${hookUpdatedAt ?? ""}`;
 
   const closeRemoteContext = useCallback((context: SshAgentHistoryContext | null) => {
     if (!context) return;
@@ -165,7 +166,7 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
     remoteContextRef.current = null;
   }, [closeRemoteContext]);
 
-  const loadLatest = useCallback(async () => {
+  const loadLatest = useCallback(async (trigger: string) => {
     const requestSeq = ++requestSeqRef.current;
     if (!source) return;
     if (!cliSessionId) {
@@ -199,12 +200,13 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
             closeRemoteContext(remoteContextRef.current);
             remoteContextRef.current = null;
           }
+          const waitForCatalogRefresh = attempt === 0;
           const local = await fetchLatestProjectSessionDetail(
             lookupProjectPath,
             undefined,
             source,
             cliSessionId,
-            { forceCatalogRefresh: true, freshDetail: true },
+            { forceCatalogRefresh: true, freshDetail: true, waitForCatalogRefresh },
           );
           detail = local === "unchanged" ? null : local;
         }
@@ -214,6 +216,7 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
 
       if (requestSeq !== requestSeqRef.current) return;
       if (detail) {
+        loadedTriggerRef.current = trigger;
         setContent(selectFinalAssistantContent(detail));
         setError(null);
       } else {
@@ -231,11 +234,9 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
     if (!source) return;
     const completed = hookStatus === "done" || hookStatus === "failed";
     if (!open && !completed) return;
-    const trigger = `${cliSessionId ?? ""}:${source}:${lookupProjectPath}:${hookStatus}:${hookUpdatedAt ?? ""}`;
-    if (loadedTriggerRef.current === trigger) return;
-    loadedTriggerRef.current = trigger;
-    void loadLatest();
-  }, [cliSessionId, hookStatus, hookUpdatedAt, loadLatest, lookupProjectPath, open, source]);
+    if (loadedTriggerRef.current === previewLoadTrigger) return;
+    void loadLatest(previewLoadTrigger);
+  }, [hookStatus, loadLatest, open, previewLoadTrigger, source]);
 
   if (!open) return null;
 
@@ -249,7 +250,7 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
         <span className="min-w-0 flex-1 truncate text-xs font-semibold">{t("terminal.markdownPreview.title")}</span>
         <button
           type="button"
-          onClick={() => void loadLatest()}
+          onClick={() => void loadLatest(previewLoadTrigger)}
           disabled={loading}
           className="ui-focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-secondary)] transition hover:bg-[var(--interactive-hover-bg)] hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-50"
           aria-label={t("terminal.markdownPreview.refresh")}
