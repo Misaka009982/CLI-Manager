@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { projectSupportsCapability } from "../../../lib/projectCapabilities";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -40,7 +39,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { getLanguageLocale, useI18n, type AppLanguage, type TranslationKey } from "../../../lib/i18n";
-import { useProjectStore } from "../../../stores/projectStore";
 import { useSettingsStore } from "../../../stores/settingsStore";
 import { ConfirmDialog } from "../../ConfirmDialog";
 
@@ -62,6 +60,7 @@ interface CcConnectProfile {
   projectName: string;
   projectPath: string;
   agent: AgentKind;
+  runtimeProjectId?: string | null;
   platform: PlatformKind;
   allowFrom: string;
   platforms: CcConnectPlatformProfile[];
@@ -200,7 +199,7 @@ const EMPTY_PROFILE: CcConnectProfile = {
   projectId: "",
   projectName: "",
   projectPath: "",
-  agent: "claude",
+  agent: "codex",
   platform: "telegram",
   allowFrom: "",
   platforms: PLATFORM_KINDS.map((platform) => ({
@@ -276,13 +275,6 @@ function formatTimestamp(value: number | null, language: AppLanguage) {
 
 export function CcConnectSettingsPage() {
   const { t, language } = useI18n();
-  const allProjects = useProjectStore((state) => state.projects);
-  const projects = useMemo(
-    () => allProjects.filter((project) => projectSupportsCapability(project, "hooks")),
-    [allProjects]
-  );
-  const projectsLoaded = useProjectStore((state) => state.loaded);
-  const fetchProjects = useProjectStore((state) => state.fetchAll);
   const ccSwitchDbPath = useSettingsStore((state) => state.ccSwitchDbPath);
   const codexConfigDir = useSettingsStore((state) => state.codexHookConfigDir);
   const codexHookBridgeEnabled = useSettingsStore((state) => state.codexHookBridgeEnabled);
@@ -413,10 +405,6 @@ export function CcConnectSettingsPage() {
   }, []);
 
   useEffect(() => {
-    if (!projectsLoaded) void fetchProjects();
-  }, [fetchProjects, projectsLoaded]);
-
-  useEffect(() => {
     let disposed = false;
     if (!codexHookBridgeEnabled) {
       setCodexHookStatus(null);
@@ -461,23 +449,6 @@ export function CcConnectSettingsPage() {
     const logTimer = window.setInterval(() => void loadLogs(), 1_500);
     return () => window.clearInterval(logTimer);
   }, [loadLogs, profile.loggingEnabled]);
-
-  useEffect(() => {
-    if (profile.projectId || projects.length === 0 || status?.profile) return;
-    const project = projects[0];
-    setProfile((current) => ({
-      ...current,
-      projectId: project.id,
-      projectName: project.name,
-      projectPath: project.path,
-      agent: project.cli_tool.toLowerCase().includes("codex") ? "codex" : "claude",
-    }));
-  }, [profile.projectId, projects, status?.profile]);
-
-  const projectOptions = useMemo(
-    () => projects.map((project) => ({ value: project.id, label: project.name })),
-    [projects],
-  );
 
   const updateProfile = <K extends keyof CcConnectProfile>(key: K, value: CcConnectProfile[K]) => {
     setProfile((current) => ({ ...current, [key]: value }));
@@ -572,20 +543,6 @@ export function CcConnectSettingsPage() {
     if (!profile.yoloEnabled) setYoloConfirmOpen(true);
   };
 
-  const selectProject = (projectId: string | null) => {
-    const project = projects.find((candidate) => candidate.id === projectId);
-    if (!project) return;
-    setProfile((current) => ({
-      ...current,
-      projectId: project.id,
-      projectName: project.name,
-      projectPath: project.path,
-      agent: project.cli_tool.toLowerCase().includes("codex") ? "codex" : current.agent,
-    }));
-    formTouchedRef.current = true;
-    setDirty(true);
-  };
-
   const setWorkingState = (value: string | null) => {
     if (value) statusRequestRef.current += 1;
     workingRef.current = value;
@@ -623,21 +580,12 @@ export function CcConnectSettingsPage() {
 
   const saveProfile = async () => {
     if (workingRef.current || status?.starting) return;
-    const currentProject = projects.find((project) => project.id === profile.projectId);
-    if (!currentProject) {
-      toast.error(t("settings.ccConnect.toast.saveFailed"), {
-        description: t("settings.ccConnect.blocker.projectMissing"),
-      });
-      return;
-    }
     setWorkingState("save");
     try {
       const next = await invoke<CcConnectStatus>("cc_connect_save_profile", {
         request: {
           profile: {
             ...profile,
-            projectName: currentProject.name,
-            projectPath: currentProject.path,
             ccSwitchDbPath,
             codexConfigDir,
           },
@@ -707,13 +655,6 @@ export function CcConnectSettingsPage() {
 
   const startWeixinAuthorization = async () => {
     if (workingRef.current || status?.starting || status?.running) return;
-    const currentProject = projects.find((project) => project.id === profile.projectId);
-    if (!currentProject) {
-      toast.error(t("settings.ccConnect.weixinAuthStartFailed"), {
-        description: t("settings.ccConnect.blocker.projectMissing"),
-      });
-      return;
-    }
     setWorkingState("weixin-authorize");
     weixinAuthorizationActiveRef.current = true;
     setWeixinAuthorizationOpen(true);
@@ -732,8 +673,6 @@ export function CcConnectSettingsPage() {
           request: {
             profile: {
               ...profile,
-              projectName: currentProject.name,
-              projectPath: currentProject.path,
               ccSwitchDbPath,
               codexConfigDir,
             },
@@ -890,18 +829,6 @@ export function CcConnectSettingsPage() {
   );
   const credentialStored = !credentialInputPending
     && Boolean(currentPlatformStatus?.credentialsReady);
-  const currentProject = projects.find((project) => project.id === profile.projectId);
-  const normalizeProjectPath = (value: string) => value
-    .replace(/^\\\\\?\\UNC\\/i, "\\\\")
-    .replace(/^\\\\\?\\/, "")
-    .replace(/\\/g, "/")
-    .replace(/\/+$/, "")
-    .toLocaleLowerCase("en-US");
-  const projectRegistrationCurrent = Boolean(
-    currentProject
-      && currentProject.name === profile.projectName
-      && normalizeProjectPath(currentProject.path) === normalizeProjectPath(profile.projectPath),
-  );
   const displayedExecutable = executableInspection ?? (!executableDirty ? status : null);
   const displayedDetectionError = executableInspection?.detectionError
     ?? (!executableDirty ? status?.detectionError : null);
@@ -1201,8 +1128,6 @@ export function CcConnectSettingsPage() {
         <Text fw={700}>{t("settings.ccConnect.profile.title")}</Text>
         <Text mt={4} size="xs" c="var(--text-muted)">{t("settings.ccConnect.profile.description")}</Text>
         <SimpleGrid cols={{ base: 1, md: 2 }} mt="md" spacing="sm">
-          <Select label={t("settings.ccConnect.project")} placeholder={t("settings.ccConnect.projectPlaceholder")} nothingFoundMessage={t("settings.ccConnect.projectEmpty")} data={projectOptions} value={profile.projectId || null} onChange={selectProject} searchable />
-          <Select label={t("settings.ccConnect.agent")} data={[{ value: "claude", label: "Claude Code" }, { value: "codex", label: "Codex" }]} value={profile.agent} onChange={(value) => value && updateProfile("agent", value as AgentKind)} />
           <Select
             label={t("settings.ccConnect.platform")}
             data={platformOptions}
@@ -1336,7 +1261,7 @@ export function CcConnectSettingsPage() {
                 variant="default"
                 leftSection={<QrCode size={15} />}
                 loading={working === "weixin-authorize"}
-                disabled={busy || !!status?.running || !currentProject || executableDirty || !displayedExecutable?.compatible}
+                disabled={busy || !!status?.running || executableDirty || !displayedExecutable?.compatible}
                 onClick={() => void startWeixinAuthorization()}
               >
                 {t("settings.ccConnect.weixinAuthorize")}
@@ -1388,13 +1313,13 @@ export function CcConnectSettingsPage() {
           <Text size="xs">{t("settings.ccConnect.lastExit")}: {status?.lastExitCode ?? "—"}</Text>
         </Stack>
         <Group mt="md" gap="xs">
-          <Button size="xs" color="cliPrimary" leftSection={<Play size={14} />} disabled={busy || !status?.ready || !!status?.running || dirty || !projectRegistrationCurrent} loading={working === "start"} onClick={() => void runAction("cc_connect_start", "start", "settings.ccConnect.toast.startSuccess", "settings.ccConnect.toast.startFailed")}>
+          <Button size="xs" color="cliPrimary" leftSection={<Play size={14} />} disabled={busy || !status?.ready || !!status?.running || dirty} loading={working === "start"} onClick={() => void runAction("cc_connect_start", "start", "settings.ccConnect.toast.startSuccess", "settings.ccConnect.toast.startFailed")}>
             {t("settings.ccConnect.start")}
           </Button>
           <Button size="xs" variant="light" color="red" leftSection={<Square size={13} />} disabled={busy || !status?.running} loading={working === "stop"} onClick={() => void runAction("cc_connect_stop", "stop", "settings.ccConnect.toast.stopSuccess", "settings.ccConnect.toast.stopFailed")}>
             {t("settings.ccConnect.stop")}
           </Button>
-          <Button size="xs" variant="default" leftSection={<RotateCw size={14} />} disabled={busy || !status?.running || dirty || !projectRegistrationCurrent} loading={working === "restart"} onClick={() => void runAction("cc_connect_restart", "restart", "settings.ccConnect.toast.restartSuccess", "settings.ccConnect.toast.restartFailed")}>
+          <Button size="xs" variant="default" leftSection={<RotateCw size={14} />} disabled={busy || !status?.running || dirty} loading={working === "restart"} onClick={() => void runAction("cc_connect_restart", "restart", "settings.ccConnect.toast.restartSuccess", "settings.ccConnect.toast.restartFailed")}>
             {t("settings.ccConnect.restart")}
           </Button>
         </Group>

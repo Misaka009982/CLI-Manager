@@ -360,6 +360,32 @@ env_key = "CLI_MANAGER_CODEX_PROVIDER_<hash>_API_KEY"
   request field: Codex resolves that request field against its persisted config layers and
   rejects the otherwise valid temporary Provider. This path must not depend on a local
   terminal session having been opened first.
+- **Connection profile vs runtime target**: persisted cc-connect connection settings own only
+  platform credentials/options, proxy, logging, timeout, language, executable, and safety mode.
+  They use the stable `~/.cli-manager/remote-manager/control-workdir` identity and must not retain
+  a registered project's path as a startup prerequisite. Desktop-pet handoff requests are the
+  authority for project, Worktree/SSH path, CLI Session ID, and Codex Provider. A remote
+  `/cli_manager_switch` selection is stored only as `runtimeProjectId` and is re-resolved from the
+  current project/provider catalog on every launch; a missing or moved target falls back to the
+  control workspace instead of failing with a stale-profile error.
+- **Legacy connection migration**: when no handoff owns the process, an old project-bound profile
+  is migrated atomically to the control identity. Existing cc-connect session state plus Weixin
+  `context_tokens.json` and `get_updates.buf` are copied without deleting the legacy files. An
+  active schema-v1 handoff keeps its original source identity until cancellation, then migrates
+  before the standby process restarts.
+- **Connection profile vs runtime target**: persisted cc-connect connection settings own only
+  platform credentials/options, proxy, logging, timeout, language, executable, and safety mode.
+  They use the stable `~/.cli-manager/remote-manager/control-workdir` identity and must not retain
+  a registered project's path as a startup prerequisite. Desktop-pet handoff requests are the
+  authority for project, Worktree/SSH path, CLI Session ID, and Codex Provider. A remote
+  `/cli_manager_switch` selection is stored only as `runtimeProjectId` and is re-resolved from the
+  current project/provider catalog on every launch; a missing or moved target falls back to the
+  control workspace instead of failing with a stale-profile error.
+- **Legacy connection migration**: when no handoff owns the process, an old project-bound profile
+  is migrated atomically to the control identity. Existing cc-connect session state plus Weixin
+  `context_tokens.json` and `get_updates.buf` are copied without deleting the legacy files. An
+  active schema-v1 handoff keeps its original source identity until cancellation, then migrates
+  before the standby process restarts.
 - **Managed model catalog**: build isolated model entries from the installed Codex
   `models_cache.json` capability schema when available, with a complete conservative
   fallback that includes every field required by the supported Codex app-server.

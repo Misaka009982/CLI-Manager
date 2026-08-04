@@ -144,3 +144,14 @@ test("WSL remains unsupported while local Codex handoff behavior is preserved", 
     processStatus: "running",
   }), { eligible: false, reason: "task_state_unknown" });
 });
+
+test("remote connection settings do not select a project or directory", () => {
+  const settingsSource = readFileSync(
+    new URL("../src/components/settings/pages/CcConnectSettingsPage.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(settingsSource, /useProjectStore/);
+  assert.doesNotMatch(settingsSource, /projectRegistrationCurrent/);
+  assert.doesNotMatch(settingsSource, /label=\{t\("settings\.ccConnect\.project"\)\}/);
+  assert.match(settingsSource, /settings\.ccConnect\.profile\.description/);
+});

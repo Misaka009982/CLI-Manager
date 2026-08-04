@@ -868,3 +868,21 @@
 - `node scripts/terminalProcessManager.test.mjs`：7 项通过。
 - `cargo check`、`npx tsc --noEmit`、`cargo fmt --all -- --check`、`git diff --check`：通过。
 - 尚未使用受影响用户的 SSH Config 和跨版本残留 daemon 做真实机器冒烟；需由安装包验证 Hook 检查/安装，以及保留旧会话和关闭旧会话后的 SSH 启动行为。
+
+## cc-connect 项目无关连接配置（2026-08-04）
+
+### 根因与发现清单
+
+- 日志中的 `remote profile is stale; save it again from the current project list` 来自远程连接 Profile 对项目 ID、名称和路径的强一致校验；该校验发生在宠物选中会话的目标解析之前，因此设置项目与托管项目不同、项目移动或重新登记都可能直接阻断启动。
+- 设置页已移除项目和 Agent 选择；后端使用固定控制工作区维持平台连接，宠物托管请求继续从真实终端会话传递项目、工作目录、CLI Session ID、Worktree/SSH 元数据，并在启动时读取该项目当前 Provider。
+- `/cli_manager_switch` 改为保存独立 `runtimeProjectId`，启动时动态解析；无效目标回退控制工作区。旧平台 Session 与微信状态会复制到控制身份，活动中的旧托管直到取消后才迁移。
+- 触点包括 cc-connect Profile 归一化/启动/自动启动、配置生成、项目切换、平台 Session 与微信状态迁移、托管预检/开始/取消、设置页和中英文说明；凭据存储、cc-connect 源码、SSH Agent 协议、终端挂起/恢复和 Hook 通知协议确认不改变。
+
+### 场景与验证
+
+- 覆盖无项目配置的控制待机、旧项目 Profile 迁移、平台 Session/微信状态保留、宠物选择不同本地项目、动态 Provider、持久化远程项目切换、项目移动/删除回退、活动旧托管取消兼容，以及本地/SSH 目标的既有工作目录验证。
+- `cargo test commands::cc_connect::tests::`：48 项通过。
+- `cargo test commands::cc_connect::handoff::tests::`：2 项通过。
+- `node scripts/remoteHandoff.test.mjs`：5 项通过。
+- `cargo fmt --all -- --check`、`cargo check`、`npx tsc --noEmit`、`npm run build`、`git diff --check`：通过。
+- 尚未执行真实 Telegram、微信、飞书、企业微信授权及安装包冒烟；该项留给后续打包测试阶段。
