@@ -3586,6 +3586,12 @@
   color: var(--term-panel-fg, var(--terminal-theme-foreground, #ececec));
 }
 
+.terminal-markdown-preview-message-select {
+  border: 1px solid var(--term-panel-border, #2e2e2e);
+  background-color: var(--term-panel-card-inner, #181818);
+  color: var(--term-panel-fg, #ececec);
+}
+
 /* Let the terminal's single background-image layer show through the split
    pane. The parent overlay still supplies the configured darkening and the
    opaque fallback remains active when no background image is available. */

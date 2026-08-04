@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ITheme } from "@xterm/xterm";
 import { invoke } from "@tauri-apps/api/core";
-import { useI18n } from "../../lib/i18n";
-import type { HistorySessionDetail, HistorySource, Project, TerminalSession } from "../../lib/types";
+import { useI18n, type AppLanguage } from "../../lib/i18n";
+import type { HistoryMessage, HistorySessionDetail, HistorySource, Project, TerminalSession } from "../../lib/types";
 import { resolveCliToolHistorySourceId } from "../../lib/cliTools";
+import { formatTime } from "../history/historyViewUtils";
 import { isLightTerminalTheme } from "../../lib/terminalThemes";
 import { resolveTerminalProjectPath } from "../../lib/terminalOscPath";
 import { buildSshAgentHistoryContext, type SshAgentHistoryContext } from "../../lib/sshAgentHistory";
@@ -93,20 +94,39 @@ export function isTerminalMarkdownPreviewSupported(
   return resolveTerminalMarkdownSource(session, project) !== null;
 }
 
-function selectFinalAssistantContent(detail: HistorySessionDetail): string | null {
-  let lastUserIndex = -1;
-  for (let index = detail.messages.length - 1; index >= 0; index -= 1) {
-    if (detail.messages[index]?.role.toLowerCase() === "user") {
-      lastUserIndex = index;
-      break;
-    }
-  }
+interface MarkdownPreviewMessage {
+  messageIndex: number;
+  order: number;
+  content: string;
+  timestamp: string | null;
+}
 
-  const candidates = detail.messages.slice(lastUserIndex + 1).reverse();
-  const assistant = candidates.find(
-    (message) => message.role.toLowerCase() === "assistant" && message.content.trim().length > 0,
-  );
-  return assistant?.content ?? null;
+function selectAssistantMarkdownMessages(detail: HistorySessionDetail): MarkdownPreviewMessage[] {
+  const messages: MarkdownPreviewMessage[] = [];
+  for (let messageIndex = 0; messageIndex < detail.messages.length; messageIndex += 1) {
+    const message: HistoryMessage | undefined = detail.messages[messageIndex];
+    if (message?.role.toLowerCase() !== "assistant" || message.content.trim().length === 0) continue;
+    messages.push({
+      messageIndex,
+      order: messages.length + 1,
+      content: message.content,
+      timestamp: message.timestamp ?? null,
+    });
+  }
+  return messages;
+}
+
+const MARKDOWN_SOURCE_FENCE = /^[ \t]*(`{3,}|~{3,})[ \t]*(?:md|markdown)[ \t]*\n([\s\S]*?)\n\1[ \t]*$/i;
+
+function unwrapFencedMarkdown(content: string): string {
+  const normalized = content.replace(/\r\n?/g, "\n");
+  const match = MARKDOWN_SOURCE_FENCE.exec(normalized);
+  return match?.[2] ?? content;
+}
+
+function formatPreviewMessageTime(timestamp: string | null, language: AppLanguage): string {
+  const parsed = timestamp ? Date.parse(timestamp) : Number.NaN;
+  return Number.isFinite(parsed) ? formatTime(parsed, language) : "—";
 }
 
 interface TerminalMarkdownPreviewProps {
@@ -117,7 +137,7 @@ interface TerminalMarkdownPreviewProps {
 }
 
 export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalTheme }: TerminalMarkdownPreviewProps) {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
   const terminalCodeTheme = isLightTerminalTheme(terminalTheme) ? "light" : "dark";
   const terminalPreviewStyle = useMemo(() => buildTerminalMarkdownPreviewStyle(terminalTheme), [terminalTheme]);
   const session = useTerminalStore((state) => state.sessions.find((item) => item.id === sessionId) ?? null);
@@ -145,13 +165,19 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
     ) ?? "";
   }, [isSshProject, project?.path, project?.remote_path, session?.cwd, worktree?.path]);
 
-  const [content, setContent] = useState<string | null>(null);
+  const [previewMessages, setPreviewMessages] = useState<MarkdownPreviewMessage[]>([]);
+  const [selectedMessageIndex, setSelectedMessageIndex] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<PreviewError | null>(null);
   const remoteContextRef = useRef<SshAgentHistoryContext | null>(null);
   const requestSeqRef = useRef(0);
   const loadedTriggerRef = useRef<string | null>(null);
   const previewLoadTrigger = `${cliSessionId ?? ""}:${source ?? ""}:${lookupProjectPath}:${hookStatus}:${hookUpdatedAt ?? ""}`;
+  const selectedMessage = useMemo(
+    () => previewMessages.find((message) => message.messageIndex === selectedMessageIndex) ?? null,
+    [previewMessages, selectedMessageIndex],
+  );
+  const content = selectedMessage ? unwrapFencedMarkdown(selectedMessage.content) : null;
 
   const closeRemoteContext = useCallback((context: SshAgentHistoryContext | null) => {
     if (!context) return;
@@ -217,10 +243,14 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
       if (requestSeq !== requestSeqRef.current) return;
       if (detail) {
         loadedTriggerRef.current = trigger;
-        setContent(selectFinalAssistantContent(detail));
+        const nextMessages = selectAssistantMarkdownMessages(detail);
+        setPreviewMessages(nextMessages);
+        setSelectedMessageIndex((current) => {
+          if (current !== null && nextMessages.some((message) => message.messageIndex === current)) return current;
+          return nextMessages[nextMessages.length - 1]?.messageIndex ?? null;
+        });
         setError(null);
       } else {
-        if (!content) setContent(null);
         setError("loadFailed");
       }
     } catch {
@@ -228,7 +258,7 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
     } finally {
       if (requestSeq === requestSeqRef.current) setLoading(false);
     }
-  }, [cliSessionId, closeRemoteContext, content, isSshProject, lookupProjectPath, project, session?.remoteTranscriptRef, source]);
+  }, [cliSessionId, closeRemoteContext, isSshProject, lookupProjectPath, project, session?.remoteTranscriptRef, source]);
 
   useEffect(() => {
     if (!source) return;
@@ -248,6 +278,24 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-[color-mix(in_srgb,var(--border)_58%,transparent)] px-3">
         <FileText size={14} className="shrink-0 text-[var(--primary)]" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-xs font-semibold">{t("terminal.markdownPreview.title")}</span>
+        {previewMessages.length > 0 && (
+          <select
+            value={selectedMessageIndex ?? ""}
+            onChange={(event) => setSelectedMessageIndex(Number(event.target.value))}
+            className="terminal-markdown-preview-message-select ui-focus-ring min-w-0 max-w-[48%] rounded-md px-1.5 py-1 text-[10px] outline-none"
+            aria-label={t("terminal.markdownPreview.selectAnswer")}
+            title={t("terminal.markdownPreview.selectAnswer")}
+          >
+            {previewMessages.map((message) => (
+              <option key={message.messageIndex} value={message.messageIndex}>
+                {t("terminal.markdownPreview.answerOption", {
+                  index: message.order,
+                  time: formatPreviewMessageTime(message.timestamp, language),
+                })}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           type="button"
           onClick={() => void loadLatest(previewLoadTrigger)}

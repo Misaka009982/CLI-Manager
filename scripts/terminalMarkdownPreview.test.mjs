@@ -14,6 +14,10 @@ const terminalSource = readFileSync(
   new URL("../src/components/XTermTerminal.tsx", import.meta.url),
   "utf8",
 );
+const i18nSource = readFileSync(
+  new URL("../src/lib/i18n.ts", import.meta.url),
+  "utf8",
+);
 
 test("markdown preview waits for the bound session catalog refresh", () => {
   assert.match(previewSource, /const waitForCatalogRefresh = attempt === 0/);
@@ -23,7 +27,7 @@ test("markdown preview waits for the bound session catalog refresh", () => {
 
 test("failed markdown preview loads are retryable and background terminal layout stays intact", () => {
   const successBlock = previewSource.match(
-    /if \(detail\) \{([\s\S]*?)setContent\(selectFinalAssistantContent\(detail\)\);/,
+    /if \(detail\) \{([\s\S]*?)setPreviewMessages\(nextMessages\);/,
   );
   assert.ok(successBlock, "expected the successful detail branch");
   assert.match(successBlock[1], /loadedTriggerRef\.current\s*=\s*trigger/);
@@ -36,4 +40,15 @@ test("failed markdown preview loads are retryable and background terminal layout
 
   assert.match(terminalSource, /data-bg-enabled/);
   assert.match(terminalSource, /ref=\{containerRef\}/);
+});
+
+test("markdown preview can select every assistant response and unwrap source fences", () => {
+  assert.match(previewSource, /function selectAssistantMarkdownMessages/);
+  assert.match(previewSource, /message\?\.role\.toLowerCase\(\) !== "assistant"/);
+  assert.match(previewSource, /function unwrapFencedMarkdown/);
+  assert.match(previewSource, /MARKDOWN_SOURCE_FENCE/);
+  assert.match(previewSource, /unwrapFencedMarkdown\(selectedMessage\.content\)/);
+  assert.match(previewSource, /terminal-markdown-preview-message-select/);
+  assert.match(previewSource, /terminal\.markdownPreview\.answerOption/);
+  assert.match(i18nSource, /terminal\.markdownPreview\.selectAnswer/);
 });
