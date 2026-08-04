@@ -2857,7 +2857,6 @@
 
 .ui-markdown .katex {
   color: var(--md-text);
-  font-size: 1em;
 }
 
 .ui-markdown .katex-display {
@@ -3590,6 +3589,39 @@
   border: 1px solid var(--term-panel-border, #2e2e2e);
   background-color: var(--term-panel-card-inner, #181818);
   color: var(--term-panel-fg, #ececec);
+}
+
+.terminal-markdown-preview-answer-popover {
+  border-color: var(--term-panel-border, #2e2e2e);
+  background-color: var(--term-panel-card-inner, #181818);
+  color: var(--term-panel-fg, #ececec);
+  box-shadow: 0 10px 24px color-mix(in srgb, #000 32%, transparent);
+}
+
+.terminal-markdown-preview-answer-option {
+  margin: 2px 4px;
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: color-mix(in srgb, var(--term-panel-fg, #ececec) 84%, var(--term-panel-dim, #9ca0a6) 16%);
+  transition: background-color var(--animate-duration-fast), color var(--animate-duration-fast);
+}
+
+.terminal-markdown-preview-answer-option[data-highlighted="true"] {
+  background-color: color-mix(in srgb, var(--term-panel-fg, #ececec) 10%, transparent);
+  color: var(--term-panel-fg, #ececec);
+}
+
+.terminal-markdown-preview-answer-option[data-state="checked"] {
+  color: var(--term-panel-cyan, #5ac8e0);
+}
+
+.terminal-markdown-preview-answer-option[data-state="checked"][data-highlighted="true"] {
+  background-color: color-mix(in srgb, var(--term-panel-cyan, #5ac8e0) 14%, transparent);
+}
+
+.terminal-markdown-preview .subagent-transcript-markdown.ui-markdown-terminal {
+  font-size: calc(0.75rem * var(--markdown-preview-font-scale, 1));
 }
 
 /* Let the terminal's single background-image layer show through the split

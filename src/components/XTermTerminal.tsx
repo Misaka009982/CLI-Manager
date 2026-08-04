@@ -462,10 +462,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       : null
   ));
   const markdownPreviewSupported = isTerminalMarkdownPreviewSupported(terminalSession, terminalProject);
-  const markdownPreviewHookStatus = useTerminalStore((state) => state.tabStatuses[sessionId]?.hook ?? "none");
   const markdownPreviewCanOpen = markdownPreviewSupported
-    && Boolean(terminalSession?.cliSessionId?.trim())
-    && (markdownPreviewHookStatus === "done" || markdownPreviewHookStatus === "failed");
+    && Boolean(terminalSession?.cliSessionId?.trim());
 
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
   const [visibilityRestorePending, setVisibilityRestorePending] = useState(false);

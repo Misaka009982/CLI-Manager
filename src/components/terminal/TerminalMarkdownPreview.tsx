@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type WheelEvent as ReactWheelEvent } from "react";
+import * as SelectPrimitive from "@radix-ui/react-select";
 import type { ITheme } from "@xterm/xterm";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n, type AppLanguage } from "../../lib/i18n";
@@ -15,6 +16,7 @@ import {
 } from "../../stores/historyStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { useWorktreeStore } from "../../stores/worktreeStore";
+import { Check, ChevronDown } from "lucide-react";
 import { FileText, RefreshCw, X } from "../icons";
 import { SessionTranscriptContent } from "../history/SessionTranscriptContent";
 
@@ -68,6 +70,7 @@ function buildTerminalMarkdownPreviewStyle(theme: ITheme): CSSProperties {
     "--term-panel-border": "color-mix(in srgb, var(--term-panel-fg) 14%, transparent)",
     "--term-panel-track": "color-mix(in srgb, var(--term-panel-bg) 94%, var(--term-panel-fg) 6%)",
     "--ui-scrollbar-thumb": "color-mix(in srgb, var(--term-panel-fg) 28%, transparent)",
+    "--ui-scrollbar-track": "color-mix(in srgb, var(--term-panel-bg) 94%, var(--term-panel-fg) 6%)",
   } as CSSProperties;
 }
 
@@ -117,6 +120,9 @@ function selectAssistantMarkdownMessages(detail: HistorySessionDetail): Markdown
 }
 
 const MARKDOWN_SOURCE_FENCE = /^[ \t]*(`{3,}|~{3,})[ \t]*(?:md|markdown)[ \t]*\n([\s\S]*?)\n\1[ \t]*$/i;
+const MARKDOWN_PREVIEW_FONT_SCALE_MIN = 0.8;
+const MARKDOWN_PREVIEW_FONT_SCALE_MAX = 1.6;
+const MARKDOWN_PREVIEW_FONT_SCALE_STEP = 0.08;
 
 function unwrapFencedMarkdown(content: string): string {
   const normalized = content.replace(/\r\n?/g, "\n");
@@ -127,6 +133,79 @@ function unwrapFencedMarkdown(content: string): string {
 function formatPreviewMessageTime(timestamp: string | null, language: AppLanguage): string {
   const parsed = timestamp ? Date.parse(timestamp) : Number.NaN;
   return Number.isFinite(parsed) ? formatTime(parsed, language) : "—";
+}
+
+interface MarkdownPreviewAnswerSelectProps {
+  messages: readonly MarkdownPreviewMessage[];
+  selectedMessageIndex: number | null;
+  onSelect: (messageIndex: number) => void;
+  formatOption: (message: MarkdownPreviewMessage) => string;
+  ariaLabel: string;
+  title: string;
+  terminalPreviewStyle: CSSProperties;
+}
+
+function MarkdownPreviewAnswerSelect({
+  messages,
+  selectedMessageIndex,
+  onSelect,
+  formatOption,
+  ariaLabel,
+  title,
+  terminalPreviewStyle,
+}: MarkdownPreviewAnswerSelectProps) {
+  const selectedValue = selectedMessageIndex ?? messages[0]?.messageIndex;
+  if (selectedValue == null) return null;
+
+  return (
+    <SelectPrimitive.Root
+      value={String(selectedValue)}
+      onValueChange={(value) => onSelect(Number(value))}
+    >
+      <SelectPrimitive.Trigger
+        className="terminal-markdown-preview-message-select ui-focus-ring inline-flex min-w-0 max-w-[48%] items-center justify-between gap-1 rounded-md px-1.5 py-1 text-[10px] outline-none"
+        aria-label={ariaLabel}
+        title={title}
+      >
+        <span className="min-w-0 flex-1 truncate text-left">
+          <SelectPrimitive.Value />
+        </span>
+        <SelectPrimitive.Icon asChild>
+          <ChevronDown size={11} className="shrink-0 opacity-70 transition-transform data-[state=open]:rotate-180" aria-hidden="true" />
+        </SelectPrimitive.Icon>
+      </SelectPrimitive.Trigger>
+      <SelectPrimitive.Portal>
+        <SelectPrimitive.Content
+          position="popper"
+          align="end"
+          sideOffset={4}
+          className="terminal-markdown-preview-answer-popover z-[1000] overflow-hidden rounded-md border py-1 text-[10px] shadow-lg"
+          style={{
+            ...terminalPreviewStyle,
+            width: "var(--radix-select-trigger-width)",
+            maxHeight: 228,
+          }}
+        >
+          <SelectPrimitive.Viewport className="ui-thin-scroll max-h-[220px] overflow-y-auto p-0">
+            {messages.map((message) => (
+              <SelectPrimitive.Item
+                key={message.messageIndex}
+                value={String(message.messageIndex)}
+                className="terminal-markdown-preview-answer-option relative flex cursor-pointer items-center gap-2 outline-none"
+              >
+                <SelectPrimitive.ItemText asChild>
+                  <span className="min-w-0 flex-1 truncate">{formatOption(message)}</span>
+                </SelectPrimitive.ItemText>
+                <SelectPrimitive.ItemIndicator asChild>
+                  <Check size={11} className="shrink-0" aria-hidden="true" />
+                </SelectPrimitive.ItemIndicator>
+              </SelectPrimitive.Item>
+            ))}
+          </SelectPrimitive.Viewport>
+        </SelectPrimitive.Content>
+      </SelectPrimitive.Portal>
+    </SelectPrimitive.Root>
+  );
 }
 
 interface TerminalMarkdownPreviewProps {
@@ -167,6 +246,7 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
 
   const [previewMessages, setPreviewMessages] = useState<MarkdownPreviewMessage[]>([]);
   const [selectedMessageIndex, setSelectedMessageIndex] = useState<number | null>(null);
+  const [markdownFontScale, setMarkdownFontScale] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<PreviewError | null>(null);
   const remoteContextRef = useRef<SshAgentHistoryContext | null>(null);
@@ -178,6 +258,15 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
     [previewMessages, selectedMessageIndex],
   );
   const content = selectedMessage ? unwrapFencedMarkdown(selectedMessage.content) : null;
+  const handlePreviewWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    setMarkdownFontScale((current) => Math.min(
+      MARKDOWN_PREVIEW_FONT_SCALE_MAX,
+      Math.max(MARKDOWN_PREVIEW_FONT_SCALE_MIN, current + direction * MARKDOWN_PREVIEW_FONT_SCALE_STEP),
+    ));
+  }, []);
 
   const closeRemoteContext = useCallback((context: SshAgentHistoryContext | null) => {
     if (!context) return;
@@ -279,22 +368,18 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
         <FileText size={14} className="shrink-0 text-[var(--primary)]" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-xs font-semibold">{t("terminal.markdownPreview.title")}</span>
         {previewMessages.length > 0 && (
-          <select
-            value={selectedMessageIndex ?? ""}
-            onChange={(event) => setSelectedMessageIndex(Number(event.target.value))}
-            className="terminal-markdown-preview-message-select ui-focus-ring min-w-0 max-w-[48%] rounded-md px-1.5 py-1 text-[10px] outline-none"
-            aria-label={t("terminal.markdownPreview.selectAnswer")}
+          <MarkdownPreviewAnswerSelect
+            messages={previewMessages}
+            selectedMessageIndex={selectedMessageIndex}
+            onSelect={setSelectedMessageIndex}
+            formatOption={(message) => t("terminal.markdownPreview.answerOption", {
+              index: message.order,
+              time: formatPreviewMessageTime(message.timestamp, language),
+            })}
+            ariaLabel={t("terminal.markdownPreview.selectAnswer")}
             title={t("terminal.markdownPreview.selectAnswer")}
-          >
-            {previewMessages.map((message) => (
-              <option key={message.messageIndex} value={message.messageIndex}>
-                {t("terminal.markdownPreview.answerOption", {
-                  index: message.order,
-                  time: formatPreviewMessageTime(message.timestamp, language),
-                })}
-              </option>
-            ))}
-          </select>
+            terminalPreviewStyle={terminalPreviewStyle}
+          />
         )}
         <button
           type="button"
@@ -316,7 +401,11 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
           <X size={14} aria-hidden="true" />
         </button>
       </header>
-      <div className="ui-scrollbar min-h-0 flex-1 overflow-auto px-4 py-3">
+      <div
+        className="ui-scrollbar min-h-0 flex-1 overflow-auto px-4 py-3"
+        onWheel={handlePreviewWheel}
+        style={{ "--markdown-preview-font-scale": markdownFontScale } as CSSProperties}
+      >
         {loading && !content ? (
           <div className="flex h-full items-center justify-center text-xs text-[var(--text-muted)]">
             {t("terminal.markdownPreview.loading")}

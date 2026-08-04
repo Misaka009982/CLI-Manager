@@ -52,3 +52,12 @@ test("markdown preview can select every assistant response and unwrap source fen
   assert.match(previewSource, /terminal\.markdownPreview\.answerOption/);
   assert.match(i18nSource, /terminal\.markdownPreview\.selectAnswer/);
 });
+
+test("markdown preview supports themed answer scrolling, wheel zoom, and restored sessions", () => {
+  assert.match(previewSource, /@radix-ui\/react-select/);
+  assert.match(previewSource, /ui-thin-scroll max-h-\[220px\]/);
+  assert.match(previewSource, /event\.ctrlKey \&\& !event\.metaKey|!event\.ctrlKey \|\| !event\.metaKey/);
+  assert.match(previewSource, /MARKDOWN_PREVIEW_FONT_SCALE_MIN/);
+  assert.match(terminalSource, /const markdownPreviewCanOpen = markdownPreviewSupported\s*&&\s*Boolean\(terminalSession\?\.cliSessionId\?\.trim\(\)\);/);
+  assert.doesNotMatch(terminalSource, /markdownPreviewHookStatus/);
+});
