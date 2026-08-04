@@ -1188,3 +1188,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 36: 修复子任务分屏滚动条与工具栏
+
+**Date**: 2026-08-03
+**Task**: 修复子任务分屏滚动条与工具栏
+**Branch**: `master`
+
+### Summary
+
+完成子任务分屏工具栏按钮按会话类型过滤，并实现覆盖式滚动条、悬浮放大、拖拽同步及终端主题颜色复用；提交到 master，类型检查和差异检查通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b7c148b7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
