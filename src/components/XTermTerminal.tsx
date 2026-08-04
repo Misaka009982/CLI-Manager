@@ -1793,7 +1793,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
             setMarkdownPreviewOpen((open) => !open);
           }}
           disabled={!markdownPreviewOpen && !markdownPreviewCanOpen}
-          className="ui-focus-ring absolute top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-md border backdrop-blur-md transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+          className="terminal-markdown-preview-toggle ui-focus-ring absolute top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-md border backdrop-blur-md transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
           style={{ ...terminalSearchButtonStyle, right: markdownPreviewRightOffset }}
           aria-label={markdownPreviewOpen
             ? t("terminal.markdownPreview.close")
@@ -1812,7 +1812,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       )}
       {searchOpen && (
         <div
-          className="absolute right-3 top-3 z-20 flex h-8 items-center gap-1 rounded-md border px-2 text-[12px] backdrop-blur-md"
+          className="terminal-search-shell absolute right-3 top-3 z-20 flex h-8 items-center gap-1 rounded-md border px-2 text-[12px] backdrop-blur-md"
           style={terminalSearchShellStyle}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}

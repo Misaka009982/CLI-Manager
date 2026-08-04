@@ -349,8 +349,10 @@ import ReactMarkdown from "react-markdown";
 - Keep `skipHtml` enabled for untrusted Markdown.
 - Default links to preview-only behavior unless the surrounding flow explicitly allows opening external URLs.
 - Keep remote images as placeholders by default; do not load remote images from history/session content without a separate reviewed allowlist or setting.
+- Math Markdown must be enabled in this shared renderer with `remark-math` and `rehype-katex`; keep `skipHtml` enabled, leave formulas inside fenced code blocks as literal code, and keep long display formulas horizontally scrollable.
 - Terminal-specific Markdown theming must stay opt-in. If one caller needs a light/dark-aware code theme or palette override, add an explicit prop or caller-owned class instead of changing the shared `variant="terminal"` default for every consumer.
 - Scope terminal-variant CSS overrides to the caller container (for example a transcript shell or file-preview wrapper). Do not widen `.ui-markdown-terminal` defaults just to fix one surface.
+- The terminal background image is owned by `.ui-terminal-bg-layer`; when `data-bg-enabled="true"`, the Markdown preview must reveal that same pseudo-element layer through a translucent surface instead of loading a second asset. Controls that are direct children of the wrapper need a z-index above the generic direct-child stacking rule.
 - When changing Markdown styles, update `src/components/ui/markdownSample.ts` so the manual preview covers the new element or edge case.
 
 **Tests**: Run `npx tsc --noEmit` and `npm run build`; manually inspect the Markdown style preview in Settings > About in both default and terminal variants. If the change targets a terminal-only caller such as a transcript or file preview, also verify that scoped caller still matches the active terminal theme while the other `variant="terminal"` callers keep their prior appearance.

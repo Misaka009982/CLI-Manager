@@ -2855,6 +2855,18 @@
   line-height: 1.58;
 }
 
+.ui-markdown .katex {
+  color: var(--md-text);
+  font-size: 1em;
+}
+
+.ui-markdown .katex-display {
+  margin: 0.8rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.15rem 0 0.35rem;
+}
+
 /* Replay lives inside the terminal side-panel theme, while history Markdown normally
    reads the app-shell palette. Remap those tokens only for this caller. */
 .ai-replay-transcript {
@@ -3572,6 +3584,18 @@
   --interactive-hover-bg: color-mix(in srgb, var(--term-panel-fg, #ececec) 9%, transparent);
   background: var(--term-panel-bg, var(--terminal-theme-background, #0c0e10));
   color: var(--term-panel-fg, var(--terminal-theme-foreground, #ececec));
+}
+
+/* Let the terminal's single background-image layer show through the split
+   pane. The parent overlay still supplies the configured darkening and the
+   opaque fallback remains active when no background image is available. */
+.ui-terminal-bg-layer[data-bg-enabled="true"] .terminal-markdown-preview {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--term-panel-bg, #0c0e10) 68%, transparent),
+      color-mix(in srgb, var(--term-panel-card, #121212) 58%, transparent)
+    );
 }
 
 .terminal-markdown-preview .ui-markdown-terminal {
@@ -7538,6 +7562,14 @@
    overriding their own absolute/relative positioning. */
 .ui-terminal-bg-layer[data-bg-enabled="true"] > * {
   z-index: 2;
+}
+
+/* The generic child layer above intentionally normalizes content stacking.
+   Restore a higher level for controls so the full-size terminal content layer
+   cannot intercept their pointer events in background mode. */
+.ui-terminal-bg-layer[data-bg-enabled="true"] > .terminal-markdown-preview-toggle,
+.ui-terminal-bg-layer[data-bg-enabled="true"] > .terminal-search-shell {
+  z-index: 20;
 }
 
 /* Background image and dimming overlays are decorative. Keep xterm as the
