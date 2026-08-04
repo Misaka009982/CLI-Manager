@@ -832,3 +832,18 @@
 - `npm run build`：通过，完成 6702 个模块转换。
 - `git diff --check`：通过，仅有仓库现有 Windows 行尾提示。
 - 尚未连接真实高延迟 SSH 主机做首次握手与后续逐级浏览的耗时对比；需在开发模式或安装包中完成实际网络冒烟。
+
+## cc-connect Codex 托管恢复 Provider 修复（2026-08-03）
+
+### 根因与发现清单
+
+- 根因位于 CLI-Manager app-server 代理与 Codex `thread/resume` 的配置边界：代理把只存在于进程级 `-c` 覆盖中的合成 Provider `cli_manager_remote` 再写入请求级 `modelProvider`；Codex 0.146.0 会从持久化配置层解析该请求字段，因此报 `Model provider cli_manager_remote not found`。
+- 微信、Telegram、飞书和企业微信共用该 Agent 链路，平台收发、cc-connect 启动、原 Session ID、工作目录、项目 Provider 数据、模型目录和真实 `CODEX_HOME` 均已确认不是本次失败源。
+- 修复删除请求级 Provider 注入及其无用参数传递；项目登记 Provider 继续由 app-server 启动时的 `-c model_provider`、Provider 定义和密钥环境强制生效。Session 防漂移、新线程拦截、SSH cwd 改写与文件投递提示保持不变。
+
+### 验证结果
+
+- `cargo test --locked --manifest-path src-tauri/Cargo.toml codex_app_server_proxy::tests`：18 项通过。
+- `node scripts/codexAppServerProxy.e2e.test.mjs`：4 项通过。
+- 使用新编译代理和真实 Codex 0.146.0 恢复原失败会话 `019fc591-8a0b-7872-95b5-49c591ed4db1`：恢复成功，Session ID 保持不变，模型为 `gpt-5.6-sol`。
+- 对照验证保留请求级 `modelProvider` 时稳定复现原错误，删除该字段后同会话成功恢复。
