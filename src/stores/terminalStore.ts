@@ -165,6 +165,9 @@ function formatTerminalCreateError(error: unknown): string {
   if (message.includes("ssh_credential_missing") || message.includes("ssh_credential_ref_required")) {
     return translateCurrent("terminal.ssh.credentialMissing");
   }
+  if (message.includes("pty_host_upgrade_sessions_active")) {
+    return translateCurrent("terminal.ssh.daemonUpgradeBlocked");
+  }
   return message;
 }
 

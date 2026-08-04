@@ -947,6 +947,7 @@ pub fn run() {
             commands::terminal_shell::terminal_shell_scan,
             commands::terminal_shell::terminal_shell_icon,
             commands::ssh::ssh_client_status,
+            commands::ssh::ssh_resolve_user,
             commands::ssh::ssh_test_connection,
             commands::ssh::ssh_agent_probe,
             commands::ssh::ssh_agent_install_preview,

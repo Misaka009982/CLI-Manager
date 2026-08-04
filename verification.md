@@ -847,3 +847,24 @@
 - `node scripts/codexAppServerProxy.e2e.test.mjs`：4 项通过。
 - 使用新编译代理和真实 Codex 0.146.0 恢复原失败会话 `019fc591-8a0b-7872-95b5-49c591ed4db1`：恢复成功，Session ID 保持不变，模型为 `gpt-5.6-sol`。
 - 对照验证保留请求级 `modelProvider` 时稳定复现原错误，删除该字段后同会话成功恢复。
+
+## SSH Config 用户身份与 PtyHost 升级修复（2026-08-04）
+
+### 根因与发现清单
+
+- Hook 失败根因位于 SSH Config 连接身份与 Hook 元数据持久化的边界：Config 别名主机按设计不保存 `username`，但 Hook 检查、安装和卸载完成后仍直接用该空字段写入集成记录，固定触发 `ssh_user_required`。
+- 修复通过本机 OpenSSH `ssh -G` 解析当前别名、Include、Match 和默认规则最终生效的 `User`，直连主机继续优先使用已登记用户名；解析结果接入 Hook 检查、安装、卸载及项目覆盖记录入口，不修改远端 SSH Agent 协议。
+- SSH 启动失败根因位于持久 PtyHost 与新版本应用的进程生命周期边界：旧 daemon 有存活会话时会被保留，而创建 SSH 会话要求 daemon 与应用版本一致；旧逻辑在会话结束后也只报错，不会重新尝试升级。
+- 修复统一 daemon 的版本和二进制传输能力检查：无存活会话时串行关闭旧 daemon、启动当前版本并重置前端旧传输；仍有存活会话时保留会话并显示明确的关闭提示，不强杀用户任务。
+- 触点包括 `commands/ssh.rs`、`SshCliIntegrationDialog`、Hook 元数据 Store、`commands/terminal.rs`、`TerminalProcessManager`、`PtyHostSocket`、终端错误映射和中英文文案；SSH 认证、代理、跳板机、远端 Agent 制品、cc-connect 和普通本地 PTY 创建逻辑已确认不改变。
+- GitNexus CLI 因其运行依赖缺少 `tree-sitter-kotlin` 无法建立索引；已降级使用 codebase-memory moderate 索引、调用路径、`rg`、源码和 Git diff 复核，工作区检测只包含上述预期链路。
+
+### 场景覆盖与验证结果
+
+- 覆盖直连显式用户名、SSH Config 别名解析、无法解析用户名、daemon 当前版本、旧 daemon 空闲自动升级、旧 daemon 存活会话阻塞，以及升级后的 WebSocket 重新连接。
+- `cargo test commands::ssh::tests::`：29 项通过。
+- `cargo test commands::terminal::tests::`：2 项通过。
+- `node scripts/ptyHostSocket.test.mjs`：11 项通过。
+- `node scripts/terminalProcessManager.test.mjs`：7 项通过。
+- `cargo check`、`npx tsc --noEmit`、`cargo fmt --all -- --check`、`git diff --check`：通过。
+- 尚未使用受影响用户的 SSH Config 和跨版本残留 daemon 做真实机器冒烟；需由安装包验证 Hook 检查/安装，以及保留旧会话和关闭旧会话后的 SSH 启动行为。

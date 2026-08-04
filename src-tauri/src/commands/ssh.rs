@@ -92,6 +92,63 @@ fn single_line(bytes: &[u8]) -> String {
         .to_string()
 }
 
+fn parse_effective_ssh_user(bytes: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(bytes).lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let key = fields.next()?;
+        if !key.eq_ignore_ascii_case("user") {
+            return None;
+        }
+        fields
+            .next()
+            .map(str::trim)
+            .filter(|value| {
+                !value.is_empty() && !value.contains(['\0', '\r', '\n']) && fields.next().is_none()
+            })
+            .map(str::to_string)
+    })
+}
+
+fn effective_ssh_user_command(spec: &SshConnectionSpec) -> Result<Command, String> {
+    validate_spec(spec)?;
+    let mut command = silent_command("ssh");
+    command.arg("-G");
+    if !spec.config_file.trim().is_empty() {
+        command.args(["-F", spec.config_file.trim()]);
+    } else if spec.config_alias.trim().is_empty()
+        && spec.jump_target.trim().is_empty()
+        && matches!(
+            spec.auth_mode.as_str(),
+            "identity_file" | "password_prompt" | "credential_ref" | "interactive"
+        )
+    {
+        command.args(["-F", "none"]);
+    }
+    if spec.config_alias.trim().is_empty() {
+        command.args(["-p", &spec.port.to_string()]);
+    }
+    command.arg(spec.target());
+    Ok(command)
+}
+
+fn resolve_effective_ssh_user(spec: &SshConnectionSpec) -> Result<String, String> {
+    if !spec.username.trim().is_empty() {
+        return Ok(spec.username.trim().to_string());
+    }
+    let command = effective_ssh_user_command(spec)?;
+    let output = output_with_timeout(command, Duration::from_secs(5))
+        .map_err(|error| format!("ssh_user_resolve_failed:{error}"))?;
+    if !output.status.success() {
+        let detail = single_line(&output.stderr);
+        return Err(if detail.is_empty() {
+            "ssh_user_resolve_failed".to_string()
+        } else {
+            format!("ssh_user_resolve_failed:{detail}")
+        });
+    }
+    parse_effective_ssh_user(&output.stdout).ok_or_else(|| "ssh_user_required".to_string())
+}
+
 fn host_key_fingerprint(stderr: &str) -> Option<String> {
     stderr.lines().find_map(|line| {
         line.split_once("Server host key:")
@@ -1389,6 +1446,13 @@ pub async fn ssh_client_status() -> SshClientStatus {
 }
 
 #[tauri::command]
+pub async fn ssh_resolve_user(spec: SshConnectionSpec) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || resolve_effective_ssh_user(&spec))
+        .await
+        .map_err(|error| format!("ssh_user_resolve_failed:{error}"))?
+}
+
+#[tauri::command]
 pub async fn ssh_test_connection(
     spec: SshConnectionSpec,
     accept_new_host_key: Option<bool>,
@@ -1924,9 +1988,10 @@ pub async fn ssh_list_directories(
 mod tests {
     use super::{
         build_agent_install_script, build_agent_management_script, build_agent_probe_script,
-        hook_request, host_key_fingerprint, install_action, is_authenticated_log,
-        parse_agent_environment, parse_agent_operation, parse_agent_probe_stdout, posix_quote,
-        read_bounded, result_from_agent_report, ssh_password_account, ssh_probe_command,
+        effective_ssh_user_command, hook_request, host_key_fingerprint, install_action,
+        is_authenticated_log, parse_agent_environment, parse_agent_operation,
+        parse_agent_probe_stdout, parse_effective_ssh_user, posix_quote, read_bounded,
+        result_from_agent_report, ssh_password_account, ssh_probe_command,
         validate_agent_hook_report, validate_remote_path, validate_spec, AgentDoctorProbe,
         AgentVersionProbe, ParsedAgentProbe, RemoteAgentEnvironment, SshConnectionSpec,
         MAX_AGENT_HOOK_ENTRIES,
@@ -1971,6 +2036,34 @@ mod tests {
         assert!(args.windows(2).any(|pair| pair == ["-J", "bastion"]));
         assert!(args.iter().any(|arg| arg == "BatchMode=yes"));
         assert_eq!(args.last().map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn parses_effective_user_from_openssh_config_output() {
+        assert_eq!(
+            parse_effective_ssh_user(b"host example.com\nuser remote-dev\nport 22\n"),
+            Some("remote-dev".to_string())
+        );
+        assert_eq!(parse_effective_ssh_user(b"hostname example.com\n"), None);
+        assert_eq!(parse_effective_ssh_user(b"user\n"), None);
+        assert_eq!(parse_effective_ssh_user(b"user root extra\n"), None);
+    }
+
+    #[test]
+    fn config_alias_user_resolution_uses_openssh_effective_config() {
+        let mut value = spec();
+        value.host.clear();
+        value.username.clear();
+        value.config_alias = "production".to_string();
+        value.auth_mode = "ssh_config".to_string();
+        value.identity_file.clear();
+        value.jump_target.clear();
+        let command = effective_ssh_user_command(&value).unwrap();
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["-G", "production"]);
     }
 
     #[test]
