@@ -1039,6 +1039,7 @@ pub fn run() {
             commands::history::history_get_stats,
             commands::history::request_logs::history_sync_request_logs,
             commands::history::request_logs::history_list_request_logs,
+            commands::history::request_logs::history_get_request_log_stats,
             commands::history_sources::history_sources_list_descriptors,
             commands::history_sources::history_sources_detect,
             commands::history_sources::history_sources_validate,
