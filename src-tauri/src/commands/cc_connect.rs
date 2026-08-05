@@ -36,6 +36,9 @@ const CONFIG_FILE_NAME: &str = "config.toml";
 const PROJECT_LIST_FILE_NAME: &str = "cli-manager-projects.txt";
 const PROJECT_SWITCH_SCRIPT_FILE_NAME: &str = "cli-manager-switch.ps1";
 const LOG_FILE_NAME: &str = "cc-connect.log";
+const CONTROL_WORK_DIR_NAME: &str = "control-workdir";
+const CONTROL_PROJECT_ID: &str = "cli-manager-remote-control";
+const CONTROL_PROJECT_NAME: &str = "CLI-Manager Remote";
 const WEIXIN_AUTH_DIR_NAME: &str = "weixin-authorization";
 const WEIXIN_AUTH_CONFIG_FILE_NAME: &str = "setup.toml";
 const WEIXIN_AUTH_QR_FILE_NAME: &str = "qr.png";
@@ -177,6 +180,8 @@ pub struct CcConnectProfile {
     pub project_name: String,
     pub project_path: String,
     pub agent: CcConnectAgent,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_project_id: Option<String>,
     #[serde(default = "default_cc_connect_platform")]
     pub platform: CcConnectPlatform,
     #[serde(default)]
@@ -607,6 +612,42 @@ fn config_path() -> Result<PathBuf, String> {
 }
 fn data_dir() -> Result<PathBuf, String> {
     Ok(remote_manager_dir()?.join("data"))
+}
+fn control_work_dir() -> Result<PathBuf, String> {
+    let path = remote_manager_dir()?.join(CONTROL_WORK_DIR_NAME);
+    fs::create_dir_all(&path)
+        .map_err(|err| format!("create cc-connect control work directory failed: {err}"))?;
+    path.canonicalize()
+        .map_err(|err| format!("canonicalize cc-connect control work directory failed: {err}"))
+}
+fn sanitize_weixin_path_segment(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        return "default".to_string();
+    }
+    value
+        .chars()
+        .map(|character| {
+            if matches!(character, '/' | '\\' | ':' | '\0') {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+fn weixin_account_dir_at(data_root: &Path, project_name: &str, project_id: &str) -> PathBuf {
+    data_root
+        .join("weixin")
+        .join(sanitize_weixin_path_segment(project_name))
+        .join(sanitize_weixin_path_segment(project_id))
+}
+fn weixin_account_dir(project_name: &str, project_id: &str) -> Result<PathBuf, String> {
+    Ok(weixin_account_dir_at(
+        &data_dir()?,
+        project_name,
+        project_id,
+    ))
 }
 fn log_path() -> Result<PathBuf, String> {
     Ok(crate::app_paths::logs_dir()?.join(LOG_FILE_NAME))
@@ -1626,9 +1667,12 @@ fn render_project_list(
 ) -> String {
     let current_summary = registered_projects
         .iter()
-        .find(|project| project.id == profile.project_id)
+        .find(|project| profile.runtime_project_id.as_deref() == Some(project.id.as_str()))
         .map(|project| project_summary(profile.language, project))
-        .unwrap_or_else(|| single_line(&profile.project_name));
+        .unwrap_or_else(|| match profile.language {
+            CcConnectLanguage::Zh => "等待宠物选择托管会话".to_string(),
+            CcConnectLanguage::En => "waiting for a desktop-pet handoff".to_string(),
+        });
     let mut output = match profile.language {
         CcConnectLanguage::Zh => format!("CLI-Manager 项目（当前：{current_summary}）"),
         CcConnectLanguage::En => format!("CLI-Manager projects (current: {current_summary})"),
@@ -1676,7 +1720,7 @@ fn render_project_list(
                 .collect();
             project.group_path.len()
         };
-        let current = project.id == profile.project_id;
+        let current = profile.runtime_project_id.as_deref() == Some(project.id.as_str());
         let unavailable = !Path::new(&project.path).is_dir();
         let state = match (profile.language, current, unavailable) {
             (CcConnectLanguage::Zh, true, false) => " [当前]",
@@ -1974,6 +2018,94 @@ fn write_managed_config_with_codex(
     Ok(path)
 }
 
+fn copy_profile_state_file_if_missing(
+    source: &Path,
+    target: &Path,
+    label: &'static str,
+) -> Result<(), String> {
+    if target.is_file() || !source.is_file() {
+        return Ok(());
+    }
+    let payload = fs::read(source).map_err(|err| format!("read legacy {label} failed: {err}"))?;
+    write_file_atomically(target, &payload, label)
+}
+
+fn migrate_legacy_profile_state_at(
+    profile: &CcConnectProfile,
+    control_path: &Path,
+    data_root: &Path,
+) -> Result<(), String> {
+    let legacy_path = PathBuf::from(profile.project_path.trim());
+    if legacy_path.is_absolute() && !profile.project_name.trim().is_empty() {
+        let sessions_root = data_root.to_path_buf();
+        let source = handoff_session::cc_session_store_path(
+            &sessions_root,
+            &profile.project_name,
+            &user_path_string(&legacy_path),
+        )?;
+        let target = handoff_session::cc_session_store_path(
+            &sessions_root,
+            CONTROL_PROJECT_NAME,
+            &user_path_string(control_path),
+        )?;
+        copy_profile_state_file_if_missing(&source, &target, "cc-connect control session")?;
+    }
+
+    if !profile.project_name.trim().is_empty() && !profile.project_id.trim().is_empty() {
+        let source_dir =
+            weixin_account_dir_at(data_root, &profile.project_name, &profile.project_id);
+        let target_dir = weixin_account_dir_at(data_root, CONTROL_PROJECT_NAME, CONTROL_PROJECT_ID);
+        for filename in ["context_tokens.json", "get_updates.buf"] {
+            copy_profile_state_file_if_missing(
+                &source_dir.join(filename),
+                &target_dir.join(filename),
+                "Weixin control state",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_legacy_profile_state(
+    profile: &CcConnectProfile,
+    control_path: &Path,
+) -> Result<(), String> {
+    migrate_legacy_profile_state_at(profile, control_path, &data_dir()?)
+}
+
+fn set_control_profile_values(profile: &mut CcConnectProfile, control_path: &Path) -> bool {
+    let runtime_project_id = profile
+        .runtime_project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let changed = profile.project_id != CONTROL_PROJECT_ID
+        || profile.project_name != CONTROL_PROJECT_NAME
+        || profile.agent != CcConnectAgent::Codex
+        || profile.runtime_project_id != runtime_project_id
+        || PathBuf::from(&profile.project_path)
+            .canonicalize()
+            .map(|path| path != control_path)
+            .unwrap_or(true);
+    profile.project_id = CONTROL_PROJECT_ID.to_string();
+    profile.project_name = CONTROL_PROJECT_NAME.to_string();
+    profile.project_path = user_path_string(control_path);
+    profile.agent = CcConnectAgent::Codex;
+    profile.runtime_project_id = runtime_project_id;
+    changed
+}
+
+fn apply_control_profile(profile: &mut CcConnectProfile) -> Result<bool, String> {
+    let control_path = control_work_dir()?;
+    let legacy_profile = profile.clone();
+    let changed = set_control_profile_values(profile, &control_path);
+    if changed {
+        migrate_legacy_profile_state(&legacy_profile, &control_path)?;
+    }
+    Ok(changed)
+}
+
 fn load_profile() -> Result<Option<CcConnectProfile>, String> {
     let path = profile_path()?;
     let raw = match fs::read_to_string(&path) {
@@ -1985,6 +2117,9 @@ fn load_profile() -> Result<Option<CcConnectProfile>, String> {
         .map_err(|err| format!("parse cc-connect profile failed: {err}"))?;
     profile.executable_path = normalize_executable_path_value(profile.executable_path.as_deref());
     hydrate_profile_platforms(&mut profile);
+    if handoff_session::load_handoff_record()?.is_none() && apply_control_profile(&mut profile)? {
+        persist_profile(&profile)?;
+    }
     Ok(Some(profile))
 }
 
@@ -2092,21 +2227,7 @@ fn normalize_profile(
             "max_turn_time_mins must be between 0 and {MAX_TURN_TIME_MINS}"
         ));
     }
-    profile.project_id = profile.project_id.trim().to_string();
-    profile.project_name = profile.project_name.trim().to_string();
-    profile.project_path = profile.project_path.trim().to_string();
-    if profile.project_id.is_empty() || profile.project_name.is_empty() {
-        return Err("a CLI-Manager project must be selected".to_string());
-    }
-    let project_path = PathBuf::from(&profile.project_path);
-    if !project_path.is_absolute() || !project_path.is_dir() {
-        return Err("selected project path must be an existing absolute directory".to_string());
-    }
-    profile.project_path = path_string(
-        &project_path
-            .canonicalize()
-            .map_err(|err| format!("canonicalize project path failed: {err}"))?,
-    );
+    apply_control_profile(&mut profile)?;
     profile.cc_switch_db_path = profile
         .cc_switch_db_path
         .as_deref()
@@ -2129,7 +2250,6 @@ fn normalize_profile(
             Ok(user_path_string(&path))
         })
         .transpose()?;
-    validate_registered_project(&profile)?;
     let mut enabled_count = 0usize;
     for item in &mut profile.platforms {
         item.allow_from = item.allow_from.trim().to_string();
@@ -2224,13 +2344,6 @@ fn normalize_allow_from(platform: CcConnectPlatform, raw: &str) -> Result<String
 
 fn profile_issue_codes(profile: &CcConnectProfile) -> Vec<String> {
     let mut issues = Vec::new();
-    if profile.project_id.trim().is_empty() || profile.project_name.trim().is_empty() {
-        issues.push("project_missing".to_string());
-    }
-    let path = Path::new(&profile.project_path);
-    if !path.is_absolute() || !path.is_dir() {
-        issues.push("project_path_missing".to_string());
-    }
     let enabled = enabled_platforms(profile);
     if enabled.is_empty() {
         issues.push("platform_missing".to_string());
@@ -3720,25 +3833,6 @@ fn registered_project_by_token(
         .ok_or_else(|| "the selected project is no longer registered in CLI-Manager".to_string())
 }
 
-fn validate_registered_project(profile: &CcConnectProfile) -> Result<RegisteredProject, String> {
-    let project = load_registered_projects(Some(profile))?
-        .into_iter()
-        .find(|project| project.id == profile.project_id)
-        .ok_or_else(|| "selected project is no longer registered in CLI-Manager".to_string())?;
-    let current_path = PathBuf::from(&project.path)
-        .canonicalize()
-        .map_err(|err| format!("canonicalize registered project path failed: {err}"))?;
-    let profile_path = PathBuf::from(&profile.project_path)
-        .canonicalize()
-        .map_err(|err| format!("canonicalize remote profile project path failed: {err}"))?;
-    if project.name != profile.project_name || current_path != profile_path {
-        return Err(
-            "remote profile is stale; save it again from the current project list".to_string(),
-        );
-    }
-    Ok(project)
-}
-
 #[cfg(target_os = "windows")]
 fn set_credential(account: &str, value: &str) -> Result<(), String> {
     crate::credential_store::entry(account)?
@@ -4215,8 +4309,7 @@ impl CcConnectManager {
             ));
         }
         self.append_system_log(format!(
-            "cc-connect profile saved for project '{}' ({} platforms)",
-            profile.project_name,
+            "cc-connect connection profile saved ({} platforms)",
             enabled_platforms(&profile).len()
         ));
         Ok(())
@@ -4584,7 +4677,7 @@ impl CcConnectManager {
         let mut profile =
             load_profile()?.ok_or_else(|| "cc-connect profile is not configured".to_string())?;
         let project = registered_project_by_token(&profile, token)?;
-        let already_current = project.id == profile.project_id;
+        let already_current = profile.runtime_project_id.as_deref() == Some(project.id.as_str());
         let restart_required = {
             let state = self
                 .process
@@ -4598,17 +4691,14 @@ impl CcConnectManager {
         if already_current {
             return Ok(RemoteSwitchOutcome {
                 language: profile.language,
-                project_name: profile.project_name,
-                project_path: user_path_string(Path::new(&profile.project_path)),
+                project_name: project.name,
+                project_path: user_path_string(Path::new(&project.path)),
                 restart_required: false,
                 already_current: true,
             });
         }
 
-        profile.project_id = project.id;
-        profile.project_name = project.name;
-        profile.project_path = project.path;
-        profile.agent = project.agent;
+        profile.runtime_project_id = Some(project.id.clone());
         let profile = normalize_profile(self, profile)?;
         let config_snapshot = FileSnapshot::capture(config_path()?, "cc-connect config")?;
         let project_list_snapshot =
@@ -4646,12 +4736,12 @@ impl CcConnectManager {
         }
         self.append_system_log(format!(
             "cc-connect remote project switched to '{}' ({})",
-            profile.project_name, profile.project_path
+            project.name, project.path
         ));
         Ok(RemoteSwitchOutcome {
             language: profile.language,
-            project_name: profile.project_name,
-            project_path: user_path_string(Path::new(&profile.project_path)),
+            project_name: project.name,
+            project_path: user_path_string(Path::new(&project.path)),
             restart_required,
             already_current: false,
         })
@@ -5526,6 +5616,7 @@ mod tests {
             project_name: "Example".to_string(),
             project_path: path_string(project_path),
             agent: CcConnectAgent::Claude,
+            runtime_project_id: None,
             platform: CcConnectPlatform::Telegram,
             allow_from: "123456789".to_string(),
             platforms: Vec::new(),
@@ -5557,6 +5648,90 @@ mod tests {
             cli_config_root: String::new(),
             env_vars: "{}".to_string(),
         }
+    }
+
+    #[test]
+    fn control_profile_detaches_connection_settings_from_project_paths() {
+        let control = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let control_path = control.path().canonicalize().unwrap();
+        let mut profile = sample_profile(project.path());
+        profile.runtime_project_id = Some("  project-2  ".to_string());
+
+        assert!(set_control_profile_values(&mut profile, &control_path));
+        assert_eq!(profile.project_id, CONTROL_PROJECT_ID);
+        assert_eq!(profile.project_name, CONTROL_PROJECT_NAME);
+        assert_eq!(profile.project_path, user_path_string(&control_path));
+        assert_eq!(profile.agent, CcConnectAgent::Codex);
+        assert_eq!(profile.runtime_project_id.as_deref(), Some("project-2"));
+        assert!(!set_control_profile_values(&mut profile, &control_path));
+    }
+
+    #[test]
+    fn legacy_platform_state_is_copied_to_the_control_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let control = tempfile::tempdir().unwrap();
+        let mut profile = sample_profile(project.path());
+        profile.project_id = "legacy-project".to_string();
+        profile.project_name = "Legacy".to_string();
+
+        let source_session = handoff_session::cc_session_store_path(
+            root.path(),
+            &profile.project_name,
+            &profile.project_path,
+        )
+        .unwrap();
+        fs::create_dir_all(source_session.parent().unwrap()).unwrap();
+        fs::write(&source_session, br#"{"active":"s1","sessions":{}}"#).unwrap();
+        let source_weixin =
+            weixin_account_dir_at(root.path(), &profile.project_name, &profile.project_id);
+        fs::create_dir_all(&source_weixin).unwrap();
+        fs::write(
+            source_weixin.join("context_tokens.json"),
+            br#"{"user":"token"}"#,
+        )
+        .unwrap();
+        fs::write(source_weixin.join("get_updates.buf"), b"cursor").unwrap();
+
+        migrate_legacy_profile_state_at(&profile, control.path(), root.path()).unwrap();
+
+        let target_session = handoff_session::cc_session_store_path(
+            root.path(),
+            CONTROL_PROJECT_NAME,
+            &user_path_string(control.path()),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(target_session).unwrap(),
+            br#"{"active":"s1","sessions":{}}"#
+        );
+        let target_weixin =
+            weixin_account_dir_at(root.path(), CONTROL_PROJECT_NAME, CONTROL_PROJECT_ID);
+        assert_eq!(
+            fs::read(target_weixin.join("context_tokens.json")).unwrap(),
+            br#"{"user":"token"}"#
+        );
+        assert_eq!(
+            fs::read(target_weixin.join("get_updates.buf")).unwrap(),
+            b"cursor"
+        );
+    }
+
+    #[test]
+    fn project_list_uses_standby_copy_without_a_runtime_target() {
+        let project = tempfile::tempdir().unwrap();
+        let profile = sample_profile(project.path());
+        let list = render_project_list(
+            &profile,
+            &[sample_registered_project(
+                "project-1",
+                "Example",
+                project.path(),
+            )],
+        );
+        assert!(list.contains("等待宠物选择托管会话"));
+        assert!(!list.contains("[当前]"));
     }
 
     fn sample_group(
@@ -6582,6 +6757,7 @@ allow_from = ""
         let unavailable = current.path().join("missing");
         let mut profile = sample_profile(current.path());
         profile.project_name = "Current\nProject".to_string();
+        profile.runtime_project_id = Some("project-1".to_string());
         let projects = vec![
             sample_registered_project("project-1", "Current\nProject", current.path()),
             sample_registered_project("project-2", "Missing", &unavailable),
@@ -6644,6 +6820,7 @@ allow_from = ""
         let mut profile = sample_profile(project_dir.path());
         profile.project_id = "claude-amazon".to_string();
         profile.project_name = "amazon".to_string();
+        profile.runtime_project_id = Some("claude-amazon".to_string());
 
         let mut claude = sample_registered_project("claude-amazon", "amazon", project_dir.path());
         claude.group_path = vec![
