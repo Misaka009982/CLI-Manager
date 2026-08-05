@@ -1,11 +1,12 @@
 import { Box, Button, Group } from "@mantine/core";
 import { Code2, Terminal, Wrench } from "lucide-react";
+import { useRef } from "react";
 import type { NativeProviderAppType } from "./nativeProviderTypes";
 
 interface NativeProviderTypeTabsProps {
   value: NativeProviderAppType;
   labels: Record<NativeProviderAppType, string>;
-  onChange: (value: NativeProviderAppType) => void;
+  onChange: (value: NativeProviderAppType) => boolean | void | Promise<boolean | void>;
 }
 const ICONS = {
   claude: Terminal,
@@ -15,6 +16,19 @@ const ICONS = {
 
 export function NativeProviderTypeTabs({ value, labels, onChange }: NativeProviderTypeTabsProps) {
   const values: NativeProviderAppType[] = ["claude", "codex", "grokbuild"];
+  const tabRefs = useRef<Partial<Record<NativeProviderAppType, HTMLButtonElement | null>>>({});
+
+  const activateTab = (next: NativeProviderAppType) => {
+    const current = value;
+    void Promise.resolve(onChange(next))
+      .then((changed) => {
+        const target = changed === false ? current : next;
+        requestAnimationFrame(() => tabRefs.current[target]?.focus());
+      })
+      .catch(() => {
+        requestAnimationFrame(() => tabRefs.current[current]?.focus());
+      });
+  };
 
   return (
     <Box
@@ -30,6 +44,9 @@ export function NativeProviderTypeTabs({ value, labels, onChange }: NativeProvid
           return (
             <Button
               key={item}
+              ref={(node) => {
+                tabRefs.current[item] = node;
+              }}
               role="tab"
               aria-selected={active}
               tabIndex={active ? 0 : -1}
@@ -37,7 +54,23 @@ export function NativeProviderTypeTabs({ value, labels, onChange }: NativeProvid
               color={active ? "cliPrimary" : "gray"}
               size="compact-sm"
               leftSection={<Icon size={15} />}
-              onClick={() => onChange(item)}
+              onClick={() => activateTab(item)}
+              onKeyDown={(event) => {
+                const currentIndex = values.indexOf(item);
+                let nextIndex: number | null = null;
+                if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+                  nextIndex = (currentIndex + 1) % values.length;
+                } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+                  nextIndex = (currentIndex - 1 + values.length) % values.length;
+                } else if (event.key === "Home") {
+                  nextIndex = 0;
+                } else if (event.key === "End") {
+                  nextIndex = values.length - 1;
+                }
+                if (nextIndex === null) return;
+                event.preventDefault();
+                activateTab(values[nextIndex]);
+              }}
             >
               {labels[item]}
             </Button>

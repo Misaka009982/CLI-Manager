@@ -176,3 +176,44 @@ Before handoff:
 4. stage only task-owned files; preserve unrelated user work;
 5. run Trellis quality check and update the permanent contracts with verified
    facts.
+
+## Phase 7 — Manual UI feedback follow-up
+
+1. Refactor `NativeProviderSettingsPage` into a catalog surface and a separate
+   `CLI Home` surface without changing provider/Home backend commands.
+2. Move `NativeProviderImportSection` behind an Import modal/drawer action;
+   preserve preview, repair, consent, commit, error and unsaved-state behavior.
+3. Add presentation-only project/Worktree name resolution to repair rows;
+   keep exact IDs for repair commands and show a localized missing fallback.
+4. Give the provider list/detail grid one bounded responsive height and two
+   independent scroll containers. Verify loading, empty, error, many-provider,
+   long-document and no-selection states.
+5. Add all new action, view, repair-label, empty-state and accessibility copy
+   to both `zh-CN` and `en-US`; preserve keyboard/focus behavior.
+6. Run `npx tsc --noEmit`, focused frontend tests, i18n parity, `git diff
+   --check`, then update `acceptance.md`, `ACCEPTANCE-CLOSEOUT.md`,
+   `HANDOFF.md` and `[TEMP]` CHANGELOG evidence.
+
+**Phase 7 exit:** Import is not permanently inline, CLI Home is a separate
+surface, repair references are readable, and catalog/detail panes remain
+equal-height and independently scrollable at the required widths.
+
+### Phase 7 implementation result (2026-08-04)
+
+Static implementation and the focused scope-label regression test are complete.
+The remaining 1024px/1440px runtime layout, keyboard/focus/ARIA, language,
+macOS and WSL checks remain manual/environment-blocked; this phase must not be
+interpreted as full Gate 27 completion.
+
+### Phase 7 UI editor/layout follow-up (2026-08-04)
+
+- Added a collapsible Monaco common-config editor with JSON mode for Claude and
+  TOML editing mode for Codex/Grok Build; visible Validate action is wired to a
+  non-writing backend validator and shares the save validation rules.
+- Moved surface navigation above the CLI type tabs and preserved the existing
+  type-tab icons.
+- Hardened the detail pane for 1024px-class widths: responsive info grid,
+  wrapping action/key rows, `min-w-0`, and horizontal overflow guards across
+  provider, key and full-document cards.
+- Added four Rust regression tests for common JSON/TOML validation. Static and
+  Rust checks pass; runtime UI/macOS/WSL checks remain blocked.

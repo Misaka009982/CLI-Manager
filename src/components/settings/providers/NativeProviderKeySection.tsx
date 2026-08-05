@@ -113,8 +113,8 @@ export function NativeProviderKeySection({
 
   return (
     <>
-      <Card withBorder radius="lg" padding="md" className="border-border/70 bg-surface-container-low">
-        <Group justify="space-between" align="center" mb="sm">
+      <Card withBorder radius="lg" padding="md" className="min-w-0 overflow-hidden border-border/70 bg-surface-container-low">
+        <Group justify="space-between" align="center" mb="sm" wrap="wrap">
           <Group gap="xs">
             <KeyRound size={16} />
             <Text fw={600}>{t("providerCatalog.keysTitle")}</Text>
@@ -143,10 +143,10 @@ export function NativeProviderKeySection({
                 key={key.id}
                 justify="space-between"
                 align="center"
-                wrap="nowrap"
-                className="rounded-lg border border-border/60 bg-surface-container-lowest px-3 py-2"
+                wrap="wrap"
+                className="min-w-0 rounded-lg border border-border/60 bg-surface-container-lowest px-3 py-2"
               >
-                <Stack gap={2} miw={0}>
+                <Stack gap={2} miw={0} className="min-w-0 flex-1">
                   <Group gap="xs" wrap="wrap">
                     <Text size="sm" fw={600} truncate>{key.label}</Text>
                     {key.isActive && <Badge size="xs" color="cliPrimary">{t("providerCatalog.active")}</Badge>}

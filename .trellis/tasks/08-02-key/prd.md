@@ -277,3 +277,66 @@ replacement for the other.
 - Manual activation selects exactly one key without any automated key behavior.
 - Home diagnostics, Hook status/install target, and automatic history source
   derive from one chosen Home and preserve explicit overrides.
+
+## UI follow-up from manual review (2026-08-04)
+
+The following adjustments are part of this existing provider-domain task. They
+are acceptance-driven UI corrections, not a new provider capability.
+
+### Confirmed product direction
+
+1. CCS import is a secondary flow. The native provider catalog shows only an
+   Import action; the import source path, preview, repair references, key
+   consent and commit flow open in a modal/drawer and are not rendered as a
+   permanent inline section in the catalog.
+2. CLI Home is a separate settings surface reachable from the native provider
+   page. The existing Home selection, derived targets, diagnostics, global
+   apply and explicit Adopt actions move there and no longer consume vertical
+   space in the provider catalog view.
+3. The provider catalog and selected-provider detail are two equal-height,
+   independently scrollable panes. The provider list has a bounded viewport;
+   adding providers must not grow the page or push detail content out of view.
+
+### UI requirements
+
+- UI-01: Unresolved imported project/Worktree references display the readable
+  project or Worktree name. The stable ID remains available in a tooltip or
+  secondary text; if the record no longer exists, show a localized missing
+  label plus the ID rather than an opaque UUID-only row.
+- UI-02: The catalog header exposes an Import button. Opening it shows the
+  complete existing import workflow, including source selection, preview,
+  repair mapping, key consent, update consent, commit and errors. Closing the
+  surface preserves no stale preview as an inline catalog block.
+- UI-03: The catalog header or page sub-navigation exposes `CLI Home` and
+  opens the existing Home/environment/global-apply surface as its own view.
+  Home state, selected provider type and unsaved-change guards remain intact.
+- UI-04: The catalog/detail shell uses one responsive height contract. The
+  list and detail panes scroll independently, have no unbounded provider list,
+  and do not create blank, clipped, overlapping or off-screen detail cards.
+  Loading, empty and error states must also occupy the same pane height.
+- UI-05: The above controls and view changes are fully localized in `zh-CN`
+  and `en-US`, keyboard reachable, focus-visible and labelled for assistive
+  technology.
+
+### Acceptance additions
+
+- At least six providers do not increase the outer page height; the list and
+  detail viewport bottoms align at 1024px and 1440px.
+- Import is absent from the catalog body until the user activates the Import
+  action; the modal/drawer can be closed and reopened without a stale preview.
+- A repair row reads `项目名 / Worktree 名` rather than only
+  `scopeKind:scopeId`, while preserving deterministic fallback for deleted
+  records.
+- CLI Home can be opened, switched, saved, previewed and closed without
+  changing provider selection or silently changing Hook/history overrides.
+
+### UI-05~08 acceptance additions
+
+- Common configuration opens in a collapsible code editor. Claude uses JSON;
+  Codex and Grok Build use TOML. Validate must not write the database, and Save
+  must use the same syntax/secret checks.
+- Claude/Codex/Grok type tabs retain visible, keyboard-reachable type icons.
+- The `供应商目录 / CLI Home` surface selector is above the type selector.
+- At 1024px and 1440px, long URLs, Key labels, raw documents and field-source
+  rows must remain readable; detail cards may wrap or scroll but must not clip,
+  overlap or push their controls off-screen.

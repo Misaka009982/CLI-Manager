@@ -345,8 +345,12 @@ async fn sync_request_logs_with_connection(
     .map_err(|err| format!("request_logs_scan_join_failed: {err}"))?;
     let synced_at_ms = now_millis();
     let sync_state = load_sync_state(conn).await?;
-    let current_paths: HashSet<String> = index
+    let request_log_entries: Vec<HistoryIndexEntry> = index
         .entries
+        .into_iter()
+        .filter(|entry| matches!(entry.file_ref.source.as_str(), "claude" | "codex"))
+        .collect();
+    let current_paths: HashSet<String> = request_log_entries
         .iter()
         .map(|entry| path_to_key(&entry.file_ref.path))
         .collect();
@@ -357,9 +361,8 @@ async fn sync_request_logs_with_connection(
         })
         .map(|(path, _)| path.clone())
         .collect();
-    let scanned_files = index.entries.len() as u64;
-    let changed_documents: Vec<RequestLogDocument> = index
-        .entries
+    let scanned_files = request_log_entries.len() as u64;
+    let changed_documents: Vec<RequestLogDocument> = request_log_entries
         .into_iter()
         .filter(|entry| {
             let file_path = path_to_key(&entry.file_ref.path);
@@ -403,13 +406,14 @@ async fn sync_request_logs_with_connection(
 pub async fn history_sync_request_logs(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     force: Option<bool>,
 ) -> Result<RequestLogSyncResult, String> {
     let _guard = request_log_sync_lock().lock().await;
     let mut conn = open_cli_manager_db().await?;
     sync_request_logs_with_connection(
         &mut conn,
-        history_roots(claude_config_dir, codex_config_dir),
+        history_roots(claude_config_dir, codex_config_dir, grok_session_root),
         force.unwrap_or(false),
     )
     .await
@@ -686,6 +690,7 @@ mod tests {
         let roots = history_roots(
             Some(claude.to_string_lossy().to_string()),
             Some(codex.to_string_lossy().to_string()),
+            None,
         );
         let mut conn = test_connection().await;
 
@@ -766,6 +771,7 @@ mod tests {
         let roots = history_roots(
             Some(claude.to_string_lossy().to_string()),
             Some(codex.to_string_lossy().to_string()),
+            None,
         );
         let mut conn = test_connection().await;
 

@@ -33,7 +33,8 @@ generic configuration textarea.
   advanced settings, validation, effective configuration and live diff.
 - Helper field changes and raw-document changes round-trip only through
   backend parser/patch results. A syntax error retains the local draft and
-  blocks destructive overwrite.
+  blocks destructive overwrite; a server-side parse/secret-edit error is
+  rendered by the active document editor and associated with its field.
 - Common config opens from the current **type**, not selected provider. The
   provider’s inherit switch identifies its origin and effective precedence.
 - The UI includes source/common/provider/effective/live-diff labels and
@@ -67,6 +68,9 @@ generic configuration textarea.
   It shows derived Claude/Codex/Grok live/config/history/Hook paths and warns
   if a feature has an explicit root not following Home. It never performs an
   unrequested Hook install/uninstall/move.
+- Home adoption passes the selected CLI config root to the history binding
+  synchronizer; Grok derives its single `.grok/sessions` history root there,
+  so the UI must not pass an already-derived `sessions` path.
 - Environment check renders status, reason, remedy and safe open/copy actions.
   It never displays environment variable values.
 - CCS import is a wizard: source selection, scan, key-consent, conflict/
@@ -87,6 +91,15 @@ generic configuration textarea.
 - Keyboard order follows screen order; cards, tabs, key rows, code editors and
   dialogs have visible focus and accessible names. Delete returns focus to a
   logical neighboring card.
+- Provider cards use a focusable selection control inside a non-interactive
+  group; reorder, enable, duplicate and delete controls must not be nested
+  inside an element with `role="button"`.
+- Type tabs use roving `tabIndex`: only the active tab is in the tab sequence;
+  Arrow keys and Home/End select the corresponding type. If selection awaits an
+  asynchronous unsaved-change confirmation, accepted selection moves focus to
+  the new tab, while cancellation or rejection restores focus to the previous
+  active tab. Focus movement must happen after the state transition so the
+  active tab remains the single tabbable element.
 - Add each string in `zh-CN` and `en-US`, including ARIA, import conflicts,
   Home alignment, apply/journal recovery and key workflow. Verify English
   keeps 24-hour time.
@@ -100,3 +113,114 @@ generic configuration textarea.
 - Test 1024px/1440px widths, Chinese/English, keyboard-only use, long
   configuration documents, unsaved changes, empty type, and provider import
   errors.
+
+## Acceptance closeout boundary (2026-08-03)
+
+- Static i18n parity and TypeScript checks are necessary but do not replace runtime language switching, 24-hour display, keyboard/focus, ARIA, or 1024px/1440px layout checks.
+- When the application cannot be started under the closeout constraints, those UI checks remain `BLOCKED`; source inspection must not be promoted to a visual PASS.
+
+## UI follow-up contract (2026-08-04)
+
+- The native-provider page exposes two local surfaces: `catalog` and `cliHome`.
+  The catalog owns provider type tabs, common config and master/detail editing;
+  the Home/environment/global-apply section is rendered only by `cliHome` and
+  continues to use the existing Home hook and mutation guards.
+- CCS import is secondary UI. The catalog owns an explicit Import action and
+  mounts the source picker, preview, consent, repair and commit workflow only
+  in the opened modal/drawer. Closing it must remove the temporary preview from
+  the catalog DOM.
+- Import repair labels are presentation-only resolution:
+  `scopeKind + scopeId -> project/Worktree display name -> localized missing
+  label + stable ID`. Repair commands must continue to submit exact IDs and
+  must never perform name-based matching.
+- The catalog/detail shell supplies one bounded responsive viewport height.
+  The list pane and detail pane each own vertical scrolling; the outer page
+  must not grow with provider count or long raw documents. Loading, empty,
+  error and no-selection states must use the same pane contract.
+- The static contract does not replace manual 1024px/1440px, keyboard/focus,
+  ARIA, runtime language or macOS verification; those remain BLOCKED when the
+  application cannot be started in the closeout environment.
+
+## Common editor and detail layout contract (2026-08-04)
+
+- The common configuration editor is collapsible and keeps an accessible
+  editor label, expanded state and parse-error association. Claude uses JSON;
+  Codex/Grok Build use TOML.
+- Validate is a non-writing action. It must report backend validation errors
+  without changing the stored common configuration or discarding the draft;
+  Save uses the same validation contract before writing.
+- Provider detail, key and raw-document cards must use `min-w-0`/responsive
+  wrapping at narrow widths. Long values must remain reachable through the
+  card's scroll context rather than being clipped by an inner fixed-width row.
+
+## Native provider large-screen detail follow-up (2026-08-04)
+
+- The catalog detail pane exposes four stable views in this order: Basic
+  information, Effective config, API keys, and Complete config. Basic
+  information is the default and changing provider or CLI type resets to it.
+- The catalog basic view reuses the existing global preview → confirmation →
+  apply flow, but the explicit Preview click is optional: Apply performs the
+  same fresh preflight before confirmation when no preview is present. It must
+  not write Home files directly or bypass locks, fingerprints, compensation,
+  journal recovery, or post-apply refresh.
+- The catalog master/detail grid uses one bounded responsive viewport height;
+  the provider list and detail pane share that height and own independent
+  vertical scrolling. A long provider list or document must not make the outer
+  settings page grow indefinitely on large screens.
+- Codex and Grok Build use the same maintenance hierarchy and shared
+  components for metadata, keys, raw documents, effective configuration and
+  global state. Only app-specific document kinds, formats and target paths
+  differ. Claude-only API format/auth/full-URL/model-mapping controls remain
+  Claude-only.
+
+## Runtime feedback fixes (2026-08-04)
+
+- Monaco-based provider editors must pass a stable `path`, keep their model
+  across temporary unmounts, and keep the common editor mounted while its
+  `Collapse` is closed. This prevents a collapse/reopen race from attempting
+  to attach a model to a disposed Monaco service.
+- Effective provider/effective previews use a code-editor surface. Claude
+  displays JSON; Codex and Grok Build unwrap the stored JSON envelope and
+  display the nested `config` document as TOML. The source-documents view may
+  remain a mixed read-only text view because Codex contains both auth JSON and
+  config TOML.
+- The create/edit provider form exposes the provider-specific document for all
+  three app types. The frontend stores the Codex/Grok TOML document inside the
+  existing JSON envelope; the backend preserves key-manager-owned JSON/TOML
+  secrets while applying the non-secret draft.
+- Global current-state detection must prefer an exact match between the
+  materialized target files and a provider plan, then fall back to the
+  database current flag for drift/key-missing reporting. A database flag alone
+  is insufficient after importing an existing Home configuration.
+- Detail actions do not include a duplicate button; duplication remains a
+  catalog-card action so the detail header stays focused on inspection and
+  editing.
+
+## Global apply feedback fix (2026-08-04)
+
+- The global confirmation path must display the app-specific CLI config root:
+  Claude uses `Home/.claude`, Codex uses `Home/.codex`, and Grok Build uses
+  `Home/.grok`; displaying the Home parent alone is misleading even when the
+  backend plan targets the correct directory.
+- The Apply button must be usable without a prior explicit Preview click. The
+  frontend obtains a fresh preview/fingerprint at apply time and passes it to
+  the existing guarded apply command, preserving conflict detection and the
+  write/recovery journal contract.
+
+## Codex/Grok advanced provider maintenance (2026-08-04)
+
+- Codex and Grok Build share one advanced maintenance section. It exposes the
+  upstream/wire API, manual model mappings, User-Agent, JSON object header/body
+  overrides, Goal mode and remote compression. All labels and validation errors
+  require `zh-CN` and `en-US` entries.
+- Advanced values are stored in the existing provider settings JSON envelope
+  under `advanced`. They are UI/provider metadata and must not be copied into
+  unsupported official TOML keys or take ownership of API secrets.
+- When the nested provider document is empty or absent, the form generates a
+  CLI-specific seed from typed fields: Claude JSON, Codex TOML, or Grok TOML.
+  This generated document is refreshed while the form remains automatic; once
+  the user edits the raw document, it becomes manual and unknown fields are
+  preserved.
+- Header/body overrides must be JSON objects and every model mapping must have
+  non-empty source and target values. Invalid advanced state disables save and
+  keeps the draft visible; backend key-manager fields remain authoritative.

@@ -18,10 +18,6 @@ interface CodexStatuslineConfig {
   items: string[];
 }
 
-interface CcSwitchHookProtectionStatus {
-  state: "notDetected" | "notSynced" | "synced" | "invalidDb" | "unavailable" | "syncFailed";
-}
-
 interface ItemDefinition {
   id: string;
   zh: string;
@@ -110,7 +106,6 @@ export function CodexStatuslineEditor({
 }) {
   const { language, t } = useI18n();
   const codexConfigDir = useSettingsStore((state) => state.codexHookConfigDir);
-  const ccSwitchDbPath = useSettingsStore((state) => state.ccSwitchDbPath);
   const [config, setConfig] = useState<CodexStatuslineConfig | null>(null);
   const [items, setItems] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -170,30 +165,12 @@ export function CodexStatuslineEditor({
     });
   };
 
-  const syncCodexCommonConfig = async (nextItems: string[]) => {
-    try {
-      const status = await invoke<CcSwitchHookProtectionStatus>("codex_statusline_sync_ccswitch", {
-        configDir: codexConfigDir ?? undefined,
-        items: nextItems,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
-      });
-      if (["invalidDb", "unavailable", "syncFailed"].includes(status.state)) {
-        toast.warning(t("settings.statusline.ccSwitchSyncWarning"), {
-          description: t("settings.statusline.ccSwitchSyncWarningDescription"),
-        });
-      }
-    } catch (error) {
-      toast.warning(t("settings.statusline.ccSwitchSyncWarning"), { description: errorMessage(error) });
-    }
-  };
-
   const save = async () => {
     setSaving(true);
     try {
       if (!profiles.state) return;
       const next = await profiles.save(profiles.state.activeProfileId, items);
       applyProfileState(next);
-      await syncCodexCommonConfig(items);
       toast.success(t("settings.codexStatusline.saved"));
     } catch (error) {
       toast.error(t("settings.codexStatusline.saveFailed"), { description: errorMessage(error) });
@@ -212,25 +189,19 @@ export function CodexStatuslineEditor({
           onSave={save}
           onCreate={async (name) => {
             applyProfileState(await profiles.create(name, items));
-            await syncCodexCommonConfig(items);
           }}
           onSwitch={async (profileId) => {
             const next = await profiles.switchProfile(profileId);
             applyProfileState(next);
-            const active = next.profiles.find((profile) => profile.id === next.activeProfileId);
-            await syncCodexCommonConfig(active?.payload ?? items);
           }}
           onRename={async (profileId, name) => applyProfileState(await profiles.rename(profileId, name))}
           onDuplicate={async (profileId, name) => {
             applyProfileState(await profiles.duplicate(profileId, name));
-            await syncCodexCommonConfig(items);
           }}
           onDelete={async (profileId) => applyProfileState(await profiles.remove(profileId))}
           onCaptureExternal={async (name) => {
             const next = await profiles.captureExternal(name);
             applyProfileState(next);
-            const active = next.profiles.find((profile) => profile.id === next.activeProfileId);
-            await syncCodexCommonConfig(active?.payload ?? items);
           }}
         />
       </Card>

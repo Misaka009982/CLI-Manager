@@ -31,8 +31,45 @@ pub(crate) struct ProviderDetail {
     pub settings_config: String,
     pub effective_settings_config: String,
     pub settings_has_secret: bool,
+    pub claude_config: Option<ClaudeConfig>,
     pub documents: Vec<ProviderDocument>,
     pub keys: Vec<ProviderKeySummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeConfig {
+    pub api_format: String,
+    pub api_key_field: String,
+    pub is_full_url: bool,
+    pub model: String,
+    pub default_haiku_model: String,
+    pub default_haiku_model_name: String,
+    pub default_sonnet_model: String,
+    pub default_sonnet_model_name: String,
+    pub default_opus_model: String,
+    pub default_opus_model_name: String,
+    pub default_fable_model: String,
+    pub default_fable_model_name: String,
+    pub subagent_model: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaudeConfigInput {
+    pub api_format: Option<String>,
+    pub api_key_field: Option<String>,
+    pub is_full_url: Option<bool>,
+    pub model: Option<String>,
+    pub default_haiku_model: Option<String>,
+    pub default_haiku_model_name: Option<String>,
+    pub default_sonnet_model: Option<String>,
+    pub default_sonnet_model_name: Option<String>,
+    pub default_opus_model: Option<String>,
+    pub default_opus_model_name: Option<String>,
+    pub default_fable_model: Option<String>,
+    pub default_fable_model_name: Option<String>,
+    pub subagent_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,6 +122,7 @@ pub(crate) struct ProviderCreateInput {
     pub icon: Option<String>,
     pub icon_color: Option<String>,
     pub common_config_enabled: Option<bool>,
+    pub claude_config: Option<ClaudeConfigInput>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -103,6 +141,7 @@ pub(crate) struct ProviderUpdateInput {
     pub icon: Option<String>,
     pub icon_color: Option<String>,
     pub common_config_enabled: Option<bool>,
+    pub claude_config: Option<ClaudeConfigInput>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

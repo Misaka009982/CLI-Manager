@@ -1,4 +1,7 @@
-use super::dto::{ProviderCard, ProviderKeySummary, ProviderRecord};
+use super::dto::{
+    ClaudeConfig, ClaudeConfigInput, ProviderCard, ProviderKeySummary, ProviderRecord,
+};
+use crate::provider::grok;
 use serde_json::{Map, Value};
 use sqlx::{Row, SqliteConnection};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -88,6 +91,190 @@ fn set_optional_json_string(object: &mut Map<String, Value>, key: &str, value: O
     }
 }
 
+const CLAUDE_API_FORMATS: [&str; 4] = [
+    "anthropic",
+    "openai_chat",
+    "openai_responses",
+    "gemini_native",
+];
+
+const CLAUDE_AUTH_FIELDS: [&str; 2] = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"];
+
+fn claude_text(env: &Map<String, Value>, key: &str) -> Option<String> {
+    env.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn selected_claude_auth_field(env: &Map<String, Value>) -> &'static str {
+    let has_auth_token = env.contains_key("ANTHROPIC_AUTH_TOKEN");
+    let has_api_key = env.contains_key("ANTHROPIC_API_KEY");
+    match (has_auth_token, has_api_key) {
+        (true, true) if claude_text(env, "ANTHROPIC_AUTH_TOKEN").is_none() => {
+            "ANTHROPIC_AUTH_TOKEN"
+        }
+        (true, true) if claude_text(env, "ANTHROPIC_API_KEY").is_none() => "ANTHROPIC_API_KEY",
+        (false, true) => "ANTHROPIC_API_KEY",
+        _ => "ANTHROPIC_AUTH_TOKEN",
+    }
+}
+
+fn strip_claude_one_m_marker(value: &str) -> String {
+    let trimmed = value.trim_end();
+    if trimmed
+        .get(trimmed.len().saturating_sub(4)..)
+        .map(|marker| marker.eq_ignore_ascii_case("[1m]"))
+        .unwrap_or(false)
+    {
+        return trimmed[..trimmed.len() - 4].trim_end().to_string();
+    }
+    trimmed.to_string()
+}
+
+fn apply_claude_env_field(env: &mut Map<String, Value>, key: &str, value: Option<&str>) {
+    set_optional_json_string(env, key, value);
+}
+
+pub(crate) fn apply_claude_config_fields(
+    raw: &str,
+    input: Option<&ClaudeConfigInput>,
+) -> Result<String, String> {
+    let Some(input) = input else {
+        return Ok(raw.to_string());
+    };
+    let mut value = serde_json::from_str::<Value>(raw)
+        .map_err(|_| error("provider_settings_invalid_json", "settings_config"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| error("provider_settings_must_be_object", "settings_config"))?;
+    if let Some(api_format) = input.api_format.as_deref().map(str::trim) {
+        if !CLAUDE_API_FORMATS.contains(&api_format) {
+            return Err(error("provider_claude_api_format_invalid", api_format));
+        }
+        set_optional_json_string(object, "api_format", Some(api_format));
+    }
+    let env = object
+        .entry("env")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| error("provider_settings_env_invalid", "env"))?;
+
+    for (key, field_value) in [
+        ("ANTHROPIC_MODEL", input.model.as_deref()),
+        (
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            input.default_haiku_model.as_deref(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+            input.default_haiku_model_name.as_deref(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            input.default_sonnet_model.as_deref(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+            input.default_sonnet_model_name.as_deref(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            input.default_opus_model.as_deref(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+            input.default_opus_model_name.as_deref(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_FABLE_MODEL",
+            input.default_fable_model.as_deref(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+            input.default_fable_model_name.as_deref(),
+        ),
+        (
+            "CLAUDE_CODE_SUBAGENT_MODEL",
+            input.subagent_model.as_deref(),
+        ),
+    ] {
+        apply_claude_env_field(env, key, field_value);
+    }
+
+    if let Some(api_key_field) = input.api_key_field.as_deref().map(str::trim) {
+        if !CLAUDE_AUTH_FIELDS.contains(&api_key_field) {
+            return Err(error("provider_claude_auth_field_invalid", api_key_field));
+        }
+        let other = if api_key_field == "ANTHROPIC_API_KEY" {
+            "ANTHROPIC_AUTH_TOKEN"
+        } else {
+            "ANTHROPIC_API_KEY"
+        };
+        let existing_secret = claude_text(env, api_key_field).or_else(|| claude_text(env, other));
+        env.remove(other);
+        env.insert(
+            api_key_field.to_string(),
+            Value::String(existing_secret.unwrap_or_default()),
+        );
+    }
+
+    serde_json::to_string(&value).map_err(|_| error("provider_settings_serialize_failed", ""))
+}
+
+pub(crate) fn apply_claude_meta(meta: &mut Map<String, Value>, input: Option<&ClaudeConfigInput>) {
+    if let Some(is_full_url) = input.and_then(|value| value.is_full_url) {
+        meta.insert("claudeIsFullUrl".to_string(), Value::Bool(is_full_url));
+    }
+}
+
+pub(crate) fn claude_config_from_settings(raw: &str, meta: &Map<String, Value>) -> ClaudeConfig {
+    let value = serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::Object(Map::new()));
+    let object = value.as_object();
+    let env = object
+        .and_then(|root| root.get("env"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let model = claude_text(&env, "ANTHROPIC_MODEL").unwrap_or_default();
+    let sonnet =
+        claude_text(&env, "ANTHROPIC_DEFAULT_SONNET_MODEL").unwrap_or_else(|| model.clone());
+    let opus = claude_text(&env, "ANTHROPIC_DEFAULT_OPUS_MODEL").unwrap_or_else(|| model.clone());
+    let fable = claude_text(&env, "ANTHROPIC_DEFAULT_FABLE_MODEL").unwrap_or_else(|| opus.clone());
+    let haiku = claude_text(&env, "ANTHROPIC_DEFAULT_HAIKU_MODEL")
+        .or_else(|| claude_text(&env, "ANTHROPIC_SMALL_FAST_MODEL"))
+        .unwrap_or_else(|| model.clone());
+    let text_or_model = |key: &str, fallback: &str| {
+        claude_text(&env, key).unwrap_or_else(|| strip_claude_one_m_marker(fallback))
+    };
+    let api_format = object
+        .and_then(|root| root.get("api_format"))
+        .and_then(Value::as_str)
+        .filter(|value| CLAUDE_API_FORMATS.contains(value))
+        .unwrap_or("anthropic")
+        .to_string();
+    let api_key_field = selected_claude_auth_field(&env);
+    ClaudeConfig {
+        api_format,
+        api_key_field: api_key_field.to_string(),
+        is_full_url: meta
+            .get("claudeIsFullUrl")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        model: model.clone(),
+        default_haiku_model: haiku.clone(),
+        default_haiku_model_name: text_or_model("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", &haiku),
+        default_sonnet_model: sonnet.clone(),
+        default_sonnet_model_name: text_or_model("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", &sonnet),
+        default_opus_model: opus.clone(),
+        default_opus_model_name: text_or_model("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", &opus),
+        default_fable_model: fable.clone(),
+        default_fable_model_name: text_or_model("ANTHROPIC_DEFAULT_FABLE_MODEL_NAME", &fable),
+        subagent_model: claude_text(&env, "CLAUDE_CODE_SUBAGENT_MODEL").unwrap_or_default(),
+    }
+}
+
 pub(crate) fn apply_config_fields(
     app_type: &str,
     raw: &str,
@@ -97,6 +284,10 @@ pub(crate) fn apply_config_fields(
 ) -> Result<String, String> {
     if base_url.is_none() && model.is_none() && api_format.is_none() {
         return Ok(raw.to_string());
+    }
+
+    if app_type == "grokbuild" {
+        return grok::apply_typed_fields(raw, base_url, model, api_format);
     }
 
     let mut value = serde_json::from_str::<Value>(raw)
@@ -333,6 +524,9 @@ pub(crate) fn config_summary(
     app_type: &str,
     raw: &str,
 ) -> (Option<String>, Option<String>, Option<String>) {
+    if app_type == "grokbuild" {
+        return grok::summary(raw);
+    }
     let Ok(value) = serde_json::from_str::<Value>(raw) else {
         return (None, None, None);
     };
@@ -597,6 +791,14 @@ pub(crate) fn set_json_secret(
     app_type: &str,
     secret: &str,
 ) -> Result<(), String> {
+    if app_type == "grokbuild" {
+        let raw = serde_json::to_string(value)
+            .map_err(|_| error("provider_settings_serialize_failed", ""))?;
+        let projected = grok::project_key(&raw, secret)?;
+        *value = serde_json::from_str(&projected)
+            .map_err(|_| error("provider_settings_serialize_failed", ""))?;
+        return Ok(());
+    }
     let object = value
         .as_object_mut()
         .ok_or_else(|| error("provider_settings_must_be_object", "settings_config"))?;
@@ -607,11 +809,13 @@ pub(crate) fn set_json_secret(
                 .or_insert_with(|| Value::Object(Map::new()))
                 .as_object_mut()
                 .ok_or_else(|| error("provider_settings_env_invalid", "env"))?;
-            let key = if env.contains_key("ANTHROPIC_API_KEY") {
-                "ANTHROPIC_API_KEY"
-            } else {
+            let key = selected_claude_auth_field(env);
+            let other = if key == "ANTHROPIC_API_KEY" {
                 "ANTHROPIC_AUTH_TOKEN"
+            } else {
+                "ANTHROPIC_API_KEY"
             };
+            env.remove(other);
             env.insert(key.to_string(), Value::String(secret.to_string()));
         }
         "codex" => {
@@ -631,14 +835,6 @@ pub(crate) fn set_json_secret(
                 *auth = Value::String(secret.to_string());
             }
         }
-        "grokbuild" => {
-            let key = if object.contains_key("apiKey") {
-                "apiKey"
-            } else {
-                "api_key"
-            };
-            object.insert(key.to_string(), Value::String(secret.to_string()));
-        }
         _ => return Err(error("provider_invalid_app_type", app_type)),
     }
     Ok(())
@@ -649,6 +845,9 @@ pub(crate) fn project_key_into_settings(
     raw: &str,
     secret: &str,
 ) -> Result<String, String> {
+    if app_type == "grokbuild" {
+        return grok::project_key(raw, secret);
+    }
     let mut value = serde_json::from_str::<Value>(raw)
         .map_err(|_| error("provider_settings_invalid_json", "settings_config"))?;
     set_json_secret(&mut value, app_type, secret)?;

@@ -2,12 +2,6 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::AppHandle;
-
-use crate::commands::hook_settings::{
-    sync_ccswitch_codex_statusline, CcSwitchHookProtectionStatus,
-};
-
 const CONFIG_FILE: &str = "config.toml";
 const TUI_TABLE: &str = "tui";
 const STATUS_LINE_KEY: &str = "status_line";
@@ -34,7 +28,9 @@ fn resolve_config_dir(config_dir: Option<String>) -> Result<PathBuf, String> {
         .filter(|value| !value.is_empty())
     {
         Some(value) => Ok(PathBuf::from(value)),
-        None => Ok(home_dir()?.join(".codex")),
+        None => crate::provider::home::default_config_root("codex")
+            .or_else(|| home_dir().ok().map(|home| home.join(".codex")))
+            .ok_or_else(|| "home_dir_unavailable".to_string()),
     }
 }
 
@@ -177,7 +173,35 @@ fn finish_lines(lines: Vec<String>, original: &str) -> String {
     next
 }
 
+fn is_wsl_path(path: &Path) -> bool {
+    crate::wsl::is_wsl_config_dir(&path.to_string_lossy())
+}
+
+fn read_config(path: &Path) -> Result<String, String> {
+    if is_wsl_path(path) {
+        let bytes = crate::provider::global::read_live(&path.to_string_lossy())
+            .map_err(|error| format!("codex_config_read_failed: {error}"))?;
+        return bytes
+            .map(|bytes| {
+                String::from_utf8(bytes)
+                    .map_err(|error| format!("codex_config_read_failed: {error}"))
+            })
+            .transpose()
+            .map(|content| content.unwrap_or_default());
+    }
+
+    if path.exists() {
+        fs::read_to_string(path).map_err(|err| format!("codex_config_read_failed: {err}"))
+    } else {
+        Ok(String::new())
+    }
+}
+
 fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
+    if is_wsl_path(path) {
+        return atomic_write_wsl(path, content);
+    }
+
     let parent = path
         .parent()
         .ok_or_else(|| "codex_config_path_invalid".to_string())?;
@@ -209,15 +233,54 @@ fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn atomic_write_wsl(path: &Path, content: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "codex_config_path_invalid".to_string())?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let temp = parent.join(format!(
+        ".{CONFIG_FILE}.{}.{}.tmp",
+        std::process::id(),
+        stamp
+    ));
+    let temp_string = temp.to_string_lossy();
+    if let Err(error) = crate::provider::global::write_live(&temp_string, content.as_bytes()) {
+        return Err(format!("codex_config_write_failed: {error}"));
+    }
+
+    let path_string = path.to_string_lossy();
+    let existing = match crate::provider::global::read_live(&path_string) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = crate::provider::global::remove_live(&temp_string);
+            return Err(format!("codex_config_read_failed: {error}"));
+        }
+    };
+    if let Some(existing) = existing {
+        let backup = parent.join(format!("{CONFIG_FILE}.cli-manager-statusline.bak"));
+        let backup_string = backup.to_string_lossy();
+        if let Err(error) = crate::provider::global::write_live(&backup_string, &existing) {
+            let _ = crate::provider::global::remove_live(&temp_string);
+            return Err(format!("codex_config_backup_failed: {error}"));
+        }
+    }
+
+    if let Err(error) = crate::provider::global::replace_live_from_stage(&path_string, &temp_string)
+    {
+        let _ = crate::provider::global::remove_live(&temp_string);
+        return Err(format!("codex_config_replace_failed: {error}"));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn codex_statusline_load(config_dir: Option<String>) -> Result<CodexStatuslineConfig, String> {
     let dir = resolve_config_dir(config_dir)?;
     let path = dir.join(CONFIG_FILE);
-    let content = if path.exists() {
-        fs::read_to_string(&path).map_err(|err| format!("codex_config_read_failed: {err}"))?
-    } else {
-        String::new()
-    };
+    let content = read_config(&path)?;
     Ok(CodexStatuslineConfig {
         config_dir: dir.to_string_lossy().to_string(),
         config_path: path.to_string_lossy().to_string(),
@@ -233,25 +296,9 @@ pub fn codex_statusline_save(
     validate_items(&items)?;
     let dir = resolve_config_dir(config_dir)?;
     let path = dir.join(CONFIG_FILE);
-    let content = if path.exists() {
-        fs::read_to_string(&path).map_err(|err| format!("codex_config_read_failed: {err}"))?
-    } else {
-        String::new()
-    };
+    let content = read_config(&path)?;
     atomic_write(&path, &set_status_line(&content, &items))?;
     codex_statusline_load(Some(dir.to_string_lossy().to_string()))
-}
-
-#[tauri::command]
-pub async fn codex_statusline_sync_ccswitch(
-    app: AppHandle,
-    config_dir: Option<String>,
-    items: Vec<String>,
-    cc_switch_db_path: Option<String>,
-) -> Result<CcSwitchHookProtectionStatus, String> {
-    validate_items(&items)?;
-    let dir = resolve_config_dir(config_dir)?;
-    Ok(sync_ccswitch_codex_statusline(&app, cc_switch_db_path, &dir, &items).await)
 }
 
 pub(crate) fn validate_items(items: &[String]) -> Result<(), String> {

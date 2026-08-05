@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Badge, Button, Card, Group, Stack, Text, Textarea } from "@mantine/core";
+import { Alert, Badge, Button, Card, Group, Stack, Text } from "@mantine/core";
 import { AlertTriangle, Check, Save } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
 import { useAppConfirm } from "@/components/ui/useAppConfirm";
-import type { NativeProviderAppType, NativeProviderDocument } from "./nativeProviderTypes";
+import { providerErrorCode, type NativeProviderAppType, type NativeProviderDocument } from "./nativeProviderTypes";
+import { NativeProviderCodeEditor } from "./NativeProviderCodeEditor";
 
 interface NativeProviderDocumentEditorProps {
   appType: NativeProviderAppType;
@@ -35,6 +36,13 @@ function appTypeLabel(appType: NativeProviderAppType, t: (key: TranslationKey) =
   return t("providerCatalog.appType.grokbuild");
 }
 
+const SERVER_ERROR_KEYS: Partial<Record<string, TranslationKey>> = {
+  provider_config_invalid: "providerCatalog.errors.invalidDocument",
+  provider_config_must_be_object: "providerCatalog.errors.invalidDocumentObject",
+  provider_document_kind_invalid: "providerCatalog.errors.invalidDocumentKind",
+  provider_document_secret_edit_requires_key_manager: "providerCatalog.errors.documentSecretEdit",
+};
+
 export function NativeProviderDocumentEditor({
   appType,
   providerId,
@@ -50,6 +58,7 @@ export function NativeProviderDocumentEditor({
   const [activeKind, setActiveKind] = useState(documents[0]?.kind ?? "");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [dirtyKinds, setDirtyKinds] = useState<Set<string>>(new Set());
+  const [saveErrorCode, setSaveErrorCode] = useState<string | null>(null);
 
   useEffect(() => {
     dirtyRef.current = dirtyKinds;
@@ -62,6 +71,7 @@ export function NativeProviderDocumentEditor({
       const nextDrafts = Object.fromEntries(documents.map((document) => [document.kind, document.value]));
       dirtyRef.current = new Set();
       setDirtyKinds(new Set());
+      setSaveErrorCode(null);
       setDrafts(nextDrafts);
       setActiveKind(documents[0]?.kind ?? "");
       return;
@@ -87,6 +97,19 @@ export function NativeProviderDocumentEditor({
   const isDirty = activeDocument ? dirtyKinds.has(activeDocument.kind) : false;
   const localValid = activeDocument?.format === "json" ? isValidJson(activeValue) : true;
   const saveBusy = action === "update-document";
+  const serverError = saveErrorCode
+    ? t(SERVER_ERROR_KEYS[saveErrorCode] ?? "providerCatalog.errors.generic")
+    : null;
+  const parseError = serverError ?? (
+    activeDocument && !activeDocument.valid
+      ? t("providerCatalog.documents.invalidDocument")
+      : activeDocument?.format === "json" && !localValid
+        ? t("providerCatalog.documents.invalidJson")
+        : null
+  );
+  const parseErrorId = activeDocument
+    ? `provider-document-parse-error-${activeDocument.kind.replace(/[^a-zA-Z0-9_-]/g, "-")}`
+    : undefined;
 
   const availableKinds = useMemo(() => documents.map((document) => document.kind), [documents]);
 
@@ -100,6 +123,7 @@ export function NativeProviderDocumentEditor({
         danger: true,
       });
       if (!confirmed) return;
+      setSaveErrorCode(null);
       setDirtyKinds((current) => {
         const next = new Set(current);
         next.delete(activeKind);
@@ -112,7 +136,13 @@ export function NativeProviderDocumentEditor({
 
   const handleSave = async () => {
     if (!activeDocument || !localValid) return;
-    await onSave(activeDocument.kind, activeValue);
+    try {
+      await onSave(activeDocument.kind, activeValue);
+      setSaveErrorCode(null);
+    } catch (error) {
+      setSaveErrorCode(providerErrorCode(error));
+      return;
+    }
     setDrafts((current) => ({ ...current, [activeDocument.kind]: activeValue }));
     setDirtyKinds((current) => {
       const next = new Set(current);
@@ -126,10 +156,10 @@ export function NativeProviderDocumentEditor({
 
   return (
     <>
-      <Card withBorder radius="lg" padding="md" className="border-border/70 bg-surface-container-low">
+      <Card withBorder radius="lg" padding="md" className="min-w-0 overflow-hidden border-border/70 bg-surface-container-low">
         <Stack gap="sm">
-          <Group justify="space-between" align="flex-start" wrap="nowrap">
-            <Stack gap={2}>
+          <Group justify="space-between" align="flex-start" wrap="wrap">
+            <Stack gap={2} miw={0}>
               <Text fw={600}>{t("providerCatalog.documents.title")}</Text>
               <Text size="xs" c="dimmed">{t("providerCatalog.documents.description")}</Text>
             </Stack>
@@ -172,29 +202,32 @@ export function NativeProviderDocumentEditor({
               {t("providerCatalog.documents.secretRedacted")}
             </Alert>
           )}
-          {activeDocument.format === "json" && !localValid && (
-            <Alert color="red" variant="light" icon={<AlertTriangle size={16} />}>
-              {t("providerCatalog.documents.invalidJson")}
+          {parseError && (
+            <Alert id={parseErrorId} color="red" variant="light" icon={<AlertTriangle size={16} />}>
+              {parseError}
             </Alert>
           )}
-          <Textarea
-            aria-label={t("providerCatalog.documents.editorLabel", { name: documentLabel(activeDocument.kind, t) })}
-            value={activeValue}
-            minRows={12}
-            autosize
-            disabled={Boolean(action)}
-            styles={{ input: { fontFamily: "var(--font-mono, ui-monospace, monospace)" } }}
-            onChange={(event) => {
-              const value = event.currentTarget.value;
+          <div aria-describedby={parseError ? parseErrorId : undefined}>
+            <NativeProviderCodeEditor
+              format={activeDocument.format}
+              value={activeValue}
+              path={`native-provider-document-${providerId}-${activeDocument.kind}`}
+              ariaLabel={t("providerCatalog.documents.editorLabel", { name: documentLabel(activeDocument.kind, t) })}
+              height="min(48vh, 520px)"
+              invalid={Boolean(parseError)}
+              readOnly={Boolean(action)}
+              onChange={(value) => {
               setDrafts((current) => ({ ...current, [activeDocument.kind]: value }));
+              setSaveErrorCode(null);
               setDirtyKinds((current) => {
                 const next = new Set(current);
                 next.add(activeDocument.kind);
                 dirtyRef.current = next;
                 return next;
               });
-            }}
-          />
+              }}
+            />
+          </div>
           <Text size="xs" c="dimmed">
             {t("providerCatalog.documents.backendAuthority", { appType: appTypeLabel(appType, t) })}
           </Text>

@@ -378,3 +378,61 @@ dialogs, localized copy, focus management, and an unsaved-change guard.
 | CCS IDs collide with native IDs | composite app identity and import-ref mapping; no heuristic fallback |
 | source config contains secret | plaintext storage is allowed, but reveal is explicit and defaults/logs/sync remain masked |
 | old terminal running after switch | session snapshots remain immutable; only new launches resolve again |
+
+## 11. UI follow-up design from manual review
+
+### 11.1 Page-level state
+
+`NativeProviderSettingsPage` keeps the current CLI type selection, but adds a
+small page-surface state:
+
+```text
+providerCatalogView = catalog | cliHome
+importSurface = closed | open
+```
+
+The catalog view renders type tabs, search, Import, CLI Home, add/refresh and
+the provider list/detail shell. Import is opened from the Import action and is
+not mounted as a permanent catalog section. CLI Home is rendered in its own
+surface and reuses the existing Home/environment/global-apply state and
+guards; it is not duplicated in the catalog.
+
+### 11.2 Import repair identity
+
+Import issues continue to use the stable issue ID and native provider ID for
+commands, but the read DTO/UI label must resolve the reference identity:
+
+```text
+scopeKind + scopeId
+  -> project/worktree display name (when present)
+  -> localized missing-record label + stable ID (when absent)
+```
+
+The resolver must not change repair semantics or introduce name-based matching.
+Names are presentation-only; commands still submit the exact issue/provider
+IDs. The stable ID is secondary text or a tooltip for diagnosis.
+
+### 11.3 Equal-height catalog/detail shell
+
+The page shell supplies one bounded responsive height to both panes. The left
+catalog and right detail each use their own vertical `ScrollArea`; the outer
+provider grid does not grow with the number of cards. The detail pane keeps its
+header, key section and document editors inside the same scroll context, so a
+missing/empty/loading detail state cannot leave a broken blank card or push the
+list to a different height.
+
+The implementation must verify the shell at 1024px and 1440px, with long
+provider names, many providers, long raw documents, preview errors and no
+selected provider. No new dependency or layout framework is justified.
+
+### 11.4 Common editor and detail containment follow-up
+
+- Common configuration remains type-scoped: Claude uses JSON, Codex/Grok Build
+  use TOML. The editor is collapsible but defaults open to preserve existing
+  visibility. Monaco provides code editing, folding and accessible naming.
+- A Validate action calls a non-writing backend command. The repository keeps
+  one validation rule set for both validate and save, so TOML errors and secret
+  fields are surfaced before any database write.
+- The page surface selector precedes the CLI type selector. Detail cards use a
+  shared min-width/overflow contract, responsive info columns and wrapping
+  action rows so long values cannot push controls outside the detail viewport.

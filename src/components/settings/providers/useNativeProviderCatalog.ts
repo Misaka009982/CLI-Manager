@@ -23,13 +23,14 @@ interface UseNativeProviderCatalogResult {
   errorCode: string | null;
   setSelectedProviderId: (providerId: string | null) => void;
   refresh: () => Promise<void>;
+  refreshSelection: (providerId: string | null) => Promise<void>;
   createProvider: (input: NativeProviderCreateInput) => Promise<void>;
   updateProvider: (input: NativeProviderUpdateInput) => Promise<void>;
   updateDocument: (input: NativeProviderDocumentUpdateInput) => Promise<void>;
   duplicateProvider: (providerId: string, name?: string) => Promise<void>;
   deleteProvider: (providerId: string) => Promise<void>;
   setProviderEnabled: (providerId: string, enabled: boolean) => Promise<void>;
-  setCurrentProvider: (providerId: string) => Promise<void>;
+  reorderProviders: (providerIds: string[]) => Promise<void>;
   createKey: (input: NativeProviderKeyCreateInput) => Promise<void>;
   updateKey: (input: NativeProviderKeyUpdateInput) => Promise<void>;
   activateKey: (providerId: string, keyId: string) => Promise<void>;
@@ -183,12 +184,15 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
     });
   }, [appType, refreshSelection, runAction]);
 
-  const setCurrentProvider = useCallback(async (providerId: string) => {
-    await runAction("set-current-provider", async () => {
-      await invoke<NativeProviderDetail>("provider_catalog_set_current", { appType, providerId });
-      await refreshSelection(providerId);
+  const reorderProviders = useCallback(async (providerIds: string[]) => {
+    await runAction("reorder-providers", async () => {
+      await invoke<NativeProviderCard[]>("provider_catalog_reorder", {
+        appType,
+        providerIds,
+      });
+      await refresh();
     });
-  }, [appType, refreshSelection, runAction]);
+  }, [appType, refresh, runAction]);
 
   const createKey = useCallback(async (input: NativeProviderKeyCreateInput) => {
     await runAction("create-key", async () => {
@@ -268,13 +272,14 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
     errorCode,
     setSelectedProviderId,
     refresh,
+    refreshSelection,
     createProvider,
     updateProvider,
     updateDocument,
     duplicateProvider,
     deleteProvider,
     setProviderEnabled,
-    setCurrentProvider,
+    reorderProviders,
     createKey,
     updateKey,
     activateKey,

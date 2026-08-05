@@ -1,13 +1,13 @@
 use super::common::get_common_config_value;
-use super::documents::documents_from_settings;
 use super::documents::merge_common_into_settings;
+use super::documents::{documents_from_settings, preserve_toml_secrets};
 use super::dto::{ProviderCard, ProviderCreateInput, ProviderDetail, ProviderUpdateInput};
 use super::support::{
-    active_key_label, apply_config_fields, card_from_record_with_connection,
-    duplicate_settings_config, error, load_provider, map_database_error,
-    meta_common_config_enabled, meta_enabled, normalize_app_type, normalize_settings_config,
-    optional_text, optional_text_value, parse_meta, provider_from_row, serialize_meta,
-    unix_timestamp_millis,
+    apply_claude_config_fields, apply_claude_meta, apply_config_fields,
+    card_from_record_with_connection, claude_config_from_settings, duplicate_settings_config,
+    error, is_secret_key, load_provider, map_database_error, meta_common_config_enabled,
+    normalize_app_type, normalize_settings_config, optional_text, optional_text_value, parse_meta,
+    provider_from_row, serialize_meta, unix_timestamp_millis,
 };
 use crate::provider::database;
 use serde_json::{Map, Value};
@@ -58,14 +58,73 @@ pub(crate) async fn get_provider(
     };
     let (effective_settings_config, _, _) =
         super::support::redact_settings_config(&effective_settings_config);
+    let claude_config = (app_type == "claude")
+        .then(|| claude_config_from_settings(&record.settings_config, &parse_meta(&record.meta)));
     Ok(ProviderDetail {
         card,
         settings_config,
         effective_settings_config,
         settings_has_secret,
+        claude_config,
         documents: documents_from_settings(&app_type, &record.settings_config),
         keys,
     })
+}
+
+fn preserve_json_secrets(existing: &Value, incoming: &mut Value) {
+    match (existing, incoming) {
+        (Value::Object(existing), Value::Object(incoming)) => {
+            for (key, existing_value) in existing {
+                if is_secret_key(key) {
+                    incoming.insert(key.clone(), existing_value.clone());
+                } else if let Some(incoming_value) = incoming.get_mut(key) {
+                    preserve_json_secrets(existing_value, incoming_value);
+                }
+            }
+        }
+        (Value::Array(existing), Value::Array(incoming)) => {
+            for (existing_value, incoming_value) in existing.iter().zip(incoming.iter_mut()) {
+                preserve_json_secrets(existing_value, incoming_value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn merge_settings_config_update(
+    app_type: &str,
+    existing_raw: &str,
+    incoming_raw: &str,
+) -> Result<String, String> {
+    let existing = serde_json::from_str::<Value>(existing_raw)
+        .map_err(|_| error("provider_settings_invalid_json", "settings_config"))?;
+    let mut incoming = serde_json::from_str::<Value>(incoming_raw)
+        .map_err(|_| error("provider_settings_invalid_json", "settings_config"))?;
+    if !incoming.is_object() {
+        return Err(error("provider_settings_must_be_object", "settings_config"));
+    }
+    preserve_json_secrets(&existing, &mut incoming);
+
+    if app_type != "claude" {
+        let existing_config = existing
+            .get("config")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let incoming_config = incoming
+            .get("config")
+            .and_then(Value::as_str)
+            .unwrap_or(existing_config);
+        let mut config = incoming_config
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|_| error("provider_config_invalid", "config"))?;
+        preserve_toml_secrets(existing_config, &mut config)?;
+        incoming
+            .as_object_mut()
+            .expect("validated settings object")
+            .insert("config".to_string(), Value::String(config.to_string()));
+    }
+
+    serde_json::to_string(&incoming).map_err(|_| error("provider_settings_serialize_failed", ""))
 }
 
 pub(crate) async fn create_provider(input: ProviderCreateInput) -> Result<ProviderDetail, String> {
@@ -79,6 +138,8 @@ pub(crate) async fn create_provider(input: ProviderCreateInput) -> Result<Provid
         input.model.as_deref(),
         input.api_format.as_deref(),
     )?;
+    let settings_config =
+        apply_claude_config_fields(&settings_config, input.claude_config.as_ref())?;
     let common_config_enabled = input.common_config_enabled.unwrap_or(true);
     let mut meta = Map::new();
     meta.insert("enabled".to_string(), Value::Bool(true));
@@ -86,6 +147,9 @@ pub(crate) async fn create_provider(input: ProviderCreateInput) -> Result<Provid
         "commonConfigEnabled".to_string(),
         Value::Bool(common_config_enabled),
     );
+    if app_type == "claude" {
+        apply_claude_meta(&mut meta, input.claude_config.as_ref());
+    }
     let now = unix_timestamp_millis();
     let id = Uuid::new_v4().to_string();
     let mut connection = database::open_connection().await?;
@@ -135,7 +199,11 @@ pub(crate) async fn update_provider(input: ProviderUpdateInput) -> Result<Provid
         .transpose()?
         .unwrap_or(existing.name.clone());
     let normalized_settings = match input.settings_config {
-        Some(value) => normalize_settings_config(Some(value))?,
+        Some(value) => normalize_settings_config(Some(merge_settings_config_update(
+            &app_type,
+            &existing.settings_config,
+            &value,
+        )?))?,
         None => existing.settings_config.clone(),
     };
     let settings_config = apply_config_fields(
@@ -146,6 +214,11 @@ pub(crate) async fn update_provider(input: ProviderUpdateInput) -> Result<Provid
         input.api_format.as_deref(),
     )?;
     let mut meta = parse_meta(&existing.meta);
+    let settings_config =
+        apply_claude_config_fields(&settings_config, input.claude_config.as_ref())?;
+    if app_type == "claude" {
+        apply_claude_meta(&mut meta, input.claude_config.as_ref());
+    }
     if let Some(enabled) = input.common_config_enabled {
         meta.insert("commonConfigEnabled".to_string(), Value::Bool(enabled));
     }
@@ -302,45 +375,6 @@ pub(crate) async fn set_provider_enabled(
     get_provider(app_type, provider.id).await
 }
 
-pub(crate) async fn set_current_provider(
-    app_type: String,
-    provider_id: String,
-) -> Result<ProviderDetail, String> {
-    let app_type = normalize_app_type(&app_type)?;
-    let mut connection = database::open_connection().await?;
-    let provider = load_provider(&mut connection, &app_type, provider_id.trim()).await?;
-    let meta = parse_meta(&provider.meta);
-    if !meta_enabled(&meta) {
-        return Err(error("provider_disabled_cannot_current", "providerId"));
-    }
-    if active_key_label(&mut connection, &app_type, &provider.id)
-        .await?
-        .is_none()
-    {
-        return Err(error("provider_current_requires_active_key", "providerId"));
-    }
-    let mut transaction = connection
-        .begin()
-        .await
-        .map_err(|err| map_database_error("provider_current_begin_failed", err))?;
-    sqlx::query("UPDATE providers SET is_current = 0 WHERE app_type = ?1")
-        .bind(&app_type)
-        .execute(&mut *transaction)
-        .await
-        .map_err(|err| map_database_error("provider_current_clear_failed", err))?;
-    sqlx::query("UPDATE providers SET is_current = 1 WHERE id = ?1 AND app_type = ?2")
-        .bind(&provider.id)
-        .bind(&app_type)
-        .execute(&mut *transaction)
-        .await
-        .map_err(|err| map_database_error("provider_current_set_failed", err))?;
-    transaction
-        .commit()
-        .await
-        .map_err(|err| map_database_error("provider_current_commit_failed", err))?;
-    get_provider(app_type, provider.id).await
-}
-
 pub(crate) async fn reorder_providers(
     app_type: String,
     provider_ids: Vec<String>,
@@ -388,4 +422,40 @@ pub(crate) async fn reorder_providers(
         .map_err(|err| map_database_error("provider_reorder_commit_failed", err))?;
     drop(connection);
     list_providers(Some(app_type)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_settings_config_update;
+    use serde_json::Value;
+
+    #[test]
+    fn provider_update_preserves_key_manager_owned_codex_secrets() {
+        let existing = r#"{
+            "auth": {"OPENAI_API_KEY": "sk-real"},
+            "config": "api_key = \"toml-real\"\nmodel = \"old\"\n"
+        }"#;
+        let incoming = r#"{
+            "auth": {"OPENAI_API_KEY": "***"},
+            "config": "api_key = \"[REDACTED]\"\nmodel = \"new\"\n"
+        }"#;
+        let merged = merge_settings_config_update("codex", existing, incoming).unwrap();
+        let value: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["auth"]["OPENAI_API_KEY"], "sk-real");
+        assert!(value["config"].as_str().unwrap().contains("toml-real"));
+        assert!(value["config"]
+            .as_str()
+            .unwrap()
+            .contains("model = \"new\""));
+    }
+
+    #[test]
+    fn provider_update_preserves_key_manager_owned_claude_secrets() {
+        let existing = r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-real","ANTHROPIC_MODEL":"old"}}"#;
+        let incoming = r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"***","ANTHROPIC_MODEL":"new"}}"#;
+        let merged = merge_settings_config_update("claude", existing, incoming).unwrap();
+        let value: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-real");
+        assert_eq!(value["env"]["ANTHROPIC_MODEL"], "new");
+    }
 }

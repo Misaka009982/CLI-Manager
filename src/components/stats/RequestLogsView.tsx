@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import type { RequestLogFilters, RequestLogPage, RequestLogSyncResult } from "../../lib/types";
-import { useSettingsStore } from "../../stores/settingsStore";
+import { getHistoryPathArgs } from "../../lib/historyPathArgs";
 import { useI18n, type AppLanguage } from "../../lib/i18n";
 import { VendorIcon } from "../VendorIcon";
 import { StatsDatePicker } from "./StatsDatePicker";
@@ -152,8 +152,6 @@ function outlierThreshold(values: number[]): number {
 
 export function RequestLogsView({ onOpenSession }: RequestLogsViewProps) {
   const { language, t } = useI18n();
-  const claudeConfigDir = useSettingsStore((state) => state.claudeHookConfigDir);
-  const codexConfigDir = useSettingsStore((state) => state.codexHookConfigDir);
   const [draft, setDraft] = useState<RequestLogDraftFilters>(() => defaultFilters());
   const [applied, setApplied] = useState<RequestLogDraftFilters>(() => defaultFilters());
   const [page, setPage] = useState(0);
@@ -229,11 +227,10 @@ export function RequestLogsView({ onOpenSession }: RequestLogsViewProps) {
   const syncAndRefresh = async () => {
     if (syncing) return;
     setSyncing(true);
-    setSyncError(null);
+      setSyncError(null);
     try {
       await invoke<RequestLogSyncResult>("history_sync_request_logs", {
-        claudeConfigDir: claudeConfigDir?.trim() || null,
-        codexConfigDir: codexConfigDir?.trim() || null,
+        ...(await getHistoryPathArgs()),
         force: true,
       });
       setPage(0);

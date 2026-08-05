@@ -34,23 +34,7 @@ interface HookSettingsStatus {
   codex: ToolHookSettingsStatus;
   pi: ToolHookSettingsStatus;
   grok: ToolHookSettingsStatus;
-  ccSwitch: CcSwitchHookProtectionStatus;
   claudeAutoRepaired: boolean;
-}
-
-type CcSwitchHookProtectionState =
-  | "notDetected"
-  | "notSynced"
-  | "synced"
-  | "invalidDb"
-  | "unavailable"
-  | "syncFailed";
-
-interface CcSwitchHookProtectionStatus {
-  state: CcSwitchHookProtectionState;
-  dbPath: string | null;
-  message: string | null;
-  wslMismatch: boolean;
 }
 
 const STATUS_LABELS: Record<HookInstallStatus, { zh: string; en: string }> = {
@@ -67,25 +51,6 @@ const STATUS_COLORS: Record<HookInstallStatus, string> = {
   installed: "green",
 };
 
-const CCSWITCH_STATE_LABELS: Record<CcSwitchHookProtectionState, { zh: string; en: string }> = {
-  notDetected: { zh: "未检测到 cc-switch", en: "cc-switch not detected" },
-  notSynced: { zh: "未同步", en: "Not Synced" },
-  synced: { zh: "已同步", en: "Synced" },
-  invalidDb: { zh: "数据库路径无效", en: "Invalid database path" },
-  unavailable: { zh: "不可用", en: "Unavailable" },
-  syncFailed: { zh: "同步失败", en: "Sync Failed" },
-};
-
-const CCSWITCH_STATE_COLORS: Record<CcSwitchHookProtectionState, string> = {
-  notDetected: "gray",
-  notSynced: "yellow",
-  synced: "green",
-  invalidDb: "red",
-  unavailable: "yellow",
-  syncFailed: "red",
-};
-
-
 function pickText(language: AppLanguage, zh: string, en: string) {
   return pickByLanguage(language, zh, en);
 }
@@ -96,104 +61,6 @@ function isWindowsPlatform(): boolean {
 
 function formatPath(value: string | null, language: AppLanguage): string {
   return value && value.trim() ? value : pickText(language, "未选择", "Not selected");
-}
-
-function formatCcSwitchMessage(message: string | null, language: AppLanguage): string | null {
-  if (!message) return null;
-  const messages: Record<string, { zh: string; en: string }> = {
-    db_not_found: {
-      zh: "设置中的 cc-switch 数据库不存在，请在「设置 -> 供应商」重新选择。",
-      en: "The cc-switch database in settings does not exist. Choose it again in Settings -> Providers.",
-    },
-    unsupported_format: {
-      zh: "cc-switch 数据库路径必须指向 .db 文件。",
-      en: "The cc-switch database path must point to a .db file.",
-    },
-    common_config_parse_failed: {
-      zh: "Claude 通用配置片段不是有效 JSON，未自动覆盖。",
-      en: "The Claude common config snippet is not valid JSON and was not overwritten.",
-    },
-  };
-  const translated = messages[message];
-  return translated ? pickText(language, translated.zh, translated.en) : message;
-}
-
-function getCcSwitchProtectionDescription(status: CcSwitchHookProtectionStatus | null | undefined, language: AppLanguage): string {
-  if (!status) return pickText(language, "正在检测 cc-switch 通用配置保护状态。", "Checking cc-switch common config protection status.");
-  switch (status.state) {
-    case "synced":
-      return pickText(language, "已同步到 cc-switch 通用配置片段，切换供应商时会保留 CLI-Manager Hook。", "Synced to the cc-switch common config snippet. CLI-Manager Hook is preserved when switching providers.");
-    case "notSynced":
-      return pickText(language, "尚未同步到 cc-switch 通用配置片段，重新安装对应 Hook 可重试。", "Not synced to the cc-switch common config snippet yet. Reinstall the Hook to retry.");
-    case "notDetected":
-      return pickText(language, "未检测到 cc-switch 数据库，Hook 已按普通全局配置工作。", "No cc-switch database detected. Hook is installed as normal global configuration.");
-    case "invalidDb":
-      return pickText(language, "设置中的 cc-switch 数据库路径不可用，已停止自动写入以避免误写。", "The cc-switch database path in settings is unavailable. Automatic write is stopped to avoid incorrect writes.");
-    case "unavailable":
-      return pickText(language, "cc-switch 数据库暂不可用于通用配置同步。", "cc-switch database is currently unavailable for common config sync.");
-    case "syncFailed":
-      return pickText(language, "cc-switch 通用配置同步失败，Hook 本身已安装，可稍后重试。", "cc-switch common config sync failed. The Hook itself is installed; retry later.");
-  }
-}
-
-function CcSwitchProtectionCard({ status }: { status?: CcSwitchHookProtectionStatus | null }) {
-  const { language } = useI18n();
-  const state = status?.state ?? "notDetected";
-  const isHealthy = state === "synced";
-  const isWarning = state === "notSynced" || state === "unavailable";
-  const Icon = isHealthy ? CheckCircle : isWarning || state === "notDetected" ? HelpCircle : AlertTriangle;
-  const formattedMessage = formatCcSwitchMessage(status?.message ?? null, language);
-
-  return (
-    <Card className="border border-border bg-surface-container-low" p="sm" radius="lg">
-      <Stack gap="xs">
-        <Group justify="space-between" gap="sm" align="flex-start">
-          <Group gap="sm" wrap="nowrap" className="min-w-0">
-            <Box
-              style={{
-                color: isHealthy
-                  ? "var(--success)"
-                  : state === "syncFailed" || state === "invalidDb"
-                    ? "var(--error)"
-                    : "var(--warning)",
-                marginTop: 2,
-                flexShrink: 0,
-              }}
-            >
-              <Icon size={18} />
-            </Box>
-            <Box className="min-w-0">
-              <Text size="sm" fw={500} c="var(--on-surface)">
-                {pickText(language, "cc-switch 通用配置保护", "cc-switch Common Config Protection")}
-              </Text>
-              <Text mt={4} size="xs" c="var(--on-surface-variant)">
-                {getCcSwitchProtectionDescription(status, language)}
-              </Text>
-            </Box>
-          </Group>
-          <Badge variant="light" color={CCSWITCH_STATE_COLORS[state]} radius="xl" className="shrink-0">
-            {pickText(language, CCSWITCH_STATE_LABELS[state].zh, CCSWITCH_STATE_LABELS[state].en)}
-          </Badge>
-        </Group>
-        {status?.dbPath && (
-          <Text
-            component="code"
-            size="xs"
-            ff="var(--font-ui-mono)"
-            c="var(--on-surface-variant)"
-            className="break-all"
-          >
-            {status.dbPath}
-          </Text>
-        )}
-        {formattedMessage && (
-          <Text size="xs" c={state === "syncFailed" || state === "invalidDb" ? "red" : "yellow"}>
-            {formattedMessage}
-          </Text>
-        )}
-      </Stack>
-    </Card>
-  );
 }
 
 function PathRow({ label, value }: { label: string; value: string | null }) {
@@ -531,7 +398,6 @@ export function HookSettingsPage() {
   const taskbarAttentionMode = useSettingsStore((s) => s.taskbarAttentionMode);
   const taskbarAttentionFlashCount = useSettingsStore((s) => s.taskbarAttentionFlashCount);
   const hookSettingsSectionsExpanded = useSettingsStore((s) => s.hookSettingsSectionsExpanded);
-  const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
   const claudeHookAutoRepairKnownInstalled = useSettingsStore((s) => s.claudeHookAutoRepairKnownInstalled);
   const claudeHookAutoRepairNoticeShown = useSettingsStore((s) => s.claudeHookAutoRepairNoticeShown);
   const updateSetting = useSettingsStore((s) => s.update);
@@ -591,32 +457,15 @@ export function HookSettingsPage() {
         codexSelectedDir: codexDir,
         piSelectedDir: piDir,
         grokSelectedDir: grokDir,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
         autoRepair: claudeHookBridgeEnabled && claudeHookAutoRepairKnownInstalled,
       });
       setStatus(nextStatus);
-      if (nextStatus.claude.configDir) {
-        setSelectedDir(nextStatus.claude.configDir);
-        if (useSettingsStore.getState().claudeHookConfigDir !== nextStatus.claude.configDir) {
-          await updateSetting("claudeHookConfigDir", nextStatus.claude.configDir);
-        }
-      }
-      if (nextStatus.codex.configDir) {
-        setCodexSelectedDir(nextStatus.codex.configDir);
-        if (useSettingsStore.getState().codexHookConfigDir !== nextStatus.codex.configDir) {
-          await updateSetting("codexHookConfigDir", nextStatus.codex.configDir);
-        }
-      }
+      // Keep resolved native directories in status only. Persisting an
+      // automatic fallback here would turn it into an explicit override.
       if (nextStatus.pi.configDir) {
         setPiSelectedDir(nextStatus.pi.configDir);
         if (useSettingsStore.getState().piHookConfigDir !== nextStatus.pi.configDir) {
           await updateSetting("piHookConfigDir", nextStatus.pi.configDir);
-        }
-      }
-      if (nextStatus.grok?.configDir) {
-        setGrokSelectedDir(nextStatus.grok.configDir);
-        if (useSettingsStore.getState().grokHookConfigDir !== nextStatus.grok.configDir) {
-          await updateSetting("grokHookConfigDir", nextStatus.grok.configDir);
         }
       }
       if (nextStatus.claudeAutoRepaired && !claudeHookAutoRepairNoticeShown) {
@@ -695,15 +544,11 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
-      if (nextStatus.claude.configDir) setSelectedDir(nextStatus.claude.configDir);
       await updateSetting("claudeHookAutoRepairKnownInstalled", true);
       await updateSetting("claudeHookAutoRepairNoticeShown", false);
-      toast.success(text("Claude Hook 已安装", "Claude Hook installed"), {
-        description: getCcSwitchProtectionDescription(nextStatus.ccSwitch, language),
-      });
+      toast.success(text("Claude Hook 已安装", "Claude Hook installed"));
     } catch (error) {
       toast.error(text("安装 Claude Hook 失败", "Failed to install Claude Hook"), { description: getErrorMessage(error) });
     } finally {
@@ -719,10 +564,8 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
-      if (nextStatus.claude.configDir) setSelectedDir(nextStatus.claude.configDir);
       await updateSetting("claudeHookAutoRepairKnownInstalled", false);
       await updateSetting("claudeHookAutoRepairNoticeShown", false);
       toast.success(text("Claude Hook 已删除", "Claude Hook removed"));
@@ -741,14 +584,9 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
-      if (nextStatus.codex.configDir) setCodexSelectedDir(nextStatus.codex.configDir);
-      if (nextStatus.pi.configDir) setPiSelectedDir(nextStatus.pi.configDir);
-      toast.success(text("Codex Hook 已安装", "Codex Hook installed"), {
-        description: getCcSwitchProtectionDescription(nextStatus.ccSwitch, language),
-      });
+      toast.success(text("Codex Hook 已安装", "Codex Hook installed"));
     } catch (error) {
       toast.error(text("安装 Codex Hook 失败", "Failed to install Codex Hook"), { description: getErrorMessage(error) });
     } finally {
@@ -764,11 +602,8 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
-      if (nextStatus.codex.configDir) setCodexSelectedDir(nextStatus.codex.configDir);
-      if (nextStatus.pi.configDir) setPiSelectedDir(nextStatus.pi.configDir);
       toast.success(text("Codex Hook 已删除", "Codex Hook removed"));
     } catch (error) {
       toast.error(text("删除 Codex Hook 失败", "Failed to remove Codex Hook"), { description: getErrorMessage(error) });
@@ -799,7 +634,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.pi.configDir) setPiSelectedDir(nextStatus.pi.configDir);
@@ -821,7 +655,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.pi.configDir) setPiSelectedDir(nextStatus.pi.configDir);
@@ -862,10 +695,8 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
-      if (nextStatus.grok.configDir) setGrokSelectedDir(nextStatus.grok.configDir);
       const hooksFile = nextStatus.grok.configPath?.trim();
       const configFile = nextStatus.grok.featureConfigPath?.trim();
       toast.success(text("Grok Hook 已安装", "Grok Hook installed"), {
@@ -896,10 +727,8 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
-      if (nextStatus.grok.configDir) setGrokSelectedDir(nextStatus.grok.configDir);
       toast.success(text("Grok Hook 已删除", "Grok Hook removed"));
     } catch (error) {
       toast.error(text("删除 Grok Hook 失败", "Failed to remove Grok Hook"), { description: getErrorMessage(error) });
@@ -910,10 +739,7 @@ export function HookSettingsPage() {
 
   const syncStatusAfterMutation = (nextStatus: HookSettingsStatus) => {
     setStatus(nextStatus);
-    if (nextStatus.claude.configDir) setSelectedDir(nextStatus.claude.configDir);
-    if (nextStatus.codex.configDir) setCodexSelectedDir(nextStatus.codex.configDir);
     if (nextStatus.pi.configDir) setPiSelectedDir(nextStatus.pi.configDir);
-    if (nextStatus.grok?.configDir) setGrokSelectedDir(nextStatus.grok.configDir);
   };
 
   const handleModuleToggle = async (
@@ -948,7 +774,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
         module,
       });
       syncStatusAfterMutation(nextStatus);
@@ -989,7 +814,6 @@ export function HookSettingsPage() {
   const codex = status?.codex;
   const pi = status?.pi;
   const grok = status?.grok;
-  const ccSwitchProtection = status?.ccSwitch ?? null;
   const claudeStatus = claude?.status ?? "directoryMissing";
   const codexStatus = codex?.status ?? "directoryMissing";
   const piStatus = pi?.status ?? "directoryMissing";
@@ -2045,7 +1869,6 @@ export function HookSettingsPage() {
         </Stack>
       </CollapsibleHookSection>
 
-      <CcSwitchProtectionCard status={ccSwitchProtection} />
     </Stack>
   );
 }

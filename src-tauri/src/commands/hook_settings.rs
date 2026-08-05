@@ -1,13 +1,10 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{Connection, Row, SqliteConnection};
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 
@@ -23,8 +20,6 @@ const GROK_CONFIG_FILE_NAME: &str = "config.toml";
 
 const HOOK_COMMAND_MARKER: &str = "__hook";
 const CODEX_COMMON_CONFIG_HOOKS_MARKER: &str = "# CLI-Manager hook protection";
-const CCSWITCH_COMMON_CONFIG_CLAUDE_KEY: &str = "common_config_claude";
-const CCSWITCH_COMMON_CONFIG_CODEX_KEY: &str = "common_config_codex";
 const CLAUDE_HOOK_EVENTS: [&str; 9] = [
     "SessionStart",
     "UserPromptSubmit",
@@ -64,7 +59,6 @@ pub struct HookSettingsStatus {
     codex: ToolHookSettingsStatus,
     pi: ToolHookSettingsStatus,
     grok: ToolHookSettingsStatus,
-    cc_switch: CcSwitchHookProtectionStatus,
     claude_auto_repaired: bool,
 }
 
@@ -96,38 +90,6 @@ enum HookInstallStatus {
     Installed,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CcSwitchHookProtectionStatus {
-    pub state: CcSwitchHookProtectionState,
-    pub db_path: Option<String>,
-    pub message: Option<String>,
-    pub wsl_mismatch: bool,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum CcSwitchHookProtectionState {
-    NotDetected,
-    NotSynced,
-    Synced,
-    InvalidDb,
-    Unavailable,
-    SyncFailed,
-}
-
-#[derive(Clone, Copy)]
-enum CcSwitchSyncMode {
-    Install,
-    Uninstall,
-}
-
-#[derive(Clone, Copy)]
-enum CommonConfigTool {
-    Claude,
-    Codex,
-}
-
 #[derive(Clone, Copy)]
 enum ClaudeHookModule {
     SessionStart,
@@ -157,12 +119,10 @@ enum PiHookModule {
 
 #[tauri::command]
 pub async fn hook_settings_get_status(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
-    cc_switch_db_path: Option<String>,
     auto_repair: Option<bool>,
 ) -> Result<HookSettingsStatus, String> {
     let claude_dir = resolve_claude_dir(selected_dir, false)?;
@@ -176,14 +136,6 @@ pub async fn hook_settings_get_status(
             let current = build_claude_status(Some(dir.clone()))?;
             if !matches!(current.status, HookInstallStatus::Installed) {
                 install_claude_hooks(dir)?;
-                sync_ccswitch_tool_common_config(
-                    &app,
-                    cc_switch_db_path.clone(),
-                    dir,
-                    CommonConfigTool::Claude,
-                    CcSwitchSyncMode::Install,
-                )
-                .await;
                 claude_auto_repaired = true;
             }
         }
@@ -193,36 +145,23 @@ pub async fn hook_settings_get_status(
     let codex = build_codex_status_with_trust_repair(codex_dir.clone())?;
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(grok_dir.clone())?;
-    let cc_switch = inspect_ccswitch_hook_protection(
-        &app,
-        cc_switch_db_path,
-        claude_dir.as_deref(),
-        codex_dir.as_deref(),
-        &claude,
-        &codex,
-    )
-    .await;
 
     Ok(HookSettingsStatus {
         claude,
         codex,
         pi,
         grok,
-        cc_switch,
         claude_auto_repaired,
     })
 }
 
 #[tauri::command]
 pub async fn hook_settings_install(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
-    cc_switch_db_path: Option<String>,
     module: Option<String>,
-    sync_cc_switch_common_config: Option<bool>,
 ) -> Result<HookSettingsStatus, String> {
     let claude_dir = resolve_claude_dir(selected_dir, true)?
         .ok_or_else(|| "请先选择 Claude 配置目录".to_string())?;
@@ -236,72 +175,25 @@ pub async fn hook_settings_install(
         install_claude_hooks(&claude_dir)?;
     }
     let claude = build_claude_status(Some(claude_dir.clone()))?;
-    if sync_cc_switch_common_config.unwrap_or(true) {
-        if requested_module.is_some() {
-            sync_ccswitch_for_tool_status(
-                &app,
-                cc_switch_db_path.clone(),
-                &claude_dir,
-                CommonConfigTool::Claude,
-                &claude,
-            )
-            .await;
-        } else {
-            sync_ccswitch_tool_common_config(
-                &app,
-                cc_switch_db_path.clone(),
-                &claude_dir,
-                CommonConfigTool::Claude,
-                CcSwitchSyncMode::Install,
-            )
-            .await;
-            if let Some(codex_dir) = codex_dir.as_ref() {
-                let codex_status = build_codex_status(Some(codex_dir.clone()))?;
-                if hook_status_has_hooks(&codex_status) {
-                    sync_ccswitch_tool_common_config(
-                        &app,
-                        cc_switch_db_path.clone(),
-                        codex_dir,
-                        CommonConfigTool::Codex,
-                        CcSwitchSyncMode::Install,
-                    )
-                    .await;
-                }
-            }
-        }
-    }
     let codex = build_codex_status(codex_dir.clone())?;
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(grok_dir.clone())?;
-    let cc_switch = inspect_ccswitch_hook_protection(
-        &app,
-        cc_switch_db_path,
-        Some(&claude_dir),
-        codex_dir.as_deref(),
-        &claude,
-        &codex,
-    )
-    .await;
     Ok(HookSettingsStatus {
         claude,
         codex,
         pi,
         grok,
-        cc_switch,
         claude_auto_repaired: false,
     })
 }
 
 #[tauri::command]
 pub async fn hook_settings_uninstall(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
-    cc_switch_db_path: Option<String>,
     module: Option<String>,
-    sync_cc_switch_common_config: Option<bool>,
 ) -> Result<HookSettingsStatus, String> {
     let claude_dir = resolve_claude_dir(selected_dir, true)?
         .ok_or_else(|| "请先选择 Claude 配置目录".to_string())?;
@@ -315,59 +207,25 @@ pub async fn hook_settings_uninstall(
         uninstall_claude_hooks(&claude_dir)?;
     }
     let claude = build_claude_status(Some(claude_dir.clone()))?;
-    if sync_cc_switch_common_config.unwrap_or(true) {
-        if requested_module.is_some() {
-            sync_ccswitch_for_tool_status(
-                &app,
-                cc_switch_db_path.clone(),
-                &claude_dir,
-                CommonConfigTool::Claude,
-                &claude,
-            )
-            .await;
-        } else {
-            sync_ccswitch_tool_common_config(
-                &app,
-                cc_switch_db_path.clone(),
-                &claude_dir,
-                CommonConfigTool::Claude,
-                CcSwitchSyncMode::Uninstall,
-            )
-            .await;
-        }
-    }
     let codex = build_codex_status(codex_dir.clone())?;
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(grok_dir.clone())?;
-    let cc_switch = inspect_ccswitch_hook_protection(
-        &app,
-        cc_switch_db_path,
-        Some(&claude_dir),
-        codex_dir.as_deref(),
-        &claude,
-        &codex,
-    )
-    .await;
     Ok(HookSettingsStatus {
         claude,
         codex,
         pi,
         grok,
-        cc_switch,
         claude_auto_repaired: false,
     })
 }
 
 #[tauri::command]
 pub async fn hook_settings_install_codex(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
-    cc_switch_db_path: Option<String>,
     module: Option<String>,
-    sync_cc_switch_common_config: Option<bool>,
 ) -> Result<HookSettingsStatus, String> {
     let codex_dir = resolve_codex_dir(codex_selected_dir, false)?
         .ok_or_else(|| "请先选择 Codex 配置目录".to_string())?;
@@ -381,72 +239,25 @@ pub async fn hook_settings_install_codex(
         install_codex_hooks(&codex_dir)?;
     }
     let codex = build_codex_status(Some(codex_dir.clone()))?;
-    if sync_cc_switch_common_config.unwrap_or(true) {
-        if requested_module.is_some() {
-            sync_ccswitch_for_tool_status(
-                &app,
-                cc_switch_db_path.clone(),
-                &codex_dir,
-                CommonConfigTool::Codex,
-                &codex,
-            )
-            .await;
-        } else {
-            sync_ccswitch_tool_common_config(
-                &app,
-                cc_switch_db_path.clone(),
-                &codex_dir,
-                CommonConfigTool::Codex,
-                CcSwitchSyncMode::Install,
-            )
-            .await;
-            if let Some(claude_dir) = claude_dir.as_ref() {
-                let claude_status = build_claude_status(Some(claude_dir.clone()))?;
-                if hook_status_has_hooks(&claude_status) {
-                    sync_ccswitch_tool_common_config(
-                        &app,
-                        cc_switch_db_path.clone(),
-                        claude_dir,
-                        CommonConfigTool::Claude,
-                        CcSwitchSyncMode::Install,
-                    )
-                    .await;
-                }
-            }
-        }
-    }
     let claude = build_claude_status(claude_dir.clone())?;
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(grok_dir.clone())?;
-    let cc_switch = inspect_ccswitch_hook_protection(
-        &app,
-        cc_switch_db_path,
-        claude_dir.as_deref(),
-        Some(&codex_dir),
-        &claude,
-        &codex,
-    )
-    .await;
     Ok(HookSettingsStatus {
         claude,
         codex,
         pi,
         grok,
-        cc_switch,
         claude_auto_repaired: false,
     })
 }
 
 #[tauri::command]
 pub async fn hook_settings_uninstall_codex(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
-    cc_switch_db_path: Option<String>,
     module: Option<String>,
-    sync_cc_switch_common_config: Option<bool>,
 ) -> Result<HookSettingsStatus, String> {
     let codex_dir = resolve_codex_dir(codex_selected_dir, false)?
         .ok_or_else(|| "未找到 Codex 配置目录".to_string())?;
@@ -461,56 +272,23 @@ pub async fn hook_settings_uninstall_codex(
     }
     let claude = build_claude_status(claude_dir.clone())?;
     let codex = build_codex_status(Some(codex_dir.clone()))?;
-    if sync_cc_switch_common_config.unwrap_or(true) {
-        if requested_module.is_some() {
-            sync_ccswitch_for_tool_status(
-                &app,
-                cc_switch_db_path.clone(),
-                &codex_dir,
-                CommonConfigTool::Codex,
-                &codex,
-            )
-            .await;
-        } else {
-            sync_ccswitch_tool_common_config(
-                &app,
-                cc_switch_db_path.clone(),
-                &codex_dir,
-                CommonConfigTool::Codex,
-                CcSwitchSyncMode::Uninstall,
-            )
-            .await;
-        }
-    }
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(grok_dir.clone())?;
-    let cc_switch = inspect_ccswitch_hook_protection(
-        &app,
-        cc_switch_db_path,
-        claude_dir.as_deref(),
-        Some(&codex_dir),
-        &claude,
-        &codex,
-    )
-    .await;
     Ok(HookSettingsStatus {
         claude,
         codex,
         pi,
         grok,
-        cc_switch,
         claude_auto_repaired: false,
     })
 }
 
 #[tauri::command]
 pub async fn hook_settings_install_pi(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
-    cc_switch_db_path: Option<String>,
     module: Option<String>,
 ) -> Result<HookSettingsStatus, String> {
     let pi_dir =
@@ -528,33 +306,21 @@ pub async fn hook_settings_install_pi(
     let codex = build_codex_status(codex_dir.clone())?;
     let pi = build_pi_status(Some(pi_dir.clone()))?;
     let grok = build_grok_status(grok_dir.clone())?;
-    let cc_switch = inspect_ccswitch_hook_protection(
-        &app,
-        cc_switch_db_path,
-        claude_dir.as_deref(),
-        codex_dir.as_deref(),
-        &claude,
-        &codex,
-    )
-    .await;
     Ok(HookSettingsStatus {
         claude,
         codex,
         pi,
         grok,
-        cc_switch,
         claude_auto_repaired: false,
     })
 }
 
 #[tauri::command]
 pub async fn hook_settings_uninstall_pi(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
-    cc_switch_db_path: Option<String>,
     module: Option<String>,
 ) -> Result<HookSettingsStatus, String> {
     let pi_dir =
@@ -572,33 +338,21 @@ pub async fn hook_settings_uninstall_pi(
     let codex = build_codex_status(codex_dir.clone())?;
     let pi = build_pi_status(Some(pi_dir.clone()))?;
     let grok = build_grok_status(grok_dir.clone())?;
-    let cc_switch = inspect_ccswitch_hook_protection(
-        &app,
-        cc_switch_db_path,
-        claude_dir.as_deref(),
-        codex_dir.as_deref(),
-        &claude,
-        &codex,
-    )
-    .await;
     Ok(HookSettingsStatus {
         claude,
         codex,
         pi,
         grok,
-        cc_switch,
         claude_auto_repaired: false,
     })
 }
 
 #[tauri::command]
 pub async fn hook_settings_install_grok(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
-    cc_switch_db_path: Option<String>,
     module: Option<String>,
 ) -> Result<HookSettingsStatus, String> {
     let grok_dir = resolve_grok_dir(grok_selected_dir, true)?
@@ -618,33 +372,21 @@ pub async fn hook_settings_install_grok(
     let codex = build_codex_status(codex_dir.clone())?;
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(Some(grok_dir.clone()))?;
-    let cc_switch = inspect_ccswitch_hook_protection(
-        &app,
-        cc_switch_db_path,
-        claude_dir.as_deref(),
-        codex_dir.as_deref(),
-        &claude,
-        &codex,
-    )
-    .await;
     Ok(HookSettingsStatus {
         claude,
         codex,
         pi,
         grok,
-        cc_switch,
         claude_auto_repaired: false,
     })
 }
 
 #[tauri::command]
 pub async fn hook_settings_uninstall_grok(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
-    cc_switch_db_path: Option<String>,
     module: Option<String>,
 ) -> Result<HookSettingsStatus, String> {
     let grok_dir = resolve_grok_dir(grok_selected_dir, false)?
@@ -663,21 +405,11 @@ pub async fn hook_settings_uninstall_grok(
     let codex = build_codex_status(codex_dir.clone())?;
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(Some(grok_dir.clone()))?;
-    let cc_switch = inspect_ccswitch_hook_protection(
-        &app,
-        cc_switch_db_path,
-        claude_dir.as_deref(),
-        codex_dir.as_deref(),
-        &claude,
-        &codex,
-    )
-    .await;
     Ok(HookSettingsStatus {
         claude,
         codex,
         pi,
         grok,
-        cc_switch,
         claude_auto_repaired: false,
     })
 }
@@ -701,127 +433,6 @@ pub async fn hook_settings_select_dir(
                 .map_err(|e| format!("选择目录失败: {e}"))
         })
         .transpose()
-}
-
-fn cc_switch_not_detected() -> CcSwitchHookProtectionStatus {
-    CcSwitchHookProtectionStatus {
-        state: CcSwitchHookProtectionState::NotDetected,
-        db_path: None,
-        message: None,
-        wsl_mismatch: false,
-    }
-}
-
-fn cc_switch_status(
-    state: CcSwitchHookProtectionState,
-    db_path: Option<&Path>,
-    message: Option<String>,
-    _claude_dir: &Path,
-) -> CcSwitchHookProtectionStatus {
-    CcSwitchHookProtectionStatus {
-        state,
-        db_path: db_path.map(path_to_string),
-        message,
-        wsl_mismatch: false,
-    }
-}
-
-fn explicit_db_path(db_path: &Option<String>) -> Option<String> {
-    db_path
-        .as_ref()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn derive_wsl_ccswitch_db_path(claude_dir: &Path) -> Option<PathBuf> {
-    let claude_dir = path_to_string(claude_dir);
-    let (distro, linux_path) = crate::wsl::parse_wsl_unc_path(&claude_dir)?;
-    let home_path = linux_path.strip_suffix("/.claude")?;
-    Some(PathBuf::from(crate::wsl::linux_to_unc_wsl_path(
-        &format!("{home_path}/.cc-switch/cc-switch.db"),
-        &distro,
-    )))
-}
-
-fn resolve_ccswitch_db_path_for_hook(
-    app: &AppHandle,
-    db_path: Option<String>,
-    claude_dir: &Path,
-) -> Result<PathBuf, CcSwitchHookProtectionStatus> {
-    let explicit = explicit_db_path(&db_path);
-    if explicit.is_none() {
-        if let Some(candidate) = derive_wsl_ccswitch_db_path(claude_dir) {
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-    }
-
-    match super::ccswitch::resolve_db_path(app, db_path) {
-        Ok(path) => Ok(path),
-        Err(err) if explicit.is_none() && err == "db_not_found" => Err(cc_switch_not_detected()),
-        Err(err) if explicit.is_some() => Err(CcSwitchHookProtectionStatus {
-            state: CcSwitchHookProtectionState::InvalidDb,
-            db_path: explicit,
-            message: Some(err),
-            wsl_mismatch: false,
-        }),
-        Err(err) => Err(CcSwitchHookProtectionStatus {
-            state: CcSwitchHookProtectionState::SyncFailed,
-            db_path: None,
-            message: Some(err),
-            wsl_mismatch: false,
-        }),
-    }
-}
-
-async fn open_db_readwrite(path: &Path) -> Result<SqliteConnection, String> {
-    let options = SqliteConnectOptions::new()
-        .filename(path)
-        .busy_timeout(Duration::from_secs(15));
-    SqliteConnection::connect_with(&options)
-        .await
-        .map_err(|err| format!("db_open_failed: {err}"))
-}
-
-async fn open_db_readonly(path: &Path) -> Result<SqliteConnection, String> {
-    let options = SqliteConnectOptions::new()
-        .filename(path)
-        .read_only(true)
-        .busy_timeout(Duration::from_secs(15));
-    SqliteConnection::connect_with(&options)
-        .await
-        .map_err(|err| format!("db_open_failed: {err}"))
-}
-
-impl CommonConfigTool {
-    fn key(self) -> &'static str {
-        match self {
-            CommonConfigTool::Claude => CCSWITCH_COMMON_CONFIG_CLAUDE_KEY,
-            CommonConfigTool::Codex => CCSWITCH_COMMON_CONFIG_CODEX_KEY,
-        }
-    }
-
-    fn config_name(self) -> &'static str {
-        match self {
-            CommonConfigTool::Claude => "common_config_claude",
-            CommonConfigTool::Codex => "common_config_codex",
-        }
-    }
-
-    fn legacy_scripts(self) -> &'static [&'static str] {
-        match self {
-            CommonConfigTool::Claude => &CLAUDE_LEGACY_SCRIPTS,
-            CommonConfigTool::Codex => &CODEX_LEGACY_SCRIPTS,
-        }
-    }
-
-    fn events(self) -> &'static [&'static str] {
-        match self {
-            CommonConfigTool::Claude => &CLAUDE_HOOK_EVENTS,
-            CommonConfigTool::Codex => &CODEX_HOOK_EVENTS,
-        }
-    }
 }
 
 const ALL_CLAUDE_HOOK_MODULES: [ClaudeHookModule; 6] = [
@@ -886,13 +497,6 @@ fn parse_pi_hook_module(module: Option<String>) -> Result<Option<PiHookModule>, 
             other => Err(format!("未知的 Pi Hook 模块: {other}")),
         })
         .transpose()
-}
-
-fn apply_claude_hook_commands(settings: &mut Value, exe: &str) {
-    remove_hook_commands(settings, &CLAUDE_HOOK_EVENTS, &CLAUDE_LEGACY_SCRIPTS);
-    for module in ALL_CLAUDE_HOOK_MODULES {
-        apply_claude_hook_module(settings, exe, module);
-    }
 }
 
 fn apply_claude_hook_module(settings: &mut Value, exe: &str, module: ClaudeHookModule) {
@@ -1058,816 +662,6 @@ fn remove_codex_hook_module(settings: &mut Value, module: CodexHookModule) {
     }
 }
 
-fn merge_common_config_hooks(
-    existing: Option<&str>,
-    exe: &str,
-    tool: CommonConfigTool,
-    codex_hook_state_blocks: &[Vec<String>],
-) -> Result<String, String> {
-    if matches!(tool, CommonConfigTool::Codex) {
-        return Ok(merge_codex_common_config_toml(
-            existing,
-            codex_hook_state_blocks,
-        ));
-    }
-
-    let mut settings: Value = match existing {
-        Some(raw) if !raw.trim().is_empty() => {
-            serde_json::from_str(raw).map_err(|_| "common_config_parse_failed".to_string())?
-        }
-        _ => Value::Object(Map::new()),
-    };
-    ensure_root_object(&settings, tool.config_name())?;
-    apply_claude_hook_commands(&mut settings, exe);
-    let mut text = serde_json::to_string_pretty(&settings)
-        .map_err(|err| format!("common_config_serialize_failed: {err}"))?;
-    text.push('\n');
-    Ok(text)
-}
-
-#[cfg(test)]
-fn merge_claude_common_config_hooks(existing: Option<&str>, exe: &str) -> Result<String, String> {
-    merge_common_config_hooks(existing, exe, CommonConfigTool::Claude, &[])
-}
-
-#[cfg(test)]
-fn merge_codex_common_config_hooks(existing: Option<&str>, exe: &str) -> Result<String, String> {
-    merge_common_config_hooks(existing, exe, CommonConfigTool::Codex, &[])
-}
-
-fn strip_common_config_hooks(
-    existing: Option<&str>,
-    tool: CommonConfigTool,
-) -> Result<Option<String>, String> {
-    let Some(raw) = existing.filter(|value| !value.trim().is_empty()) else {
-        return Ok(None);
-    };
-    if matches!(tool, CommonConfigTool::Codex) {
-        return Ok(strip_codex_common_config_toml(raw));
-    }
-
-    let mut settings: Value =
-        serde_json::from_str(raw).map_err(|_| "common_config_parse_failed".to_string())?;
-    ensure_root_object(&settings, tool.config_name())?;
-    remove_hook_commands(&mut settings, tool.events(), tool.legacy_scripts());
-    let mut text = serde_json::to_string_pretty(&settings)
-        .map_err(|err| format!("common_config_serialize_failed: {err}"))?;
-    text.push('\n');
-    Ok(Some(text))
-}
-
-fn merge_common_config_statusline(
-    existing: Option<&str>,
-    status_line: Value,
-) -> Result<String, String> {
-    let mut settings: Value = match existing {
-        Some(raw) if !raw.trim().is_empty() => {
-            serde_json::from_str(raw).map_err(|_| "common_config_parse_failed".to_string())?
-        }
-        _ => Value::Object(Map::new()),
-    };
-    ensure_root_object(&settings, CCSWITCH_COMMON_CONFIG_CLAUDE_KEY)?;
-    settings
-        .as_object_mut()
-        .expect("validated object")
-        .insert("statusLine".to_string(), status_line);
-    let mut text = serde_json::to_string_pretty(&settings)
-        .map_err(|err| format!("common_config_serialize_failed: {err}"))?;
-    text.push('\n');
-    Ok(text)
-}
-
-fn strip_common_config_statusline(existing: Option<&str>) -> Result<Option<String>, String> {
-    let Some(raw) = existing.filter(|value| !value.trim().is_empty()) else {
-        return Ok(None);
-    };
-    let mut settings: Value =
-        serde_json::from_str(raw).map_err(|_| "common_config_parse_failed".to_string())?;
-    ensure_root_object(&settings, CCSWITCH_COMMON_CONFIG_CLAUDE_KEY)?;
-    let owned = settings
-        .get("statusLine")
-        .and_then(Value::as_object)
-        .and_then(|value| value.get("command"))
-        .and_then(Value::as_str)
-        .is_some_and(|command| command.contains("__statusline"));
-    if !owned {
-        return Ok(None);
-    }
-    settings
-        .as_object_mut()
-        .expect("validated object")
-        .remove("statusLine");
-    let mut text = serde_json::to_string_pretty(&settings)
-        .map_err(|err| format!("common_config_serialize_failed: {err}"))?;
-    text.push('\n');
-    Ok(Some(text))
-}
-
-fn toml_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn codex_status_line_assignment(items: &[String]) -> String {
-    format!(
-        "status_line = [{}]",
-        items
-            .iter()
-            .map(|item| toml_string(item))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-}
-
-fn merge_common_config_codex_statusline(existing: Option<&str>, items: &[String]) -> String {
-    let mut lines: Vec<String> = existing
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| value.lines().map(ToString::to_string).collect())
-        .unwrap_or_default();
-    let assignment = codex_status_line_assignment(items);
-    let mut tui_header_index = None;
-    for (index, line) in lines.iter().enumerate() {
-        if line.trim() == "[tui]" {
-            tui_header_index = Some(index);
-            break;
-        }
-    }
-
-    if let Some(header_index) = tui_header_index {
-        let mut insert_index = lines.len();
-        for index in header_index + 1..lines.len() {
-            if is_toml_table_header(&lines[index]) {
-                insert_index = index;
-                break;
-            }
-            if lines[index]
-                .trim()
-                .split_once('=')
-                .is_some_and(|(key, _)| key.trim() == "status_line")
-            {
-                lines[index] = assignment;
-                return format!("{}\n", lines.join("\n"));
-            }
-        }
-        lines.insert(insert_index, assignment);
-        return format!("{}\n", lines.join("\n"));
-    }
-
-    let insert_index = first_toml_table_header_index(&lines).unwrap_or(lines.len());
-    let mut block = Vec::new();
-    if insert_index > 0 && !lines[insert_index - 1].trim().is_empty() {
-        block.push(String::new());
-    }
-    block.push("[tui]".to_string());
-    block.push(assignment);
-    if insert_index < lines.len() {
-        block.push(String::new());
-    }
-    lines.splice(insert_index..insert_index, block);
-    format!("{}\n", lines.join("\n"))
-}
-
-#[cfg(test)]
-fn strip_claude_common_config_hooks(existing: Option<&str>) -> Result<Option<String>, String> {
-    strip_common_config_hooks(existing, CommonConfigTool::Claude)
-}
-
-#[cfg(test)]
-fn strip_codex_common_config_hooks(existing: Option<&str>) -> Result<Option<String>, String> {
-    strip_common_config_hooks(existing, CommonConfigTool::Codex)
-}
-
-fn common_config_has_hooks(
-    raw: Option<&str>,
-    exe: &str,
-    tool: CommonConfigTool,
-) -> Result<bool, String> {
-    let Some(raw) = raw.filter(|value| !value.trim().is_empty()) else {
-        return Ok(false);
-    };
-    match tool {
-        CommonConfigTool::Claude => {
-            let settings: Value =
-                serde_json::from_str(raw).map_err(|_| "common_config_parse_failed".to_string())?;
-            Ok(exact_command_registered(
-                &settings,
-                "SessionStart",
-                &build_command(exe, "claude", "SessionStart"),
-            ) && exact_command_registered(
-                &settings,
-                "UserPromptSubmit",
-                &build_command(exe, "claude", "UserPromptSubmit"),
-            ) && exact_command_registered(
-                &settings,
-                "Notification",
-                &build_command(exe, "claude", "Notification"),
-            ) && exact_command_with_matcher_registered(
-                &settings,
-                "PreToolUse",
-                CLAUDE_QUESTION_TOOL_NAME,
-                &build_command(exe, "claude", "Notification"),
-            ) && exact_command_registered(
-                &settings,
-                "Stop",
-                &build_command(exe, "claude", "Stop"),
-            ) && exact_command_registered(
-                &settings,
-                "StopFailure",
-                &build_command(exe, "claude", "StopFailure"),
-            ) && exact_command_registered(
-                &settings,
-                "SubagentStart",
-                &build_command(exe, "claude", "SubagentStart"),
-            ) && exact_command_registered(
-                &settings,
-                "SubagentStop",
-                &build_command(exe, "claude", "SubagentStop"),
-            ) && registered_exact_command(
-                &settings,
-                Some(exe),
-                "PreToolUse",
-                "claude",
-                "AgentToolStart",
-            ) && registered_exact_command(
-                &settings,
-                Some(exe),
-                "PostToolUse",
-                "claude",
-                "AgentToolStop",
-            ) && registered_exact_command(
-                &settings,
-                Some(exe),
-                "PreToolUse",
-                "claude",
-                "ToolStart",
-            ) && registered_exact_command(
-                &settings,
-                Some(exe),
-                "PostToolUse",
-                "claude",
-                "ToolStop",
-            ))
-        }
-        CommonConfigTool::Codex => Ok(toml_features_hooks_enabled(raw)),
-    }
-}
-
-#[cfg(test)]
-fn claude_common_config_has_hooks(raw: Option<&str>, exe: &str) -> Result<bool, String> {
-    common_config_has_hooks(raw, exe, CommonConfigTool::Claude)
-}
-
-#[cfg(test)]
-fn codex_common_config_has_hooks(raw: Option<&str>, exe: &str) -> Result<bool, String> {
-    common_config_has_hooks(raw, exe, CommonConfigTool::Codex)
-}
-
-async fn read_common_config_value(
-    conn: &mut SqliteConnection,
-    key: &str,
-) -> Result<Option<String>, String> {
-    let row = sqlx::query("SELECT value FROM settings WHERE key = ?1")
-        .bind(key)
-        .fetch_optional(conn)
-        .await
-        .map_err(|err| format!("db_query_failed: {err}"))?;
-    row.map(|row| {
-        row.try_get::<Option<String>, _>("value")
-            .map_err(|err| format!("db_query_failed: {err}"))
-    })
-    .transpose()
-    .map(Option::flatten)
-}
-
-async fn settings_table_exists(conn: &mut SqliteConnection) -> Result<bool, String> {
-    sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'")
-        .fetch_optional(conn)
-        .await
-        .map(|row| row.is_some())
-        .map_err(|err| format!("db_query_failed: {err}"))
-}
-
-async fn sync_common_config_at_path(
-    db_path: &Path,
-    exe: &str,
-    tool: CommonConfigTool,
-    mode: CcSwitchSyncMode,
-    codex_hook_state_blocks: &[Vec<String>],
-) -> Result<CcSwitchHookProtectionState, String> {
-    if crate::wsl::is_wsl_config_dir(&path_to_string(db_path)) {
-        let prepared_path = crate::ccswitch_db::prepare_read_path(db_path).await?;
-        let mut conn = open_db_readonly(prepared_path.path()).await?;
-        if !settings_table_exists(&mut conn).await? {
-            return Ok(CcSwitchHookProtectionState::Unavailable);
-        }
-        let key = tool.key();
-        let existing = read_common_config_value(&mut conn, key).await?;
-        drop(conn);
-        let (next, upsert, state) = match mode {
-            CcSwitchSyncMode::Install => (
-                merge_common_config_hooks(existing.as_deref(), exe, tool, codex_hook_state_blocks)?,
-                true,
-                CcSwitchHookProtectionState::Synced,
-            ),
-            CcSwitchSyncMode::Uninstall => {
-                let Some(next) = strip_common_config_hooks(existing.as_deref(), tool)? else {
-                    return Ok(CcSwitchHookProtectionState::NotSynced);
-                };
-                (next, false, CcSwitchHookProtectionState::NotSynced)
-            }
-        };
-        let available =
-            crate::ccswitch_db::write_wsl_setting(db_path, key, existing.as_deref(), &next, upsert)
-                .await?;
-        return Ok(if available {
-            state
-        } else {
-            CcSwitchHookProtectionState::Unavailable
-        });
-    }
-
-    let mut conn = open_db_readwrite(db_path).await?;
-    sqlx::query("BEGIN IMMEDIATE")
-        .execute(&mut conn)
-        .await
-        .map_err(|err| format!("db_write_failed: {err}"))?;
-
-    let result = async {
-        if !settings_table_exists(&mut conn).await? {
-            return Ok(CcSwitchHookProtectionState::Unavailable);
-        }
-
-        let key = tool.key();
-        let existing = read_common_config_value(&mut conn, key).await?;
-        match mode {
-            CcSwitchSyncMode::Install => {
-                let next = merge_common_config_hooks(
-                    existing.as_deref(),
-                    exe,
-                    tool,
-                    codex_hook_state_blocks,
-                )?;
-                sqlx::query(
-                    "INSERT INTO settings (key, value) VALUES (?1, ?2) \
-                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                )
-                .bind(key)
-                .bind(next)
-                .execute(&mut conn)
-                .await
-                .map_err(|err| format!("db_write_failed: {err}"))?;
-                Ok(CcSwitchHookProtectionState::Synced)
-            }
-            CcSwitchSyncMode::Uninstall => {
-                if let Some(next) = strip_common_config_hooks(existing.as_deref(), tool)? {
-                    sqlx::query("UPDATE settings SET value = ?1 WHERE key = ?2")
-                        .bind(next)
-                        .bind(key)
-                        .execute(&mut conn)
-                        .await
-                        .map_err(|err| format!("db_write_failed: {err}"))?;
-                }
-                Ok(CcSwitchHookProtectionState::NotSynced)
-            }
-        }
-    }
-    .await;
-
-    match result {
-        Ok(state) => {
-            sqlx::query("COMMIT")
-                .execute(&mut conn)
-                .await
-                .map_err(|err| format!("db_write_failed: {err}"))?;
-            Ok(state)
-        }
-        Err(err) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut conn).await;
-            Err(err)
-        }
-    }
-}
-
-pub(crate) async fn sync_ccswitch_claude_statusline(
-    app: &AppHandle,
-    db_path: Option<String>,
-    claude_dir: &Path,
-    status_line: Option<Value>,
-) -> CcSwitchHookProtectionStatus {
-    let path = match resolve_ccswitch_db_path_for_hook(app, db_path, claude_dir) {
-        Ok(path) => path,
-        Err(status) => return status,
-    };
-    let result = async {
-        if crate::wsl::is_wsl_config_dir(&path_to_string(&path)) {
-            let prepared_path = crate::ccswitch_db::prepare_read_path(&path).await?;
-            let mut conn = open_db_readonly(prepared_path.path()).await?;
-            if !settings_table_exists(&mut conn).await? {
-                return Ok(CcSwitchHookProtectionState::Unavailable);
-            }
-            let existing =
-                read_common_config_value(&mut conn, CCSWITCH_COMMON_CONFIG_CLAUDE_KEY).await?;
-            drop(conn);
-            let (next, upsert, state) = if let Some(status_line) = status_line {
-                (
-                    merge_common_config_statusline(existing.as_deref(), status_line)?,
-                    true,
-                    CcSwitchHookProtectionState::Synced,
-                )
-            } else {
-                let Some(next) = strip_common_config_statusline(existing.as_deref())? else {
-                    return Ok(CcSwitchHookProtectionState::NotSynced);
-                };
-                (next, false, CcSwitchHookProtectionState::NotSynced)
-            };
-            let available = crate::ccswitch_db::write_wsl_setting(
-                &path,
-                CCSWITCH_COMMON_CONFIG_CLAUDE_KEY,
-                existing.as_deref(),
-                &next,
-                upsert,
-            )
-            .await?;
-            return Ok(if available {
-                state
-            } else {
-                CcSwitchHookProtectionState::Unavailable
-            });
-        }
-
-        let mut conn = open_db_readwrite(&path).await?;
-        sqlx::query("BEGIN IMMEDIATE")
-            .execute(&mut conn)
-            .await
-            .map_err(|err| format!("db_write_failed: {err}"))?;
-        let update = async {
-            if !settings_table_exists(&mut conn).await? {
-                return Ok(CcSwitchHookProtectionState::Unavailable);
-            }
-            let existing =
-                read_common_config_value(&mut conn, CCSWITCH_COMMON_CONFIG_CLAUDE_KEY).await?;
-            if let Some(status_line) = status_line {
-                let next = merge_common_config_statusline(existing.as_deref(), status_line)?;
-                sqlx::query(
-                    "INSERT INTO settings (key, value) VALUES (?1, ?2) \
-                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                )
-                .bind(CCSWITCH_COMMON_CONFIG_CLAUDE_KEY)
-                .bind(next)
-                .execute(&mut conn)
-                .await
-                .map_err(|err| format!("db_write_failed: {err}"))?;
-                Ok(CcSwitchHookProtectionState::Synced)
-            } else {
-                if let Some(next) = strip_common_config_statusline(existing.as_deref())? {
-                    sqlx::query("UPDATE settings SET value = ?1 WHERE key = ?2")
-                        .bind(next)
-                        .bind(CCSWITCH_COMMON_CONFIG_CLAUDE_KEY)
-                        .execute(&mut conn)
-                        .await
-                        .map_err(|err| format!("db_write_failed: {err}"))?;
-                }
-                Ok(CcSwitchHookProtectionState::NotSynced)
-            }
-        }
-        .await;
-        match update {
-            Ok(state) => {
-                sqlx::query("COMMIT")
-                    .execute(&mut conn)
-                    .await
-                    .map_err(|err| format!("db_write_failed: {err}"))?;
-                Ok(state)
-            }
-            Err(err) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut conn).await;
-                Err(err)
-            }
-        }
-    }
-    .await;
-    match result {
-        Ok(state) => cc_switch_status(state, Some(&path), None, claude_dir),
-        Err(err) => cc_switch_status(
-            CcSwitchHookProtectionState::SyncFailed,
-            Some(&path),
-            Some(err),
-            claude_dir,
-        ),
-    }
-}
-
-pub(crate) async fn sync_ccswitch_codex_statusline(
-    app: &AppHandle,
-    db_path: Option<String>,
-    codex_dir: &Path,
-    items: &[String],
-) -> CcSwitchHookProtectionStatus {
-    let path = match resolve_ccswitch_db_path_for_hook(app, db_path, codex_dir) {
-        Ok(path) => path,
-        Err(status) => return status,
-    };
-    let result = async {
-        if crate::wsl::is_wsl_config_dir(&path_to_string(&path)) {
-            let prepared_path = crate::ccswitch_db::prepare_read_path(&path).await?;
-            let mut conn = open_db_readonly(prepared_path.path()).await?;
-            if !settings_table_exists(&mut conn).await? {
-                return Ok(CcSwitchHookProtectionState::Unavailable);
-            }
-            let existing =
-                read_common_config_value(&mut conn, CCSWITCH_COMMON_CONFIG_CODEX_KEY).await?;
-            drop(conn);
-            let next = merge_common_config_codex_statusline(existing.as_deref(), items);
-            let available = crate::ccswitch_db::write_wsl_setting(
-                &path,
-                CCSWITCH_COMMON_CONFIG_CODEX_KEY,
-                existing.as_deref(),
-                &next,
-                true,
-            )
-            .await?;
-            return Ok(if available {
-                CcSwitchHookProtectionState::Synced
-            } else {
-                CcSwitchHookProtectionState::Unavailable
-            });
-        }
-
-        let mut conn = open_db_readwrite(&path).await?;
-        sqlx::query("BEGIN IMMEDIATE")
-            .execute(&mut conn)
-            .await
-            .map_err(|err| format!("db_write_failed: {err}"))?;
-        let update = async {
-            if !settings_table_exists(&mut conn).await? {
-                return Ok(CcSwitchHookProtectionState::Unavailable);
-            }
-            let existing =
-                read_common_config_value(&mut conn, CCSWITCH_COMMON_CONFIG_CODEX_KEY).await?;
-            let next = merge_common_config_codex_statusline(existing.as_deref(), items);
-            sqlx::query(
-                "INSERT INTO settings (key, value) VALUES (?1, ?2) \
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            )
-            .bind(CCSWITCH_COMMON_CONFIG_CODEX_KEY)
-            .bind(next)
-            .execute(&mut conn)
-            .await
-            .map_err(|err| format!("db_write_failed: {err}"))?;
-            Ok(CcSwitchHookProtectionState::Synced)
-        }
-        .await;
-        match update {
-            Ok(state) => {
-                sqlx::query("COMMIT")
-                    .execute(&mut conn)
-                    .await
-                    .map_err(|err| format!("db_write_failed: {err}"))?;
-                Ok(state)
-            }
-            Err(err) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut conn).await;
-                Err(err)
-            }
-        }
-    }
-    .await;
-    match result {
-        Ok(state) => cc_switch_status(state, Some(&path), None, codex_dir),
-        Err(err) => cc_switch_status(
-            CcSwitchHookProtectionState::SyncFailed,
-            Some(&path),
-            Some(err),
-            codex_dir,
-        ),
-    }
-}
-
-async fn inspect_common_config_at_path(
-    db_path: &Path,
-    exe: &str,
-    tool: CommonConfigTool,
-) -> Result<CcSwitchHookProtectionState, String> {
-    let mut conn = open_db_readonly(db_path).await?;
-    if !settings_table_exists(&mut conn).await? {
-        return Ok(CcSwitchHookProtectionState::Unavailable);
-    }
-    let existing = read_common_config_value(&mut conn, tool.key()).await?;
-    if common_config_has_hooks(existing.as_deref(), exe, tool)? {
-        Ok(CcSwitchHookProtectionState::Synced)
-    } else {
-        Ok(CcSwitchHookProtectionState::NotSynced)
-    }
-}
-
-async fn sync_ccswitch_tool_common_config(
-    app: &AppHandle,
-    db_path: Option<String>,
-    config_dir: &Path,
-    tool: CommonConfigTool,
-    mode: CcSwitchSyncMode,
-) -> CcSwitchHookProtectionStatus {
-    let path = match resolve_ccswitch_db_path_for_hook(app, db_path, config_dir) {
-        Ok(path) => path,
-        Err(status) => return status,
-    };
-    let exe = match hook_exe_for_dir(config_dir) {
-        Ok(exe) => exe,
-        Err(err) => {
-            return cc_switch_status(
-                CcSwitchHookProtectionState::SyncFailed,
-                Some(&path),
-                Some(err),
-                config_dir,
-            );
-        }
-    };
-    let codex_hook_state_blocks =
-        if matches!(tool, CommonConfigTool::Codex) && matches!(mode, CcSwitchSyncMode::Install) {
-            match read_codex_cli_manager_hook_state_blocks(config_dir) {
-                Ok(blocks) => blocks,
-                Err(err) => {
-                    return cc_switch_status(
-                        CcSwitchHookProtectionState::SyncFailed,
-                        Some(&path),
-                        Some(err),
-                        config_dir,
-                    );
-                }
-            }
-        } else {
-            Vec::new()
-        };
-    match sync_common_config_at_path(&path, &exe, tool, mode, &codex_hook_state_blocks).await {
-        Ok(state) => cc_switch_status(state, Some(&path), None, config_dir),
-        Err(err) => cc_switch_status(
-            CcSwitchHookProtectionState::SyncFailed,
-            Some(&path),
-            Some(err),
-            config_dir,
-        ),
-    }
-}
-
-async fn sync_ccswitch_for_tool_status(
-    app: &AppHandle,
-    db_path: Option<String>,
-    config_dir: &Path,
-    tool: CommonConfigTool,
-    status: &ToolHookSettingsStatus,
-) {
-    let mode = if tool_status_is_fully_installed(status, tool) {
-        CcSwitchSyncMode::Install
-    } else {
-        CcSwitchSyncMode::Uninstall
-    };
-    sync_ccswitch_tool_common_config(app, db_path, config_dir, tool, mode).await;
-}
-
-fn hook_status_has_hooks(status: &ToolHookSettingsStatus) -> bool {
-    status.session_start_hook_installed
-        || status.running_hook_installed
-        || status.attention_hook_installed
-        || status.stop_hook_installed
-        || status.failure_hook_installed
-        || status.subagent_start_hook_installed
-        || status.hooks_feature_installed
-}
-
-fn tool_status_is_fully_installed(status: &ToolHookSettingsStatus, tool: CommonConfigTool) -> bool {
-    match tool {
-        CommonConfigTool::Claude => {
-            status.session_start_hook_installed
-                && status.running_hook_installed
-                && status.attention_hook_installed
-                && status.stop_hook_installed
-                && status.failure_hook_installed
-                && status.subagent_start_hook_installed
-        }
-        CommonConfigTool::Codex => {
-            status.session_start_hook_installed
-                && status.running_hook_installed
-                && status.attention_hook_installed
-                && status.stop_hook_installed
-                && status.subagent_start_hook_installed
-                && status.hooks_feature_installed
-        }
-    }
-}
-
-fn combine_cc_switch_statuses(
-    statuses: Vec<CcSwitchHookProtectionStatus>,
-) -> CcSwitchHookProtectionStatus {
-    let Some(first) = statuses.first().cloned() else {
-        return cc_switch_not_detected();
-    };
-
-    let state_priority = [
-        CcSwitchHookProtectionState::InvalidDb,
-        CcSwitchHookProtectionState::SyncFailed,
-        CcSwitchHookProtectionState::Unavailable,
-        CcSwitchHookProtectionState::NotSynced,
-        CcSwitchHookProtectionState::NotDetected,
-    ];
-    let state = state_priority
-        .iter()
-        .find(|state| statuses.iter().any(|status| status.state == **state))
-        .cloned()
-        .unwrap_or(CcSwitchHookProtectionState::Synced);
-
-    CcSwitchHookProtectionStatus {
-        state,
-        db_path: statuses
-            .iter()
-            .find_map(|status| status.db_path.clone())
-            .or(first.db_path),
-        message: statuses
-            .iter()
-            .find_map(|status| status.message.clone())
-            .or(first.message),
-        wsl_mismatch: statuses.iter().any(|status| status.wsl_mismatch),
-    }
-}
-
-async fn inspect_tool_common_config_at_path(
-    db_path: &Path,
-    config_dir: &Path,
-    tool: CommonConfigTool,
-) -> CcSwitchHookProtectionStatus {
-    let exe = match hook_exe_for_dir(config_dir) {
-        Ok(exe) => exe,
-        Err(err) => {
-            return cc_switch_status(
-                CcSwitchHookProtectionState::SyncFailed,
-                Some(db_path),
-                Some(err),
-                config_dir,
-            );
-        }
-    };
-    let prepared_path = match crate::ccswitch_db::prepare_read_path(db_path).await {
-        Ok(path) => path,
-        Err(err) => {
-            return cc_switch_status(
-                CcSwitchHookProtectionState::SyncFailed,
-                Some(db_path),
-                Some(err),
-                config_dir,
-            );
-        }
-    };
-    match inspect_common_config_at_path(prepared_path.path(), &exe, tool).await {
-        Ok(state) => cc_switch_status(state, Some(db_path), None, config_dir),
-        Err(err) => cc_switch_status(
-            CcSwitchHookProtectionState::SyncFailed,
-            Some(db_path),
-            Some(err),
-            config_dir,
-        ),
-    }
-}
-
-async fn inspect_ccswitch_hook_protection(
-    app: &AppHandle,
-    db_path: Option<String>,
-    claude_dir: Option<&Path>,
-    codex_dir: Option<&Path>,
-    claude: &ToolHookSettingsStatus,
-    codex: &ToolHookSettingsStatus,
-) -> CcSwitchHookProtectionStatus {
-    let mut targets = Vec::new();
-    if hook_status_has_hooks(claude) {
-        if let Some(dir) = claude_dir {
-            targets.push((dir, CommonConfigTool::Claude));
-        }
-    }
-    if hook_status_has_hooks(codex) {
-        if let Some(dir) = codex_dir {
-            targets.push((dir, CommonConfigTool::Codex));
-        }
-    }
-    if targets.is_empty() {
-        if let Some(dir) = claude_dir {
-            targets.push((dir, CommonConfigTool::Claude));
-        } else if let Some(dir) = codex_dir {
-            targets.push((dir, CommonConfigTool::Codex));
-        }
-    }
-
-    let Some((reference_dir, _)) = targets.first().copied() else {
-        return cc_switch_not_detected();
-    };
-
-    let path = match resolve_ccswitch_db_path_for_hook(app, db_path, reference_dir) {
-        Ok(path) => path,
-        Err(status) => return status,
-    };
-    let mut statuses = Vec::new();
-    for (config_dir, tool) in targets {
-        statuses.push(inspect_tool_common_config_at_path(&path, config_dir, tool).await);
-    }
-    combine_cc_switch_statuses(statuses)
-}
-
 fn install_claude_hooks(claude_dir: &Path) -> Result<(), String> {
     let exe = hook_exe_for_dir(claude_dir)?;
     let settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE_NAME);
@@ -1983,14 +777,9 @@ fn install_codex_hook_module(codex_dir: &Path, module: CodexHookModule) -> Resul
 
 fn ensure_codex_hooks_feature(codex_dir: &Path) -> Result<(), String> {
     let config_path = codex_dir.join(CODEX_CONFIG_FILE_NAME);
-    let content = match fs::read_to_string(&config_path) {
-        Ok(value) => value,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(format!("读取 {} 失败: {e}", path_to_string(&config_path))),
-    };
+    let content = read_text_if_exists(&config_path)?.unwrap_or_default();
     let next_content = set_toml_feature_hooks_enabled(&content, true);
-    fs::write(&config_path, next_content)
-        .map_err(|e| format!("写入 {} 失败: {e}", path_to_string(&config_path)))
+    write_text(&config_path, &next_content)
 }
 
 fn set_toml_feature_hooks_enabled(content: &str, enabled: bool) -> String {
@@ -2230,23 +1019,6 @@ fn trim_empty_lines(lines: &mut Vec<String>) {
     }
 }
 
-fn read_codex_cli_manager_hook_state_blocks(codex_dir: &Path) -> Result<Vec<Vec<String>>, String> {
-    let hooks_path = codex_dir.join(CODEX_HOOKS_FILE_NAME);
-    let config_path = codex_dir.join(CODEX_CONFIG_FILE_NAME);
-    let hooks = read_json_if_exists(&hooks_path)?;
-    let expected_keys = codex_cli_manager_hook_state_keys(&hooks, &hooks_path);
-    if expected_keys.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let content = match fs::read_to_string(&config_path) {
-        Ok(value) => value,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(format!("读取 {} 失败: {err}", path_to_string(&config_path))),
-    };
-    Ok(extract_codex_hook_state_blocks(&content, &expected_keys))
-}
-
 fn codex_cli_manager_hook_state_keys(settings: &Value, hooks_path: &Path) -> Vec<String> {
     let hooks_path = path_to_string(hooks_path);
     let Some(hooks) = settings.get("hooks").and_then(Value::as_object) else {
@@ -2294,10 +1066,8 @@ fn codex_cli_manager_hooks_trusted(
     hooks_path: &Path,
     config_path: &Path,
 ) -> Result<bool, String> {
-    let config = match fs::read_to_string(config_path) {
-        Ok(value) => value,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(err) => return Err(format!("读取 {} 失败: {err}", path_to_string(config_path))),
+    let Some(config) = read_text_if_exists(config_path)? else {
+        return Ok(false);
     };
     let config: toml::Value = toml::from_str(&config)
         .map_err(|err| format!("解析 {} 失败: {err}", path_to_string(config_path)))?;
@@ -2391,27 +1161,6 @@ fn codex_hook_trusted_hash(event: &str, group: &Value, hook: &Value) -> Result<S
     Ok(format!("sha256:{:x}", Sha256::digest(canonical)))
 }
 
-fn extract_codex_hook_state_blocks(config: &str, expected_keys: &[String]) -> Vec<Vec<String>> {
-    let lines: Vec<&str> = config.lines().collect();
-    let mut blocks = Vec::new();
-    let mut index = 0;
-    while index < lines.len() {
-        let key = toml_hooks_state_key(lines[index]);
-        if key.is_some_and(|key| expected_keys.iter().any(|expected| expected == &key)) {
-            let mut block = vec![lines[index].to_string()];
-            index += 1;
-            while index < lines.len() && !is_toml_table_header(lines[index]) {
-                block.push(lines[index].to_string());
-                index += 1;
-            }
-            blocks.push(block);
-            continue;
-        }
-        index += 1;
-    }
-    blocks
-}
-
 fn toml_hooks_state_key(line: &str) -> Option<String> {
     let trimmed = line.trim();
     if !trimmed.starts_with("[hooks.state.") || !is_toml_table_header(trimmed) {
@@ -2477,77 +1226,6 @@ fn toml_escape_basic_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn strip_codex_common_config_toml(raw: &str) -> Option<String> {
-    let mut source_lines: Vec<String> = raw.lines().map(ToString::to_string).collect();
-    let before_state_strip = source_lines.len();
-    remove_marker_owned_codex_hook_state_blocks(&mut source_lines);
-    let removed_state_blocks = source_lines.len() != before_state_strip;
-
-    let mut lines = Vec::new();
-    let mut removed = false;
-    for line in &source_lines {
-        let trimmed = line.trim();
-        let is_owned_hooks_line = trimmed.contains(CODEX_COMMON_CONFIG_HOOKS_MARKER)
-            && trimmed
-                .split_once('=')
-                .is_some_and(|(key, _)| key.trim() == "hooks");
-        if is_owned_hooks_line {
-            removed = true;
-            continue;
-        }
-        lines.push(line.to_string());
-    }
-
-    if !removed && !removed_state_blocks {
-        return Some(format!("{}\n", raw.trim_end()));
-    }
-
-    trim_empty_toml_features_section(&mut lines);
-    let text = lines.join("\n").trim().to_string();
-    if text.is_empty() {
-        None
-    } else {
-        Some(format!("{text}\n"))
-    }
-}
-
-fn trim_empty_toml_features_section(lines: &mut Vec<String>) {
-    let Some(header_index) = lines.iter().position(|line| line.trim() == "[features]") else {
-        return;
-    };
-    let mut end_index = lines.len();
-    for (index, line) in lines.iter().enumerate().skip(header_index + 1) {
-        let trimmed = line.trim();
-        if is_toml_table_header(line) {
-            end_index = index;
-            break;
-        }
-        if !trimmed.is_empty() && !trimmed.starts_with('#') {
-            return;
-        }
-    }
-    lines.drain(header_index..end_index);
-}
-
-fn toml_features_hooks_enabled(raw: &str) -> bool {
-    let mut in_features = false;
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if is_toml_table_header(line) {
-            in_features = trimmed == "[features]";
-            continue;
-        }
-        if in_features
-            && trimmed.split_once('=').is_some_and(|(key, value)| {
-                key.trim() == "hooks" && toml_bool_value(value) == Some(true)
-            })
-        {
-            return true;
-        }
-    }
-    false
-}
-
 fn toml_bool_value(value: &str) -> Option<bool> {
     match value.split('#').next().unwrap_or("").trim() {
         "true" => Some(true),
@@ -2557,10 +1235,8 @@ fn toml_bool_value(value: &str) -> Option<bool> {
 }
 
 fn codex_hooks_feature_installed(config_path: &Path) -> Result<bool, String> {
-    let content = match fs::read_to_string(config_path) {
-        Ok(value) => value,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(format!("读取 {} 失败: {e}", path_to_string(config_path))),
+    let Some(content) = read_text_if_exists(config_path)? else {
+        return Ok(false);
     };
     let mut in_features = false;
     for line in content.lines() {
@@ -2616,14 +1292,9 @@ fn uninstall_codex_hook_module(codex_dir: &Path, module: CodexHookModule) -> Res
 
 fn disable_codex_hooks_feature(codex_dir: &Path) -> Result<(), String> {
     let config_path = codex_dir.join(CODEX_CONFIG_FILE_NAME);
-    let content = match fs::read_to_string(&config_path) {
-        Ok(value) => value,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(format!("读取 {} 失败: {e}", path_to_string(&config_path))),
-    };
+    let content = read_text_if_exists(&config_path)?.unwrap_or_default();
     let next_content = set_toml_feature_hooks_enabled(&content, false);
-    fs::write(&config_path, next_content)
-        .map_err(|e| format!("写入 {} 失败: {e}", path_to_string(&config_path)))
+    write_text(&config_path, &next_content)
 }
 
 fn resolve_grok_dir(
@@ -2631,27 +1302,28 @@ fn resolve_grok_dir(
     create_if_missing: bool,
 ) -> Result<Option<PathBuf>, String> {
     if let Some(dir) = selected_dir.and_then(|value| normalize_selected_dir(&value)) {
-        if dir.is_dir() {
+        if live_is_dir(&dir) {
             return Ok(Some(dir));
         }
         if create_if_missing {
-            fs::create_dir_all(&dir).map_err(|e| format!("创建 Grok 配置目录失败: {e}"))?;
+            create_live_dir_all(&dir, "创建 Grok 配置目录失败")?;
             return Ok(Some(dir));
         }
         return Ok(None);
     }
 
-    let Some(home) = home_dir() else {
-        return Ok(None);
-    };
     let default_dir = env::var_os("GROK_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".grok"));
-    if default_dir.is_dir() {
+        .or_else(|| crate::provider::home::default_config_root("grok"))
+        .or_else(|| home_dir().map(|home| home.join(".grok")));
+    let Some(default_dir) = default_dir else {
+        return Ok(None);
+    };
+    if live_is_dir(&default_dir) {
         Ok(Some(default_dir))
     } else if create_if_missing {
-        fs::create_dir_all(&default_dir).map_err(|e| format!("创建 Grok 配置目录失败: {e}"))?;
+        create_live_dir_all(&default_dir, "创建 Grok 配置目录失败")?;
         Ok(Some(default_dir))
     } else {
         Ok(None)
@@ -2670,7 +1342,7 @@ fn install_grok_hooks(grok_dir: &Path) -> Result<(), String> {
     let exe = hook_exe_for_dir(grok_dir)?;
     let hooks_path = grok_hooks_path(grok_dir);
     if let Some(parent) = hooks_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建 Grok hooks 目录失败: {e}"))?;
+        create_live_dir_all(parent, "创建 Grok hooks 目录失败")?;
     }
     let mut settings = read_json(&hooks_path)?;
     ensure_root_object(&settings, GROK_HOOKS_FILE_NAME)?;
@@ -2689,7 +1361,7 @@ fn install_grok_hook_module(grok_dir: &Path, module: ClaudeHookModule) -> Result
     let exe = hook_exe_for_dir(grok_dir)?;
     let hooks_path = grok_hooks_path(grok_dir);
     if let Some(parent) = hooks_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建 Grok hooks 目录失败: {e}"))?;
+        create_live_dir_all(parent, "创建 Grok hooks 目录失败")?;
     }
     let mut settings = read_json(&hooks_path)?;
     ensure_root_object(&settings, GROK_HOOKS_FILE_NAME)?;
@@ -2704,7 +1376,7 @@ fn install_grok_hook_module(grok_dir: &Path, module: ClaudeHookModule) -> Result
 }
 
 fn verify_grok_hooks_file(hooks_path: &Path, exe: &str) -> Result<(), String> {
-    if !hooks_path.is_file() {
+    if !live_is_file(hooks_path) {
         return Err(format!(
             "Grok Hook 写入失败：文件不存在 {}",
             path_to_string(hooks_path)
@@ -2744,14 +1416,14 @@ fn verify_grok_cross_vendor_isolation(grok_dir: &Path) -> Result<(), String> {
 
 fn uninstall_grok_hooks(grok_dir: &Path) -> Result<(), String> {
     let hooks_path = grok_hooks_path(grok_dir);
-    if !hooks_path.is_file() {
+    if !live_is_file(&hooks_path) {
         return Ok(());
     }
     let mut settings = read_json(&hooks_path)?;
     ensure_root_object(&settings, GROK_HOOKS_FILE_NAME)?;
     remove_hook_commands(&mut settings, &CLAUDE_HOOK_EVENTS, &[]);
     if settings.get("hooks").is_none() {
-        let _ = fs::remove_file(&hooks_path);
+        let _ = remove_live_file(&hooks_path);
         return Ok(());
     }
     write_json(&hooks_path, &settings)
@@ -2759,14 +1431,14 @@ fn uninstall_grok_hooks(grok_dir: &Path) -> Result<(), String> {
 
 fn uninstall_grok_hook_module(grok_dir: &Path, module: ClaudeHookModule) -> Result<(), String> {
     let hooks_path = grok_hooks_path(grok_dir);
-    if !hooks_path.is_file() {
+    if !live_is_file(&hooks_path) {
         return Ok(());
     }
     let mut settings = read_json(&hooks_path)?;
     ensure_root_object(&settings, GROK_HOOKS_FILE_NAME)?;
     remove_named_hook_module(&mut settings, "grok", module);
     if settings.get("hooks").is_none() {
-        let _ = fs::remove_file(&hooks_path);
+        let _ = remove_live_file(&hooks_path);
         return Ok(());
     }
     write_json(&hooks_path, &settings)
@@ -2774,18 +1446,13 @@ fn uninstall_grok_hook_module(grok_dir: &Path, module: ClaudeHookModule) -> Resu
 
 fn disable_grok_cross_vendor_hooks(grok_dir: &Path) -> Result<(), String> {
     let config_path = grok_config_path(grok_dir);
-    let content = match fs::read_to_string(&config_path) {
-        Ok(value) => value,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(format!("读取 {} 失败: {e}", path_to_string(&config_path))),
-    };
+    let content = read_text_if_exists(&config_path)?.unwrap_or_default();
     let mut next = set_toml_table_bool(&content, "compat.claude", "hooks", false);
     next = set_toml_table_bool(&next, "compat.cursor", "hooks", false);
     if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建 Grok 配置目录失败: {e}"))?;
+        create_live_dir_all(parent, "创建 Grok 配置目录失败")?;
     }
-    fs::write(&config_path, next)
-        .map_err(|e| format!("写入 {} 失败: {e}", path_to_string(&config_path)))
+    write_text(&config_path, &next)
 }
 
 /// Set `key = bool` under a dotted table header like `compat.claude`.
@@ -2840,10 +1507,8 @@ fn format_toml_lines(lines: &[String]) -> String {
 }
 
 fn grok_cross_vendor_hooks_disabled(config_path: &Path) -> Result<bool, String> {
-    let content = match fs::read_to_string(config_path) {
-        Ok(value) => value,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(format!("读取 {} 失败: {e}", path_to_string(config_path))),
+    let Some(content) = read_text_if_exists(config_path)? else {
+        return Ok(false);
     };
     Ok(
         toml_table_bool(&content, "compat.claude", "hooks") == Some(false)
@@ -3059,11 +1724,11 @@ fn resolve_pi_dir(
     create_if_missing: bool,
 ) -> Result<Option<PathBuf>, String> {
     if let Some(dir) = selected_dir.and_then(|value| normalize_selected_dir(&value)) {
-        if dir.is_dir() {
+        if live_is_dir(&dir) {
             return Ok(Some(dir));
         }
         if create_if_missing {
-            fs::create_dir_all(&dir).map_err(|e| format!("创建 Pi 配置目录失败: {e}"))?;
+            create_live_dir_all(&dir, "创建 Pi 配置目录失败")?;
             return Ok(Some(dir));
         }
         return Ok(None);
@@ -3073,10 +1738,10 @@ fn resolve_pi_dir(
         return Ok(None);
     };
     let default_dir = home_dir.join(".pi").join("agent");
-    if default_dir.is_dir() {
+    if live_is_dir(&default_dir) {
         Ok(Some(default_dir))
     } else if create_if_missing {
-        fs::create_dir_all(&default_dir).map_err(|e| format!("创建 Pi 配置目录失败: {e}"))?;
+        create_live_dir_all(&default_dir, "创建 Pi 配置目录失败")?;
         Ok(Some(default_dir))
     } else {
         Ok(None)
@@ -3239,9 +1904,9 @@ fn install_pi_hooks(pi_dir: &Path) -> Result<(), String> {
 
 fn install_pi_hook_module(pi_dir: &Path, module: PiHookModule) -> Result<(), String> {
     let path = pi_extension_path(pi_dir);
-    let mut modules = if path.is_file() {
-        let content = fs::read_to_string(&path)
-            .map_err(|e| format!("读取 {} 失败: {e}", path_to_string(&path)))?;
+    let mut modules = if live_is_file(&path) {
+        let content = read_text_if_exists(&path)?
+            .ok_or_else(|| format!("读取 {} 失败: 文件不存在", path_to_string(&path)))?;
         read_pi_modules(&content)
     } else {
         Vec::new()
@@ -3257,12 +1922,11 @@ fn install_pi_hook_module(pi_dir: &Path, module: PiHookModule) -> Result<(), Str
 
 fn uninstall_pi_hooks(pi_dir: &Path) -> Result<(), String> {
     let path = pi_extension_path(pi_dir);
-    if path.is_file() {
-        let content = fs::read_to_string(&path)
-            .map_err(|e| format!("读取 {} 失败: {e}", path_to_string(&path)))?;
+    if live_is_file(&path) {
+        let content = read_text_if_exists(&path)?
+            .ok_or_else(|| format!("读取 {} 失败: 文件不存在", path_to_string(&path)))?;
         if content.contains(PI_EXTENSION_MARKER) {
-            fs::remove_file(&path)
-                .map_err(|e| format!("删除 {} 失败: {e}", path_to_string(&path)))?;
+            remove_live_file(&path)?;
         }
     }
     Ok(())
@@ -3270,11 +1934,11 @@ fn uninstall_pi_hooks(pi_dir: &Path) -> Result<(), String> {
 
 fn uninstall_pi_hook_module(pi_dir: &Path, module: PiHookModule) -> Result<(), String> {
     let path = pi_extension_path(pi_dir);
-    if !path.is_file() {
+    if !live_is_file(&path) {
         return Ok(());
     }
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("读取 {} 失败: {e}", path_to_string(&path)))?;
+    let content = read_text_if_exists(&path)?
+        .ok_or_else(|| format!("读取 {} 失败: 文件不存在", path_to_string(&path)))?;
     if !content.contains(PI_EXTENSION_MARKER) {
         return Ok(());
     }
@@ -3283,7 +1947,7 @@ fn uninstall_pi_hook_module(pi_dir: &Path, module: PiHookModule) -> Result<(), S
         .filter(|item| std::mem::discriminant(item) != std::mem::discriminant(&module))
         .collect();
     if modules.is_empty() {
-        fs::remove_file(&path).map_err(|e| format!("删除 {} 失败: {e}", path_to_string(&path)))?;
+        remove_live_file(&path)?;
         return Ok(());
     }
     install_pi_modules(pi_dir, &modules)
@@ -3294,23 +1958,23 @@ fn install_pi_modules(pi_dir: &Path, modules: &[PiHookModule]) -> Result<(), Str
         return uninstall_pi_hooks(pi_dir);
     }
     let extensions_dir = pi_dir.join(PI_EXTENSION_DIR_NAME);
-    fs::create_dir_all(&extensions_dir)
-        .map_err(|e| format!("创建 {} 失败: {e}", path_to_string(&extensions_dir)))?;
+    create_live_dir_all(
+        &extensions_dir,
+        &format!("创建 {} 失败", path_to_string(&extensions_dir)),
+    )?;
     let path = pi_extension_path(pi_dir);
     ensure_pi_extension_writable(&path)?;
     let source = pi_extension_source(modules);
-    fs::write(&path, source).map_err(|e| format!("写入 {} 失败: {e}", path_to_string(&path)))?;
+    write_text(&path, &source)?;
     Ok(())
 }
 
 fn ensure_pi_extension_writable(path: &Path) -> Result<(), String> {
-    match fs::read_to_string(path) {
-        Ok(content) if !content.contains(PI_EXTENSION_MARKER) => {
+    match read_text_if_exists(path)? {
+        Some(content) if !content.contains(PI_EXTENSION_MARKER) => {
             Err(PI_EXTENSION_CONFLICT_ERROR.to_string())
         }
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("读取 {} 失败: {error}", path_to_string(path))),
+        Some(_) | None => Ok(()),
     }
 }
 
@@ -3321,9 +1985,9 @@ fn build_pi_status(pi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus, St
 
     let extension_path = pi_extension_path(&pi_dir);
     let hooks_dir = pi_dir.join(PI_EXTENSION_DIR_NAME);
-    let content = if extension_path.is_file() {
-        fs::read_to_string(&extension_path)
-            .map_err(|e| format!("读取 {} 失败: {e}", path_to_string(&extension_path)))?
+    let content = if live_is_file(&extension_path) {
+        read_text_if_exists(&extension_path)?
+            .ok_or_else(|| format!("读取 {} 失败: 文件不存在", path_to_string(&extension_path)))?
     } else {
         String::new()
     };
@@ -3373,7 +2037,7 @@ fn resolve_claude_dir(
     require_existing: bool,
 ) -> Result<Option<PathBuf>, String> {
     if let Some(dir) = selected_dir.and_then(|value| normalize_selected_dir(&value)) {
-        if !dir.is_dir() {
+        if !live_is_dir(&dir) {
             return if require_existing {
                 Err("选择的 Claude 配置目录不存在".to_string())
             } else {
@@ -3383,11 +2047,12 @@ fn resolve_claude_dir(
         return Ok(Some(dir));
     }
 
-    let Some(home_dir) = home_dir() else {
+    let default_dir = crate::provider::home::default_config_root("claude")
+        .or_else(|| home_dir().map(|home| home.join(".claude")));
+    let Some(default_dir) = default_dir else {
         return Ok(None);
     };
-    let default_dir = home_dir.join(".claude");
-    if default_dir.is_dir() {
+    if live_is_dir(&default_dir) {
         Ok(Some(default_dir))
     } else if require_existing {
         Err("未找到默认 Claude 配置目录，请手动选择目录".to_string())
@@ -3401,24 +2066,25 @@ fn resolve_codex_dir(
     create_if_missing: bool,
 ) -> Result<Option<PathBuf>, String> {
     if let Some(dir) = selected_dir.and_then(|value| normalize_selected_dir(&value)) {
-        if dir.is_dir() {
+        if live_is_dir(&dir) {
             return Ok(Some(dir));
         }
         if create_if_missing {
-            fs::create_dir_all(&dir).map_err(|e| format!("创建 Codex 配置目录失败: {e}"))?;
+            create_live_dir_all(&dir, "创建 Codex 配置目录失败")?;
             return Ok(Some(dir));
         }
         return Ok(None);
     }
 
-    let Some(home_dir) = home_dir() else {
+    let default_dir = crate::provider::home::default_config_root("codex")
+        .or_else(|| home_dir().map(|home| home.join(".codex")));
+    let Some(default_dir) = default_dir else {
         return Ok(None);
     };
-    let default_dir = home_dir.join(".codex");
-    if default_dir.is_dir() {
+    if live_is_dir(&default_dir) {
         Ok(Some(default_dir))
     } else if create_if_missing {
-        fs::create_dir_all(&default_dir).map_err(|e| format!("创建 Codex 配置目录失败: {e}"))?;
+        create_live_dir_all(&default_dir, "创建 Codex 配置目录失败")?;
         Ok(Some(default_dir))
     } else {
         Ok(None)
@@ -3610,16 +2276,13 @@ fn repair_duplicate_codex_hook_state_blocks(codex_dir: &Path) -> Result<(), Stri
         return Ok(());
     }
 
-    let config = match fs::read_to_string(&config_path) {
-        Ok(value) => value,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(format!("读取 {} 失败: {err}", path_to_string(&config_path))),
+    let Some(config) = read_text_if_exists(&config_path)? else {
+        return Ok(());
     };
     let Some(next) = deduplicate_codex_hook_state_blocks(&config, &expected_keys) else {
         return Ok(());
     };
-    fs::write(&config_path, next)
-        .map_err(|err| format!("写入 {} 失败: {err}", path_to_string(&config_path)))
+    write_text(&config_path, &next)
 }
 
 fn repair_codex_hook_trust(codex_dir: &Path) -> Result<(), String> {
@@ -3658,12 +2321,11 @@ fn repair_codex_hook_trust(codex_dir: &Path) -> Result<(), String> {
         }
     }
 
-    let config = fs::read_to_string(&config_path)
-        .map_err(|err| format!("读取 {} 失败: {err}", path_to_string(&config_path)))?;
+    let config = read_text_if_exists(&config_path)?
+        .ok_or_else(|| format!("读取 {} 失败: 文件不存在", path_to_string(&config_path)))?;
     let next = merge_codex_common_config_toml(Some(&config), &blocks);
     if next != config {
-        fs::write(&config_path, next)
-            .map_err(|err| format!("写入 {} 失败: {err}", path_to_string(&config_path)))?;
+        write_text(&config_path, &next)?;
     }
     Ok(())
 }
@@ -3752,9 +2414,72 @@ fn status_from_checks(
     }
 }
 
-fn read_json(path: &Path) -> Result<Value, String> {
+fn is_wsl_path(path: &Path) -> bool {
+    crate::wsl::is_wsl_config_dir(&path_to_string(path))
+}
+
+fn live_is_file(path: &Path) -> bool {
+    if is_wsl_path(path) {
+        crate::provider::global::live_is_file(&path_to_string(path))
+    } else {
+        path.is_file()
+    }
+}
+
+fn live_is_dir(path: &Path) -> bool {
+    if is_wsl_path(path) {
+        crate::provider::global::live_is_dir(&path_to_string(path))
+    } else {
+        path.is_dir()
+    }
+}
+
+fn create_live_dir_all(path: &Path, error_prefix: &str) -> Result<(), String> {
+    if is_wsl_path(path) {
+        return crate::provider::global::create_live_dir_all(&path_to_string(path))
+            .map_err(|error| format!("{error_prefix}: {error}"));
+    }
+    fs::create_dir_all(path).map_err(|error| format!("{error_prefix}: {error}"))
+}
+
+fn read_text_if_exists(path: &Path) -> Result<Option<String>, String> {
+    if is_wsl_path(path) {
+        let bytes = crate::provider::global::read_live(&path_to_string(path))
+            .map_err(|error| format!("读取 {} 失败: {error}", path_to_string(path)))?;
+        return bytes
+            .map(|bytes| {
+                String::from_utf8(bytes)
+                    .map_err(|error| format!("读取 {} 失败: {error}", path_to_string(path)))
+            })
+            .transpose();
+    }
+
     match fs::read_to_string(path) {
-        Ok(content) => {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("读取 {} 失败: {error}", path_to_string(path))),
+    }
+}
+
+fn write_text(path: &Path, content: &str) -> Result<(), String> {
+    if is_wsl_path(path) {
+        return crate::provider::global::write_live(&path_to_string(path), content.as_bytes())
+            .map_err(|error| format!("写入 {} 失败: {error}", path_to_string(path)));
+    }
+    fs::write(path, content).map_err(|error| format!("写入 {} 失败: {error}", path_to_string(path)))
+}
+
+fn remove_live_file(path: &Path) -> Result<(), String> {
+    if is_wsl_path(path) {
+        return crate::provider::global::remove_live(&path_to_string(path))
+            .map_err(|error| format!("删除 {} 失败: {error}", path_to_string(path)));
+    }
+    fs::remove_file(path).map_err(|error| format!("删除 {} 失败: {error}", path_to_string(path)))
+}
+
+fn read_json(path: &Path) -> Result<Value, String> {
+    match read_text_if_exists(path)? {
+        Some(content) => {
             if content.trim().is_empty() {
                 Ok(json!({}))
             } else {
@@ -3762,14 +2487,13 @@ fn read_json(path: &Path) -> Result<Value, String> {
                     .map_err(|e| format!("解析 {} 失败: {e}", path_to_string(path)))
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
-        Err(e) => Err(format!("读取 {} 失败: {e}", path_to_string(path))),
+        None => Ok(json!({})),
     }
 }
 
 fn read_json_if_exists(path: &Path) -> Result<Value, String> {
-    match fs::read_to_string(path) {
-        Ok(content) => {
+    match read_text_if_exists(path)? {
+        Some(content) => {
             if content.trim().is_empty() {
                 Ok(json!({}))
             } else {
@@ -3777,8 +2501,7 @@ fn read_json_if_exists(path: &Path) -> Result<Value, String> {
                     .map_err(|e| format!("解析 {} 失败: {e}", path_to_string(path)))
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
-        Err(e) => Err(format!("读取 {} 失败: {e}", path_to_string(path))),
+        None => Ok(json!({})),
     }
 }
 
@@ -3793,8 +2516,7 @@ fn ensure_root_object(settings: &Value, file_name: &str) -> Result<(), String> {
 fn write_json(path: &Path, settings: &Value) -> Result<(), String> {
     let content = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("序列化 {} 失败: {e}", path_to_string(path)))?;
-    fs::write(path, format!("{content}\n"))
-        .map_err(|e| format!("写入 {} 失败: {e}", path_to_string(path)))
+    write_text(path, &format!("{content}\n"))
 }
 
 fn add_hook_command(settings: &mut Value, event: &str, command: String) {
@@ -4073,7 +2795,7 @@ fn hook_exe_for_dir(config_dir: &Path) -> Result<String, String> {
 /// 删除历史遗留的 PowerShell hook 脚本（若存在）；新方案不再写脚本文件。
 fn cleanup_legacy_scripts(hooks_dir: &Path, scripts: &[&str]) {
     for name in scripts {
-        let _ = fs::remove_file(hooks_dir.join(name));
+        let _ = remove_live_file(&hooks_dir.join(name));
     }
 }
 
@@ -4726,499 +3448,6 @@ yolo = false
         assert!(!settings.contains(".ps1"));
         assert!(settings.contains(HOOK_COMMAND_MARKER));
         assert!(!hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME).is_file());
-    }
-
-    #[test]
-    fn merge_claude_common_config_hooks_preserves_existing_fields_and_hooks() {
-        let exe = "/tmp/cli-manager";
-        let existing = serde_json::to_string(&json!({
-            "env": {
-                "FOO": "bar"
-            },
-            "hooks": {
-                "Stop": [{
-                    "matcher": "",
-                    "hooks": [{
-                        "type": "command",
-                        "command": "echo keep",
-                        "timeout": 1
-                    }]
-                }]
-            }
-        }))
-        .unwrap();
-
-        let merged = merge_claude_common_config_hooks(Some(&existing), exe).unwrap();
-        let value: Value = serde_json::from_str(&merged).unwrap();
-
-        assert_eq!(value["env"]["FOO"].as_str(), Some("bar"));
-        assert!(event_has_exact_command(
-            &value["hooks"]["Stop"],
-            "echo keep"
-        ));
-        assert!(exact_command_registered(
-            &value,
-            "Notification",
-            &build_command(exe, "claude", "Notification")
-        ));
-        assert!(claude_common_config_has_hooks(Some(&merged), exe).unwrap());
-    }
-
-    #[test]
-    fn strip_claude_common_config_hooks_keeps_non_cli_manager_hooks() {
-        let exe = "/tmp/cli-manager";
-        let existing = serde_json::to_string(&json!({
-            "env": {
-                "FOO": "bar"
-            },
-            "hooks": {
-                "Stop": [{
-                    "matcher": "",
-                    "hooks": [{
-                        "type": "command",
-                        "command": "echo keep",
-                        "timeout": 1
-                    }]
-                }]
-            }
-        }))
-        .unwrap();
-        let merged = merge_claude_common_config_hooks(Some(&existing), exe).unwrap();
-
-        let stripped = strip_claude_common_config_hooks(Some(&merged))
-            .unwrap()
-            .unwrap();
-        let value: Value = serde_json::from_str(&stripped).unwrap();
-
-        assert_eq!(value["env"]["FOO"].as_str(), Some("bar"));
-        assert!(event_has_exact_command(
-            &value["hooks"]["Stop"],
-            "echo keep"
-        ));
-        assert!(!serde_json::to_string(&value)
-            .unwrap()
-            .contains(HOOK_COMMAND_MARKER));
-    }
-
-    #[test]
-    fn merge_common_config_statusline_preserves_existing_fields_and_hooks() {
-        let existing = serde_json::to_string(&json!({
-            "env": { "FOO": "bar" },
-            "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": "echo keep" }] }] },
-            "statusLine": { "type": "command", "command": "third-party" }
-        }))
-        .unwrap();
-        let merged = merge_common_config_statusline(
-            Some(&existing),
-            json!({ "type": "command", "command": "cli-manager __statusline", "padding": 0 }),
-        )
-        .unwrap();
-        let value: Value = serde_json::from_str(&merged).unwrap();
-
-        assert_eq!(value["env"]["FOO"].as_str(), Some("bar"));
-        assert_eq!(
-            value["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
-            Some("echo keep")
-        );
-        assert_eq!(
-            value["statusLine"]["command"].as_str(),
-            Some("cli-manager __statusline")
-        );
-    }
-
-    #[test]
-    fn strip_common_config_statusline_only_removes_cli_manager_statusline() {
-        let managed = serde_json::to_string(&json!({
-            "env": { "FOO": "bar" },
-            "statusLine": { "type": "command", "command": "cli-manager __statusline" }
-        }))
-        .unwrap();
-        let stripped = strip_common_config_statusline(Some(&managed))
-            .unwrap()
-            .unwrap();
-        let value: Value = serde_json::from_str(&stripped).unwrap();
-        assert_eq!(value["env"]["FOO"].as_str(), Some("bar"));
-        assert!(value.get("statusLine").is_none());
-
-        let third_party = r#"{"statusLine":{"type":"command","command":"third-party"}}"#;
-        assert!(strip_common_config_statusline(Some(third_party))
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
-    fn merge_codex_statusline_preserves_existing_common_config() {
-        let raw = r#"model_reasoning_effort = "xhigh"
-
-[features]
-hooks = true # CLI-Manager hook protection
-
-[windows]
-wsl = true
-"#;
-        let merged = merge_common_config_codex_statusline(
-            Some(raw),
-            &[
-                "model-with-reasoning".to_string(),
-                "context-remaining".to_string(),
-            ],
-        );
-        assert!(merged
-            .contains("[tui]\nstatus_line = [\"model-with-reasoning\", \"context-remaining\"]"));
-        assert!(merged.contains("[features]\nhooks = true # CLI-Manager hook protection"));
-        assert!(merged.contains("[windows]\nwsl = true"));
-        assert!(merged.find("[tui]").unwrap() < merged.find("[features]").unwrap());
-    }
-
-    #[test]
-    fn merge_codex_statusline_replaces_existing_tui_status_line() {
-        let raw = r#"[features]
-hooks = true
-
-[tui]
-notifications = ["approval-requested"]
-status_line = ["model"]
-theme = "monokai"
-"#;
-        let merged = merge_common_config_codex_statusline(
-            Some(raw),
-            &["current-dir".to_string(), "status".to_string()],
-        );
-        assert!(merged.contains("notifications = [\"approval-requested\"]"));
-        assert!(merged.contains("status_line = [\"current-dir\", \"status\"]"));
-        assert!(merged.contains("theme = \"monokai\""));
-        assert_eq!(merged.matches("status_line =").count(), 1);
-    }
-
-    #[test]
-    fn claude_common_config_has_hooks_requires_notification_hook() {
-        let exe = "/tmp/cli-manager";
-        let merged = merge_claude_common_config_hooks(None, exe).unwrap();
-        let mut value: Value = serde_json::from_str(&merged).unwrap();
-        value
-            .get_mut("hooks")
-            .and_then(Value::as_object_mut)
-            .unwrap()
-            .remove("Notification");
-        let without_notification = serde_json::to_string(&value).unwrap();
-
-        assert!(!claude_common_config_has_hooks(Some(&without_notification), exe).unwrap());
-    }
-
-    #[test]
-    fn claude_common_config_has_hooks_requires_question_matcher() {
-        let exe = "/tmp/cli-manager";
-        let merged = merge_claude_common_config_hooks(None, exe).unwrap();
-        let mut value: Value = serde_json::from_str(&merged).unwrap();
-        let entries = value["hooks"]["PreToolUse"].as_array_mut().unwrap();
-        let question_entry = entries
-            .iter_mut()
-            .find(|entry| {
-                entry.get("matcher").and_then(Value::as_str) == Some(CLAUDE_QUESTION_TOOL_NAME)
-            })
-            .unwrap();
-        question_entry["matcher"] = json!("OtherTool");
-        let wrong_matcher = serde_json::to_string(&value).unwrap();
-
-        assert!(!claude_common_config_has_hooks(Some(&wrong_matcher), exe).unwrap());
-    }
-
-    #[test]
-    fn merge_codex_common_config_hooks_writes_toml_feature_flag() {
-        let exe = "/tmp/cli-manager";
-        let existing = r#"model = "gpt-5"
-
-        [features]
-        experimental = true
-        "#;
-
-        let merged = merge_codex_common_config_hooks(Some(existing), exe).unwrap();
-
-        assert!(merged.contains("model = \"gpt-5\""));
-        assert!(merged.contains("experimental = true"));
-        assert!(merged.contains("[features]"));
-        assert!(merged.contains("hooks = true"));
-        assert!(merged.contains(CODEX_COMMON_CONFIG_HOOKS_MARKER));
-        assert!(codex_common_config_has_hooks(Some(&merged), exe).unwrap());
-    }
-
-    #[test]
-    fn strip_codex_common_config_hooks_removes_only_marker_owned_toml_line() {
-        let exe = "/tmp/cli-manager";
-        let merged = merge_codex_common_config_hooks(None, exe).unwrap();
-
-        let stripped = strip_codex_common_config_hooks(Some(&merged)).unwrap();
-
-        assert!(stripped.is_none());
-
-        let user_owned = "[features]\nhooks = true\n";
-        let stripped_user_owned = strip_codex_common_config_hooks(Some(user_owned))
-            .unwrap()
-            .unwrap();
-        assert_eq!(stripped_user_owned, user_owned);
-        assert!(codex_common_config_has_hooks(Some(&stripped_user_owned), exe).unwrap());
-    }
-
-    #[tokio::test]
-    async fn merge_codex_common_config_carries_cli_manager_hook_state() {
-        let tmp = TempDir::new().unwrap();
-        let codex_dir = tmp.path().join("codex");
-        fs::create_dir_all(&codex_dir).unwrap();
-        install_codex_hooks(&codex_dir).unwrap();
-
-        let hooks_path = codex_dir.join(CODEX_HOOKS_FILE_NAME);
-        let hooks_key = format!(
-            "{}:permission_request:0:0",
-            toml_escape_basic_string(&path_to_string(&hooks_path))
-        );
-        let project_hooks_key = format!(
-            "{}:permission_request:0:0",
-            toml_escape_basic_string(r"F:\github\CLI-Manager\.codex\hooks.json")
-        );
-        let config = format!(
-            r#"[hooks.state."{hooks_key}"]
-trusted_hash = "sha256:new"
-
-[hooks.state."{project_hooks_key}"]
-trusted_hash = "sha256:project"
-"#
-        );
-        fs::write(codex_dir.join(CODEX_CONFIG_FILE_NAME), config).unwrap();
-        let hook_state_blocks = read_codex_cli_manager_hook_state_blocks(&codex_dir).unwrap();
-        assert_eq!(hook_state_blocks.len(), 1);
-
-        let existing = format!(
-            r#"model_reasoning_effort = "xhigh"
-
-[features]
-hooks = true # CLI-Manager hook protection
-
-{CODEX_COMMON_CONFIG_HOOKS_MARKER}
-[hooks.state."{hooks_key}"]
-trusted_hash = "sha256:old"
-
-[projects.'\\?\F:\idea-work\business-center']
-trust_level = "trusted"
-"#
-        );
-        let merged = merge_common_config_hooks(
-            Some(&existing),
-            "/tmp/cli-manager",
-            CommonConfigTool::Codex,
-            &hook_state_blocks,
-        )
-        .unwrap();
-
-        assert!(merged.contains(&format!(r#"[hooks.state."{hooks_key}"]"#)));
-        assert!(merged.contains(r#"trusted_hash = "sha256:new""#));
-        assert!(!merged.contains("sha256:old"));
-        assert!(!merged.contains("sha256:project"));
-        assert!(merged.find("[features]").unwrap() < merged.find("[hooks.state.").unwrap());
-        assert!(
-            merged.find("[hooks.state.").unwrap()
-                < merged
-                    .find(r#"[projects.'\\?\F:\idea-work\business-center']"#)
-                    .unwrap()
-        );
-    }
-
-    #[test]
-    fn strip_codex_common_config_hooks_removes_marker_owned_hook_state_blocks() {
-        let raw = format!(
-            r#"[features]
-hooks = true # CLI-Manager hook protection
-
-{CODEX_COMMON_CONFIG_HOOKS_MARKER}
-[hooks.state."C:\\Users\\1\\.codex\\hooks.json:permission_request:0:0"]
-trusted_hash = "sha256:owned"
-"#
-        );
-
-        let stripped = strip_codex_common_config_hooks(Some(&raw)).unwrap();
-
-        assert!(stripped.is_none());
-    }
-
-    #[tokio::test]
-    async fn sync_codex_common_config_writes_codex_key_without_touching_claude_key() {
-        let tmp = TempDir::new().unwrap();
-        let db_path = tmp.path().join("cc-switch.db");
-        fs::File::create(&db_path).unwrap();
-        let exe = "/tmp/cli-manager";
-        let existing_claude = r#"{"env":{"KEEP":"1"}}"#;
-
-        let mut conn = open_db_readwrite(&db_path).await.unwrap();
-        sqlx::query("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-            .execute(&mut conn)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO settings (key, value) VALUES (?1, ?2)")
-            .bind(CCSWITCH_COMMON_CONFIG_CLAUDE_KEY)
-            .bind(existing_claude)
-            .execute(&mut conn)
-            .await
-            .unwrap();
-        drop(conn);
-
-        let state = sync_common_config_at_path(
-            &db_path,
-            exe,
-            CommonConfigTool::Codex,
-            CcSwitchSyncMode::Install,
-            &[],
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(state, CcSwitchHookProtectionState::Synced);
-
-        let mut conn = open_db_readwrite(&db_path).await.unwrap();
-        let codex_common_config =
-            read_common_config_value(&mut conn, CCSWITCH_COMMON_CONFIG_CODEX_KEY)
-                .await
-                .unwrap()
-                .unwrap();
-        let claude_common_config =
-            read_common_config_value(&mut conn, CCSWITCH_COMMON_CONFIG_CLAUDE_KEY)
-                .await
-                .unwrap()
-                .unwrap();
-
-        assert!(codex_common_config_has_hooks(Some(&codex_common_config), exe).unwrap());
-        assert!(codex_common_config.contains("[features]"));
-        assert!(codex_common_config.contains("hooks = true"));
-        assert!(codex_common_config.contains(CODEX_COMMON_CONFIG_HOOKS_MARKER));
-        assert_eq!(claude_common_config, existing_claude);
-    }
-
-    #[tokio::test]
-    async fn sync_codex_common_config_preserves_real_ccswitch_toml_shape() {
-        let tmp = TempDir::new().unwrap();
-        let db_path = tmp.path().join("cc-switch.db");
-        fs::File::create(&db_path).unwrap();
-        let exe = "/tmp/cli-manager";
-        let existing_codex = r#"model_reasoning_effort = "xhigh"
-disable_response_storage = true
-personality = "pragmatic"
-
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-alternate_screen = "never"
-
-[projects.'\\?\F:\idea-work\business-center']
-trust_level = "trusted"
-
-[windows]
-sandbox = "unelevated"
-
-[tui]
-status_line = ["model-with-reasoning", "context-remaining", "current-dir"]
-
-model_instructions_file = "./instruction.md"
-"#;
-
-        let mut conn = open_db_readwrite(&db_path).await.unwrap();
-        sqlx::query("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
-            .execute(&mut conn)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO settings (key, value) VALUES (?1, ?2)")
-            .bind(CCSWITCH_COMMON_CONFIG_CODEX_KEY)
-            .bind(existing_codex)
-            .execute(&mut conn)
-            .await
-            .unwrap();
-        drop(conn);
-
-        let state = sync_common_config_at_path(
-            &db_path,
-            exe,
-            CommonConfigTool::Codex,
-            CcSwitchSyncMode::Install,
-            &[],
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(state, CcSwitchHookProtectionState::Synced);
-
-        let mut conn = open_db_readwrite(&db_path).await.unwrap();
-        let codex_common_config =
-            read_common_config_value(&mut conn, CCSWITCH_COMMON_CONFIG_CODEX_KEY)
-                .await
-                .unwrap()
-                .unwrap();
-
-        let features_index = codex_common_config.find("[features]").unwrap();
-        let projects_index = codex_common_config
-            .find(r#"[projects.'\\?\F:\idea-work\business-center']"#)
-            .unwrap();
-        assert!(features_index < projects_index);
-        assert!(codex_common_config.contains(r#"[projects.'\\?\F:\idea-work\business-center']"#));
-        assert!(codex_common_config.contains("[windows]"));
-        assert!(codex_common_config.contains("[tui]"));
-        assert!(codex_common_config.contains(
-            "status_line = [\"model-with-reasoning\", \"context-remaining\", \"current-dir\"]"
-        ));
-        assert!(codex_common_config.contains("[features]"));
-        assert!(codex_common_config.contains("hooks = true"));
-        assert!(codex_common_config.contains(CODEX_COMMON_CONFIG_HOOKS_MARKER));
-        assert!(codex_common_config_has_hooks(Some(&codex_common_config), exe).unwrap());
-    }
-
-    #[tokio::test]
-    async fn sync_codex_common_config_treats_null_setting_value_as_missing() {
-        let tmp = TempDir::new().unwrap();
-        let db_path = tmp.path().join("cc-switch.db");
-        fs::File::create(&db_path).unwrap();
-        let exe = "/tmp/cli-manager";
-
-        let mut conn = open_db_readwrite(&db_path).await.unwrap();
-        sqlx::query("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
-            .execute(&mut conn)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO settings (key, value) VALUES (?1, NULL)")
-            .bind(CCSWITCH_COMMON_CONFIG_CODEX_KEY)
-            .execute(&mut conn)
-            .await
-            .unwrap();
-        drop(conn);
-
-        let state = sync_common_config_at_path(
-            &db_path,
-            exe,
-            CommonConfigTool::Codex,
-            CcSwitchSyncMode::Install,
-            &[],
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(state, CcSwitchHookProtectionState::Synced);
-
-        let mut conn = open_db_readwrite(&db_path).await.unwrap();
-        let codex_common_config =
-            read_common_config_value(&mut conn, CCSWITCH_COMMON_CONFIG_CODEX_KEY)
-                .await
-                .unwrap()
-                .unwrap();
-        assert_eq!(
-            codex_common_config,
-            format!("[features]\nhooks = true {CODEX_COMMON_CONFIG_HOOKS_MARKER}\n")
-        );
-    }
-
-    #[test]
-    fn claude_common_config_rejects_invalid_json() {
-        assert_eq!(
-            merge_claude_common_config_hooks(Some("{bad json"), "/tmp/cli-manager").unwrap_err(),
-            "common_config_parse_failed"
-        );
-        assert_eq!(
-            strip_claude_common_config_hooks(Some("{bad json")).unwrap_err(),
-            "common_config_parse_failed"
-        );
     }
 
     #[test]

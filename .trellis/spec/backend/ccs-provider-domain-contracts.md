@@ -143,10 +143,18 @@ legacy cli-manager.db migration unchanged
   documents must retain comments/order. Frontend parsing is only an editor aid.
 - Writers change only documented provider-owned paths. Preserve Hooks,
   permissions, MCP, project trust, statusline and unknown user fields.
+- When a writer owns a credential-bearing document, it must remove stale
+  provider credentials from every owned profile/entry before projecting the
+  selected active key; an unselected Grok model profile or legacy top-level
+  Codex auth field must not retain an imported credential.
 - Global apply resolves a selected Home, stages/parses all target files,
   creates recoverable backups, replaces/verifies every target, then commits
   current state. Journal and compensate partial failure; recover unfinished
   operations on next startup. Codex must compensate both files.
+- Scope launch snapshots are all-or-nothing: if materializing or writing any
+  generated file, key projection, or manifest fails, remove the incomplete
+  snapshot root before returning the error so no orphaned configuration or
+  credential remains for later launch/recovery.
 
 ## Scope and Home contract
 
@@ -165,6 +173,10 @@ legacy cli-manager.db migration unchanged
   higher priority and must be labelled rather than overwritten.
 - Home preferences are per local/WSL environment identity. Validate root
   directories; do not accept a CLI subdirectory as Home.
+- Saving a Home also persists one active Home identity in `providers.db`;
+  startup restores that identity so no-explicit-root defaults follow the last
+  saved Home. The per-environment preferences remain independent, and this
+  active pointer must never override an explicit Hook or history root.
 
 ## IPC boundary
 
@@ -267,6 +279,14 @@ provider_import_commit(previewId, options) -> ImportResult
   Worktree > project > global; no CCS file in normal resolution.
 - Import: mainline single key, PR multi-key, OAuth/empty/corrupt source,
   duplicated names, changed fingerprints and unmapped legacy reference.
+- Multi-key import deduplication uses the source label plus an in-memory
+  credential digest; it must never use a masked display value, because distinct
+  short credentials can share the same mask. After deduplication, duplicate
+  source labels receive deterministic numeric suffixes so the native schema's
+  per-provider label uniqueness cannot discard a distinct credential; the same
+  normalized labels must be used by preview and commit. Source keys are sorted
+  by their source `sort_index` before this normalization, with deterministic
+  tie-breakers.
 
 ### 7. Wrong vs Correct
 
@@ -296,6 +316,131 @@ preview + lock + stage + parse + backup + replace all targets + verify
 - Common config is type-scoped and merges with correct precedence.
 - Global apply preserves non-owned fields and compensates partial writes.
 - Local/WSL Home alignment covers global files, Hook and history defaults.
+- History source shape checks for WSL UNC locations must use the same WSL-aware
+  existence probe as root validation; never call host `Path::is_dir/is_file`
+  for a WSL path.
+- CCS import WSL source probes and read-only snapshot commands must use the
+  shared bounded subprocess helper; a stopped or unhealthy WSL distribution
+  must return an import error instead of blocking the settings UI.
 - Worktree/project/global precedence and launch snapshots work with CCS absent.
 - Single/multi-key CCS import is previewable, idempotent and has no heuristic
   reference fallback.
+
+## Acceptance closeout boundary (2026-08-03)
+
+- Windows-side Rust and TypeScript checks are not evidence of a real WSL write/import run. If `wsl.exe --status` or `--list --quiet` cannot provide a working distribution and Python SQLite runtime, the WSL acceptance items remain `BLOCKED`.
+- The three global writers, compensation, journal recovery, external-modification protection, and Home/Hook/History alignment require a real writable Home run in addition to unit tests; unit tests must not be reported as that manual evidence.
+- Native production runtime must retain only the read-only CCS import adapter. No production path may call CCS list/prepare/reset/switch operations after cutover.
+
+## Common configuration validation command (2026-08-04)
+
+- `provider_common_config_validate` accepts the same `CommonConfigSetInput` as
+  `provider_common_config_set` and returns no document or secret data.
+- It validates app type, expected format, JSON object shape, TOML syntax and
+  managed-secret exclusion without opening a write transaction or changing the
+  `settings` row.
+- `provider_common_config_set` calls the same repository validator before its
+  database write; validate and save therefore cannot drift in accepted syntax.
+
+## Provider editor and current-state feedback contract (2026-08-04)
+
+### 1. Scope / Trigger
+
+- Trigger: provider create/edit now accepts a provider-specific JSON/TOML
+  document, and `provider_global_current` must recognize an already materialized
+  Home even when `providers.is_current` was never committed by CLI-Manager.
+
+### 2. Signatures
+
+- `provider_catalog_update(input: ProviderUpdateInput) -> ProviderDetail`
+- `provider_global_current(input: GlobalCurrentInput) -> GlobalCurrent`
+- Internal `merge_settings_config_update(app_type, existing, incoming)` keeps
+  the persisted JSON envelope while validating the nested Codex/Grok TOML.
+
+### 3. Contracts
+
+- Update input may contain `settingsConfig`; Claude uses a JSON object, Codex
+  and Grok Build use `{ "config": "<TOML>" }` plus any existing envelope fields.
+- Existing JSON secret fields and TOML secret paths remain owned by the key
+  manager. A provider document edit may change non-secret fields only.
+- Current detection scans active-key candidates for a plan whose every target
+  live byte sequence equals its desired byte sequence. Exact materialized match
+  takes precedence over a stale `is_current` flag; the flag remains a fallback
+  for drift, missing-key and unavailable states.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Incoming settings is not a JSON object | `provider_settings_must_be_object` |
+| Claude document is invalid JSON | `provider_settings_invalid_json` |
+| Codex/Grok nested config is invalid TOML | `provider_config_invalid` |
+| Existing TOML secret cannot be safely preserved | `provider_document_secret_edit_requires_key_manager` |
+| Exact target match found | current provider name/id with `applied` state |
+| Only database current flag found | current provider with computed drift/key-missing/unavailable state |
+| No match and no current flag | `not_set` |
+
+### 5. Good / Base / Bad Cases
+
+- Good: edit Codex `config.toml` model while its API key is redacted; the
+  model changes and the stored key remains byte-for-byte unchanged.
+- Base: imported Home files match one active-key provider even when all
+  database `is_current` flags are zero; current status names that provider.
+- Bad: trust the masked key returned to the frontend and overwrite the real
+  key with `***` or `[REDACTED]`.
+- Bad: identify current only from `providers.is_current` after an external or
+  CCS-created configuration already exists on disk.
+
+### 6. Tests Required
+
+- Repository unit tests assert JSON and TOML key-manager-owned secrets survive
+  provider document updates while non-secret fields change.
+- Global unit tests assert a plan matches only when every target matches and
+  rejects a single changed target.
+- Runtime acceptance must still verify actual local/WSL target recognition,
+  external modification protection, compensation and journal recovery.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+incoming.settingsConfig -> normalize -> UPDATE providers
+provider_global_current -> SELECT ... WHERE is_current = 1
+```
+
+#### Correct
+
+```text
+incoming settings -> preserve key-manager-owned JSON/TOML secrets
+  -> validate envelope and nested format -> UPDATE providers
+global current -> build each active-key plan -> compare every target
+  -> exact file match first, database flag fallback for drift reporting
+```
+
+## 8. Global apply display and preflight contract (2026-08-04)
+
+- `ProviderHomeState.homePath` is the parent Home directory. Confirmation UI
+  must select the app-specific target root from `ProviderHomeState.targets`;
+  it must not present `homePath` as the actual Claude/Codex/Grok write target.
+- The explicit preview action is optional at the UI boundary. When the user
+  clicks Apply without an existing preview, the frontend must obtain a fresh
+  `GlobalPreview` and use its fingerprint with `provider_global_apply`.
+- The backend apply command continues to require a fingerprint. This keeps
+  locks, live-file conflict detection, staging, verification, compensation and
+  journal recovery unchanged while removing only the user-facing click-order
+  requirement.
+
+## Provider advanced metadata and generated documents (2026-08-04)
+
+- The existing provider `settingsConfig` envelope may contain an `advanced`
+  object for Codex/Grok maintenance metadata. Repository update/merge paths
+  round-trip unknown envelope fields; they must not be interpreted as secret
+  material or silently discarded.
+- Runtime materializers consume only CLI-recognized typed fields and the nested
+  provider document. The frontend-generated Claude JSON, Codex TOML and Grok
+  TOML are seed documents for an empty provider record; backend validation and
+  key-manager-owned secret projection remain authoritative on save/apply.
+- No IPC signature or writer contract changes are required for this metadata.
+  Global writers continue to use existing target-specific config files,
+  fingerprint checks, compensation and journal recovery.

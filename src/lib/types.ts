@@ -368,6 +368,16 @@ export type TreeNode =
 
 export type TerminalSessionKind = "pty" | "subagent-transcript" | "file-editor" | "synced-history";
 
+export interface NativeProviderLaunchSnapshot {
+  appType: "claude" | "codex" | "grokbuild";
+  providerId: string;
+  providerName: string;
+  source: string;
+  snapshotId: string;
+  claudeSettingsPath: string | null;
+  generatedHome: string | null;
+}
+
 export type SubagentTranscriptSourceKind = "pending" | "child-jsonl" | "parent-jsonl" | "lifecycle-only";
 
 export interface SubagentTranscriptSource {
@@ -432,6 +442,8 @@ export interface TerminalSession {
   /** true 时启动命令由 XTermTerminal 在 initialTerminalOutput 写完后再发送。 */
   deferStartupUntilInitialOutput?: boolean;
   cliSessionId?: string;
+  /** 本次会话使用的原生 Provider 快照；恢复时复用，避免后续切换污染旧会话。 */
+  providerSnapshot?: NativeProviderLaunchSnapshot;
   remoteTranscriptRef?: string;
   remoteHistoryConsumerId?: string;
   remoteHistorySourceInstanceId?: string;

@@ -14,15 +14,24 @@ const OUTPUT_BACKLOG_RECOVERY_FRAMES = OUTPUT_BACKLOG_WARN_FRAMES / 2;
 const DIAGNOSTIC_SESSION_LIMIT = 5;
 
 export interface TerminalClaudeProviderLaunchConfig {
-  projectId: string;
+  appType: "claude";
   providerId: string;
-  dbPath?: string;
+  snapshotId: string;
+  claudeSettingsPath: string;
 }
 
 export interface TerminalCodexProviderLaunchConfig {
+  appType: "codex";
   providerId: string;
-  dbPath?: string;
-  codexConfigDir?: string;
+  snapshotId: string;
+  generatedHome: string;
+}
+
+export interface TerminalGrokProviderLaunchConfig {
+  appType: "grokbuild";
+  providerId: string;
+  snapshotId: string;
+  generatedHome: string;
 }
 
 export interface TerminalColors {
@@ -37,6 +46,7 @@ export interface TerminalCreateRequest extends Record<string, unknown> {
   hookEnvEnabled: boolean;
   claudeProvider: TerminalClaudeProviderLaunchConfig | null;
   codexProvider: TerminalCodexProviderLaunchConfig | null;
+  grokProvider: TerminalGrokProviderLaunchConfig | null;
   sshLaunch: unknown | null;
   terminalColors: TerminalColors;
 }

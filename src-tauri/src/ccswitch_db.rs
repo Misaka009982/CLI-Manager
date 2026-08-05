@@ -1,8 +1,6 @@
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::time::Duration;
 
-use serde::Serialize;
 use uuid::Uuid;
 
 const SNAPSHOT_SCRIPT: &str = r#"
@@ -14,38 +12,6 @@ try:
 finally:
     target.close()
     source.close()
-"#;
-
-const WRITE_SETTING_SCRIPT: &str = r#"
-import json, sqlite3, sys
-request = json.load(sys.stdin)
-connection = sqlite3.connect(sys.argv[1], timeout=15)
-try:
-    connection.execute("BEGIN IMMEDIATE")
-    if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'").fetchone() is None:
-        connection.rollback()
-        print("settings_table_missing")
-        raise SystemExit(0)
-    row = connection.execute("SELECT value FROM settings WHERE key = ?", (request["key"],)).fetchone()
-    current = None if row is None else row[0]
-    if current != request["expected"]:
-        connection.rollback()
-        print("conflict")
-        raise SystemExit(0)
-    if request["upsert"]:
-        connection.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (request["key"], request["value"]),
-        )
-    elif row is not None:
-        connection.execute("UPDATE settings SET value = ? WHERE key = ?", (request["value"], request["key"]))
-    connection.commit()
-    print("ok")
-except Exception:
-    connection.rollback()
-    raise
-finally:
-    connection.close()
 "#;
 
 pub(crate) struct PreparedReadPath {
@@ -75,47 +41,26 @@ fn wsl_target(path: &Path) -> Result<(String, String), String> {
 pub(crate) fn wsl_file_exists(path: &Path) -> Result<bool, String> {
     let (distro, linux_path) = wsl_target(path)?;
     let wsl = crate::wsl::find_wsl_exe().ok_or_else(|| "wsl_unavailable".to_string())?;
-    crate::shell_resolver::silent_command(wsl.to_string_lossy().as_ref())
+    let mut command = crate::shell_resolver::silent_command(wsl.to_string_lossy().as_ref());
+    command
         .arg("-d")
         .arg(distro)
         .args(["--exec", "test", "-f"])
-        .arg(linux_path)
-        .status()
-        .map(|status| status.success())
+        .arg(linux_path);
+    crate::shell_resolver::output_with_timeout(command, Duration::from_secs(15))
+        .map(|output| output.status.success())
         .map_err(|err| format!("wsl_db_check_failed: {err}"))
 }
 
-fn run_wsl_python(
-    distro: &str,
-    script: &str,
-    args: &[&str],
-    stdin: Option<&[u8]>,
-) -> Result<String, String> {
+fn run_wsl_python(distro: &str, script: &str, args: &[&str]) -> Result<String, String> {
     let wsl = crate::wsl::find_wsl_exe().ok_or_else(|| "wsl_unavailable".to_string())?;
     let mut command = crate::shell_resolver::silent_command(wsl.to_string_lossy().as_ref());
     command
         .arg("-d")
         .arg(distro)
         .args(["--exec", "python3", "-c", script])
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if stdin.is_some() {
-        command.stdin(Stdio::piped());
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|err| format!("wsl_sqlite_runtime_unavailable: {err}"))?;
-    if let Some(input) = stdin {
-        child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| "wsl_sqlite_stdin_unavailable".to_string())?
-            .write_all(input)
-            .map_err(|err| format!("wsl_sqlite_stdin_failed: {err}"))?;
-    }
-    let output = child
-        .wait_with_output()
+        .args(args);
+    let output = crate::shell_resolver::output_with_timeout(command, Duration::from_secs(15))
         .map_err(|err| format!("wsl_sqlite_failed: {err}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -144,12 +89,7 @@ pub(crate) async fn prepare_read_path(path: &Path) -> Result<PreparedReadPath, S
     let snapshot_wsl = crate::wsl::windows_path_to_wsl(&snapshot.to_string_lossy())
         .ok_or_else(|| "wsl_snapshot_path_unavailable".to_string())?;
     let result = tokio::task::spawn_blocking(move || {
-        run_wsl_python(
-            &distro,
-            SNAPSHOT_SCRIPT,
-            &[&linux_path, &snapshot_wsl],
-            None,
-        )
+        run_wsl_python(&distro, SNAPSHOT_SCRIPT, &[&linux_path, &snapshot_wsl])
     })
     .await
     .map_err(|err| format!("wsl_sqlite_failed: {err}"))?;
@@ -163,47 +103,6 @@ pub(crate) async fn prepare_read_path(path: &Path) -> Result<PreparedReadPath, S
     })
 }
 
-#[derive(Serialize)]
-struct SettingWriteRequest<'a> {
-    key: &'a str,
-    expected: Option<&'a str>,
-    value: &'a str,
-    upsert: bool,
-}
-
-pub(crate) async fn write_wsl_setting(
-    path: &Path,
-    key: &str,
-    expected: Option<&str>,
-    value: &str,
-    upsert: bool,
-) -> Result<bool, String> {
-    let (distro, linux_path) = wsl_target(path)?;
-    let request = serde_json::to_vec(&SettingWriteRequest {
-        key,
-        expected,
-        value,
-        upsert,
-    })
-    .map_err(|err| format!("wsl_sqlite_request_failed: {err}"))?;
-    let result = tokio::task::spawn_blocking(move || {
-        run_wsl_python(
-            &distro,
-            WRITE_SETTING_SCRIPT,
-            &[&linux_path],
-            Some(&request),
-        )
-    })
-    .await
-    .map_err(|err| format!("wsl_sqlite_failed: {err}"))??;
-    match result.as_str() {
-        "ok" => Ok(true),
-        "settings_table_missing" => Ok(false),
-        "conflict" => Err("db_write_conflict".to_string()),
-        _ => Err(format!("wsl_sqlite_invalid_response: {result}")),
-    }
-}
-
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
@@ -211,14 +110,13 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires CLI_MANAGER_TEST_WSL_DISTRO and a working WSL Python sqlite3 runtime"]
-    async fn wsl_database_roundtrip_uses_snapshot_and_in_distro_write() {
+    async fn wsl_database_snapshot_is_read_only() {
         let distro = std::env::var("CLI_MANAGER_TEST_WSL_DISTRO").unwrap();
         let linux_path = format!("/tmp/cli-manager-ccswitch-test-{}.db", Uuid::new_v4());
         run_wsl_python(
             &distro,
             "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)'); c.execute('INSERT INTO settings VALUES (?, ?)', ('common_config_claude', 'before')); c.commit(); c.close()",
             &[&linux_path],
-            None,
         )
         .unwrap();
         let unc = PathBuf::from(crate::wsl::linux_to_unc_wsl_path(&linux_path, &distro));
@@ -239,31 +137,10 @@ mod tests {
         drop(connection);
         drop(prepared);
 
-        assert!(
-            write_wsl_setting(&unc, "common_config_claude", Some("before"), "after", true,)
-                .await
-                .unwrap()
-        );
-
-        let prepared = prepare_read_path(&unc).await.unwrap();
-        let options = sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(prepared.path())
-            .read_only(true);
-        let mut connection = SqliteConnection::connect_with(&options).await.unwrap();
-        let after: String = sqlx::query("SELECT value FROM settings WHERE key = ?1")
-            .bind("common_config_claude")
-            .fetch_one(&mut connection)
-            .await
-            .unwrap()
-            .try_get("value")
-            .unwrap();
-        assert_eq!(after, "after");
-
         let _ = run_wsl_python(
             &distro,
             "import os,sys; os.remove(sys.argv[1]) if os.path.exists(sys.argv[1]) else None",
             &[&linux_path],
-            None,
         );
     }
 }

@@ -12,9 +12,11 @@ export interface UseNativeProviderCommonConfigResult {
   dirty: boolean;
   loading: boolean;
   saving: boolean;
+  validating: boolean;
   errorCode: string | null;
   setDraft: (value: string) => void;
   refresh: () => Promise<void>;
+  validate: () => Promise<void>;
   save: () => Promise<void>;
   clearError: () => void;
 }
@@ -24,6 +26,7 @@ export function useNativeProviderCommonConfig(appType: NativeProviderAppType): U
   const [draft, setDraftState] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [validating, setValidating] = useState(false);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const requestRef = useRef(0);
 
@@ -79,15 +82,36 @@ export function useNativeProviderCommonConfig(appType: NativeProviderAppType): U
     }
   }, [appType, document?.format, draft]);
 
+  const validate = useCallback(async () => {
+    setValidating(true);
+    setErrorCode(null);
+    try {
+      await invoke("provider_common_config_validate", {
+        input: {
+          appType,
+          value: draft,
+          format: document?.format ?? commonConfigFormat(appType),
+        },
+      });
+    } catch (error) {
+      setErrorCode(providerErrorCode(error));
+      throw error;
+    } finally {
+      setValidating(false);
+    }
+  }, [appType, document?.format, draft]);
+
   return {
     document,
     draft,
     dirty: document ? document.value !== draft : draft.trim().length > 0,
     loading,
     saving,
+    validating,
     errorCode,
     setDraft,
     refresh,
+    validate,
     save,
     clearError: () => setErrorCode(null),
   };

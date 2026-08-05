@@ -66,7 +66,6 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
   const codexHookConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
   const piHookConfigDir = useSettingsStore((s) => s.piHookConfigDir);
   const grokHookConfigDir = useSettingsStore((s) => s.grokHookConfigDir);
-  const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
   const claudeHookBridgeEnabled = useSettingsStore((s) => s.claudeHookBridgeEnabled);
   const codexHookBridgeEnabled = useSettingsStore((s) => s.codexHookBridgeEnabled);
   const piHookBridgeEnabled = useSettingsStore((s) => s.piHookBridgeEnabled);
@@ -103,7 +102,6 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
         codexSelectedDir,
         piSelectedDir,
         grokSelectedDir,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
         autoRepair: claudeHookBridgeEnabled && claudeHookAutoRepairKnownInstalled,
       });
       setStatus(nextStatus);
@@ -119,7 +117,6 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
       setLoading(false);
     }
   }, [
-    ccSwitchDbPath,
     claudeHookBridgeEnabled,
     claudeHookAutoRepairKnownInstalled,
     claudeHookAutoRepairNoticeShown,
@@ -150,7 +147,6 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
         codexSelectedDir,
         piSelectedDir,
         grokSelectedDir,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       };
       if (tools.includes("claude")) {
         await invoke<HookSettingsStatus>("hook_settings_uninstall", dirs);

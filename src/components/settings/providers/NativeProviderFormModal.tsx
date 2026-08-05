@@ -1,10 +1,31 @@
 import { useEffect, useState } from "react";
-import { Button, Group, Modal, Stack, Switch, TextInput, Textarea } from "@mantine/core";
+import { Alert, Button, Group, Modal, Stack, Switch, Text, TextInput, Textarea } from "@mantine/core";
+import { AlertTriangle } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
+import { NativeClaudeConfigSection } from "./NativeClaudeConfigSection";
+import { NativeProviderAdvancedConfigSection } from "./NativeProviderAdvancedConfigSection";
+import { NativeProviderCodeEditor } from "./NativeProviderCodeEditor";
+import {
+  defaultNativeProviderAdvancedConfig,
+  generateNativeProviderConfigDocument,
+  isEmptyNativeProviderConfigDocument,
+  isValidNativeProviderAdvancedConfig,
+  nativeProviderAdvancedConfigFromSettings,
+  settingsConfigWithAdvanced,
+  type NativeProviderAdvancedConfig,
+} from "./nativeProviderAdvancedConfig";
+import {
+  isValidProviderConfigDocument,
+  nativeProviderConfigFormat,
+  settingsConfigFromProviderDocument,
+  providerConfigDocumentFromSettings,
+} from "./nativeProviderConfigView";
 import type {
   NativeProviderAppType,
   NativeProviderCard,
+  NativeProviderClaudeConfig,
   NativeProviderCreateInput,
+  NativeProviderDetail,
   NativeProviderUpdateInput,
 } from "./nativeProviderTypes";
 
@@ -17,6 +38,9 @@ export interface NativeProviderFormValues {
   category: string;
   notes: string;
   commonConfigEnabled: boolean;
+  claudeConfig: NativeProviderClaudeConfig;
+  providerConfig: string;
+  advanced: NativeProviderAdvancedConfig;
 }
 
 interface NativeProviderFormModalProps {
@@ -24,6 +48,7 @@ interface NativeProviderFormModalProps {
   mode: "create" | "edit";
   appType: NativeProviderAppType;
   provider: NativeProviderCard | null;
+  providerDetail: NativeProviderDetail | null;
   loading: boolean;
   onClose: () => void;
   onSubmit: (input: NativeProviderCreateInput | NativeProviderUpdateInput) => Promise<void>;
@@ -38,20 +63,90 @@ const EMPTY_VALUES: NativeProviderFormValues = {
   category: "",
   notes: "",
   commonConfigEnabled: true,
+  providerConfig: "{}",
+  advanced: defaultNativeProviderAdvancedConfig(),
+  claudeConfig: {
+    apiFormat: "anthropic",
+    apiKeyField: "ANTHROPIC_AUTH_TOKEN",
+    isFullUrl: false,
+    model: "",
+    defaultHaikuModel: "",
+    defaultHaikuModelName: "",
+    defaultSonnetModel: "",
+    defaultSonnetModelName: "",
+    defaultOpusModel: "",
+    defaultOpusModelName: "",
+    defaultFableModel: "",
+    defaultFableModelName: "",
+    subagentModel: "",
+  },
 };
 
-function valuesFromProvider(provider: NativeProviderCard | null): NativeProviderFormValues {
-  if (!provider) return EMPTY_VALUES;
+function valuesFromProvider(
+  appType: NativeProviderAppType,
+  provider: NativeProviderCard | null,
+  detail: NativeProviderDetail | null,
+): NativeProviderFormValues {
+  const rawSettingsConfig = detail?.settingsConfig ?? "{}";
+  if (!provider) {
+    const advanced = nativeProviderAdvancedConfigFromSettings(rawSettingsConfig);
+    const claudeConfig = EMPTY_VALUES.claudeConfig;
+    return {
+      ...EMPTY_VALUES,
+      claudeConfig,
+      advanced,
+      providerConfig: providerConfigDocumentFromSettings(
+        appType,
+        rawSettingsConfig,
+        { claude: claudeConfig },
+        advanced,
+      ),
+    };
+  }
+  const claudeConfig = detail?.claudeConfig ?? EMPTY_VALUES.claudeConfig;
+  const baseUrl = provider.baseUrl ?? "";
+  const model = provider.model ?? claudeConfig.model;
+  const advanced = nativeProviderAdvancedConfigFromSettings(rawSettingsConfig, provider.apiFormat);
+  const apiFormat = appType === "claude"
+    ? provider.apiFormat ?? claudeConfig.apiFormat
+    : provider.apiFormat ?? advanced.wireApi;
   return {
     name: provider.name,
-    baseUrl: provider.baseUrl ?? "",
-    model: provider.model ?? "",
-    apiFormat: provider.apiFormat ?? "",
+    baseUrl,
+    model,
+    apiFormat,
     websiteUrl: provider.websiteUrl ?? "",
     category: provider.category ?? "",
     notes: provider.notes ?? "",
     commonConfigEnabled: provider.commonConfigEnabled,
+    claudeConfig: { ...EMPTY_VALUES.claudeConfig, ...claudeConfig },
+    advanced,
+    providerConfig: providerConfigDocumentFromSettings(
+      appType,
+      rawSettingsConfig,
+      {
+        baseUrl,
+        model,
+        apiFormat,
+        claude: claudeConfig,
+      },
+      advanced,
+    ),
   };
+}
+
+function hasStoredProviderConfig(appType: NativeProviderAppType, settingsConfig: string): boolean {
+  if (appType === "claude") {
+    return !isEmptyNativeProviderConfigDocument(appType, providerConfigDocumentFromSettings(appType, settingsConfig));
+  }
+  try {
+    const parsed: unknown = JSON.parse(settingsConfig);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+    const config = (parsed as { config?: unknown }).config;
+    return typeof config === "string" && config.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export function NativeProviderFormModal({
@@ -59,6 +154,7 @@ export function NativeProviderFormModal({
   mode,
   appType,
   provider,
+  providerDetail,
   loading,
   onClose,
   onSubmit,
@@ -66,17 +162,67 @@ export function NativeProviderFormModal({
   const { t } = useI18n();
   const [values, setValues] = useState<NativeProviderFormValues>(EMPTY_VALUES);
   const [nameError, setNameError] = useState(false);
+  const [providerConfigManual, setProviderConfigManual] = useState(false);
+  const configFormat = nativeProviderConfigFormat(appType);
+  const configValid = isValidProviderConfigDocument(appType, values.providerConfig);
+  const advancedConfigValid = appType === "claude" || isValidNativeProviderAdvancedConfig(values.advanced);
 
   useEffect(() => {
     if (opened) {
-      setValues(valuesFromProvider(provider));
+      const nextValues = valuesFromProvider(appType, provider, providerDetail);
+      setValues(nextValues);
+      setProviderConfigManual(hasStoredProviderConfig(appType, providerDetail?.settingsConfig ?? "{}"));
       setNameError(false);
     }
-  }, [opened, provider]);
+  }, [appType, opened, provider, providerDetail]);
 
   const updateValue = <K extends keyof NativeProviderFormValues>(key: K, value: NativeProviderFormValues[K]) => {
-    setValues((current) => ({ ...current, [key]: value }));
+    setValues((current) => {
+      const next = { ...current, [key]: value };
+      if (
+        !providerConfigManual
+        && (key === "baseUrl" || key === "model" || key === "apiFormat")
+      ) {
+        next.providerConfig = generateNativeProviderConfigDocument(appType, {
+          baseUrl: next.baseUrl,
+          model: next.model,
+          apiFormat: next.apiFormat,
+          claude: next.claudeConfig,
+        }, next.advanced);
+      }
+      return next;
+    });
     if (key === "name" && typeof value === "string" && value.trim()) setNameError(false);
+  };
+
+  const updateClaudeConfig = (claudeConfig: NativeProviderClaudeConfig) => {
+    setValues((current) => {
+      const next = { ...current, claudeConfig, model: claudeConfig.model, apiFormat: claudeConfig.apiFormat };
+      if (!providerConfigManual) {
+        next.providerConfig = generateNativeProviderConfigDocument(appType, {
+          baseUrl: next.baseUrl,
+          model: next.model,
+          apiFormat: next.apiFormat,
+          claude: claudeConfig,
+        }, next.advanced);
+      }
+      return next;
+    });
+  };
+
+  const updateAdvanced = (advanced: NativeProviderAdvancedConfig) => {
+    setValues((current) => {
+      const next = { ...current, advanced, apiFormat: advanced.wireApi };
+      if (!providerConfigManual) {
+        next.providerConfig = generateNativeProviderConfigDocument(appType, {
+          baseUrl: next.baseUrl,
+          model: next.model,
+          apiFormat: next.apiFormat,
+          claude: next.claudeConfig,
+        }, advanced);
+      }
+      return next;
+    });
   };
 
   const handleSubmit = async () => {
@@ -85,31 +231,44 @@ export function NativeProviderFormModal({
       setNameError(true);
       return;
     }
+    if (!configValid || !advancedConfigValid) return;
 
+    const model = appType === "claude" ? values.claudeConfig.model : values.model.trim();
+    const apiFormat = appType === "claude" ? values.claudeConfig.apiFormat : values.apiFormat.trim();
+    const documentSettingsConfig = settingsConfigFromProviderDocument(
+      appType,
+      values.providerConfig,
+      providerDetail?.settingsConfig,
+    );
+    const settingsConfig = appType === "claude"
+      ? documentSettingsConfig
+      : settingsConfigWithAdvanced(documentSettingsConfig, values.advanced);
     const common = {
       appType,
       name,
+      settingsConfig,
       baseUrl: values.baseUrl.trim() || undefined,
-      model: values.model.trim() || undefined,
-      apiFormat: values.apiFormat.trim() || undefined,
+      model: model.trim() || undefined,
+      apiFormat: apiFormat || undefined,
       websiteUrl: values.websiteUrl.trim() || undefined,
       category: values.category.trim() || undefined,
       notes: values.notes.trim() || undefined,
       commonConfigEnabled: values.commonConfigEnabled,
+      claudeConfig: appType === "claude" ? values.claudeConfig : undefined,
     };
 
     if (mode === "edit" && provider) {
       await onSubmit({
         ...common,
         baseUrl: values.baseUrl.trim(),
-        model: values.model.trim(),
-        apiFormat: values.apiFormat.trim(),
+        model: model.trim(),
+        apiFormat,
         providerId: provider.id,
       });
       return;
     }
 
-    await onSubmit({ ...common, settingsConfig: "{}" });
+    await onSubmit(common);
   };
 
   return (
@@ -118,7 +277,7 @@ export function NativeProviderFormModal({
       onClose={onClose}
       title={t(mode === "create" ? "providerCatalog.createTitle" : "providerCatalog.editTitle")}
       centered
-      size="lg"
+      size="xl"
     >
       <Stack gap="sm">
         <TextInput
@@ -132,7 +291,7 @@ export function NativeProviderFormModal({
         />
         <Group grow align="flex-start">
           <TextInput
-            label={t("providerCatalog.baseUrlLabel")}
+            label={t(appType === "codex" ? "providerCatalog.requestUrlLabel" : "providerCatalog.baseUrlLabel")}
             placeholder={t("providerCatalog.baseUrlPlaceholder")}
             value={values.baseUrl}
             onChange={(event) => updateValue("baseUrl", event.currentTarget.value)}
@@ -140,8 +299,14 @@ export function NativeProviderFormModal({
           <TextInput
             label={t("providerCatalog.modelLabel")}
             placeholder={t("providerCatalog.modelPlaceholder")}
-            value={values.model}
-            onChange={(event) => updateValue("model", event.currentTarget.value)}
+            value={appType === "claude" ? values.claudeConfig.model : values.model}
+            onChange={(event) => {
+              if (appType === "claude") {
+                updateClaudeConfig({ ...values.claudeConfig, model: event.currentTarget.value });
+              } else {
+                updateValue("model", event.currentTarget.value);
+              }
+            }}
           />
         </Group>
         <Group grow align="flex-start">
@@ -157,13 +322,52 @@ export function NativeProviderFormModal({
             value={values.category}
             onChange={(event) => updateValue("category", event.currentTarget.value)}
           />
-          <TextInput
-            label={t("providerCatalog.apiFormatLabel")}
-            placeholder={t("providerCatalog.apiFormatPlaceholder")}
-            value={values.apiFormat}
-            onChange={(event) => updateValue("apiFormat", event.currentTarget.value)}
-          />
         </Group>
+        {appType === "claude" && (
+          <NativeClaudeConfigSection
+            value={values.claudeConfig}
+            onChange={updateClaudeConfig}
+            disabled={loading}
+          />
+        )}
+        {appType !== "claude" && (
+          <NativeProviderAdvancedConfigSection
+            appType={appType}
+            value={values.advanced}
+            onChange={updateAdvanced}
+            disabled={loading}
+          />
+        )}
+        {!advancedConfigValid && (
+          <Alert color="red" variant="light" icon={<AlertTriangle size={16} />}>
+            {t("providerCatalog.compatibleAdvanced.invalid")}
+          </Alert>
+        )}
+        <Stack gap="xs">
+          <Text fw={600}>{t("providerCatalog.providerConfig.title")}</Text>
+          <Text size="xs" c="dimmed">{configFormat.toUpperCase()}</Text>
+          <NativeProviderCodeEditor
+            format={configFormat}
+            value={values.providerConfig}
+            path={`native-provider-form-${appType}-${provider?.id ?? "new"}`}
+            ariaLabel={t("providerCatalog.providerConfig.editorLabel", { format: configFormat.toUpperCase() })}
+            height="220px"
+            invalid={!configValid}
+            readOnly={loading}
+            onChange={(value) => {
+              setProviderConfigManual(true);
+              updateValue("providerConfig", value);
+            }}
+          />
+          {!configValid && (
+            <Alert color="red" variant="light" icon={<AlertTriangle size={16} />}>
+              {t("providerCatalog.providerConfig.invalid")}
+            </Alert>
+          )}
+          <Text size="xs" c="dimmed">
+            {t("providerCatalog.providerConfig.description", { format: configFormat.toUpperCase() })}
+          </Text>
+        </Stack>
         <Textarea
           label={t("providerCatalog.notesLabel")}
           placeholder={t("providerCatalog.notesPlaceholder")}
@@ -181,7 +385,12 @@ export function NativeProviderFormModal({
         />
         <Group justify="flex-end" mt="xs">
           <Button variant="subtle" color="gray" onClick={onClose}>{t("common.cancel")}</Button>
-          <Button color="cliPrimary" loading={loading} onClick={() => void handleSubmit().catch(() => undefined)}>
+          <Button
+            color="cliPrimary"
+            loading={loading}
+            disabled={loading || !configValid || !advancedConfigValid}
+            onClick={() => void handleSubmit().catch(() => undefined)}
+          >
             {t("common.save")}
           </Button>
         </Group>

@@ -18,7 +18,7 @@ pub mod hook_client;
 mod linux_graphics;
 mod log_rotation;
 mod process_job;
-mod provider;
+pub(crate) mod provider;
 pub mod pty;
 mod runtime_diagnostics;
 mod shell_resolver;
@@ -806,6 +806,15 @@ pub fn run() {
             }
             if let Err(err) = tauri::async_runtime::block_on(provider::initialize()) {
                 log::warn!("provider database initialization skipped: {err}");
+            } else {
+                if let Err(err) = tauri::async_runtime::block_on(provider::initialize_cache()) {
+                    log::warn!("provider Home cache initialization skipped: {err}");
+                }
+                if let Err(err) =
+                    tauri::async_runtime::block_on(provider::global::recover_pending())
+                {
+                    log::warn!("provider apply recovery skipped: {err}");
+                }
             }
             conpty_sideload::initialize(app.handle());
             // 保留应用自身调试日志，但压掉 sqlx 的逐条 SQL 输出。
@@ -1105,16 +1114,6 @@ pub fn run() {
             commands::ccusage::ccusage_get_status,
             commands::ccusage::ccusage_install_tools,
             commands::ccusage::ccusage_refresh_report,
-            commands::ccswitch::ccswitch_list_providers,
-            commands::ccswitch::ccswitch_get_project_provider,
-            commands::ccswitch::ccswitch_apply_provider,
-            commands::ccswitch::ccswitch_reset_project_provider,
-            commands::ccswitch::ccswitch_prepare_claude_provider,
-            commands::ccswitch::ccswitch_prepare_codex_provider,
-            commands::ccswitch::ccswitch_test_provider_model,
-            commands::ccswitch::ccswitch_cleanup_codex_profiles,
-            commands::ccswitch::ccswitch_probe_projects,
-            commands::ccswitch::ccswitch_list_common_configs,
             commands::provider::provider_catalog_list,
             commands::provider::provider_catalog_get,
             commands::provider::provider_catalog_create,
@@ -1123,7 +1122,6 @@ pub fn run() {
             commands::provider::provider_catalog_duplicate,
             commands::provider::provider_catalog_delete,
             commands::provider::provider_catalog_set_enabled,
-            commands::provider::provider_catalog_set_current,
             commands::provider::provider_catalog_reorder,
             commands::provider::provider_key_list,
             commands::provider::provider_key_create,
@@ -1135,6 +1133,25 @@ pub fn run() {
             commands::provider::provider_key_reveal,
             commands::provider::provider_common_config_get,
             commands::provider::provider_common_config_set,
+            commands::provider::provider_common_config_validate,
+            commands::provider::provider_home_get,
+            commands::provider::provider_home_preview,
+            commands::provider::provider_home_select,
+            commands::provider::provider_home_reset,
+            commands::provider::provider_global_preview,
+            commands::provider::provider_global_current,
+            commands::provider::provider_global_apply,
+            commands::provider::provider_environment_inspect,
+            commands::provider::provider_environment_open_target,
+            commands::provider::provider_global_repair,
+            commands::provider::provider_scope_resolve,
+            commands::provider::provider_scope_prepare,
+            commands::provider::provider_scope_release_snapshot,
+            commands::provider::provider_scope_gc_snapshots,
+            commands::provider::provider_import_preview,
+            commands::provider::provider_import_commit,
+            commands::provider::provider_import_issues,
+            commands::provider::provider_import_resolve_issue,
             commands::command_suggestion::command_suggestion_test_model,
             commands::command_suggestion::command_suggestion_generate,
             commands::command_suggestion::command_suggestion_list_path_entries,
@@ -1192,13 +1209,11 @@ pub fn run() {
             statusline::statusline_render_preview,
             statusline::statusline_install,
             statusline::statusline_uninstall,
-            statusline::statusline_sync_ccswitch,
             statusline::statusline_get_catalog,
             statusline::statusline_powerline_font_status,
             statusline::statusline_powerline_install_fonts,
             codex_statusline::codex_statusline_load,
             codex_statusline::codex_statusline_save,
-            codex_statusline::codex_statusline_sync_ccswitch,
             statusline_profiles::statusline_profiles_load,
             statusline_profiles::statusline_backup_export,
             statusline_profiles::statusline_backup_restore,

@@ -56,7 +56,7 @@ export function NativeProviderKeyReplacementModal({
           <Button
             color="red"
             loading={loading}
-            disabled={!replacementKeyId || candidates.length === 0}
+            disabled={loading || !replacementKeyId || candidates.length === 0}
             onClick={() => replacementKeyId && void onConfirm(replacementKeyId).catch(() => undefined)}
           >
             {t("providerCatalog.replaceAndDelete")}

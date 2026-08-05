@@ -79,12 +79,22 @@ pub(crate) fn documents_from_settings(app_type: &str, raw: &str) -> Vec<Provider
     }
 }
 
-fn invalid_document(kind: &str, format: &str, value: &str) -> ProviderDocument {
+fn invalid_document(kind: &str, format: &str, raw: &str) -> ProviderDocument {
+    let has_secret = [
+        "token",
+        "key",
+        "secret",
+        "password",
+        "credential",
+        "authorization",
+    ]
+    .iter()
+    .any(|marker| raw.to_ascii_lowercase().contains(marker));
     ProviderDocument {
         kind: kind.to_string(),
         format: format.to_string(),
-        value: value.to_string(),
-        has_secret: false,
+        value: "[INVALID CONFIG DOCUMENT]".to_string(),
+        has_secret,
         valid: false,
     }
 }
@@ -359,7 +369,10 @@ fn patch_json_document(
     Ok(incoming)
 }
 
-fn preserve_toml_secrets(existing: &str, incoming: &mut DocumentMut) -> Result<(), String> {
+pub(crate) fn preserve_toml_secrets(
+    existing: &str,
+    incoming: &mut DocumentMut,
+) -> Result<(), String> {
     let Ok(existing_document) = existing.parse::<DocumentMut>() else {
         if !collect_toml_edit_secret_paths(incoming.as_item(), &[]).is_empty() {
             return Err(error(
@@ -597,5 +610,16 @@ mod tests {
         );
         assert!(documents[0].has_secret);
         assert!(documents[1].valid);
+    }
+
+    #[test]
+    fn invalid_provider_document_never_returns_raw_content() {
+        let documents = documents_from_settings(
+            "codex",
+            r#"{"auth":{"OPENAI_API_KEY":"secret"},"config":"not valid json""#,
+        );
+        assert_eq!(documents[0].value, "[INVALID CONFIG DOCUMENT]");
+        assert!(documents[0].has_secret);
+        assert!(!documents[0].value.contains("secret"));
     }
 }

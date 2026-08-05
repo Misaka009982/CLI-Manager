@@ -1,5 +1,5 @@
-import { ActionIcon, Badge, Card, Group, Stack, Switch, Text, Tooltip } from "@mantine/core";
-import { Copy, Trash2 } from "lucide-react";
+import { ActionIcon, Badge, Card, Group, Stack, Switch, Text, Tooltip, UnstyledButton } from "@mantine/core";
+import { ChevronDown, ChevronUp, Copy, Trash2 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import type { NativeProviderCard as NativeProviderCardData } from "./nativeProviderTypes";
 
@@ -7,47 +7,90 @@ interface NativeProviderCardProps {
   provider: NativeProviderCardData;
   selected: boolean;
   busy: boolean;
+  isFirst: boolean;
+  isLast: boolean;
   onSelect: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onEnabledChange: (enabled: boolean) => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
 }
 export function NativeProviderCard({
   provider,
   selected,
   busy,
+  isFirst,
+  isLast,
   onSelect,
   onDuplicate,
   onDelete,
   onEnabledChange,
+  onMoveUp,
+  onMoveDown,
 }: NativeProviderCardProps) {
   const { t } = useI18n();
-  const endpoint = provider.baseUrl || provider.model || t("providerCatalog.notConfigured");
+  const endpoint = provider.baseUrl || t("providerCatalog.notConfigured");
+  const endpointLabel = t(provider.appType === "codex"
+    ? "providerCatalog.requestUrl"
+    : "providerCatalog.baseUrl");
+  const model = provider.model || t("providerCatalog.notConfigured");
 
   return (
     <Card
       withBorder
       radius="lg"
       padding="sm"
-      role="button"
-      tabIndex={0}
-      aria-pressed={selected}
+      role="group"
+      aria-label={t("providerCatalog.selectProvider", { name: provider.name })}
       className={`cursor-pointer transition-colors ${selected ? "border-primary bg-primary/10" : "border-border/70 bg-surface-container-low"}`}
       onClick={onSelect}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onSelect();
-        }
-      }}
     >
       <Stack gap="xs">
         <Group justify="space-between" align="flex-start" wrap="nowrap">
-          <Stack gap={2} miw={0}>
-            <Text fw={600} truncate title={provider.name}>{provider.name}</Text>
-            <Text size="xs" c="dimmed" truncate title={endpoint}>{endpoint}</Text>
-          </Stack>
+          <UnstyledButton
+            type="button"
+            className="min-w-0 flex-1 rounded-md text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            aria-pressed={selected}
+            aria-label={t("providerCatalog.selectProvider", { name: provider.name })}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect();
+            }}
+          >
+            <Stack gap={2}>
+              <Text fw={600} truncate title={provider.name}>{provider.name}</Text>
+              <Text size="xs" c="dimmed" truncate title={endpoint}>
+                {endpointLabel}: {endpoint}
+              </Text>
+              <Text size="xs" c="dimmed" truncate title={model}>
+                {t("providerCatalog.model")}: {model}
+              </Text>
+            </Stack>
+          </UnstyledButton>
           <Group gap={2} wrap="nowrap" onClick={(event) => event.stopPropagation()}>
+            <Tooltip label={t("providerCatalog.moveUp")}>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                aria-label={t("providerCatalog.moveUp")}
+                disabled={busy || isFirst}
+                onClick={onMoveUp}
+              >
+                <ChevronUp size={15} />
+              </ActionIcon>
+            </Tooltip>
+            <Tooltip label={t("providerCatalog.moveDown")}>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                aria-label={t("providerCatalog.moveDown")}
+                disabled={busy || isLast}
+                onClick={onMoveDown}
+              >
+                <ChevronDown size={15} />
+              </ActionIcon>
+            </Tooltip>
             <Tooltip label={t("providerCatalog.duplicate")}>
               <ActionIcon
                 variant="subtle"

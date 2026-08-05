@@ -49,6 +49,7 @@ import { debugConsoleWarn } from "./lib/debugConsole";
 import { createPerfMarker, logInfo, logWarn } from "./lib/logger";
 import { getContrastRatioFromHex, MIN_APPLY_CONTRAST_RATIO } from "./lib/contrast";
 import { getDb } from "./lib/db";
+import { getHistoryPathArgs } from "./lib/historyPathArgs";
 import { translateCurrent, useI18n } from "./lib/i18n";
 import { getOsPlatform } from "./lib/shell";
 import { normalizeFontFamilyStack } from "./lib/systemFonts";
@@ -160,7 +161,6 @@ async function hasInstalledCliHook(): Promise<boolean> {
     codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
     piSelectedDir: settings.piHookConfigDir?.trim() || null,
     grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
-    ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
     autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
   });
   if (status.claudeAutoRepaired && !settings.claudeHookAutoRepairNoticeShown) {
@@ -600,8 +600,7 @@ function App() {
         await getDb();
         if (disposed) return;
         await invoke("history_sync_request_logs", {
-          claudeConfigDir: claudeHookConfigDir?.trim() || null,
-          codexConfigDir: codexHookConfigDir?.trim() || null,
+          ...(await getHistoryPathArgs()),
           force: false,
         });
       } catch (err) {

@@ -59,6 +59,14 @@ backup preservation, and idempotent re-open.
 - [ ] Source/common/provider/effective/live-diff views identify field origin.
 - [ ] No UI exposes automatic rotation, health, quota, retry, validity, or
   failover controls.
+- [ ] Import is opened by an explicit catalog action; the source path, preview,
+  repair mapping, consent and commit workflow are not permanently inline in
+  the provider catalog.
+- [ ] Import repair rows show project/Worktree display names, with stable IDs
+  retained as secondary diagnostics and a localized fallback for deleted
+  records.
+- [ ] CLI Home is a separate provider-page surface; the catalog does not render
+  the full Home/environment/global-apply section inline.
 
 ## Gate 3 — Global Home materialization
 
@@ -138,6 +146,9 @@ backup preservation, and idempotent re-open.
 - [ ] Screen review confirms the supplied CCS screenshots’ functional depth:
   list cards, top-level endpoint/key/model, multi-key, raw full config,
   common config and global switch are all present.
+- [ ] The provider list and detail panes use the same bounded responsive height;
+  both scroll independently, long lists do not grow the outer page, and no
+  detail card is blank, clipped, overlapped or pushed off-screen.
 
 ## Required automated checks
 
@@ -163,3 +174,37 @@ localized error mapping, and scope selector behavior.
   provider-domain flows.
 - [ ] Changelog target is replaced from `[TEMP]` with the user-provided
   release version.
+
+### Phase 7 implementation evidence (2026-08-04)
+
+- [x] Static UI implementation: the catalog exposes an Import action and only
+  mounts the complete import workflow inside a modal while it is open.
+- [x] Repair labels resolve project/Worktree names from the project snapshot;
+  exact issue/provider IDs remain unchanged for repair commands, with localized
+  missing-record fallbacks. `node --test scripts/nativeProviderImportDisplay.test.mjs`:
+  3 passed, 0 failed.
+- [x] CLI Home is a separate page surface and reuses the existing Home hook and
+  section; catalog/common-config content is not rendered in that surface.
+- [x] The catalog/detail shell has one bounded responsive height at `lg` and
+  independent vertical scrolling; the catalog itself fills the shared height.
+- [x] New action, surface, repair-label and fallback strings have matching
+  `zh-CN`/`en-US` entries; static parity is zh=3434/en=3434 with no missing or
+  extra keys.
+- [ ] Runtime UI checks at 1024px/1440px, keyboard/focus/ARIA, language switch,
+  macOS runtime and WSL paths remain blocked by the current environment and
+  closeout constraints.
+
+### UI-05~08 implementation evidence (2026-08-04)
+
+- [x] Common configuration is collapsible and uses Monaco for editing. Claude
+  is presented as JSON; Codex/Grok Build are presented as TOML. JSON local
+  object checks and the non-writing backend `provider_common_config_validate`
+  command provide validation before save.
+- [x] Existing Claude/Codex/Grok type tabs retain their corresponding icons.
+- [x] `供应商目录 / CLI Home` surface navigation is rendered above the CLI type
+  tabs; only the selected surface is mounted.
+- [x] Provider detail, key and raw-document cards have responsive min-width and
+  overflow protection; narrow layouts wrap or collapse detail fields instead
+  of clipping them, while list/detail panes retain independent scrolling.
+- [ ] Runtime verification at 1024px/1440px, Monaco focus/ARIA, keyboard flow,
+  language switching, macOS runtime and WSL remain environment-blocked.

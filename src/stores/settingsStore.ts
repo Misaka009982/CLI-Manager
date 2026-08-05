@@ -88,7 +88,6 @@ type LastSettingsTab =
   | "terminal-theme"
   | "shortcuts"
   | "templates"
-  | "providers"
   | "native-providers"
   | "model-pricing"
   | "cc-connect"
@@ -677,7 +676,6 @@ const LAST_SETTINGS_TABS: readonly LastSettingsTab[] = [
   "terminal-theme",
   "shortcuts",
   "templates",
-  "providers",
   "native-providers",
   "model-pricing",
   "cc-connect",
@@ -751,6 +749,7 @@ function migrateTaskbarAttentionFlashCount(value: unknown): number {
 }
 
 function migrateLastSettingsTab(value: unknown): LastSettingsTab {
+  if (value === "providers") return "native-providers";
   return typeof value === "string" && LAST_SETTINGS_TABS.includes(value as LastSettingsTab)
     ? (value as LastSettingsTab)
     : DEFAULTS.lastSettingsTab;

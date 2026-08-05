@@ -162,6 +162,30 @@ mod process_tree_tests {
     }
 }
 
+#[cfg(test)]
+mod process_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn long_running_process_is_terminated_at_timeout() {
+        let command = if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "ping 127.0.0.1 -n 6 > nul"]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 5"]);
+            command
+        };
+        let started = std::time::Instant::now();
+        let error = output_with_timeout(command, std::time::Duration::from_millis(100))
+            .expect_err("long-running process should time out");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < std::time::Duration::from_secs(4));
+    }
+}
+
 pub fn resolve_git_bash_exe() -> Option<PathBuf> {
     fixed_path_candidate()
         .or_else(path_git_candidate)

@@ -1,10 +1,13 @@
 use super::documents::merge_json_documents;
+use super::dto::ClaudeConfigInput;
 use super::keys::{activate_key_in_transaction, delete_key_in_transaction};
 use super::support::{
-    apply_config_fields, config_summary, contains_secret_fields, duplicate_settings_config,
+    apply_claude_config_fields, apply_claude_meta, apply_config_fields,
+    claude_config_from_settings, config_summary, contains_secret_fields, duplicate_settings_config,
     normalize_app_type, project_key_into_settings, redact_settings_config,
 };
 use crate::provider::database;
+use serde_json::Map;
 use serde_json::Value;
 use sqlx::Connection;
 use tempfile::tempdir;
@@ -47,6 +50,19 @@ fn projects_active_key_into_app_specific_json_fields() {
 }
 
 #[test]
+fn projects_claude_key_into_selected_auth_field() {
+    let projected = project_key_into_settings(
+        "claude",
+        r#"{"env":{"ANTHROPIC_API_KEY":"","ANTHROPIC_AUTH_TOKEN":"old"}}"#,
+        "sk-selected",
+    )
+    .unwrap();
+    let value: Value = serde_json::from_str(&projected).unwrap();
+    assert_eq!(value["env"]["ANTHROPIC_API_KEY"], "sk-selected");
+    assert!(value["env"]["ANTHROPIC_AUTH_TOKEN"].is_null());
+}
+
+#[test]
 fn applies_visible_config_fields_without_overwriting_credentials() {
     let updated = apply_config_fields(
         "claude",
@@ -65,6 +81,55 @@ fn applies_visible_config_fields_without_overwriting_credentials() {
     );
     assert_eq!(value["env"]["ANTHROPIC_MODEL"], "claude-test");
     assert_eq!(value["api_format"], "anthropic");
+}
+
+#[test]
+fn claude_advanced_fields_round_trip_to_settings_and_meta() {
+    let input = ClaudeConfigInput {
+        api_format: Some("openai_chat".to_string()),
+        api_key_field: Some("ANTHROPIC_API_KEY".to_string()),
+        is_full_url: Some(true),
+        model: Some("fallback[1M]".to_string()),
+        default_haiku_model: Some("haiku".to_string()),
+        default_haiku_model_name: Some("Haiku".to_string()),
+        default_sonnet_model: Some("sonnet[1M]".to_string()),
+        default_sonnet_model_name: Some("Sonnet".to_string()),
+        default_opus_model: Some("opus".to_string()),
+        default_opus_model_name: Some("Opus".to_string()),
+        default_fable_model: Some("fable[1M]".to_string()),
+        default_fable_model_name: Some("Fable".to_string()),
+        subagent_model: Some("subagent[1M]".to_string()),
+    };
+    let raw = r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"existing"}}"#;
+    let updated = apply_claude_config_fields(raw, Some(&input)).unwrap();
+    let value: Value = serde_json::from_str(&updated).unwrap();
+    assert_eq!(value["api_format"], "openai_chat");
+    assert_eq!(value["env"]["ANTHROPIC_API_KEY"], "existing");
+    assert!(value["env"]["ANTHROPIC_AUTH_TOKEN"].is_null());
+    assert_eq!(value["env"]["ANTHROPIC_DEFAULT_FABLE_MODEL"], "fable[1M]");
+    assert_eq!(value["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], "subagent[1M]");
+
+    let mut meta = Map::new();
+    apply_claude_meta(&mut meta, Some(&input));
+    let config = claude_config_from_settings(&updated, &meta);
+    assert_eq!(config.api_format, "openai_chat");
+    assert_eq!(config.api_key_field, "ANTHROPIC_API_KEY");
+    assert!(config.is_full_url);
+    assert_eq!(config.default_sonnet_model, "sonnet[1M]");
+    assert_eq!(config.default_fable_model_name, "Fable");
+}
+
+#[test]
+fn claude_advanced_fields_reject_unknown_api_format() {
+    let input = ClaudeConfigInput {
+        api_format: Some("unknown".to_string()),
+        ..ClaudeConfigInput::default()
+    };
+    let result = apply_claude_config_fields(r#"{"env":{}}"#, Some(&input));
+    assert_eq!(
+        result.unwrap_err(),
+        "provider_claude_api_format_invalid:unknown"
+    );
 }
 
 #[test]

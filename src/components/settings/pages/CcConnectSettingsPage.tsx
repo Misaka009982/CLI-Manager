@@ -395,7 +395,6 @@ export function CcConnectSettingsPage() {
         const next = await invoke<HookMonitoringStatus>("hook_settings_get_status", {
           selectedDir: undefined,
           codexSelectedDir: codexConfigDir ?? undefined,
-          ccSwitchDbPath: ccSwitchDbPath ?? undefined,
           autoRepair: false,
         });
         if (!disposed) setCodexHookStatus(next.codex.status);
@@ -409,7 +408,7 @@ export function CcConnectSettingsPage() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [ccSwitchDbPath, codexConfigDir, codexHookBridgeEnabled]);
+  }, [codexConfigDir, codexHookBridgeEnabled]);
 
   useEffect(() => {
     void refreshStatus(true, true);

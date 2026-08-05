@@ -178,17 +178,22 @@ fn log_history_stats_oom_diagnostic(
 pub(crate) struct HistoryRoots {
     claude_config_dir: Option<PathBuf>,
     codex_config_dir: Option<PathBuf>,
+    grok_session_root: Option<PathBuf>,
 }
 
 impl HistoryRoots {
     fn cache_key(&self) -> String {
         format!(
-            "claude={}|codex={}",
+            "claude={}|codex={}|grok={}",
             self.claude_config_dir
                 .as_deref()
                 .map(path_to_key)
                 .unwrap_or_else(|| "__default__".to_string()),
             self.codex_config_dir
+                .as_deref()
+                .map(path_to_key)
+                .unwrap_or_else(|| "__default__".to_string()),
+            self.grok_session_root
                 .as_deref()
                 .map(path_to_key)
                 .unwrap_or_else(|| "__default__".to_string())
@@ -948,12 +953,17 @@ pub async fn history_list_sessions(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     project_path: Option<String>,
     query: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<HistorySessionSummary>, String> {
-    let roots = history_roots(claude_config_dir.clone(), codex_config_dir.clone());
+    let roots = history_roots(
+        claude_config_dir.clone(),
+        codex_config_dir.clone(),
+        grok_session_root.clone(),
+    );
     match catalog::list_sessions(
         &roots,
         source.clone(),
@@ -981,9 +991,10 @@ pub async fn history_list_sessions(
                     .unwrap_or_default()
                     .to_string();
                 let target_project_path = project_path.clone();
+                let grok_history_root = resolve_grok_history_root(&roots);
                 let direct = tokio::task::spawn_blocking(move || {
                     find_exact_grok_session_in_root(
-                        &resolve_grok_history_root(),
+                        &grok_history_root,
                         &session_id,
                         target_project_path.as_deref(),
                     )
@@ -1023,6 +1034,7 @@ pub async fn history_list_sessions(
                 source,
                 claude_config_dir,
                 codex_config_dir,
+                grok_session_root,
                 project_path,
                 query,
                 limit,
@@ -1037,13 +1049,14 @@ async fn history_list_sessions_legacy(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     project_path: Option<String>,
     query: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<HistorySessionSummary>, String> {
     tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let source_filter = source.map(|v| v.to_lowercase());
         let target_project_path = project_path
             .map(|v| normalize_history_path(&v))
@@ -1271,6 +1284,7 @@ pub async fn history_get_session(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
     aggregate_subtasks: Option<bool>,
@@ -1279,7 +1293,11 @@ pub async fn history_get_session(
     let aggregate_subtasks = aggregate_subtasks.unwrap_or(false);
     if !aggregate_subtasks {
         let started_at = Instant::now();
-        let roots = history_roots(claude_config_dir.clone(), codex_config_dir.clone());
+        let roots = history_roots(
+            claude_config_dir.clone(),
+            codex_config_dir.clone(),
+            grok_session_root.clone(),
+        );
         match catalog::get_session_detail_from_v2(
             &roots,
             &file_path,
@@ -1302,7 +1320,11 @@ pub async fn history_get_session(
     }
     if source_normalized == "opencode" {
         let started_at = Instant::now();
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(
+            claude_config_dir,
+            codex_config_dir,
+            grok_session_root.clone(),
+        );
         let summary =
             catalog::get_session_by_file_path(&roots, &file_path, "opencode", &project_key)
                 .await?
@@ -1317,7 +1339,7 @@ pub async fn history_get_session(
     }
     tokio::task::spawn_blocking(move || {
         let started_at = Instant::now();
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         debug!(
             "history_get_session request: source={}, project_key={}, file_path={}, claude_root={}, codex_root={}",
             source,
@@ -1406,12 +1428,13 @@ pub async fn history_convert_session(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
     target_source: String,
 ) -> Result<HistoryConversionResult, String> {
     let (result, codex_registration) = tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let file_ref =
             validate_session_file_ref_for_conversion(&file_path, &source, &project_key, &roots)?;
         ensure_source_mutation_unlocked(&target_source)?;
@@ -1498,7 +1521,7 @@ fn history_source_base(source: &str, roots: &HistoryRoots) -> Result<PathBuf, St
         "gemini" => Ok(resolve_gemini_history_root()),
         "copilot" => Ok(resolve_copilot_history_root()),
         "antigravity" => Ok(resolve_antigravity_history_root()),
-        "grok" => Ok(resolve_grok_history_root()),
+        "grok" => Ok(resolve_grok_history_root(roots)),
         "pi" => Ok(resolve_pi_history_root()),
         "kiro" => Ok(resolve_kiro_history_root()),
         "cursor" => Ok(resolve_cursor_history_root()),
@@ -1694,11 +1717,12 @@ pub async fn history_delete_session(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let source = source.trim().to_lowercase();
         if !matches!(source.as_str(), "claude" | "codex") {
             return Err("unsupported_history_mutation_source".to_string());
@@ -1720,13 +1744,14 @@ pub async fn history_search(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     project_path: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<HistorySearchResult>, String> {
     if query.trim().chars().count() < 3 {
         return Ok(Vec::new());
     }
-    let roots = history_roots(claude_config_dir, codex_config_dir);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
     let hits = catalog::search_sessions(&roots, &query, source, project_path, limit).await?;
     let _ = catalog::ensure_refresh(app, roots, false, false).await;
     Ok(hits)
@@ -1737,8 +1762,9 @@ pub async fn history_get_index_status(
     app: tauri::AppHandle,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
 ) -> Result<HistoryIndexStatus, String> {
-    let roots = history_roots(claude_config_dir, codex_config_dir);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
     catalog::ensure_refresh(app, roots, false, false).await
 }
 
@@ -1751,12 +1777,13 @@ pub async fn history_get_index_v2_status() -> Result<HistoryIndexV2Status, Strin
 pub async fn history_index_v2_preview_adapter_sessions(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: Option<String>,
     project_key: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<HistoryIndexV2AdapterSession>, String> {
     tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let source_filter = source
             .map(|value| value.trim().to_lowercase())
             .filter(|value| !value.is_empty());
@@ -2411,9 +2438,10 @@ pub async fn history_refresh_index(
     app: tauri::AppHandle,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     wait: Option<bool>,
 ) -> Result<HistoryIndexStatus, String> {
-    let roots = history_roots(claude_config_dir, codex_config_dir);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
     catalog::ensure_refresh(app, roots, true, wait.unwrap_or(true)).await
 }
 
@@ -2423,6 +2451,7 @@ pub async fn history_list_prompts(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     project_key: Option<String>,
     file_path: Option<String>,
     query: Option<String>,
@@ -2435,7 +2464,7 @@ pub async fn history_list_prompts(
     let query_for_opencode = query.clone();
     let max_items = limit.unwrap_or(200).clamp(1, 2000);
     let mut prompts: Vec<HistoryPromptItem> = tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let scope = scope
             .as_deref()
             .map(|v| v.trim().to_lowercase())
@@ -2568,10 +2597,11 @@ pub async fn history_list_stats_projects(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
 ) -> Result<Vec<String>, String> {
     let source_for_opencode = source.clone();
     let mut projects: Vec<String> = tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let source_filter = source.map(|v| v.to_lowercase());
         let mut projects = BTreeSet::new();
 
@@ -2609,6 +2639,7 @@ pub async fn history_get_stats(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     project_key: Option<String>,
     project_path: Option<String>,
     project_paths: Option<Vec<String>>,
@@ -2619,7 +2650,7 @@ pub async fn history_get_stats(
     force: Option<bool>,
 ) -> Result<HistoryStatsResponse, String> {
     let started_at = Instant::now();
-    let roots = history_roots(claude_config_dir, codex_config_dir);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
     let source_filter = source.map(|v| v.to_lowercase());
     let target_project = project_key
         .map(|v| v.trim().to_string())
@@ -5381,10 +5412,12 @@ pub(crate) fn is_subagent_transcript_path(path: &Path) -> bool {
 pub(crate) fn history_roots(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
 ) -> HistoryRoots {
     HistoryRoots {
         claude_config_dir: normalize_config_dir(claude_config_dir),
         codex_config_dir: normalize_config_dir(codex_config_dir),
+        grok_session_root: normalize_config_dir(grok_session_root),
     }
 }
 
@@ -5396,24 +5429,30 @@ fn normalize_config_dir(value: Option<String>) -> Option<PathBuf> {
 }
 
 fn resolve_claude_history_root(roots: &HistoryRoots) -> PathBuf {
-    roots
-        .claude_config_dir
-        .clone()
-        .or_else(|| detect_home_dir().map(|home| home.join(".claude")))
-        .unwrap_or_else(|| PathBuf::from(".claude"))
-        .join("projects")
+    if let Some(dir) = roots.claude_config_dir.clone() {
+        return dir.join("projects");
+    }
+    crate::provider::home::default_history_root("claude")
+        .or_else(|| detect_home_dir().map(|home| home.join(".claude").join("projects")))
+        .unwrap_or_else(|| PathBuf::from(".claude").join("projects"))
 }
 
 fn resolve_codex_config_root(roots: &HistoryRoots) -> PathBuf {
     roots
         .codex_config_dir
         .clone()
+        .or_else(|| crate::provider::home::default_config_root("codex"))
         .or_else(|| detect_home_dir().map(|home| home.join(".codex")))
         .unwrap_or_else(|| PathBuf::from(".codex"))
 }
 
 fn resolve_codex_history_root(roots: &HistoryRoots) -> PathBuf {
-    resolve_codex_config_root(roots).join("sessions")
+    if roots.codex_config_dir.is_some() {
+        return resolve_codex_config_root(roots).join("sessions");
+    }
+    crate::provider::home::default_history_root("codex")
+        .or_else(|| detect_home_dir().map(|home| home.join(".codex").join("sessions")))
+        .unwrap_or_else(|| PathBuf::from(".codex").join("sessions"))
 }
 
 fn resolve_codex_state_db_path(roots: &HistoryRoots) -> PathBuf {
@@ -5458,10 +5497,13 @@ fn resolve_antigravity_history_root() -> PathBuf {
     }
 }
 
-fn resolve_grok_history_root() -> PathBuf {
-    detect_home_dir()
-        .map(|home| home.join(".grok"))
-        .unwrap_or_else(|| PathBuf::from(".grok"))
+fn resolve_grok_history_root(roots: &HistoryRoots) -> PathBuf {
+    roots.grok_session_root.clone().unwrap_or_else(|| {
+        crate::provider::home::default_config_root("grok")
+            .map(|root| root.join("sessions"))
+            .or_else(|| detect_home_dir().map(|home| home.join(".grok").join("sessions")))
+            .unwrap_or_else(|| PathBuf::from(".grok").join("sessions"))
+    })
 }
 
 fn resolve_pi_history_root() -> PathBuf {
@@ -6237,7 +6279,9 @@ fn scan_session_files(source_filter: Option<&str>, roots: &HistoryRoots) -> Vec<
         ));
     }
     if source_filter.as_ref().map(|v| v == "grok").unwrap_or(true) {
-        files.extend(collect_grok_session_files(&resolve_grok_history_root()));
+        files.extend(collect_grok_session_files(&resolve_grok_history_root(
+            roots,
+        )));
     }
     if source_filter.as_ref().map(|v| v == "pi").unwrap_or(true) {
         files.extend(collect_pi_session_files(&resolve_pi_history_root()));
@@ -12352,6 +12396,15 @@ mod tests {
         std::fs::write(path, content).unwrap();
     }
 
+    #[test]
+    fn explicit_grok_history_root_overrides_default_root() {
+        let roots = history_roots(None, None, Some(r"C:\history\grok\sessions".to_string()));
+        assert_eq!(
+            resolve_grok_history_root(&roots),
+            PathBuf::from(r"C:\history\grok\sessions")
+        );
+    }
+
     fn expect_string_err<T>(result: Result<T, String>) -> String {
         match result {
             Ok(_) => panic!("expected error"),
@@ -13768,6 +13821,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
+            grok_session_root: None,
         };
         if cfg!(target_os = "windows") {
             std::fs::create_dir_all(
@@ -13826,6 +13880,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
+            grok_session_root: None,
         };
         write_text(
             &resolve_codex_config_root(&roots).join("config.toml"),
@@ -13972,6 +14027,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
+            grok_session_root: None,
         };
         let file = resolve_claude_history_root(&roots)
             .join("proj")
@@ -14012,6 +14068,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
+            grok_session_root: None,
         };
         write_text(
             &resolve_codex_config_root(&roots).join("config.toml"),

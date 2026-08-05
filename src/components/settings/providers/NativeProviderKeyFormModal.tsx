@@ -156,7 +156,12 @@ export function NativeProviderKeyFormModal({
         )}
         <Group justify="flex-end" mt="xs">
           <Button variant="subtle" color="gray" onClick={onClose}>{t("common.cancel")}</Button>
-          <Button color="cliPrimary" loading={loading} onClick={() => void handleSubmit().catch(() => undefined)}>
+          <Button
+            color="cliPrimary"
+            loading={loading}
+            disabled={loading}
+            onClick={() => void handleSubmit().catch(() => undefined)}
+          >
             {t("common.save")}
           </Button>
         </Group>

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -304,7 +305,7 @@ pub fn history_sources_detect(
                 source_id: spec.id,
                 location_id: spec.location.id,
                 path: path_to_string(&path),
-                environment: current_environment(),
+                environment: environment_for_path(&path),
                 reason: "default_home_location",
             });
         }
@@ -321,6 +322,15 @@ pub fn history_sources_detect(
 }
 
 fn default_candidate_path(spec: &SourceSpec, home: &Path) -> PathBuf {
+    if let Some(path) = match spec.id {
+        "claude" => crate::provider::home::default_config_root("claude"),
+        "codex" => crate::provider::home::default_config_root("codex"),
+        "grok" => crate::provider::home::default_history_root("grok"),
+        _ => None,
+    } {
+        return path;
+    }
+
     #[cfg(target_os = "windows")]
     if spec.id == "kiro" {
         if let Some(app_data) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
@@ -343,9 +353,19 @@ fn default_candidate_path(spec: &SourceSpec, home: &Path) -> PathBuf {
         }
     }
 
-    spec.default_leaf
+    default_candidate_path_from_home(spec, home)
+}
+
+fn default_candidate_path_from_home(spec: &SourceSpec, home: &Path) -> PathBuf {
+    let path = spec
+        .default_leaf
         .split('/')
-        .fold(home.to_path_buf(), |path, part| path.join(part))
+        .fold(home.to_path_buf(), |path, part| path.join(part));
+    if spec.id == "grok" {
+        path.join("sessions")
+    } else {
+        path
+    }
 }
 
 #[tauri::command]
@@ -418,14 +438,12 @@ fn descriptor_from_spec(spec: &SourceSpec) -> HistorySourceDescriptor {
 }
 
 fn validate_location(path: &Path, kind: &str, location_id: &str, errors: &mut Vec<String>) {
-    match kind {
-        "directory" if !path.is_dir() => {
+    if !candidate_exists(path, kind) {
+        if kind == "directory" {
             errors.push(format!("location_not_directory:{location_id}"));
-        }
-        "database" if !path.is_file() => {
+        } else if kind == "database" {
             errors.push(format!("location_not_file:{location_id}"));
         }
-        _ => {}
     }
 }
 
@@ -435,10 +453,13 @@ fn validate_source_shape(spec: &SourceSpec, path: &Path, warnings: &mut Vec<Stri
     }
 
     match spec.id {
-        "claude" if !path.join("projects").is_dir() => {
+        "claude" if !candidate_exists(&path.join("projects"), "directory") => {
             warnings.push("claude_projects_dir_not_found".to_string());
         }
-        "codex" if !path.join("sessions").is_dir() && !path.join("history.jsonl").is_file() => {
+        "codex"
+            if !candidate_exists(&path.join("sessions"), "directory")
+                && !candidate_exists(&path.join("history.jsonl"), "file") =>
+        {
             warnings.push("codex_sessions_not_found".to_string());
         }
         _ => {}
@@ -446,6 +467,18 @@ fn validate_source_shape(spec: &SourceSpec, path: &Path, warnings: &mut Vec<Stri
 }
 
 fn candidate_exists(path: &Path, kind: &str) -> bool {
+    if let Some((distro, linux_path)) = crate::wsl::parse_wsl_unc_path(&path.to_string_lossy()) {
+        let Some(executable) = crate::wsl::find_wsl_exe() else {
+            return false;
+        };
+        let test = if kind == "database" { "-f" } else { "-d" };
+        let mut command =
+            crate::shell_resolver::silent_command(executable.to_string_lossy().as_ref());
+        command.args(["-d", &distro, "--exec", "test", test, &linux_path]);
+        return crate::shell_resolver::output_with_timeout(command, Duration::from_secs(5))
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+    }
     match kind {
         "database" => path.is_file(),
         _ => path.is_dir(),
@@ -488,6 +521,12 @@ fn current_environment() -> HistorySourceEnvironment {
     }
 }
 
+fn environment_for_path(path: &Path) -> HistorySourceEnvironment {
+    crate::wsl::parse_wsl_unc_path(&path.to_string_lossy())
+        .map(|(distro, _)| HistorySourceEnvironment::Wsl { distro })
+        .unwrap_or_else(current_environment)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,5 +552,20 @@ mod tests {
 
         assert!(!result.valid);
         assert_eq!(result.errors, vec!["missing_required_location:configRoot"]);
+    }
+
+    #[test]
+    fn detects_wsl_candidate_environment_from_unc_path() {
+        assert!(matches!(
+            environment_for_path(Path::new(r"\\wsl.localhost\Ubuntu\home\tester\.claude")),
+            HistorySourceEnvironment::Wsl { distro } if distro == "Ubuntu"
+        ));
+    }
+
+    #[test]
+    fn grok_default_candidate_is_the_session_root() {
+        let grok = SOURCES.iter().find(|spec| spec.id == "grok").unwrap();
+        let candidate = default_candidate_path_from_home(grok, Path::new(r"C:\Users\tester"));
+        assert_eq!(candidate, PathBuf::from(r"C:\Users\tester\.grok\sessions"));
     }
 }
