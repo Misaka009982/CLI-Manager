@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   ActionIcon,
   Badge,
@@ -68,6 +68,7 @@ import {
 
 const SWATCH_KEYS = ["background", "foreground", "red", "green", "blue", "cyan"] as const;
 const TERMINAL_FONT_FALLBACK = "monospace";
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 type TerminalThemeLibraryMode = "light" | "dark" | "system";
 type PaneMarkerPreviewColorKey = "doneColor" | "failedColor" | "attentionColor";
 
@@ -85,6 +86,129 @@ const FONT_FAMILY_OPTIONS: { value: string; label: string; labelEn?: string }[] 
   { value: "Consolas, monospace", label: "Consolas" },
   { value: "\"Courier New\", monospace", label: "Courier New" },
 ];
+
+interface TerminalColorSettingProps {
+  value: string;
+  fallbackColor: string;
+  label: string;
+  pickerAriaLabel: string;
+  hexAriaLabel: string;
+  description?: string;
+  invalidDescription: string;
+  restoreLabel: string;
+  onCommit: (value: string) => void;
+}
+
+function TerminalColorSetting({
+  value,
+  fallbackColor,
+  label,
+  pickerAriaLabel,
+  hexAriaLabel,
+  description,
+  invalidDescription,
+  restoreLabel,
+  onCommit,
+}: TerminalColorSettingProps) {
+  const [draft, setDraft] = useState(value);
+  const commitTimerRef = useRef<number | null>(null);
+
+  const clearCommitTimer = () => {
+    if (commitTimerRef.current === null) return;
+    window.clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = null;
+  };
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  useEffect(() => clearCommitTimer, []);
+
+  const normalizedDraft = draft.trim();
+  const invalid = normalizedDraft !== "" && !HEX_COLOR_PATTERN.test(normalizedDraft);
+  const pickerValue = HEX_COLOR_PATTERN.test(normalizedDraft) ? normalizedDraft : fallbackColor;
+
+  const commit = (candidate = draft) => {
+    clearCommitTimer();
+    const next = candidate.trim();
+    if (next !== "" && !HEX_COLOR_PATTERN.test(next)) return;
+    if (next !== value) onCommit(next);
+  };
+
+  const scheduleCommit = (candidate: string) => {
+    clearCommitTimer();
+    const next = candidate.trim();
+    if (next !== "" && !HEX_COLOR_PATTERN.test(next)) return;
+    commitTimerRef.current = window.setTimeout(() => {
+      commitTimerRef.current = null;
+      if (next !== value) onCommit(next);
+    }, 180);
+  };
+
+  return (
+    <Box className="border-b border-border px-3 py-3 last:border-b-0">
+      <Box className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <Box className="min-w-0 flex-1">
+          <Text size="xs" fw={600} c="var(--on-surface)">
+            {label}
+          </Text>
+          {(invalid || description) && (
+            <Text mt={4} size="xs" lh={1.45} c={invalid ? "var(--danger)" : "var(--text-muted)"}>
+              {invalid ? invalidDescription : description}
+            </Text>
+          )}
+        </Box>
+        <Box className="grid w-full max-w-[324px] shrink-0 grid-cols-[44px_116px_minmax(0,1fr)] items-center gap-2 sm:w-[324px]">
+          <TextInput
+            type="color"
+            value={pickerValue}
+            onChange={(event) => {
+              const next = event.currentTarget.value;
+              setDraft(next);
+              scheduleCommit(next);
+            }}
+            onBlur={() => commit()}
+            w={44}
+            size="xs"
+            aria-label={pickerAriaLabel}
+            styles={{ input: { cursor: "pointer", height: 30, padding: 3 } }}
+          />
+          <TextInput
+            value={draft}
+            onChange={(event) => setDraft(event.currentTarget.value.trim())}
+            onBlur={() => commit()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") commit();
+            }}
+            placeholder={fallbackColor}
+            size="xs"
+            w={116}
+            aria-label={hexAriaLabel}
+            aria-invalid={invalid}
+            styles={{ input: { fontFamily: "var(--font-ui-mono)", fontSize: 12 } }}
+          />
+          {value && (
+            <Button
+              type="button"
+              size="xs"
+              variant="subtle"
+              color="cliPrimary"
+              onClick={() => {
+                clearCommitTimer();
+                setDraft("");
+                onCommit("");
+              }}
+              className="min-w-0 justify-self-start whitespace-nowrap"
+            >
+              {restoreLabel}
+            </Button>
+          )}
+        </Box>
+      </Box>
+    </Box>
+  );
+}
 
 const UNSPLIT_OPTIONS: { value: UnsplitBehavior; label: string; labelEn: string }[] = [
   { value: "merge", label: "合并到相邻 Pane", labelEn: "Merge into adjacent Pane" },
@@ -312,6 +436,9 @@ export function ThemeSettingsPage() {
   const terminalScrollbackCustomEnabled = useSettingsStore((s) => s.terminalScrollbackCustomEnabled);
   const terminalScrollbackRows = useSettingsStore((s) => s.terminalScrollbackRows);
   const fontFamily = useSettingsStore((s) => s.fontFamily);
+  const terminalTextColor = useSettingsStore((s) => s.terminalTextColor);
+  const terminalTuiUserColor = useSettingsStore((s) => s.terminalTuiUserColor);
+  const terminalTuiAssistantColor = useSettingsStore((s) => s.terminalTuiAssistantColor);
   const normalizedFontFamily = normalizeTerminalFontFamily(fontFamily);
   const defaultShell = useSettingsStore((s) => s.defaultShell);
   const useExternalTerminal = useSettingsStore((s) => s.useExternalTerminal);
@@ -463,6 +590,9 @@ export function ThemeSettingsPage() {
       theme: effective,
     };
   }, [darkThemePalette, effectiveThemeName, language, lightThemePalette, resolvedTheme, selectedPreset]);
+
+  const defaultTerminalTextColor = selectedTheme.theme.foreground ?? "#d8dee9";
+  const previewTerminalTextColor = terminalTextColor || defaultTerminalTextColor;
 
   const themeLibraryOptions = useMemo(
     () => [
@@ -766,7 +896,7 @@ export function ThemeSettingsPage() {
       </Text>
       <Box
         className="rounded-xl border border-border p-4 font-mono"
-        style={{ backgroundColor: "var(--surface-container-lowest)", color: "var(--on-surface)" }}
+        style={{ backgroundColor: "var(--surface-container-lowest)", color: previewTerminalTextColor }}
       >
         <Box style={{ fontFamily: normalizedFontFamily, fontSize: `${fontSize}px` }}>
           <div>$ cli-manager --doctor</div>
@@ -915,6 +1045,52 @@ export function ThemeSettingsPage() {
                 )
               }
             />
+
+            <Box className="overflow-hidden rounded-xl border border-border bg-surface-container-lowest">
+              <Box className="border-b border-border bg-surface-container-low px-3 py-2.5">
+                <Text size="sm" fw={600} c="var(--on-surface)">
+                  {t("settings.terminal.colorGroupTitle")}
+                </Text>
+                <Text mt={3} size="xs" c="var(--on-surface-variant)">
+                  {t("settings.terminal.colorGroupDescription")}
+                </Text>
+              </Box>
+              <Stack gap={0}>
+                <TerminalColorSetting
+                  value={terminalTextColor}
+                  fallbackColor={defaultTerminalTextColor}
+                  label={t("settings.terminal.textColor")}
+                  pickerAriaLabel={t("settings.terminal.textColorPicker")}
+                  hexAriaLabel={t("settings.terminal.textColorHex")}
+                  description={t("settings.terminal.textColorDefaultHint")}
+                  invalidDescription={t("settings.terminal.textColorInvalid")}
+                  restoreLabel={t("settings.terminal.restoreThemeColor")}
+                  onCommit={(value) => void update("terminalTextColor", value)}
+                />
+
+                <TerminalColorSetting
+                  value={terminalTuiUserColor}
+                  fallbackColor={defaultTerminalTextColor}
+                  label={t("settings.terminal.tuiUserColor")}
+                  pickerAriaLabel={t("settings.terminal.tuiUserColorPicker")}
+                  hexAriaLabel={t("settings.terminal.tuiUserColorHex")}
+                  invalidDescription={t("settings.terminal.textColorInvalid")}
+                  restoreLabel={t("settings.terminal.restoreNativeColor")}
+                  onCommit={(value) => void update("terminalTuiUserColor", value)}
+                />
+
+                <TerminalColorSetting
+                  value={terminalTuiAssistantColor}
+                  fallbackColor={defaultTerminalTextColor}
+                  label={t("settings.terminal.tuiAssistantColor")}
+                  pickerAriaLabel={t("settings.terminal.tuiAssistantColorPicker")}
+                  hexAriaLabel={t("settings.terminal.tuiAssistantColorHex")}
+                  invalidDescription={t("settings.terminal.textColorInvalid")}
+                  restoreLabel={t("settings.terminal.restoreNativeColor")}
+                  onCommit={(value) => void update("terminalTuiAssistantColor", value)}
+                />
+              </Stack>
+            </Box>
 
             <Select<string>
               label={text("默认 Shell", "Default Shell")}

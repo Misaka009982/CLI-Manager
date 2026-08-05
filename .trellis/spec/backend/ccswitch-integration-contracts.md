@@ -353,9 +353,47 @@ env_key = "CLI_MANAGER_CODEX_PROVIDER_<hash>_API_KEY"
   project's `provider_overrides.codex.providerId` directly from the CLI-Manager
   database and prepend a CLI-Manager-owned `codex` wrapper to the cc-connect child
   process `PATH`. The app-server proxy adds validated `-c` provider overrides before
-  `app-server`; `CODEX_HOME` and the provider's secret env key are scoped to the
-  managed process tree. This path must not depend on a local terminal session having
-  been opened first.
+  `app-server`; `CODEX_HOME` remains the registered real Codex home so resumed threads
+  retain access to their rollout files, state database, auth, and memories. The Provider
+  secret env key is scoped to the managed process tree. A synthetic Provider that exists
+  only in those CLI overrides must not be copied into the `thread/resume.modelProvider`
+  request field: Codex resolves that request field against its persisted config layers and
+  rejects the otherwise valid temporary Provider. This path must not depend on a local
+  terminal session having been opened first.
+- **Connection profile vs runtime target**: persisted cc-connect connection settings own only
+  platform credentials/options, proxy, logging, timeout, language, executable, and safety mode.
+  They use the stable `~/.cli-manager/remote-manager/control-workdir` identity and must not retain
+  a registered project's path as a startup prerequisite. Desktop-pet handoff requests are the
+  authority for project, Worktree/SSH path, CLI Session ID, and Codex Provider. A remote
+  `/cli_manager_switch` selection is stored only as `runtimeProjectId` and is re-resolved from the
+  current project/provider catalog on every launch; a missing or moved target falls back to the
+  control workspace instead of failing with a stale-profile error.
+- **Legacy connection migration**: when no handoff owns the process, an old project-bound profile
+  is migrated atomically to the control identity. Existing cc-connect session state plus Weixin
+  `context_tokens.json` and `get_updates.buf` are copied without deleting the legacy files. An
+  active schema-v1 handoff keeps its original source identity until cancellation, then migrates
+  before the standby process restarts.
+- **Connection profile vs runtime target**: persisted cc-connect connection settings own only
+  platform credentials/options, proxy, logging, timeout, language, executable, and safety mode.
+  They use the stable `~/.cli-manager/remote-manager/control-workdir` identity and must not retain
+  a registered project's path as a startup prerequisite. Desktop-pet handoff requests are the
+  authority for project, Worktree/SSH path, CLI Session ID, and Codex Provider. A remote
+  `/cli_manager_switch` selection is stored only as `runtimeProjectId` and is re-resolved from the
+  current project/provider catalog on every launch; a missing or moved target falls back to the
+  control workspace instead of failing with a stale-profile error.
+- **Legacy connection migration**: when no handoff owns the process, an old project-bound profile
+  is migrated atomically to the control identity. Existing cc-connect session state plus Weixin
+  `context_tokens.json` and `get_updates.buf` are copied without deleting the legacy files. An
+  active schema-v1 handoff keeps its original source identity until cancellation, then migrates
+  before the standby process restarts.
+- **Managed model catalog**: build isolated model entries from the installed Codex
+  `models_cache.json` capability schema when available, with a complete conservative
+  fallback that includes every field required by the supported Codex app-server.
+  Pass the generated catalog to the real Codex home through an absolute
+  `-c model_catalog_json=...` override; never make the catalog directory the runtime
+  `CODEX_HOME`. Validate the catalog in the isolated directory with app-server
+  `--strict-config` before starting cc-connect so an incompatible schema fails closed
+  instead of silently dropping the injected Provider and continuing with Codex defaults.
 - **Remote wrapper contents**: the wrapper may contain only environment-variable
   names and command routing. It must never contain the Provider secret, modify
   cc-connect source, or rewrite the user's base `config.toml` / `auth.json`.

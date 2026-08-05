@@ -75,7 +75,8 @@ test("opening the same file location preserves the loaded tree", () => {
   const openProjectEnd = fileStoreSource.indexOf("closeProject:", openProjectStart);
   const openProject = fileStoreSource.slice(openProjectStart, openProjectEnd);
   assert.match(openProject, /if \(isSameProjectFileLocation\(current, project\)\)/);
-  assert.match(openProject, /if \(current !== project\) set\(\{ project \}\);\s+return;/);
+  assert.match(openProject, /if \(current !== project\) \{[\s\S]*?project,[\s\S]*?editorWorkspaces:/);
+  assert.match(openProject, /}\s+return;\s+}/);
 });
 
 test("question Hook Agent has a new immutable release identity", () => {

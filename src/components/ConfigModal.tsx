@@ -16,6 +16,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { Check, ChevronDown } from "./icons";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
+import { ShellSelect } from "./ShellSelect";
 import { VendorIcon, inferVendor } from "./VendorIcon";
 import { CliToolIcon } from "./CliToolIcon";
 import { Textarea } from "./ui/textarea";
@@ -747,13 +748,14 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
 
               {projectType === "local" && <div>
                   <label htmlFor={shellFieldId} className="ui-config-form-label">{t("configModal.shell")}</label>
-                  <Select
+                  <ShellSelect
                     id={shellFieldId}
                     key={shellSelectKey}
                     value={shellSelectValue}
-                    aria-label={t("configModal.a11y.shell")}
-                    onChange={(e) => {
-                      const nextShell = e.target.value;
+                    ariaLabel={t("configModal.a11y.shell")}
+                    placeholder={t("configModal.shell")}
+                    options={shellOptions}
+                    onChange={(nextShell) => {
                       logInfo("[config-modal] shell select onChange", {
                         instanceId: logInstanceIdRef.current,
                         nextShell,
@@ -768,11 +770,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
                       setShell(nextShell);
                     }}
                     className="text-sm"
-                  >
-                    {shellOptions.map((opt) => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </Select>
+                  />
               </div>}
 
               {cliTool.trim() === "" && (

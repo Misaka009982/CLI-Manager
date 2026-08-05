@@ -14,6 +14,9 @@ import {
 interface SessionTranscriptContentProps {
   content: string;
   query?: string;
+  variant?: "history" | "terminal";
+  terminalCodeTheme?: "light" | "dark";
+  markdownClassName?: string;
 }
 
 type TranscriptSectionKind = "markdown" | "xml" | "workflow-state" | "git" | "list" | "image";
@@ -444,18 +447,41 @@ function TranscriptBlock({ section, query }: { section: TranscriptSection; query
   );
 }
 
-export function SessionTranscriptContent({ content, query = "" }: SessionTranscriptContentProps) {
+export function SessionTranscriptContent({
+  content,
+  query = "",
+  variant = "history",
+  terminalCodeTheme,
+  markdownClassName,
+}: SessionTranscriptContentProps) {
   const sections = useMemo(() => parseTranscriptSections(content), [content]);
 
   if (sections.length === 1 && sections[0].kind === "markdown") {
-    return <HistoryMarkdownContent content={sections[0].text} query={query} />;
+    return (
+      <HistoryMarkdownContent
+        content={sections[0].text}
+        query={query}
+        variant={variant}
+        terminalCodeTheme={terminalCodeTheme}
+        className={markdownClassName}
+      />
+    );
   }
 
   return (
     <div className="ui-history-transcript">
       {sections.map((section) => {
         if (section.kind === "markdown") {
-          return <HistoryMarkdownContent key={section.id} content={section.text} query={query} />;
+          return (
+            <HistoryMarkdownContent
+              key={section.id}
+              content={section.text}
+              query={query}
+              variant={variant}
+              terminalCodeTheme={terminalCodeTheme}
+              className={markdownClassName}
+            />
+          );
         }
         return <TranscriptBlock key={section.id} section={section} query={query} />;
       })}

@@ -709,9 +709,9 @@ cd src-tauri && cargo test
 ## 💬 Community
 
 <p align="center">
-  <img src="docs/img/wechat-group-qr.png" width="280" alt="WeChat community group" />
+  <img src="docs/img/wechat.jpg" width="280" alt="Author's personal WeChat QR code" />
   <br>
-  <sub>Scan the QR code to join the WeChat community for updates and support</sub>
+  <sub>Author's personal WeChat QR code. Please add the note <code>cli-manager</code> when adding the author.</sub>
 </p>
 
 ---

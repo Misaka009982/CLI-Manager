@@ -436,6 +436,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const sessionLoadInFlightRef = useRef(new Set<string>());
   const remoteHistoryContextRef = useRef<SshAgentHistoryContext | null>(null);
   const wasPanelActiveRef = useRef(false);
+  const freshDetailRef = useRef(false);
 
   const terminalSession = useMemo(
     () => terminalSessions.find((session) => session.id === activeSessionId) ?? null,
@@ -549,6 +550,8 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     const loadSession = async (initial: boolean) => {
       if (sessionLoadInFlightRef.current.has(scopeKey)) return;
       sessionLoadInFlightRef.current.add(scopeKey);
+      const freshDetail = !isSshProject && freshDetailRef.current;
+      freshDetailRef.current = false;
       const current = latestRef.current;
       const prev = current
         ? { filePath: current.file_path, updatedAt: current.updated_at }
@@ -574,7 +577,10 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
             prev,
             sourceFilter,
             terminalSession?.cliSessionId,
-            { forceCatalogRefresh: waitingForUsage }
+            {
+              forceCatalogRefresh: waitingForUsage || freshDetail,
+              freshDetail,
+            }
           );
         }
       } catch {
@@ -644,6 +650,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const stats = useMemo(() => calculateTokenStats(latestSession), [latestSession]);
 
   const handleRefresh = useCallback(() => {
+    freshDetailRef.current = true;
     latestRef.current = null;
     setRefreshSeq((prev) => prev + 1);
   }, []);

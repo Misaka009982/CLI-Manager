@@ -40,6 +40,7 @@ import { useProjectStore } from "./projectStore";
 import { useSshHostStore } from "./sshHostStore";
 import { useSshAgentIntegrationStore } from "./sshAgentIntegrationStore";
 import { createGitDiffWorkspaceContext, useGitDiffWorkspaceStore } from "./gitDiffWorkspaceStore";
+import { useFileExplorerStore } from "./fileExplorerStore";
 import { resolveCliSessionRebind } from "./terminalCliSession";
 import { inferHookBindingSource, resolveCliHookTarget } from "./terminalHookBinding";
 import { buildSshConnectionSpec, type SshConnectionSpecPayload } from "../lib/ssh";
@@ -174,6 +175,9 @@ function formatTerminalCreateError(error: unknown): string {
   }
   if (message.includes("ssh_credential_missing") || message.includes("ssh_credential_ref_required")) {
     return translateCurrent("terminal.ssh.credentialMissing");
+  }
+  if (message.includes("pty_host_upgrade_sessions_active")) {
+    return translateCurrent("terminal.ssh.daemonUpgradeBlocked");
   }
   return message;
 }
@@ -504,6 +508,14 @@ function persistWorkspanState(
 
 function createFileEditorSessionId(projectId: string): string {
   return `file-editor:${projectId}`;
+}
+
+function clearProjectEditorWorkspacesIfUnused(project: Project, sessions: TerminalSession[]): void {
+  const stillUsed = sessions.some((session) => (
+    session.kind === "file-editor"
+    && session.fileEditor?.projectId === project.id
+  ));
+  if (!stillUsed) useFileExplorerStore.getState().clearProjectEditorWorkspaces(project.id);
 }
 
 function isPersistableSession(session: TerminalSession | undefined): boolean {
@@ -1087,7 +1099,7 @@ function getCurrentTerminalColors() {
     settings.darkThemePalette,
   );
   return {
-    foreground: normalizeHexColor(theme.foreground, "#d8dee9"),
+    foreground: normalizeHexColor(settings.terminalTextColor || theme.foreground, "#d8dee9"),
     background: normalizeHexColor(
       theme.background,
       settings.resolvedTheme === "dark" ? "#0c0e10" : "#ffffff",
@@ -2233,6 +2245,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           useGitDiffWorkspaceStore.getState().clearWorkspace(
             createGitDiffWorkspaceContext(project).key,
           );
+          clearProjectEditorWorkspacesIfUnused(project, remaining);
         }
         return;
       }
@@ -2942,6 +2955,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const closedSet = new Set(closedSessionIds);
     const remaining = state.sessions.filter((session) => !closedSet.has(session.id));
+    for (const closedSessionId of fileEditorClosedIds) {
+      const project = state.sessions.find((session) => session.id === closedSessionId)?.fileEditor?.project;
+      if (project) clearProjectEditorWorkspacesIfUnused(project, remaining);
+    }
     const workspans = updateTerminalWorkspan(state.workspans, owner.id, (workspan) => (
       syncTerminalWorkspanLayout(workspan, result.tree, result.activePaneId, result.activeSessionId)
     ));

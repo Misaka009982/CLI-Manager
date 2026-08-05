@@ -16,7 +16,7 @@
 - When a layout/workspan migration remounts a Display, its layout-effect cleanup must serialize the xterm buffer; the new Display restores that snapshot and completes its first fit/refresh before subscribing to PTY output. Do not arm the new Display's unmount snapshot callback until that restore completes: React StrictMode may dispose the probe mount while its initial write is still pending, and serializing that empty probe would overwrite the valid source snapshot. Committed frames are not replayed by the manager, so subscribing before restore can leave an idle shell visually blank.
 - Closing the last attached session cancels any scheduled reconnect; a delayed reconnect callback must return without opening a socket when no non-tombstoned sessions remain.
 - No component or store may call `listen("pty-output-...")` or invoke `pty_write/pty_resize/pty_close` directly.
-- Large-buffer horizontal resize uses a leading + trailing latest-wins cadence capped at 34ms; vertical resize remains immediate. Consecutive `ResizeObserver` frames replace only the pending fit RAF and must not cancel that horizontal cadence. macOS/Linux enable xterm cursor-line reflow so a rapid shrink does not expose the old-width cursor row while waiting for the PTY application's `SIGWINCH` redraw; Windows keeps the existing ConPTY compatibility policy. Shrink and grow must both expose xterm's live resize as soon as its queued render is ready. Immediately before each visible horizontal shrink, keep a pixel copy of the last stable `.xterm-screen` above the hidden live screen, but display that copy at its original CSS size inside an overflow-clipped viewport; never stretch the bitmap or hold it for the whole drag. Reveal the live renderer after two animation frames, and restart only this two-frame guard if another `Terminal.resize()` arrives first. `ResizeObserver` events that occur while waiting for the next throttled terminal resize may update the clip bounds but must not delay the reveal. WebGL must preserve its drawing buffer for this copy, and the barrier must validate that a captured frame contains visible pixels before hiding the live screen; a failed/empty capture leaves the live renderer visible. Capture geometry and visibility belong to `.xterm-screen`; root-level canvas lookup is only a compatibility fallback and must exclude the overview ruler. This barrier starts immediately before `Terminal.resize()`, never during the throttle wait, so it hides only xterm/WebGL's corrupt intermediate reflow frame without freezing the whole drag. Before a normal-buffer column change, if the user is above the live bottom, register a temporary marker at `viewportY`; after `Terminal.resize()` wait two animation frames for xterm's queued render and DOM viewport synchronization, then scroll to the marker's updated line and dispose it. A synchronous `scrollToLine()` is forbidden because the old DOM scroll height clamps the target before xterm's queued viewport sync. Cancel and dispose a pending marker on a newer resize or terminal detach. Do not force bottom-following or alternate-buffer terminals. Visibility restore fits immediately and forces a full refresh only when natural rendering does not complete within two frames or the renderer was rebuilt.
+- Large-buffer horizontal resize uses a leading + trailing latest-wins cadence capped at 34ms; vertical resize remains immediate. Consecutive `ResizeObserver` frames replace only the pending fit RAF and must not cancel that horizontal cadence. macOS/Linux enable xterm cursor-line reflow so a rapid shrink does not expose the old-width cursor row while waiting for the PTY application's `SIGWINCH` redraw; Windows keeps the existing ConPTY compatibility policy. Shrink and grow must both expose xterm's live resize as soon as its queued render is ready. Immediately before each visible horizontal shrink, keep a pixel copy of the last stable `.xterm-screen` above the hidden live screen, but display that copy at its original CSS size inside an overflow-clipped viewport; never stretch the bitmap or hold it for the whole drag. Reveal the live renderer after two animation frames, and restart only this two-frame guard if another `Terminal.resize()` arrives first. `ResizeObserver` events that occur while waiting for the next throttled terminal resize may update the clip bounds but must not delay the reveal. WebGL must preserve its drawing buffer for this copy, and the barrier must validate that a captured frame contains visible pixels before hiding the live screen; a failed/empty capture leaves the live renderer visible. Capture geometry and visibility belong to `.xterm-screen`; root-level canvas lookup is only a compatibility fallback and must exclude the overview ruler. This barrier starts immediately before `Terminal.resize()`, never during the throttle wait, so it hides only xterm/WebGL's corrupt intermediate reflow frame without freezing the whole drag. Before a normal-buffer column change, if the user is above the live bottom, register a temporary marker at `viewportY`; after `Terminal.resize()` wait two animation frames for xterm's queued render and DOM viewport synchronization, then scroll to the marker's updated line and dispose it. A synchronous `scrollToLine()` is forbidden because the old DOM scroll height clamps the target before xterm's queued viewport sync. If the normal buffer was at live bottom before the column change, call `scrollToBottom()` immediately after resize and again after the same two-frame DOM synchronization window so xterm's live-follow intent cannot remain stale. Cancel and dispose any pending viewport restore on a newer resize, output-state reset, or terminal detach. Do not force alternate-buffer terminals. Visibility restore fits immediately and forces a full refresh only when natural rendering does not complete within two frames or the renderer was rebuilt.
 - Split-pane leaf and divider bounds must align to the current display's physical pixel grid using the split root's global origin and `window.devicePixelRatio`. Arbitrary persisted/drag-preview ratios, fractional container bounds, nested splits, and fullscreen leaves must not place an xterm canvas at a fractional device-pixel origin. Snap divider start/end boundaries and derive the second pane from the remaining aligned space so the layout has no gap or overlap. Refresh the grid metrics on container resize and window changes, and use a resolution media query that rebinds itself whenever DPR changes so moving an unchanged-size window among 1080p, 2K fractional-scaling (including DPR 1.25/1.5), and Retina displays cannot retain the previous screen's pixel grid.
 
 **Remount snapshot ordering**:
@@ -349,8 +349,11 @@ import ReactMarkdown from "react-markdown";
 - Keep `skipHtml` enabled for untrusted Markdown.
 - Default links to preview-only behavior unless the surrounding flow explicitly allows opening external URLs.
 - Keep remote images as placeholders by default; do not load remote images from history/session content without a separate reviewed allowlist or setting.
+- Math Markdown must be enabled in this shared renderer with `remark-math` and `rehype-katex`; keep `skipHtml` enabled, leave formulas inside fenced code blocks as literal code, and keep long display formulas horizontally scrollable.
 - Terminal-specific Markdown theming must stay opt-in. If one caller needs a light/dark-aware code theme or palette override, add an explicit prop or caller-owned class instead of changing the shared `variant="terminal"` default for every consumer.
 - Scope terminal-variant CSS overrides to the caller container (for example a transcript shell or file-preview wrapper). Do not widen `.ui-markdown-terminal` defaults just to fix one surface.
+- The terminal background image is owned by `.ui-terminal-bg-layer`; when `data-bg-enabled="true"`, the Markdown preview must reveal that same pseudo-element layer through a translucent surface instead of loading a second asset. Controls that are direct children of the wrapper need a z-index above the generic direct-child stacking rule.
+- Terminal Markdown preview may unwrap one top-level `md` / `markdown` fenced source block before passing it to the shared renderer; nested code fences remain literal code. The preview must source all non-empty assistant messages from the loaded `HistorySessionDetail` and provide a stable message selector instead of silently discarding earlier responses.
 - When changing Markdown styles, update `src/components/ui/markdownSample.ts` so the manual preview covers the new element or edge case.
 
 **Tests**: Run `npx tsc --noEmit` and `npm run build`; manually inspect the Markdown style preview in Settings > About in both default and terminal variants. If the change targets a terminal-only caller such as a transcript or file preview, also verify that scoped caller still matches the active terminal theme while the other `variant="terminal"` callers keep their prior appearance.
@@ -1732,3 +1735,61 @@ if (!isEdit && !isClone && trimmedCliArgs) {
 ```
 
 **Tests**: Run `npx tsc --noEmit` and `node --test scripts/cliArgsHistory.test.mjs`; assert the shared record block occurs after the edit/create persistence branch and before `onClose()`, and a query can find an item outside the unfiltered top 10 while its matching result remains limited to 10 entries.
+
+### Convention: Xterm-style hover scrollbars on non-xterm views use an overlay thumb
+
+**What**: A read-only transcript or other non-xterm view that must match the terminal scrollbar interaction should hide the browser-native scrollbar and render an absolutely positioned track/thumb. The scroll container remains the source of truth for `scrollTop`, `scrollHeight`, and wheel/touch scrolling; the overlay thumb mirrors those values and writes `scrollTop` only during drag.
+
+**Why**: `XTermTerminal` receives a real `.xterm-slider` from xterm.js, while a transcript's `overflow-y-auto` scrollbar is generated internally by WebView2/Chromium. Browser `::-webkit-scrollbar` hover behavior is platform-dependent and can change layout width, causing reflow and Pane jitter.
+
+**Correct**:
+
+```tsx
+<div className="relative min-h-0 flex-1">
+  <div ref={scrollRef} className="ui-terminal-native-scroll h-full overflow-y-auto">
+    {content}
+  </div>
+  <div className="ui-subagent-scrollbar" aria-hidden="true">
+    <div className="ui-subagent-scrollbar-thumb" onPointerDown={startThumbDrag} />
+  </div>
+</div>
+```
+
+**Wrong**:
+
+```css
+/* Do not rely on the browser scrollbar to behave like xterm's .xterm-slider. */
+.transcript::-webkit-scrollbar-thumb:hover {
+  width: 100%;
+}
+```
+
+**Tests**: Run `npx tsc --noEmit`; manually verify the overlay thumb appears only when content overflows, starts narrow, expands on hover, follows wheel/trackpad scrolling, drags to the correct document position, and does not change the transcript Pane width or cause line-wrap jitter.
+
+### Convention: Terminal Markdown preview controls must remain terminal-themed and history-addressable
+
+**What**: The terminal Markdown preview uses the existing Radix Select primitive for historical answer selection. Its portal content must receive the terminal theme variables explicitly, and its viewport must use `ui-thin-scroll` with `--ui-scrollbar-thumb` / `--ui-scrollbar-track` from the terminal theme. Do not use a native `<select>` when the popup scrollbar or surface needs terminal styling.
+
+The preview can open when the session is a supported Claude/Codex session with a bound `cliSessionId`; a current-turn Hook status is not a prerequisite because restored sessions may have no new Hook event. `Ctrl`/`Cmd` plus wheel changes the preview Markdown scale only within the preview content, clamped to `0.8`–`1.6`; an unmodified wheel must keep normal scrolling.
+
+KaTeX's package stylesheet owns the `.katex` base font size. Shared Markdown CSS may set its color, but must not force `.katex` to `font-size: 1em`, which makes terminal formulas smaller and visually soft. Preview zoom should scale the Markdown container instead of using transforms that introduce raster blur.
+
+**Correct**:
+
+```tsx
+<SelectPrimitive.Content style={terminalPreviewStyle}>
+  <SelectPrimitive.Viewport className="ui-thin-scroll overflow-y-auto" />
+</SelectPrimitive.Content>
+
+<div onWheel={handlePreviewWheel} style={{ "--markdown-preview-font-scale": scale }} />
+```
+
+**Wrong**:
+
+```tsx
+<select>{options}</select>
+<div onWheel={zoomEveryWheelEvent} />
+<style>.ui-markdown .katex { font-size: 1em; }</style>
+```
+
+**Tests**: Run `node --test scripts/terminalMarkdownPreview.test.mjs scripts/markdownRendering.test.mjs` and `npx tsc --noEmit`; manually verify long answer lists, keyboard selection, restored sessions without a new conversation, normal scrolling, `Ctrl`/`Cmd` wheel zoom limits, light/dark terminal themes, background images, and clear KaTeX formulas.

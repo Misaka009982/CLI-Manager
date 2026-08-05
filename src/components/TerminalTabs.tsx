@@ -25,7 +25,7 @@ import { TERMINAL_PANEL_WIDTH_DEFAULTS, useSettingsStore } from "../stores/setti
 import { useWorktreeStore } from "../stores/worktreeStore";
 import { useProjectStore } from "../stores/projectStore";
 import { useSshHostStore } from "../stores/sshHostStore";
-import { isProjectFileDirty, useFileExplorerStore } from "../stores/fileExplorerStore";
+import { useFileExplorerStore } from "../stores/fileExplorerStore";
 import { useI18n, type TranslationKey } from "../lib/i18n";
 import { logError } from "../lib/logger";
 import {
@@ -1278,6 +1278,10 @@ function PaneTabBar({
     activeSessionId && paneSessionIds.includes(activeSessionId)
       ? activeSessionId
       : paneSessionIds[0] ?? null;
+  const activePaneSession = activePaneTabId
+    ? paneSessions.find((session) => session.id === activePaneTabId) ?? null
+    : null;
+  const isSubagentTranscript = activePaneSession?.kind === "subagent-transcript";
   const otherPanes = allPanes.filter((item) => item.id !== pane.id && item.sessionIds.length > 0);
   const paneFullscreenLabel = isPaneFullscreen
     ? t("terminal.toolbar.exitTerminalFullscreen")
@@ -1664,7 +1668,7 @@ function PaneTabBar({
       )}
       {variant === "pane" && (
         <div className="ui-terminal-actions flex shrink-0 items-center">
-          {isWorkspanSplit && activePaneTabId && (
+          {!isSubagentTranscript && isWorkspanSplit && activePaneTabId && (
             <button
               type="button"
               className="ui-focus-ring ui-icon-action"
@@ -1675,17 +1679,19 @@ function PaneTabBar({
               <Undo2 size={14} strokeWidth={1.8} aria-hidden="true" />
             </button>
           )}
-          <button
-            type="button"
-            className="ui-focus-ring ui-icon-action ui-action-fullscreen"
-            data-active={isPaneFullscreen ? "true" : "false"}
-            onClick={() => onTogglePaneFullscreen(pane.id)}
-            title={paneFullscreenLabel}
-            aria-label={paneFullscreenLabel}
-            aria-pressed={isPaneFullscreen}
-          >
-            {isPaneFullscreen ? <Minimize2 size={14} strokeWidth={1.8} /> : <Maximize2 size={14} strokeWidth={1.8} />}
-          </button>
+          {!isSubagentTranscript && (
+            <button
+              type="button"
+              className="ui-focus-ring ui-icon-action ui-action-fullscreen"
+              data-active={isPaneFullscreen ? "true" : "false"}
+              onClick={() => onTogglePaneFullscreen(pane.id)}
+              title={paneFullscreenLabel}
+              aria-label={paneFullscreenLabel}
+              aria-pressed={isPaneFullscreen}
+            >
+              {isPaneFullscreen ? <Minimize2 size={14} strokeWidth={1.8} /> : <Maximize2 size={14} strokeWidth={1.8} />}
+            </button>
+          )}
           {isWorkspanSplit && activePaneTabId && (
             <button
               type="button"
@@ -1895,7 +1901,7 @@ function PaneLeafView({
               <Suspense fallback={null}>
                 <FileEditorPane
                   session={session}
-                  isActive={session.id === activeSessionId}
+                  isActive={!historyActive && isLayoutVisible && session.id === activeSessionId}
                   terminalThemeBackground={terminalThemeBackground}
                   onClose={() => onCloseSessions([session.id])}
                 />
@@ -2497,7 +2503,6 @@ export function TerminalTabs({
   const terminalSidePanelSkin = useSettingsStore((s) => s.terminalSidePanelSkin);
   const updateSettings = useSettingsStore((s) => s.update);
   const openFileProject = useFileExplorerStore((s) => s.openProject);
-  const fileProject = useFileExplorerStore((s) => s.project);
   const revealFilePath = useFileExplorerStore((s) => s.revealPath);
   const openFileEditorPane = useTerminalStore((s) => s.openFileEditorPane);
   const sessionHistoryShortcut = useSettingsStore((s) => s.keyboardShortcuts.sessionHistory);
@@ -3169,6 +3174,39 @@ export function TerminalTabs({
     })();
   }, [closeSession]);
 
+  const closeSessionsWithDirtyGuard = useCallback(async (sessionIds: string[]) => {
+    const currentSessions = useTerminalStore.getState().sessions;
+    const fileStore = useFileExplorerStore.getState();
+    const fileProjects = currentSessions
+      .filter((session) => sessionIds.includes(session.id) && session.kind === "file-editor")
+      .map((session) => session.fileEditor?.project)
+      .filter((project): project is Project => Boolean(project))
+      .filter((project, index, projects) => (
+        projects.findIndex((candidate) => candidate.id === project.id) === index
+      ));
+    const dirtyFiles = fileProjects.flatMap((project) => (
+      fileStore.getProjectEditorWorkspaces(project.id).flatMap((workspace) => (
+        workspace.openFiles
+          .filter((file) => file.content !== file.savedContent)
+          .map((file) => ({ project: workspace.project, file }))
+      ))
+    ));
+
+    if (dirtyFiles.length > 0) {
+      const confirmed = await confirm({
+        title: t("files.editor.unsavedTitle"),
+        message: t("files.editor.unsavedCloseWithFiles", {
+          files: dirtyFiles.map(({ project, file }) => `${project.name}: ${file.path}`).join("\n"),
+        }),
+        confirmText: t("files.editor.discard"),
+        danger: true,
+      });
+      if (!confirmed) return;
+    }
+
+    closeSessionIds(sessionIds);
+  }, [closeSessionIds, confirm, t]);
+
   const handleCloseSessions = useCallback((sessionIds: string[], anchor?: SplitPickerAnchor) => {
     const uniqueSessionIds = Array.from(new Set(sessionIds)).filter((sessionId) => sessions.some((session) => session.id === sessionId));
     if (uniqueSessionIds.length === 0) return;
@@ -3179,7 +3217,7 @@ export function TerminalTabs({
     }).length;
 
     if (!shouldConfirmTerminalTabClose(terminalSessionCount)) {
-      closeSessionIds(uniqueSessionIds);
+      void closeSessionsWithDirtyGuard(uniqueSessionIds);
       return;
     }
 
@@ -3189,14 +3227,14 @@ export function TerminalTabs({
       sessionIds: uniqueSessionIds,
       ...position,
     });
-  }, [armCloseConfirmOutsideGuard, closeSessionIds, findCloseConfirmAnchor, resolveCloseConfirmAnchor, sessions]);
+  }, [armCloseConfirmOutsideGuard, closeSessionsWithDirtyGuard, findCloseConfirmAnchor, resolveCloseConfirmAnchor, sessions]);
 
   const confirmCloseSessions = useCallback(() => {
     if (!closeConfirm) return;
     const sessionIds = closeConfirm.sessionIds;
     setCloseConfirm(null);
-    closeSessionIds(sessionIds);
-  }, [closeConfirm, closeSessionIds]);
+    void closeSessionsWithDirtyGuard(sessionIds);
+  }, [closeConfirm, closeSessionsWithDirtyGuard]);
 
   const cancelCloseSessions = useCallback(() => {
     setCloseConfirm(null);
@@ -3368,14 +3406,10 @@ export function TerminalTabs({
   const syncFilePanelProject = useCallback(async (project: Project) => {
     if (rejectUnsupportedCapability(project, "files")) return false;
     try {
-      const sameFileContext = isSameProjectFileContext(fileProject, project);
-      if (!sameFileContext && isProjectFileDirty()) {
-        const confirmed = await confirm({
-          title: t("sidebar.toast.unsavedFileConfirm"),
-          danger: true,
-        });
-        if (!confirmed) return false;
-      }
+      const sameFileContext = isSameProjectFileContext(
+        useFileExplorerStore.getState().project,
+        project,
+      );
       if (sameFileContext) return true;
       await openFileProject(project);
       return true;
@@ -3384,7 +3418,7 @@ export function TerminalTabs({
       toast.error(t("sidebar.toast.openProjectFilesFailed"), { description: String(err) });
       return false;
     }
-  }, [confirm, fileProject, openFileProject, rejectUnsupportedCapability, t]);
+  }, [openFileProject, rejectUnsupportedCapability, t]);
 
   const closeFilesPanel = useCallback(() => {
     if (sidePanelMerged) {

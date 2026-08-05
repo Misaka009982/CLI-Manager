@@ -4,7 +4,7 @@ import type { DragEndEvent } from "@dnd-kit/core";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore, type SessionStatus, type SplitTerminalOptions } from "../../stores/terminalStore";
-import { isProjectFileDirty, useFileExplorerStore } from "../../stores/fileExplorerStore";
+import { useFileExplorerStore } from "../../stores/fileExplorerStore";
 import { useHistoryStore } from "../../stores/historyStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import {
@@ -28,7 +28,7 @@ import { resolveHistoryProjectPath } from "../../lib/historyProjectPaths";
 import { resolveCliToolHistorySourceId } from "../../lib/cliTools";
 import { shouldSidebarBootstrapProjects } from "../../lib/projectLoadPolicy";
 import { getProviderSwitchAppType, parseProjectEnvVars } from "../../lib/providerSwitching";
-import { isSameProjectFileContext, projectWithWorktreePath, projectWithWorktreeProviderOverrides } from "../../lib/terminalProject";
+import { projectWithWorktreePath, projectWithWorktreeProviderOverrides } from "../../lib/terminalProject";
 import { ALL_TERMINALS_SCOPE, collectProjectIdsForGroup, sessionMatchesTerminalScope } from "../../lib/terminalScope";
 import { projectSupportsCapability, type ProjectCapability } from "../../lib/projectCapabilities";
 import { TreeContext, worktreeListCollapseId, type TreeActions } from "./TreeContext";
@@ -1336,13 +1336,6 @@ export function Sidebar({
   const handleOpenProjectFiles = useCallback(async (project: Project) => {
     if (rejectUnsupportedCapability(project, "files")) return;
     try {
-      if (!isSameProjectFileContext(fileProject, project) && isProjectFileDirty()) {
-        const confirmed = await confirm({
-          title: t("sidebar.toast.unsavedFileConfirm"),
-          danger: true,
-        });
-        if (!confirmed) return;
-      }
       await openFileProject(project);
       setShowFileExplorer(true);
       closeHistory();
@@ -1350,7 +1343,7 @@ export function Sidebar({
       logError("Failed to open project file browser", err);
       toast.error(t("sidebar.toast.openProjectFilesFailed"), { description: String(err) });
     }
-  }, [closeHistory, confirm, fileProject, openFileProject, rejectUnsupportedCapability, t]);
+  }, [closeHistory, openFileProject, rejectUnsupportedCapability, t]);
 
   const handleOpenWorktreeFiles = useCallback(async (project: Project, worktree: WorktreeRecord) => {
     if (rejectMissingWorktree(worktree)) return;

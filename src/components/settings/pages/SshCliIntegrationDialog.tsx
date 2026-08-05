@@ -104,6 +104,8 @@ const AGENT_CODE_KEYS: Record<string, TranslationKey> = {
   agent_managed_hooks_present: "settings.sshHosts.cliIntegration.agent.code.agent_managed_hooks_present",
   ssh_agent_identity_required: "settings.sshHosts.cliIntegration.hook.code.identityRequired",
   ssh_agent_identity_changed: "settings.sshHosts.cliIntegration.hook.code.identityChanged",
+  ssh_user_required: "settings.sshHosts.cliIntegration.hook.code.sshUserRequired",
+  ssh_user_resolve_failed: "settings.sshHosts.cliIntegration.hook.code.sshUserResolveFailed",
   hook_config_root_invalid: "settings.sshHosts.cliIntegration.hook.code.rootInvalid",
   hook_config_root_parent_forbidden: "settings.sshHosts.cliIntegration.hook.code.rootInvalid",
   hook_config_root_missing: "settings.sshHosts.cliIntegration.hook.code.rootMissing",
@@ -480,6 +482,15 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
     };
   };
 
+  const resolveSshUser = async () => {
+    if (!host) throw new Error("ssh_host_not_found");
+    const configuredUser = host.username.trim();
+    if (configuredUser) return configuredUser;
+    return invoke<string>("ssh_resolve_user", {
+      spec: buildSshConnectionSpec(host, hosts),
+    });
+  };
+
   const inspectHook = async (
     source: SshToolSource,
     configuredRoot = roots[source],
@@ -499,7 +510,8 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
     try {
       const report = await invoke<SshRemoteHookConfigReport>("ssh_agent_hook_inspect", hookArgs(source, configuredRoot));
       if (scopeKind === "projectOverride" || configuredRoot.trim() === (hostPreferences.get(source) ?? "").trim()) {
-        await recordHookReport(host.id, host.username, configuredRoot, report, undefined, scopeKind);
+        const sshUser = await resolveSshUser();
+        await recordHookReport(host.id, sshUser, configuredRoot, report, undefined, scopeKind);
       }
       if (scopeKind === "hostPrimary") {
         setHookReports((current) => ({ ...current, [source]: report }));
@@ -576,13 +588,14 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
         expectedCanonicalRoot,
         expectedFiles: preview.configFiles.map(({ role, canonicalPath, fingerprint }) => ({ role, canonicalPath, fingerprint })),
       });
+      const sshUser = await resolveSshUser();
       if (integrationId) {
-        await recordHookReport(host.id, host.username, configuredRoot, report, integrationId);
+        await recordHookReport(host.id, sshUser, configuredRoot, report, integrationId);
       } else if (scopeKind === "projectOverride") {
-        await recordHookReport(host.id, host.username, configuredRoot, report, undefined, "projectOverride");
+        await recordHookReport(host.id, sshUser, configuredRoot, report, undefined, "projectOverride");
       } else {
         await saveHostPreferences(host.id, roots);
-        await recordHookReport(host.id, host.username, configuredRoot, report);
+        await recordHookReport(host.id, sshUser, configuredRoot, report);
       }
       if (!integrationId && scopeKind === "hostPrimary") {
         setHookReports((current) => ({ ...current, [source]: report }));

@@ -57,6 +57,7 @@ interface PreparedTerminalCreate {
   envVars: Record<string, string>;
   shell: string | null;
   sshLaunch: unknown | null;
+  daemonRestarted: boolean;
 }
 
 export interface TerminalStatusEvent {
@@ -132,6 +133,9 @@ export class TerminalProcessManager {
     return invoke<PreparedTerminalCreate>("pty_prepare_create", request).then(async (prepared) => {
       const sessionId = prepared.sessionId;
       try {
+        if (prepared.daemonRestarted) {
+          ptyHostSocket.resetAfterDaemonRestart();
+        }
         const traits = await ptyHostSocket.create(
           sessionId,
           prepared.cwd,

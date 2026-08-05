@@ -3,20 +3,23 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, QueryBuilder, Row, Sqlite, SqliteConnection};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 
-const REQUEST_LOG_PARSER_VERSION: i64 = 1;
+const REQUEST_LOG_PARSER_VERSION: i64 = 2;
 const DEFAULT_PAGE_SIZE: u32 = 20;
 const MAX_PAGE_SIZE: u32 = 100;
+const REQUEST_LOG_SOURCES: [&str; 5] = ["claude", "codex", "gemini", "opencode", "grok"];
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct RequestLogFilters {
     source: Option<String>,
     project_key: Option<String>,
+    project_path: Option<String>,
+    project_paths: Option<Vec<String>>,
     model: Option<String>,
     session_query: Option<String>,
     start_at: Option<i64>,
@@ -57,7 +60,12 @@ pub struct RequestLogItem {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct RequestLogSummary {
     total: u64,
+    total_input_tokens: u64,
+    total_output_tokens: u64,
+    total_cache_read_tokens: u64,
+    total_cache_creation_tokens: u64,
     total_tokens: u64,
+    cache_hit_rate: f64,
     total_cost_usd: f64,
     unpriced_tokens: u64,
 }
@@ -86,6 +94,100 @@ struct RequestLogSyncState {
     source: &'static str,
     fingerprint: SessionFileFingerprint,
     parser_version: i64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RequestLogStatsTrendItem {
+    bucket_start_ms: i64,
+    requests: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
+    total_tokens: u64,
+    total_cost_usd: f64,
+    unpriced_tokens: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RequestLogStatsSourceItem {
+    source: String,
+    requests: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
+    total_tokens: u64,
+    ratio: f64,
+    total_cost_usd: f64,
+    unpriced_tokens: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RequestLogStatsModelItem {
+    model: String,
+    requests: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
+    total_tokens: u64,
+    ratio: f64,
+    total_cost_usd: f64,
+    unpriced_tokens: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RequestLogStatsResponse {
+    range_start_at: i64,
+    range_end_at: i64,
+    granularity: &'static str,
+    total_requests: u64,
+    total_input_tokens: u64,
+    total_output_tokens: u64,
+    total_cache_read_tokens: u64,
+    total_cache_creation_tokens: u64,
+    total_tokens: u64,
+    cache_hit_rate: f64,
+    total_cost_usd: f64,
+    total_unpriced_tokens: u64,
+    trend: Vec<RequestLogStatsTrendItem>,
+    source_distribution: Vec<RequestLogStatsSourceItem>,
+    model_distribution: Vec<RequestLogStatsModelItem>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct RequestLogUsageAggregate {
+    requests: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
+    total_cost_usd: f64,
+    unpriced_tokens: u64,
+}
+
+impl RequestLogUsageAggregate {
+    fn add(&mut self, usage: UsageTokenScan, cost: UsageStatsScan) {
+        self.requests = self.requests.saturating_add(1);
+        self.input_tokens = self.input_tokens.saturating_add(usage.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(usage.output_tokens);
+        self.cache_read_tokens = self
+            .cache_read_tokens
+            .saturating_add(usage.cache_read_tokens);
+        self.cache_creation_tokens = self
+            .cache_creation_tokens
+            .saturating_add(usage.cache_creation_tokens);
+        self.total_cost_usd += cost.total_cost_usd;
+        self.unpriced_tokens = self.unpriced_tokens.saturating_add(cost.unpriced_tokens);
+    }
+
+    fn total_tokens(self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.cache_creation_tokens)
+    }
 }
 
 fn request_log_sync_lock() -> &'static AsyncMutex<()> {
@@ -126,6 +228,10 @@ fn history_root_available(path: &Path) -> bool {
     std::fs::read_dir(path).is_ok()
 }
 
+fn request_log_source_allowed(source: &str) -> bool {
+    REQUEST_LOG_SOURCES.contains(&source)
+}
+
 fn available_cleanup_sources(roots: &HistoryRoots) -> HashSet<&'static str> {
     let mut sources = HashSet::new();
     if history_root_available(&resolve_claude_history_root(roots)) {
@@ -134,10 +240,22 @@ fn available_cleanup_sources(roots: &HistoryRoots) -> HashSet<&'static str> {
     if history_root_available(&resolve_codex_history_root(roots)) {
         sources.insert("codex");
     }
+    if history_root_available(&resolve_gemini_history_root()) {
+        sources.insert("gemini");
+    }
+    if history_root_available(&resolve_grok_history_root(roots)) {
+        sources.insert("grok");
+    }
+    if resolve_opencode_database_path().is_file() {
+        sources.insert("opencode");
+    }
     sources
 }
 
 fn session_file_available(file_path: &str) -> bool {
+    if parse_opencode_session_locator(file_path).is_some() {
+        return opencode_locator_in_default_scope(file_path);
+    }
     crate::wsl::is_wsl_config_dir(file_path) || Path::new(file_path).is_file()
 }
 
@@ -173,6 +291,26 @@ fn document_from_entry(entry: HistoryIndexEntry) -> RequestLogDocument {
     }
 }
 
+fn document_from_opencode(parsed: OpenCodeParsedSession) -> RequestLogDocument {
+    let summary = opencode_summary_from_parsed(&parsed);
+    let mut events = stats_usage_events_or_fallback(&summary, &parsed.computed.stats);
+    for (index, event) in events.iter_mut().enumerate() {
+        if event.event_key.trim().is_empty() {
+            event.event_key = fallback_event_key(event, index);
+        }
+        event.event_index = index;
+    }
+
+    RequestLogDocument {
+        source: parsed.file_ref.source,
+        project_key: parsed.file_ref.project_key,
+        session_id: parsed.computed.session_id,
+        file_path: path_to_key(&parsed.file_ref.path),
+        fingerprint: parsed.fingerprint,
+        events,
+    }
+}
+
 async fn load_sync_state(
     conn: &mut SqliteConnection,
 ) -> Result<HashMap<String, RequestLogSyncState>, String> {
@@ -195,6 +333,9 @@ async fn load_sync_state(
                 {
                     "claude" => "claude",
                     "codex" => "codex",
+                    "gemini" => "gemini",
+                    "opencode" => "opencode",
+                    "grok" => "grok",
                     _ => "unknown",
                 },
                 fingerprint: SessionFileFingerprint {
@@ -336,23 +477,38 @@ async fn sync_request_logs_with_connection(
     roots: HistoryRoots,
     force: bool,
 ) -> Result<RequestLogSyncResult, String> {
-    let (index, cleanup_sources) = tokio::task::spawn_blocking(move || {
+    let (index, mut cleanup_sources) = tokio::task::spawn_blocking(move || {
         let cleanup_sources = available_cleanup_sources(&roots);
         let index = refresh_history_index_snapshot(&roots, force);
         (index, cleanup_sources)
     })
     .await
     .map_err(|err| format!("request_logs_scan_join_failed: {err}"))?;
-    let synced_at_ms = now_millis();
-    let sync_state = load_sync_state(conn).await?;
-    let request_log_entries: Vec<HistoryIndexEntry> = index
+
+    let mut documents: Vec<RequestLogDocument> = index
         .entries
         .into_iter()
-        .filter(|entry| matches!(entry.file_ref.source.as_str(), "claude" | "codex"))
+        .filter(|entry| request_log_source_allowed(&entry.file_ref.source))
+        .map(document_from_entry)
         .collect();
-    let current_paths: HashSet<String> = request_log_entries
+    match opencode_catalog_sessions().await {
+        Ok(Some(sessions)) => {
+            documents.extend(sessions.into_iter().map(document_from_opencode));
+        }
+        Ok(None) => {
+            cleanup_sources.remove("opencode");
+        }
+        Err(err) => {
+            cleanup_sources.remove("opencode");
+            warn!("request log sync skipped OpenCode database: {err}");
+        }
+    }
+
+    let synced_at_ms = now_millis();
+    let sync_state = load_sync_state(conn).await?;
+    let current_paths: HashSet<String> = documents
         .iter()
-        .map(|entry| path_to_key(&entry.file_ref.path))
+        .map(|document| document.file_path.clone())
         .collect();
     let stale_paths: Vec<String> = sync_state
         .iter()
@@ -361,18 +517,17 @@ async fn sync_request_logs_with_connection(
         })
         .map(|(path, _)| path.clone())
         .collect();
-    let scanned_files = request_log_entries.len() as u64;
-    let changed_documents: Vec<RequestLogDocument> = request_log_entries
+    let scanned_files = documents.len() as u64;
+    let changed_documents: Vec<RequestLogDocument> = documents
         .into_iter()
         .filter(|entry| {
-            let file_path = path_to_key(&entry.file_ref.path);
+            let file_path = &entry.file_path;
             force
                 || sync_state
-                    .get(&file_path)
+                    .get(file_path)
                     .map(|state| !fingerprint_matches(*state, entry.fingerprint))
                     .unwrap_or(true)
         })
-        .map(document_from_entry)
         .collect();
 
     let changed_files = changed_documents.len() as u64;
@@ -433,10 +588,14 @@ fn like_pattern(value: &str) -> String {
     format!("%{escaped}%")
 }
 
-fn push_filters(builder: &mut QueryBuilder<'_, Sqlite>, filters: &RequestLogFilters) {
+fn push_filters<'a>(
+    builder: &mut QueryBuilder<'a, Sqlite>,
+    filters: &RequestLogFilters,
+    allowed_paths: Option<&'a HashSet<String>>,
+) {
     builder.push(" WHERE 1 = 1");
     if let Some(source) = normalized_filter(filters.source.as_ref()) {
-        if source == "claude" || source == "codex" {
+        if request_log_source_allowed(&source) {
             builder.push(" AND source = ").push_bind(source);
         }
     }
@@ -467,6 +626,105 @@ fn push_filters(builder: &mut QueryBuilder<'_, Sqlite>, filters: &RequestLogFilt
     if let Some(end_at) = filters.end_at {
         builder.push(" AND timestamp_ms <= ").push_bind(end_at);
     }
+    if let Some(allowed_paths) = allowed_paths {
+        if allowed_paths.is_empty() {
+            builder.push(" AND 1 = 0");
+        } else {
+            builder.push(" AND file_path IN (");
+            let mut first = true;
+            for path in allowed_paths {
+                if !first {
+                    builder.push(", ");
+                }
+                first = false;
+                builder.push_bind(path);
+            }
+            builder.push(")");
+        }
+    }
+}
+
+fn normalized_request_log_project_paths(filters: &RequestLogFilters) -> Vec<String> {
+    let mut paths = filters.project_paths.clone().unwrap_or_default();
+    if let Some(path) = &filters.project_path {
+        paths.push(path.clone());
+    }
+    let mut paths = paths
+        .into_iter()
+        .map(|path| normalize_history_path(&path))
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    paths.sort_unstable();
+    paths.dedup();
+    paths
+}
+
+async fn resolve_request_log_project_paths(
+    filters: &RequestLogFilters,
+    roots: &HistoryRoots,
+    force: bool,
+) -> Result<Option<HashSet<String>>, String> {
+    let target_paths = normalized_request_log_project_paths(filters);
+    if target_paths.is_empty() {
+        return Ok(None);
+    }
+    let source_filter = normalized_filter(filters.source.as_ref());
+    if source_filter
+        .as_deref()
+        .is_some_and(|source| !request_log_source_allowed(source))
+    {
+        return Ok(Some(HashSet::new()));
+    }
+
+    let roots_for_scan = roots.clone();
+    let target_paths_for_scan = target_paths.clone();
+    let source_for_scan = source_filter.clone();
+    let mut paths = tokio::task::spawn_blocking(move || {
+        let index = refresh_history_index_snapshot(&roots_for_scan, force);
+        index
+            .entries
+            .into_iter()
+            .filter(|entry| {
+                source_for_scan
+                    .as_deref()
+                    .map(|source| entry.file_ref.source == source)
+                    .unwrap_or(true)
+            })
+            .filter(|entry| {
+                target_paths_for_scan
+                    .iter()
+                    .any(|path| session_matches_project_path(&entry.file_ref, path))
+            })
+            .map(|entry| path_to_key(&entry.file_ref.path))
+            .collect::<HashSet<_>>()
+    })
+    .await
+    .map_err(|err| format!("request_logs_project_scope_failed: {err}"))?;
+
+    if source_filter
+        .as_deref()
+        .map(|source| source == "opencode")
+        .unwrap_or(true)
+    {
+        match opencode_catalog_sessions().await {
+            Ok(Some(sessions)) => {
+                for session in sessions {
+                    if target_paths.iter().any(|path| {
+                        session
+                            .cwd
+                            .as_deref()
+                            .is_some_and(|cwd| opencode_cwd_matches_project_path(cwd, path))
+                    }) {
+                        paths.insert(path_to_key(&session.file_ref.path));
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(err) => warn!("request log project scope skipped OpenCode database: {err}"),
+        }
+    }
+
+    Ok(Some(paths))
 }
 
 async fn list_request_logs_with_connection(
@@ -474,9 +732,10 @@ async fn list_request_logs_with_connection(
     filters: RequestLogFilters,
     page: u32,
     page_size: u32,
+    allowed_paths: Option<&HashSet<String>>,
 ) -> Result<RequestLogPage, String> {
     if normalized_filter(filters.source.as_ref())
-        .is_some_and(|source| source != "claude" && source != "codex")
+        .is_some_and(|source| !request_log_source_allowed(&source))
     {
         return Err("request_logs_invalid_source".to_string());
     }
@@ -491,7 +750,7 @@ async fn list_request_logs_with_connection(
 
     let mut count_builder =
         QueryBuilder::<Sqlite>::new("SELECT COUNT(*) AS total FROM request_logs");
-    push_filters(&mut count_builder, &filters);
+    push_filters(&mut count_builder, &filters, allowed_paths);
     let total = count_builder
         .build()
         .fetch_one(&mut *conn)
@@ -509,7 +768,7 @@ async fn list_request_logs_with_connection(
             SUM(cache_creation_tokens) AS cache_creation_tokens
          FROM request_logs",
     );
-    push_filters(&mut summary_builder, &filters);
+    push_filters(&mut summary_builder, &filters, allowed_paths);
     summary_builder.push(" GROUP BY model");
     let summary_rows = summary_builder
         .build()
@@ -542,6 +801,18 @@ async fn list_request_logs_with_connection(
             explicit_cost_usd: None,
         };
         let priced = calculate_usage_cost(model.as_deref(), usage);
+        summary.total_input_tokens = summary
+            .total_input_tokens
+            .saturating_add(usage.input_tokens);
+        summary.total_output_tokens = summary
+            .total_output_tokens
+            .saturating_add(usage.output_tokens);
+        summary.total_cache_read_tokens = summary
+            .total_cache_read_tokens
+            .saturating_add(usage.cache_read_tokens);
+        summary.total_cache_creation_tokens = summary
+            .total_cache_creation_tokens
+            .saturating_add(usage.cache_creation_tokens);
         summary.total_tokens = summary
             .total_tokens
             .saturating_add(usage_total_tokens(usage));
@@ -550,6 +821,11 @@ async fn list_request_logs_with_connection(
             .unpriced_tokens
             .saturating_add(priced.unpriced_tokens);
     }
+    summary.cache_hit_rate = request_log_cache_hit_rate(
+        summary.total_input_tokens,
+        summary.total_cache_read_tokens,
+        summary.total_cache_creation_tokens,
+    );
 
     let mut page_builder = QueryBuilder::<Sqlite>::new(
         "SELECT request_id, source, project_key, session_id, file_path, event_index,
@@ -557,7 +833,7 @@ async fn list_request_logs_with_connection(
             cache_creation_tokens
          FROM request_logs",
     );
-    push_filters(&mut page_builder, &filters);
+    push_filters(&mut page_builder, &filters, allowed_paths);
     page_builder
         .push(" ORDER BY timestamp_ms DESC, request_id DESC LIMIT ")
         .push_bind(page_size as i64)
@@ -634,15 +910,236 @@ pub async fn history_list_request_logs(
     filters: Option<RequestLogFilters>,
     page: Option<u32>,
     page_size: Option<u32>,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
 ) -> Result<RequestLogPage, String> {
+    let filters = filters.unwrap_or_default();
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+    let allowed_paths = resolve_request_log_project_paths(&filters, &roots, false).await?;
     let mut conn = open_cli_manager_db().await?;
     list_request_logs_with_connection(
         &mut conn,
-        filters.unwrap_or_default(),
+        filters,
         page.unwrap_or(0),
         page_size.unwrap_or(DEFAULT_PAGE_SIZE),
+        allowed_paths.as_ref(),
     )
     .await
+}
+
+fn request_log_cache_hit_rate(
+    input_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
+) -> f64 {
+    let denominator = input_tokens
+        .saturating_add(cache_read_tokens)
+        .saturating_add(cache_creation_tokens);
+    if denominator == 0 {
+        0.0
+    } else {
+        cache_read_tokens as f64 / denominator as f64
+    }
+}
+
+fn request_log_bucket_start(timestamp_ms: i64, granularity: &'static str) -> i64 {
+    let bucket_ms = if granularity == "hour" {
+        60 * 60 * 1000
+    } else {
+        24 * 60 * 60 * 1000
+    };
+    timestamp_ms.div_euclid(bucket_ms) * bucket_ms
+}
+
+fn request_log_stats_source_item(
+    source: String,
+    aggregate: RequestLogUsageAggregate,
+    total_tokens: u64,
+) -> RequestLogStatsSourceItem {
+    RequestLogStatsSourceItem {
+        source,
+        requests: aggregate.requests,
+        input_tokens: aggregate.input_tokens,
+        output_tokens: aggregate.output_tokens,
+        cache_read_tokens: aggregate.cache_read_tokens,
+        cache_creation_tokens: aggregate.cache_creation_tokens,
+        total_tokens: aggregate.total_tokens(),
+        ratio: if total_tokens == 0 {
+            0.0
+        } else {
+            aggregate.total_tokens() as f64 / total_tokens as f64
+        },
+        total_cost_usd: aggregate.total_cost_usd,
+        unpriced_tokens: aggregate.unpriced_tokens,
+    }
+}
+
+fn request_log_stats_model_item(
+    model: String,
+    aggregate: RequestLogUsageAggregate,
+    total_tokens: u64,
+) -> RequestLogStatsModelItem {
+    RequestLogStatsModelItem {
+        model,
+        requests: aggregate.requests,
+        input_tokens: aggregate.input_tokens,
+        output_tokens: aggregate.output_tokens,
+        cache_read_tokens: aggregate.cache_read_tokens,
+        cache_creation_tokens: aggregate.cache_creation_tokens,
+        total_tokens: aggregate.total_tokens(),
+        ratio: if total_tokens == 0 {
+            0.0
+        } else {
+            aggregate.total_tokens() as f64 / total_tokens as f64
+        },
+        total_cost_usd: aggregate.total_cost_usd,
+        unpriced_tokens: aggregate.unpriced_tokens,
+    }
+}
+
+#[tauri::command]
+pub async fn history_get_request_log_stats(
+    filters: Option<RequestLogFilters>,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
+) -> Result<RequestLogStatsResponse, String> {
+    let mut filters = filters.unwrap_or_default();
+    if normalized_filter(filters.source.as_ref())
+        .is_some_and(|source| !request_log_source_allowed(&source))
+    {
+        return Err("request_logs_invalid_source".to_string());
+    }
+
+    let range_end_at = filters.end_at.unwrap_or_else(now_millis);
+    let range_start_at = filters
+        .start_at
+        .unwrap_or_else(|| range_end_at.saturating_sub(30 * 24 * 60 * 60 * 1000));
+    if range_end_at < range_start_at {
+        return Err("request_logs_invalid_range".to_string());
+    }
+    filters.start_at = Some(range_start_at);
+    filters.end_at = Some(range_end_at);
+    let granularity = if range_end_at.saturating_sub(range_start_at) <= 24 * 60 * 60 * 1000 {
+        "hour"
+    } else {
+        "day"
+    };
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+    let allowed_paths = resolve_request_log_project_paths(&filters, &roots, false).await?;
+    let mut conn = open_cli_manager_db().await?;
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "SELECT source, model, timestamp_ms, input_tokens, output_tokens,
+            cache_read_tokens, cache_creation_tokens
+         FROM request_logs",
+    );
+    push_filters(&mut builder, &filters, allowed_paths.as_ref());
+    builder.push(" ORDER BY timestamp_ms ASC, request_id ASC");
+    let rows = builder
+        .build()
+        .fetch_all(&mut conn)
+        .await
+        .map_err(|err| format!("request_logs_stats_query_failed: {err}"))?;
+
+    let mut total = RequestLogUsageAggregate::default();
+    let mut trend: BTreeMap<i64, RequestLogUsageAggregate> = BTreeMap::new();
+    let mut sources: HashMap<String, RequestLogUsageAggregate> = HashMap::new();
+    let mut models: HashMap<String, RequestLogUsageAggregate> = HashMap::new();
+    for row in rows {
+        let model: Option<String> = row.try_get("model").map_err(|err| err.to_string())?;
+        let usage = UsageTokenScan {
+            input_tokens: row
+                .try_get::<i64, _>("input_tokens")
+                .map_err(|err| err.to_string())?
+                .max(0) as u64,
+            output_tokens: row
+                .try_get::<i64, _>("output_tokens")
+                .map_err(|err| err.to_string())?
+                .max(0) as u64,
+            cache_read_tokens: row
+                .try_get::<i64, _>("cache_read_tokens")
+                .map_err(|err| err.to_string())?
+                .max(0) as u64,
+            cache_creation_tokens: row
+                .try_get::<i64, _>("cache_creation_tokens")
+                .map_err(|err| err.to_string())?
+                .max(0) as u64,
+            explicit_cost_usd: None,
+        };
+        let cost = calculate_usage_cost(model.as_deref(), usage);
+        total.add(usage, cost);
+
+        let source: String = row.try_get("source").map_err(|err| err.to_string())?;
+        sources.entry(source).or_default().add(usage, cost);
+        models
+            .entry(model.unwrap_or_else(|| "unknown".to_string()))
+            .or_default()
+            .add(usage, cost);
+        let timestamp_ms: i64 = row.try_get("timestamp_ms").map_err(|err| err.to_string())?;
+        trend
+            .entry(request_log_bucket_start(timestamp_ms, granularity))
+            .or_default()
+            .add(usage, cost);
+    }
+
+    let total_tokens = total.total_tokens();
+    let mut source_distribution = sources
+        .into_iter()
+        .map(|(source, aggregate)| request_log_stats_source_item(source, aggregate, total_tokens))
+        .collect::<Vec<_>>();
+    source_distribution.sort_by(|left, right| {
+        right
+            .total_tokens
+            .cmp(&left.total_tokens)
+            .then_with(|| left.source.cmp(&right.source))
+    });
+    let mut model_distribution = models
+        .into_iter()
+        .map(|(model, aggregate)| request_log_stats_model_item(model, aggregate, total_tokens))
+        .collect::<Vec<_>>();
+    model_distribution.sort_by(|left, right| {
+        right
+            .total_tokens
+            .cmp(&left.total_tokens)
+            .then_with(|| left.model.cmp(&right.model))
+    });
+    let trend = trend
+        .into_iter()
+        .map(|(bucket_start_ms, aggregate)| RequestLogStatsTrendItem {
+            bucket_start_ms,
+            requests: aggregate.requests,
+            input_tokens: aggregate.input_tokens,
+            output_tokens: aggregate.output_tokens,
+            cache_read_tokens: aggregate.cache_read_tokens,
+            cache_creation_tokens: aggregate.cache_creation_tokens,
+            total_tokens: aggregate.total_tokens(),
+            total_cost_usd: aggregate.total_cost_usd,
+            unpriced_tokens: aggregate.unpriced_tokens,
+        })
+        .collect();
+
+    Ok(RequestLogStatsResponse {
+        range_start_at,
+        range_end_at,
+        granularity,
+        total_requests: total.requests,
+        total_input_tokens: total.input_tokens,
+        total_output_tokens: total.output_tokens,
+        total_cache_read_tokens: total.cache_read_tokens,
+        total_cache_creation_tokens: total.cache_creation_tokens,
+        total_tokens,
+        cache_hit_rate: request_log_cache_hit_rate(
+            total.input_tokens,
+            total.cache_read_tokens,
+            total.cache_creation_tokens,
+        ),
+        total_cost_usd: total.total_cost_usd,
+        total_unpriced_tokens: total.unpriced_tokens,
+        trend,
+        source_distribution,
+        model_distribution,
+    })
 }
 
 #[cfg(test)]
@@ -697,7 +1194,15 @@ mod tests {
         let first = sync_request_logs_with_connection(&mut conn, roots.clone(), true)
             .await
             .unwrap();
-        assert_eq!(first.written_rows, 1);
+        assert!(first.written_rows >= 1);
+        let file_key = path_to_key(&file);
+        let custom_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM request_logs WHERE file_path = ?1")
+                .bind(&file_key)
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(custom_count, 1);
         let second = sync_request_logs_with_connection(&mut conn, roots.clone(), false)
             .await
             .unwrap();
@@ -711,11 +1216,13 @@ mod tests {
         let replaced = sync_request_logs_with_connection(&mut conn, roots.clone(), true)
             .await
             .unwrap();
-        assert_eq!(replaced.written_rows, 1);
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM request_logs")
-            .fetch_one(&mut conn)
-            .await
-            .unwrap();
+        assert!(replaced.written_rows >= 1);
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM request_logs WHERE file_path = ?1")
+                .bind(&file_key)
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
         assert_eq!(count, 1);
 
         fs::remove_file(file).unwrap();
@@ -749,6 +1256,7 @@ mod tests {
             },
             0,
             500,
+            None,
         )
         .await
         .unwrap();
@@ -756,7 +1264,18 @@ mod tests {
         assert_eq!(page.total, 1);
         assert_eq!(page.page_size, MAX_PAGE_SIZE);
         assert_eq!(page.data[0].total_tokens, 18);
+        assert_eq!(page.summary.total_input_tokens, 10);
+        assert_eq!(page.summary.total_output_tokens, 5);
+        assert_eq!(page.summary.total_cache_read_tokens, 2);
+        assert_eq!(page.summary.total_cache_creation_tokens, 1);
+        assert!((page.summary.cache_hit_rate - (2.0 / 13.0)).abs() < f64::EPSILON);
         assert!(!page.data[0].session_available);
+    }
+
+    #[test]
+    fn cache_hit_rate_uses_input_and_cache_context_tokens() {
+        assert!((request_log_cache_hit_rate(100, 25, 5) - (25.0 / 130.0)).abs() < f64::EPSILON);
+        assert_eq!(request_log_cache_hit_rate(0, 0, 0), 0.0);
     }
 
     #[tokio::test]
@@ -783,10 +1302,17 @@ mod tests {
         let result = sync_request_logs_with_connection(&mut conn, roots, true)
             .await
             .unwrap();
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM request_logs")
-            .fetch_one(&mut conn)
-            .await
-            .unwrap();
+        let file = claude
+            .join("projects")
+            .join("project-a")
+            .join("session-a.jsonl");
+        let file_key = path_to_key(&file);
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM request_logs WHERE file_path = ?1")
+                .bind(&file_key)
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
 
         assert_eq!(result.removed_files, 0);
         assert_eq!(count, 1);

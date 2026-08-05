@@ -346,6 +346,102 @@ fn resolve_handoff_target(
     })
 }
 
+fn standby_target(base_profile: &CcConnectProfile) -> Result<ResolvedHandoffTarget, String> {
+    let mut profile = base_profile.clone();
+    apply_control_profile(&mut profile)?;
+    let catalog = load_provider_catalog_sync()?;
+    let (provider_id, provider_name, provider_is_global) =
+        project_provider(CcConnectAgent::Codex, "{}", &catalog);
+    let project = RegisteredProject {
+        id: CONTROL_PROJECT_ID.to_string(),
+        name: CONTROL_PROJECT_NAME.to_string(),
+        path: profile.project_path.clone(),
+        agent: CcConnectAgent::Codex,
+        group_path: Vec::new(),
+        provider_id: provider_id.clone(),
+        codex_provider_id: provider_id,
+        provider_name,
+        provider_is_global,
+        environment_type: "local".to_string(),
+        ssh_host_id: None,
+        remote_path: String::new(),
+        cli_config_root: String::new(),
+        env_vars: String::new(),
+    };
+    Ok(ResolvedHandoffTarget {
+        profile,
+        project,
+        worktree_id: None,
+        worktree_name: None,
+        work_dir: user_path_string(&control_work_dir()?),
+        transport: CcConnectHandoffTransport::Local,
+        ssh_host_id: None,
+    })
+}
+
+fn runtime_target(
+    base_profile: &CcConnectProfile,
+) -> Result<Option<ResolvedHandoffTarget>, String> {
+    let Some(project_id) = base_profile
+        .runtime_project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(project) = load_registered_projects(Some(base_profile))?
+        .into_iter()
+        .find(|project| project.id == project_id)
+    else {
+        return Ok(None);
+    };
+    if project.agent != CcConnectAgent::Codex {
+        if project.environment_type == "ssh" {
+            return Ok(None);
+        }
+        let work_dir = match canonical_local_directory(&project.path) {
+            Ok(path) => user_path_string(&path),
+            Err(_) => return Ok(None),
+        };
+        let mut project = project;
+        project.path = work_dir.clone();
+        let mut profile = base_profile.clone();
+        profile.project_id = project.id.clone();
+        profile.project_name = project.name.clone();
+        profile.project_path = work_dir.clone();
+        profile.agent = project.agent;
+        return Ok(Some(ResolvedHandoffTarget {
+            profile,
+            project,
+            worktree_id: None,
+            worktree_name: None,
+            work_dir,
+            transport: CcConnectHandoffTransport::Local,
+            ssh_host_id: None,
+        }));
+    }
+    let work_dir = if project.environment_type == "ssh" {
+        project.remote_path.clone()
+    } else {
+        project.path.clone()
+    };
+    let request = CcConnectHandoffStartRequest {
+        local_session_id: "runtime-target".to_string(),
+        cli_session_id: "runtime-target".to_string(),
+        platform: base_profile.platform,
+        project_id: project.id,
+        worktree_id: None,
+        work_dir,
+        session_title: None,
+    };
+    Ok(resolve_handoff_target(base_profile, &request).ok())
+}
+
+fn effective_idle_target(base_profile: &CcConnectProfile) -> Result<ResolvedHandoffTarget, String> {
+    runtime_target(base_profile)?.map_or_else(|| standby_target(base_profile), Ok)
+}
+
 fn source_profile_matches(profile: &CcConnectProfile, record: &PersistedHandoffRecord) -> bool {
     if profile.project_id != record.source_project_id
         || profile.project_name != record.source_project_name
@@ -367,7 +463,10 @@ fn resolve_record_target(
     base_profile: &CcConnectProfile,
     record: &PersistedHandoffRecord,
 ) -> Result<ResolvedHandoffTarget, String> {
-    if !source_profile_matches(base_profile, record) {
+    let source = effective_idle_target(base_profile)?;
+    if !source_profile_matches(base_profile, record)
+        && !source_profile_matches(&source.profile, record)
+    {
         return Err("handoff_source_profile_changed".to_string());
     }
     let request = CcConnectHandoffStartRequest {
@@ -410,8 +509,8 @@ pub(super) fn effective_target_for_process(
             Ok((target.profile, target.project))
         }
         None => {
-            let project = validate_registered_project(&base_profile)?;
-            Ok((base_profile, project))
+            let target = effective_idle_target(&base_profile)?;
+            Ok((target.profile, target.project))
         }
     }
 }
@@ -427,29 +526,8 @@ pub(super) fn ensure_handoff_inactive() -> Result<(), String> {
     }
 }
 
-fn sanitize_weixin_path_segment(value: &str) -> String {
-    let value = value.trim();
-    if value.is_empty() {
-        return "default".to_string();
-    }
-    value
-        .chars()
-        .map(|character| {
-            if matches!(character, '/' | '\\' | ':' | '\0') {
-                '_'
-            } else {
-                character
-            }
-        })
-        .collect()
-}
-
 fn weixin_context_token_path(project_name: &str, project_id: &str) -> Result<PathBuf, String> {
-    Ok(data_dir()?
-        .join("weixin")
-        .join(sanitize_weixin_path_segment(project_name))
-        .join(sanitize_weixin_path_segment(project_id))
-        .join("context_tokens.json"))
+    Ok(weixin_account_dir(project_name, project_id)?.join("context_tokens.json"))
 }
 
 fn load_weixin_context_token(
@@ -637,8 +715,12 @@ impl CcConnectManager {
             Some(profile) => profile,
             None => return Ok(Vec::new()),
         };
-        let source_session_path =
-            cc_session_store_path(&data_dir()?, &profile.project_name, &profile.project_path)?;
+        let source = effective_idle_target(&profile)?;
+        let source_session_path = cc_session_store_path(
+            &data_dir()?,
+            &source.profile.project_name,
+            &source.profile.project_path,
+        )?;
         let source_document = read_session_document(&source_session_path)?;
         let handoff_active = load_handoff_record()?.is_some();
         enabled_platforms(&profile)
@@ -655,7 +737,7 @@ impl CcConnectManager {
                 };
                 if item.platform == CcConnectPlatform::Weixin {
                     if let Ok(session_key) = &session_result {
-                        if load_weixin_context_token(&profile, session_key).is_err() {
+                        if load_weixin_context_token(&source.profile, session_key).is_err() {
                             session_result = Err("handoff_platform_session_missing".to_string());
                         }
                     }
@@ -727,18 +809,19 @@ impl CcConnectManager {
         if !credentials_ready(request.platform)? {
             return Err("handoff_credentials_missing".to_string());
         }
+        let source = effective_idle_target(&base_profile)?;
         let target = resolve_handoff_target(&base_profile, &request)?;
         let sessions_root = data_dir()?;
         let source_session_path = cc_session_store_path(
             &sessions_root,
-            &base_profile.project_name,
-            &base_profile.project_path,
+            &source.profile.project_name,
+            &source.profile.project_path,
         )?;
         let source_document = read_session_document(&source_session_path)?;
         let platform_session_key =
             resolve_platform_session_key(&source_document, request.platform, &selected_allow_from)?;
         if request.platform == CcConnectPlatform::Weixin {
-            load_weixin_context_token(&base_profile, &platform_session_key)?;
+            load_weixin_context_token(&source.profile, &platform_session_key)?;
         }
         let binary = self.detect(base_profile.executable_path.as_deref(), true)?;
         if !binary.compatible {
@@ -788,6 +871,7 @@ impl CcConnectManager {
         if !credentials_ready(request.platform)? {
             return Err("handoff_credentials_missing".to_string());
         }
+        let source = effective_idle_target(&base_profile)?;
         let target = resolve_handoff_target(&base_profile, &request)?;
         let binary = self.detect(base_profile.executable_path.as_deref(), true)?;
         if !binary.compatible {
@@ -799,8 +883,8 @@ impl CcConnectManager {
             let sessions_root = data_dir()?;
             let source_session_path = cc_session_store_path(
                 &sessions_root,
-                &base_profile.project_name,
-                &base_profile.project_path,
+                &source.profile.project_name,
+                &source.profile.project_path,
             )?;
             let source_document = read_session_document(&source_session_path)?;
             let platform_session_key = resolve_platform_session_key(
@@ -825,7 +909,7 @@ impl CcConnectManager {
             )?;
             let token_transfer = prepare_weixin_token_transfer(
                 request.platform,
-                &base_profile,
+                &source.profile,
                 &target,
                 &platform_session_key,
             )?;
@@ -846,9 +930,9 @@ impl CcConnectManager {
                 cc_session_id,
                 session_file_path: user_path_string(&target_session_path),
                 previous_active_session_id,
-                source_project_id: base_profile.project_id.clone(),
-                source_project_name: base_profile.project_name.clone(),
-                source_project_path: base_profile.project_path.clone(),
+                source_project_id: source.profile.project_id.clone(),
+                source_project_name: source.profile.project_name.clone(),
+                source_project_path: source.profile.project_path.clone(),
                 started_at_ms: now_millis(),
                 transport: target.transport,
                 ssh_host_id: target.ssh_host_id.clone(),
@@ -1018,13 +1102,21 @@ impl CcConnectManager {
         let mut warnings = Vec::new();
         if let Err(err) = self.start_inner() {
             warnings.push(format!("restart original cc-connect failed: {err}"));
-        } else if let Err(err) = send_handoff_notification(
-            &binary.path,
-            &base_profile.project_name,
-            &record.platform_session_key,
-            &format_handoff_notification(&record, false, base_profile.language),
-        ) {
-            warnings.push(err);
+        } else {
+            let notification_project = load_profile()
+                .ok()
+                .flatten()
+                .and_then(|profile| effective_idle_target(&profile).ok())
+                .map(|target| target.profile.project_name)
+                .unwrap_or_else(|| record.source_project_name.clone());
+            if let Err(err) = send_handoff_notification(
+                &binary.path,
+                &notification_project,
+                &record.platform_session_key,
+                &format_handoff_notification(&record, false, base_profile.language),
+            ) {
+                warnings.push(err);
+            }
         }
         self.append_system_log(format!(
             "remote handoff cancelled for CLI session {}",

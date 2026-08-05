@@ -46,10 +46,16 @@ interface PendingTerminalWrite {
   reset: boolean;
 }
 
-interface PendingViewportRestore {
-  marker: IMarker;
-  terminal: Terminal;
-}
+type PendingViewportRestore =
+  | {
+    kind: "bottom";
+    terminal: Terminal;
+  }
+  | {
+    kind: "marker";
+    marker: IMarker;
+    terminal: Terminal;
+  };
 
 interface UseTerminalDisplayOptions {
   sessionId: string;
@@ -132,11 +138,10 @@ export function useTerminalDisplay({
     }
     const pending = pendingViewportRestoreRef.current;
     pendingViewportRestoreRef.current = null;
-    if (pending && !pending.marker.isDisposed) pending.marker.dispose();
+    if (pending?.kind === "marker" && !pending.marker.isDisposed) pending.marker.dispose();
   };
 
-  const scheduleViewportRestore = (terminal: Terminal, marker: IMarker) => {
-    const pending = { terminal, marker };
+  const scheduleViewportRestore = (pending: PendingViewportRestore) => {
     pendingViewportRestoreRef.current = pending;
     viewportRestoreRafRef.current = requestAnimationFrame(() => {
       if (pendingViewportRestoreRef.current !== pending) return;
@@ -145,11 +150,14 @@ export function useTerminalDisplay({
         if (pendingViewportRestoreRef.current !== pending) return;
         pendingViewportRestoreRef.current = null;
         try {
-          if (terminalRef.current === terminal && !marker.isDisposed) {
-            terminal.scrollToLine(marker.line);
+          if (terminalRef.current !== pending.terminal) return;
+          if (pending.kind === "bottom") {
+            pending.terminal.scrollToBottom();
+          } else if (!pending.marker.isDisposed) {
+            pending.terminal.scrollToLine(pending.marker.line);
           }
         } finally {
-          if (!marker.isDisposed) marker.dispose();
+          if (pending.kind === "marker" && !pending.marker.isDisposed) pending.marker.dispose();
         }
       });
     });
@@ -469,6 +477,7 @@ export function useTerminalDisplay({
   };
 
   const resetOutputState = () => {
+    cancelPendingViewportRestore();
     if (ptyWriteRafIdRef.current !== null) {
       cancelAnimationFrame(ptyWriteRafIdRef.current);
       ptyWriteRafIdRef.current = null;
@@ -497,9 +506,15 @@ export function useTerminalDisplay({
       barrier.begin(terminal, container);
     }
     const buffer = terminal.buffer.active;
+    const isHorizontalReflow = cols !== terminal.cols;
+    const wasAtLiveBottom = (
+      isHorizontalReflow
+      && buffer.type === "normal"
+      && buffer.viewportY === buffer.baseY
+    );
     // Horizontal reflow changes physical row indexes; a marker follows the logical viewport line.
     const viewportMarker = (
-      cols !== terminal.cols
+      isHorizontalReflow
       && buffer.type === "normal"
       && buffer.viewportY < buffer.baseY
     )
@@ -507,7 +522,13 @@ export function useTerminalDisplay({
       : undefined;
     terminal.resize(cols, rows);
     resizeRenderBarrierRef.current?.noteContainerResize();
-    if (viewportMarker) scheduleViewportRestore(terminal, viewportMarker);
+    if (wasAtLiveBottom) {
+      // Reassert xterm's live-follow intent before and after its asynchronous DOM viewport sync.
+      terminal.scrollToBottom();
+      scheduleViewportRestore({ kind: "bottom", terminal });
+    } else if (viewportMarker) {
+      scheduleViewportRestore({ kind: "marker", marker: viewportMarker, terminal });
+    }
   };
 
   const getResizeDebouncer = () => {

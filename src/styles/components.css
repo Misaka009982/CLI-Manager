@@ -2781,6 +2781,62 @@
   width: 100% !important;
 }
 
+.ui-terminal-native-scroll {
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+}
+
+.ui-terminal-native-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.ui-subagent-scrollbar {
+  position: absolute;
+  top: 6px;
+  right: 3px;
+  bottom: 6px;
+  width: 10px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--animate-duration-fast) var(--ease-standard);
+}
+
+.ui-subagent-scrollbar[data-visible="true"],
+.ui-subagent-scrollbar[data-dragging="true"] {
+  opacity: 1;
+}
+
+.ui-subagent-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  left: 3px;
+  width: 4px;
+  min-height: 24px;
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 20%, transparent);
+  cursor: grab;
+  pointer-events: auto;
+  transition: left var(--animate-duration-fast) var(--ease-standard), width var(--animate-duration-fast) var(--ease-standard), background-color var(--animate-duration-fast) var(--ease-standard);
+}
+
+.ui-subagent-scrollbar:hover .ui-subagent-scrollbar-thumb,
+.ui-subagent-scrollbar-thumb:hover,
+.ui-subagent-scrollbar[data-dragging="true"] .ui-subagent-scrollbar-thumb {
+  left: 0;
+  width: 10px;
+  cursor: grabbing;
+}
+
+.ui-subagent-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 40%, transparent);
+}
+
+.ui-subagent-scrollbar[data-dragging="true"] .ui-subagent-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 50%, transparent);
+}
+
 .diff-code-inner {
   width: max-content;
   min-width: 100%;
@@ -2797,6 +2853,17 @@
   color: var(--md-text);
   overflow-wrap: anywhere;
   line-height: 1.58;
+}
+
+.ui-markdown .katex {
+  color: var(--md-text);
+}
+
+.ui-markdown .katex-display {
+  margin: 0.8rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.15rem 0 0.35rem;
 }
 
 /* Replay lives inside the terminal side-panel theme, while history Markdown normally
@@ -3490,6 +3557,94 @@
 .subagent-transcript-shell .subagent-transcript-markdown.ui-markdown-terminal .ui-markdown-link:hover {
   color: var(--term-panel-green, #3dd68c);
   border-bottom-color: color-mix(in srgb, var(--term-panel-green, #3dd68c) 60%, transparent);
+}
+
+/* The terminal Markdown split pane owns the same semantic palette as the
+   terminal that hosts it. Keep the history transcript renderer local to that
+   palette instead of inheriting the app-shell surface colors. */
+.terminal-markdown-preview {
+  --surface: var(--term-panel-bg, var(--terminal-theme-background, #0c0e10));
+  --surface-container-low: var(--term-panel-bg, var(--terminal-theme-background, #0c0e10));
+  --surface-container-lowest: var(--term-panel-bg, var(--terminal-theme-background, #0c0e10));
+  --surface-container-high: var(--term-panel-card, #121212);
+  --surface-container-highest: var(--term-panel-card-inner, #181818);
+  --text-primary: var(--term-panel-fg, var(--terminal-theme-foreground, #ececec));
+  --text-secondary: color-mix(in srgb, var(--term-panel-fg, #ececec) 82%, var(--term-panel-dim, #9ca0a6) 18%);
+  --text-muted: var(--term-panel-dim, #9ca0a6);
+  --border: var(--term-panel-border, #2e2e2e);
+  --bg-primary: var(--term-panel-bg, #0c0e10);
+  --bg-secondary: var(--term-panel-card-inner, #181818);
+  --bg-tertiary: var(--term-panel-card, #121212);
+  --primary: var(--term-panel-cyan, var(--terminal-theme-accent, #5ac8e0));
+  --accent: var(--term-panel-cyan, var(--terminal-theme-accent, #5ac8e0));
+  --success: var(--term-panel-green, #3dd68c);
+  --warning: var(--term-panel-yellow, #e5c453);
+  --danger: var(--term-panel-red, #f07178);
+  --interactive-hover-bg: color-mix(in srgb, var(--term-panel-fg, #ececec) 9%, transparent);
+  background: var(--term-panel-bg, var(--terminal-theme-background, #0c0e10));
+  color: var(--term-panel-fg, var(--terminal-theme-foreground, #ececec));
+}
+
+.terminal-markdown-preview-message-select {
+  border: 1px solid var(--term-panel-border, #2e2e2e);
+  background-color: var(--term-panel-card-inner, #181818);
+  color: var(--term-panel-fg, #ececec);
+}
+
+.terminal-markdown-preview-answer-popover {
+  border-color: var(--term-panel-border, #2e2e2e);
+  background-color: var(--term-panel-card-inner, #181818);
+  color: var(--term-panel-fg, #ececec);
+  box-shadow: 0 10px 24px color-mix(in srgb, #000 32%, transparent);
+}
+
+.terminal-markdown-preview-answer-option {
+  margin: 2px 4px;
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: color-mix(in srgb, var(--term-panel-fg, #ececec) 84%, var(--term-panel-dim, #9ca0a6) 16%);
+  transition: background-color var(--animate-duration-fast), color var(--animate-duration-fast);
+}
+
+.terminal-markdown-preview-answer-option[data-highlighted="true"] {
+  background-color: color-mix(in srgb, var(--term-panel-fg, #ececec) 10%, transparent);
+  color: var(--term-panel-fg, #ececec);
+}
+
+.terminal-markdown-preview-answer-option[data-state="checked"] {
+  color: var(--term-panel-cyan, #5ac8e0);
+}
+
+.terminal-markdown-preview-answer-option[data-state="checked"][data-highlighted="true"] {
+  background-color: color-mix(in srgb, var(--term-panel-cyan, #5ac8e0) 14%, transparent);
+}
+
+.terminal-markdown-preview .subagent-transcript-markdown.ui-markdown-terminal {
+  font-size: calc(0.75rem * var(--markdown-preview-font-scale, 1));
+}
+
+/* Let the terminal's single background-image layer show through the split
+   pane. The parent overlay still supplies the configured darkening and the
+   opaque fallback remains active when no background image is available. */
+.ui-terminal-bg-layer[data-bg-enabled="true"] .terminal-markdown-preview {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--term-panel-bg, #0c0e10) 68%, transparent),
+      color-mix(in srgb, var(--term-panel-card, #121212) 58%, transparent)
+    );
+}
+
+.terminal-markdown-preview .ui-markdown-terminal {
+  --md-text: var(--term-panel-fg, #ececec);
+  --md-muted: color-mix(in srgb, var(--term-panel-fg, #ececec) 82%, var(--term-panel-dim, #9ca0a6) 18%);
+  --md-subtle: var(--term-panel-dim, #9ca0a6);
+  --md-border: color-mix(in srgb, var(--term-panel-border, #2e2e2e) 88%, transparent);
+  --md-border-muted: color-mix(in srgb, var(--term-panel-border, #2e2e2e) 72%, transparent);
+  --md-canvas-subtle: color-mix(in srgb, var(--term-panel-card-inner, #181818) 86%, transparent);
+  --md-canvas-muted: color-mix(in srgb, var(--term-panel-green, #3dd68c) 10%, transparent);
+  color: var(--term-panel-fg, #ececec);
 }
 
 .synced-history-transcript-shell {
@@ -7441,10 +7596,18 @@
   transition: background-color 300ms ease;
 }
 
-/* Keep the xterm container above the pseudo-element layers. */
+/* Keep terminal content and controls above the pseudo-element layers without
+   overriding their own absolute/relative positioning. */
 .ui-terminal-bg-layer[data-bg-enabled="true"] > * {
-  position: relative;
   z-index: 2;
+}
+
+/* The generic child layer above intentionally normalizes content stacking.
+   Restore a higher level for controls so the full-size terminal content layer
+   cannot intercept their pointer events in background mode. */
+.ui-terminal-bg-layer[data-bg-enabled="true"] > .terminal-markdown-preview-toggle,
+.ui-terminal-bg-layer[data-bg-enabled="true"] > .terminal-search-shell {
+  z-index: 20;
 }
 
 /* Background image and dimming overlays are decorative. Keep xterm as the

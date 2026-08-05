@@ -124,9 +124,9 @@ export function FileEditorPane({ session, isActive, terminalThemeBackground, onC
   });
 
   useEffect(() => {
-    if (!isActive || !editorProject || isSameProjectFileContext(project, editorProject)) return;
+    if (!isActive || !editorProject || isSameProjectFileContext(useFileExplorerStore.getState().project, editorProject)) return;
     void openProject(editorProject);
-  }, [editorProject, isActive, openProject, project]);
+  }, [editorProject, isActive, openProject]);
 
   useEffect(() => {
     setPreviewMode("source");

@@ -343,6 +343,9 @@ export interface Settings {
   terminalScrollbackCustomEnabled: boolean;
   terminalScrollbackRows: number;
   fontFamily: string;
+  terminalTextColor: string;
+  terminalTuiUserColor: string;
+  terminalTuiAssistantColor: string;
   uiFontFamily: string;
   uiFontSize: number;
   uiTextColor: string;
@@ -487,6 +490,9 @@ const DEFAULTS: Settings = {
   terminalScrollbackCustomEnabled: false,
   terminalScrollbackRows: TERMINAL_SCROLLBACK_ROWS_DEFAULT,
   fontFamily: "Cascadia Code, Consolas, monospace",
+  terminalTextColor: "",
+  terminalTuiUserColor: "",
+  terminalTuiAssistantColor: "",
   uiFontFamily:
     "\"Segoe UI Variable\", \"Segoe UI\", -apple-system, BlinkMacSystemFont, \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
   uiFontSize: UI_FONT_SIZE_DEFAULT,
@@ -1217,6 +1223,36 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     ) {
       entries.uiTextColor = DEFAULTS.uiTextColor;
       persistSetting("uiTextColor", DEFAULTS.uiTextColor);
+    }
+    const storedTerminalTextColor = entries.terminalTextColor;
+    const terminalTextColor =
+      typeof storedTerminalTextColor === "string" &&
+      (storedTerminalTextColor === "" || HEX_COLOR_PATTERN.test(storedTerminalTextColor))
+        ? storedTerminalTextColor
+        : DEFAULTS.terminalTextColor;
+    entries.terminalTextColor = terminalTextColor;
+    if (storedTerminalTextColor !== undefined && storedTerminalTextColor !== terminalTextColor) {
+      persistSetting("terminalTextColor", terminalTextColor);
+    }
+    const storedTerminalTuiUserColor = entries.terminalTuiUserColor;
+    const terminalTuiUserColor =
+      typeof storedTerminalTuiUserColor === "string" &&
+      (storedTerminalTuiUserColor === "" || HEX_COLOR_PATTERN.test(storedTerminalTuiUserColor))
+        ? storedTerminalTuiUserColor
+        : DEFAULTS.terminalTuiUserColor;
+    entries.terminalTuiUserColor = terminalTuiUserColor;
+    if (storedTerminalTuiUserColor !== undefined && storedTerminalTuiUserColor !== terminalTuiUserColor) {
+      persistSetting("terminalTuiUserColor", terminalTuiUserColor);
+    }
+    const storedTerminalTuiAssistantColor = entries.terminalTuiAssistantColor;
+    const terminalTuiAssistantColor =
+      typeof storedTerminalTuiAssistantColor === "string" &&
+      (storedTerminalTuiAssistantColor === "" || HEX_COLOR_PATTERN.test(storedTerminalTuiAssistantColor))
+        ? storedTerminalTuiAssistantColor
+        : DEFAULTS.terminalTuiAssistantColor;
+    entries.terminalTuiAssistantColor = terminalTuiAssistantColor;
+    if (storedTerminalTuiAssistantColor !== undefined && storedTerminalTuiAssistantColor !== terminalTuiAssistantColor) {
+      persistSetting("terminalTuiAssistantColor", terminalTuiAssistantColor);
     }
     entries.fontFamily =
       typeof entries.fontFamily === "string" && entries.fontFamily.trim()

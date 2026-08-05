@@ -705,9 +705,9 @@ cd src-tauri && cargo test
 
 ## 💬 交流讨论
 <p align="center">
-  <img src="docs/img/wechat-group-qr.png" width="280" alt="微信交流群" />
+  <img src="docs/img/wechat.jpg" width="280" alt="作者个人微信二维码" />
   <br>
-  <sub>扫码加入微信交流群，获取最新动态与技术支持</sub>
+  <sub>作者个人微信二维码，添加好友时请备注 <code>cli-manager</code></sub>
 </p>
 
 ---

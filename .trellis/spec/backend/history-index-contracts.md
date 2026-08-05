@@ -74,6 +74,66 @@ let hits = catalog::search_sessions(&roots, &query, source, project_path, limit)
 catalog::ensure_refresh(app, roots, false, false).await?;
 ```
 
+## Scenario: Bound Terminal Markdown Preview Freshness
+
+### 1. Scope / Trigger
+
+- Trigger: a completed local Claude/Codex Hook turn asks the terminal Markdown preview for the exact bound `cliSessionId` before the history catalog has observed the newly written transcript.
+- Goal: the preview may wait for one targeted catalog refresh without blocking PTY output, losing the terminal background-image rendering path, or showing another session.
+
+### 2. Signatures
+
+- Frontend helper: `fetchLatestProjectSessionDetail(projectPath, prev, source, cliSessionId, options?)`.
+- Realtime options: `forceCatalogRefresh?: boolean`, `freshDetail?: boolean`, and `waitForCatalogRefresh?: boolean`.
+- Tauri command: `history_refresh_index(..., wait: boolean) -> HistoryIndexStatus`.
+
+### 3. Contracts
+
+- A bound preview lookup must match `source + cliSessionId`; a project/path miss must never fall back to an unrelated recent session.
+- `waitForCatalogRefresh=true` is reserved for the explicit bound Markdown preview and is passed to `history_refresh_index`; statistics polling keeps the default non-blocking `false` behavior.
+- The preview records its load trigger only after receiving a non-null matching detail. A catalog miss, parse error, or transport error remains retryable when the panel is opened or refreshed.
+- The preview consumes `SessionTranscriptContent` only; it must not alter xterm output, the terminal background-image wrapper, transparency, WebGL policy, or split geometry.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Exact session is already indexed | Load detail through the normal fast path. |
+| Exact session is missing and preview requests freshness | Wait for one forced catalog refresh, then retry the exact lookup. |
+| Refresh or detail loading fails | Show the existing preview error and leave the trigger uncommitted so a later open/refresh can retry. |
+| Source/session identity mismatches | Return no detail; never display another session's answer. |
+| Background image is active | Keep the existing terminal DOM/background stacking and xterm content path unchanged. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: Hook completion races catalog indexing; the preview waits for the refresh and renders the final assistant message for the same session.
+- Base: the catalog already contains the session; no forced refresh is needed.
+- Bad: cache a failed hidden preload trigger and make opening the visible panel permanently reuse the failure.
+- Bad: use the project's latest session as a fallback when the bound `cliSessionId` is absent.
+
+### 6. Tests Required
+
+- Frontend source regression test: assert preview freshness passes `waitForCatalogRefresh=true`, the store forwards it as `wait`, and failed loads do not write the loaded trigger.
+- Frontend background regression test: assert the existing terminal background-enabled wrapper and xterm container remain present.
+- Run `npx tsc --noEmit` and the Markdown preview/background layout Node tests.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+loadedTriggerRef.current = trigger;
+void loadLatest();
+```
+
+#### Correct
+
+```typescript
+void loadLatest(trigger);
+// inside the successful matching-detail branch:
+loadedTriggerRef.current = trigger;
+```
+
 ## Scenario: Catalog Schema Compatibility Upgrade
 
 ### 1. Scope / Trigger

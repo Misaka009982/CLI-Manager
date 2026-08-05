@@ -933,9 +933,13 @@ export interface HistoryStatsPayload {
   hourly_activity: HistoryStatsHourlyActivityItem[];
 }
 
+export type RequestLogSource = "claude" | "codex" | "gemini" | "opencode" | "grok";
+
 export interface RequestLogFilters {
-  source?: "claude" | "codex" | null;
+  source?: RequestLogSource | null;
   project_key?: string | null;
+  project_path?: string | null;
+  project_paths?: string[] | null;
   model?: string | null;
   session_query?: string | null;
   start_at?: number | null;
@@ -953,7 +957,7 @@ export interface RequestLogSyncResult {
 
 export interface RequestLogItem {
   request_id: string;
-  source: "claude" | "codex";
+  source: RequestLogSource;
   project_key: string;
   session_id: string;
   file_path: string;
@@ -973,7 +977,12 @@ export interface RequestLogItem {
 
 export interface RequestLogSummary {
   total: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_read_tokens: number;
+  total_cache_creation_tokens: number;
   total_tokens: number;
+  cache_hit_rate: number;
   total_cost_usd: number;
   unpriced_tokens: number;
 }
@@ -984,6 +993,62 @@ export interface RequestLogPage {
   total: number;
   page: number;
   page_size: number;
+}
+
+export interface RequestLogStatsTrendItem {
+  bucket_start_ms: number;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  unpriced_tokens: number;
+}
+
+export interface RequestLogStatsSourceItem {
+  source: RequestLogSource;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  total_tokens: number;
+  ratio: number;
+  total_cost_usd: number;
+  unpriced_tokens: number;
+}
+
+export interface RequestLogStatsModelItem {
+  model: string;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  total_tokens: number;
+  ratio: number;
+  total_cost_usd: number;
+  unpriced_tokens: number;
+}
+
+export interface RequestLogStatsPayload {
+  range_start_at: number;
+  range_end_at: number;
+  granularity: "hour" | "day";
+  total_requests: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_read_tokens: number;
+  total_cache_creation_tokens: number;
+  total_tokens: number;
+  cache_hit_rate: number;
+  total_cost_usd: number;
+  total_unpriced_tokens: number;
+  trend: RequestLogStatsTrendItem[];
+  source_distribution: RequestLogStatsSourceItem[];
+  model_distribution: RequestLogStatsModelItem[];
 }
 
 export const SHELL_OPTIONS_WINDOWS = [

@@ -61,6 +61,11 @@ export function isLightTerminalTheme(theme: ITheme): boolean {
   return rgb !== null && getRelativeLuminance(rgb) > 0.55;
 }
 
+export function withTerminalTextColor(theme: ITheme, textColor: string): ITheme {
+  const foreground = normalizeHexColor(textColor);
+  return foreground ? { ...theme, foreground } : theme;
+}
+
 export function getTerminalBackgroundOverlayColor(theme: ITheme): string {
   return isLightTerminalTheme(theme) ? "255, 255, 255" : "0, 0, 0";
 }

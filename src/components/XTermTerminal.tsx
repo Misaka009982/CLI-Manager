@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   Terminal,
   type IBufferLine,
@@ -24,6 +24,7 @@ import {
   getTerminalMinimumContrastRatio,
   getTerminalTheme,
   isLightTerminalTheme,
+  withTerminalTextColor,
 } from "../lib/terminalThemes";
 import { backgroundAssetUrl } from "../lib/assetUrl";
 import { translateCurrent, useI18n } from "../lib/i18n";
@@ -47,10 +48,8 @@ import { useTerminalDisplay } from "../hooks/useTerminalDisplay";
 import { useTerminalInput, type TerminalSuggestionGhostState } from "../hooks/useTerminalInput";
 import { getTerminalCellWidth } from "../lib/terminalCellWidth";
 import { copyTextToClipboard } from "../lib/systemClipboard";
-import {
-  hasCodexTuiViewport,
-  normalizeTerminalTuiComposerBackground,
-} from "../lib/terminalTuiDisplay";
+import { hasCodexTuiViewport } from "../lib/terminalTuiDisplay";
+import { createTerminalTuiColorSyncController } from "../lib/terminalTuiColorSync";
 import { hexToRgba, normalizeHexColor } from "../lib/terminalColor";
 import { wrapTerminalPasteTextForCtrlShiftV } from "../lib/terminalKeyboard";
 import {
@@ -67,9 +66,15 @@ import { Portal } from "./ui/Portal";
 import { useProjectStore } from "../stores/projectStore";
 import { formatStartupInputForPty, useTerminalStore } from "../stores/terminalStore";
 import {
+  Eye,
+  EyeOff,
+} from "./icons";
+import {
+  isTerminalMarkdownPreviewSupported,
+  TerminalMarkdownPreview,
+} from "./terminal/TerminalMarkdownPreview";
+import {
   createTerminalCliContext,
-  isClaudeOrCodexTerminalContext,
-  isClaudeTerminalContext,
   isCodexTerminalContext,
 } from "../terminal/browser/TerminalCliContext";
 import { createTerminalMouseInteractionOptions } from "../terminal/browser/TerminalMouseInteraction";
@@ -415,7 +420,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const visibilityRestoreRevealTimerRef = useRef<number | null>(null);
   const visibilityRestoreRevealRafRef = useRef<number | null>(null);
   const visibilityRestoreFallbackRafRef = useRef<number | null>(null);
-  const tuiComposerNormalizeRafRef = useRef<number | null>(null);
   const displayNormalizeOutputRef = useRef<(text: string) => string>((text) => text);
   const displayTransformOutputRef = useRef<(text: string) => string>((text) => text);
   const displayAfterWriteRef = useRef<((terminal: Terminal) => void) | null>(null);
@@ -429,6 +433,15 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const disableHardwareAcceleration = useSettingsStore((s) => s.disableHardwareAcceleration);
   const terminalInputSuggestionsEnabled = useSettingsStore((s) => s.terminalInputSuggestionsEnabled);
   const terminalInputSuggestionProvider = useSettingsStore((s) => s.terminalInputSuggestionProvider);
+  const terminalTextColor = useSettingsStore((s) => s.terminalTextColor);
+  const terminalTuiUserColor = useSettingsStore((s) => s.terminalTuiUserColor);
+  const terminalTuiAssistantColor = useSettingsStore((s) => s.terminalTuiAssistantColor);
+  const terminalTextColorRef = useRef(terminalTextColor);
+  const terminalTuiUserColorRef = useRef(terminalTuiUserColor);
+  const terminalTuiAssistantColorRef = useRef(terminalTuiAssistantColor);
+  terminalTextColorRef.current = terminalTextColor;
+  terminalTuiUserColorRef.current = terminalTuiUserColor;
+  terminalTuiAssistantColorRef.current = terminalTuiAssistantColor;
 
   const background = useSettingsStore(
     useShallow((s) => ({
@@ -442,12 +455,24 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     }))
   );
   const hiddenForThisSession = useTerminalStore((s) => s.hiddenBackgroundSessionIds.has(sessionId));
+  const terminalSession = useTerminalStore((state) => state.sessions.find((item) => item.id === sessionId) ?? null);
+  const terminalProject = useProjectStore((state) => (
+    terminalSession?.projectId
+      ? state.projects.find((item) => item.id === terminalSession.projectId) ?? null
+      : null
+  ));
+  const markdownPreviewSupported = isTerminalMarkdownPreviewSupported(terminalSession, terminalProject);
+  const markdownPreviewCanOpen = markdownPreviewSupported
+    && Boolean(terminalSession?.cliSessionId?.trim());
 
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
   const [visibilityRestorePending, setVisibilityRestorePending] = useState(false);
   const [suggestionGhost, setSuggestionGhost] = useState<TerminalSuggestionGhostState | null>(null);
   const [linuxGraphicsConstrained, setLinuxGraphicsConstrained] = useState(false);
   const [linuxGraphicsDisableWebgl, setLinuxGraphicsDisableWebgl] = useState(false);
+  const [markdownPreviewOpen, setMarkdownPreviewOpen] = useState(false);
+  const [markdownPreviewRatio, setMarkdownPreviewRatio] = useState(0.5);
+  const markdownPreviewDragCleanupRef = useRef<(() => void) | null>(null);
   const { menuState, menuRef, openMenu, closeContextMenu } = useTerminalContextMenu();
   const osPlatformRef = useRef<OsPlatform>("unknown");
   const codexImeDebugRef = useRef<CodexImeDebugState>({
@@ -514,7 +539,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const isTransparent = background.enabled && background.imagePath !== null && !hiddenForThisSession;
   const isTransparentRef = useRef(isTransparent);
   isTransparentRef.current = isTransparent;
-  const terminalTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+  const terminalTheme = withTerminalTextColor(
+    getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette),
+    terminalTextColor,
+  );
   const isLightTerminalRef = useRef(isLightTerminalTheme(terminalTheme));
   isLightTerminalRef.current = isLightTerminalTheme(terminalTheme);
   const effectiveFontFamily = normalizeTerminalFontFamily(fontFamily);
@@ -573,13 +601,80 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     clearSuggestionGhost();
   }, [terminalInputSuggestionProvider]);
 
-  const getSessionToolContext = () => {
+  useEffect(() => () => {
+    markdownPreviewDragCleanupRef.current?.();
+    markdownPreviewDragCleanupRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (!markdownPreviewOpen) return;
+    const frame = window.requestAnimationFrame(() => fitAddonRef.current?.fit());
+    return () => window.cancelAnimationFrame(frame);
+  }, [markdownPreviewOpen, markdownPreviewRatio]);
+
+  const handleMarkdownPreviewResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+
+    markdownPreviewDragCleanupRef.current?.();
+    const startX = event.clientX;
+    const startRatio = markdownPreviewRatio;
+    let frame: number | null = null;
+    let pendingRatio: number | null = null;
+
+    const updateRatio = (clientX: number) => {
+      const width = wrapper.getBoundingClientRect().width;
+      if (width <= 0) return;
+      const next = Math.min(0.68, Math.max(0.28, startRatio + (startX - clientX) / width));
+      pendingRatio = next;
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        if (pendingRatio !== null) setMarkdownPreviewRatio(pendingRatio);
+      });
+    };
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      updateRatio(moveEvent.clientX);
+    };
+    const finish = () => {
+      if (pendingRatio !== null) setMarkdownPreviewRatio(pendingRatio);
+      cleanup();
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cleanup);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = null;
+      markdownPreviewDragCleanupRef.current = null;
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cleanup);
+    markdownPreviewDragCleanupRef.current = cleanup;
+  }, [markdownPreviewRatio]);
+
+  const getSessionToolContext = useCallback(() => {
     const session = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
     const project = session?.projectId
       ? useProjectStore.getState().projects.find((item) => item.id === session.projectId)
       : null;
     return createTerminalCliContext(session, project);
-  };
+  }, [sessionId]);
+  const tuiColorSync = useMemo(
+    () => createTerminalTuiColorSyncController(() => ({
+      getContext: getSessionToolContext,
+      isTransparent: isTransparentRef.current,
+      isLightTheme: isLightTerminalRef.current,
+      terminalTextColor: terminalTextColorRef.current,
+      tuiUserColor: terminalTuiUserColorRef.current,
+      tuiAssistantColor: terminalTuiAssistantColorRef.current,
+    })),
+    [getSessionToolContext],
+  );
   if (piTerminalCompatibilityRef.current?.sessionId !== sessionId) {
     piTerminalCompatibilityRef.current = createPiTerminalCompatibility(
       sessionId,
@@ -660,31 +755,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     isCodexTerminalContext(context)
     || (runtimeTerminal !== undefined && hasCodexTuiViewport(runtimeTerminal))
   );
-  const isClaudeSession = (context = getSessionToolContext()) => isClaudeTerminalContext(context);
-  const isClaudeOrCodexSession = (context = getSessionToolContext()) => (
-    isClaudeOrCodexTerminalContext(context)
-  );
-  const normalizeTuiComposerBackground = (terminal: Terminal) => {
-    const context = getSessionToolContext();
-    normalizeTerminalTuiComposerBackground(terminal, {
-      shouldNormalize: isTransparentRef.current || (isClaudeOrCodexSession(context) && isLightTerminalRef.current),
-      isTransparent: isTransparentRef.current,
-      isLightTheme: isLightTerminalRef.current,
-      isCodexSession: isCodexSession(context),
-      isClaudeSession: isClaudeSession(context),
-    });
-  };
-  const scheduleTuiComposerBackgroundNormalization = (terminal: Terminal | null = terminalRef.current) => {
-    if (!terminal || tuiComposerNormalizeRafRef.current !== null) return;
-    tuiComposerNormalizeRafRef.current = window.requestAnimationFrame(() => {
-      tuiComposerNormalizeRafRef.current = null;
-      if (terminalRef.current !== terminal) return;
-      normalizeTuiComposerBackground(terminal);
-    });
-  };
   displayAfterWriteRef.current = (terminal) => {
-    normalizeTuiComposerBackground(terminal);
-    scheduleTuiComposerBackgroundNormalization(terminal);
+    tuiColorSync.normalize(terminal);
+    tuiColorSync.schedule(terminal);
   };
 
   displayTransformOutputRef.current = (text) => (
@@ -766,7 +839,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
-    const baseTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+    const baseTheme = withTerminalTextColor(
+      getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette),
+      terminalTextColor,
+    );
     const minimumContrastRatio = getTerminalMinimumContrastRatio(baseTheme, isTransparent);
     const nextTheme = isTransparent ? applyTransparency(baseTheme, background.overlayDarken) : baseTheme;
     terminal.options.theme = withVisibleSelectionTheme(nextTheme, searchOpen);
@@ -790,9 +866,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     if (terminal.options.scrollback !== effectiveTerminalScrollbackRows) {
       terminal.options.scrollback = effectiveTerminalScrollbackRows;
     }
-    normalizeTuiComposerBackground(terminal);
-    scheduleTuiComposerBackgroundNormalization(terminal);
-  }, [fontSize, effectiveFontFamily, effectiveTerminalScrollbackRows, resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette, isTransparent, background.overlayDarken, lowMemoryMode, disableHardwareAcceleration, linuxGraphicsDisableWebgl, searchOpen]);
+    tuiColorSync.normalize(terminal);
+    tuiColorSync.schedule(terminal);
+  }, [fontSize, effectiveFontFamily, effectiveTerminalScrollbackRows, resolvedTheme, terminalThemeName, terminalTextColor, terminalTuiUserColor, terminalTuiAssistantColor, lightThemePalette, darkThemePalette, isTransparent, background.overlayDarken, lowMemoryMode, disableHardwareAcceleration, linuxGraphicsDisableWebgl, searchOpen, tuiColorSync]);
 
   // Hidden terminals stay attached and continue parsing output. Visibility only
   // controls renderer resources and when pending layout work is flushed.
@@ -808,7 +884,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
     clearHiddenWebglDisposeTimer();
     const terminal = terminalRef.current;
-    const baseTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+    const baseTheme = withTerminalTextColor(
+      getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette),
+      terminalTextColor,
+    );
     const rendererRestored = terminal ? syncWebglRenderer(terminal, baseTheme) : false;
     const becameVisible = !wasVisible;
 
@@ -821,10 +900,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     }
     scheduleFit(true, rendererRestored);
     if (terminalRef.current) {
-      normalizeTuiComposerBackground(terminalRef.current);
-      scheduleTuiComposerBackgroundNormalization(terminalRef.current);
+      tuiColorSync.normalize(terminalRef.current);
+      tuiColorSync.schedule(terminalRef.current);
     }
-  }, [isVisible, lowMemoryMode, disableHardwareAcceleration, linuxGraphicsConstrained, linuxGraphicsDisableWebgl, resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette]);
+  }, [isVisible, lowMemoryMode, disableHardwareAcceleration, linuxGraphicsConstrained, linuxGraphicsDisableWebgl, resolvedTheme, terminalThemeName, terminalTextColor, lightThemePalette, darkThemePalette, tuiColorSync]);
 
   // The WebGL glyph atlas can be silently corrupted while the GPU sleeps
   // (display sleep, lock screen, driver reset) without ever firing
@@ -889,8 +968,12 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
   useEffect(() => {
     if (!containerRef.current) return;
+    tuiColorSync.reset();
 
-    const baseTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+    const baseTheme = withTerminalTextColor(
+      getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette),
+      terminalTextColor,
+    );
     let linkHoverIcon: TerminalLinkHoverIcon | null = null;
     let ctrlKeyDown = false;
     let fileHoverGeneration = 0;
@@ -1509,7 +1592,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     displayDisposables.push({ dispose: detachViewport });
     displayDisposables.push(terminal.onRender((range) => {
       handleVisibilityRestoreRender(terminal, range);
-      scheduleTuiComposerBackgroundNormalization(terminal);
+      tuiColorSync.schedule(terminal);
+    }));
+    displayDisposables.push(terminal.onScroll(() => {
+      tuiColorSync.schedule(terminal);
     }));
     const detachIme = attachIme(terminal, {
       forwarding: inputForwarding,
@@ -1542,10 +1628,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       resolveInitialDisplayReady?.();
       resolveInitialDisplayReady = null;
       ptyOutput?.dispose();
-      if (tuiComposerNormalizeRafRef.current !== null) {
-        cancelAnimationFrame(tuiComposerNormalizeRafRef.current);
-        tuiComposerNormalizeRafRef.current = null;
-      }
+      tuiColorSync.dispose();
       resetOutputState();
       clearHiddenWebglDisposeTimer();
       clearVisibilityRestoreRevealSchedule();
@@ -1559,7 +1642,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       fitAddonRef.current = null;
       searchAddonRef.current = null;
     };
-  }, [sessionId]);
+  }, [sessionId, tuiColorSync]);
 
   const backgroundOverlayColor = getTerminalBackgroundOverlayColor(terminalTheme);
   const showBackgroundImage = isTransparent && assetUrl !== null;
@@ -1579,12 +1662,21 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     : searchResult.resultCount > 0 && searchResult.resultIndex >= 0
       ? `${searchResult.resultIndex + 1}/${searchResult.resultCount}`
       : searchMatched === false
-        ? "0/0"
-        : "";
+      ? "0/0"
+      : "";
+  const markdownPreviewPanelPercent = markdownPreviewRatio * 100;
+  const markdownPreviewRightOffset = markdownPreviewOpen
+    ? `calc(${markdownPreviewPanelPercent}% + 12px)`
+    : "12px";
+  const searchRightOffset = markdownPreviewOpen
+    ? `calc(${markdownPreviewPanelPercent}% + 56px)`
+    : markdownPreviewSupported
+      ? "56px"
+      : "12px";
 
   const terminalSearchShellStyle: CSSProperties = {
     position: "absolute",
-    right: 12,
+    right: searchRightOffset,
     top: 12,
     zIndex: 20,
     backgroundColor: hexToRgba(searchBackground, showBackgroundImage ? 0.78 : 0.92, "rgba(0, 0, 0, 0.86)"),
@@ -1691,9 +1783,34 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       data-bg-fit={showBackgroundImage ? background.fit : undefined}
       data-bg-position={showBackgroundImage ? background.position : undefined}
     >
+      {markdownPreviewSupported && (
+        <button
+          type="button"
+          onClick={() => {
+            if (!markdownPreviewOpen && !markdownPreviewCanOpen) return;
+            setMarkdownPreviewOpen((open) => !open);
+          }}
+          disabled={!markdownPreviewOpen && !markdownPreviewCanOpen}
+          className="terminal-markdown-preview-toggle ui-focus-ring absolute top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-md border backdrop-blur-md transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+          style={{ ...terminalSearchButtonStyle, right: markdownPreviewRightOffset }}
+          aria-label={markdownPreviewOpen
+            ? t("terminal.markdownPreview.close")
+            : markdownPreviewCanOpen
+              ? t("terminal.markdownPreview.open")
+              : t("terminal.markdownPreview.unavailable")}
+          title={markdownPreviewOpen
+            ? t("terminal.markdownPreview.close")
+            : markdownPreviewCanOpen
+              ? t("terminal.markdownPreview.open")
+              : t("terminal.markdownPreview.unavailable")}
+          aria-pressed={markdownPreviewOpen}
+        >
+          {markdownPreviewOpen ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
+        </button>
+      )}
       {searchOpen && (
         <div
-          className="absolute right-3 top-3 z-20 flex h-8 items-center gap-1 rounded-md border px-2 text-[12px] backdrop-blur-md"
+          className="terminal-search-shell absolute right-3 top-3 z-20 flex h-8 items-center gap-1 rounded-md border px-2 text-[12px] backdrop-blur-md"
           style={terminalSearchShellStyle}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
@@ -1767,7 +1884,35 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           </button>
         </div>
       )}
-      <div ref={containerRef} className="relative h-full w-full overflow-hidden pl-2" style={terminalContainerStyle} />
+      <div className="absolute inset-0 overflow-hidden">
+        <div
+          className="absolute inset-y-0 left-0 min-w-0 overflow-hidden"
+          style={{ width: markdownPreviewOpen ? `${100 - markdownPreviewPanelPercent}%` : "100%" }}
+        >
+          <div ref={containerRef} className="relative h-full w-full overflow-hidden pl-2" style={terminalContainerStyle} />
+        </div>
+        {markdownPreviewOpen && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t("terminal.markdownPreview.resize")}
+            className="absolute inset-y-0 z-20 w-1 -translate-x-1/2 cursor-col-resize bg-transparent transition-colors hover:bg-[color-mix(in_srgb,var(--primary)_55%,transparent)]"
+            style={{ left: `${100 - markdownPreviewPanelPercent}%` }}
+            onPointerDown={handleMarkdownPreviewResizeStart}
+          />
+        )}
+        <div
+          className="absolute inset-y-0 right-0 min-w-0 overflow-hidden"
+          style={{ width: markdownPreviewOpen ? `${markdownPreviewPanelPercent}%` : "0%", pointerEvents: markdownPreviewOpen ? "auto" : "none" }}
+        >
+          <TerminalMarkdownPreview
+            sessionId={sessionId}
+            open={markdownPreviewOpen}
+            onClose={() => setMarkdownPreviewOpen(false)}
+            terminalTheme={terminalTheme}
+          />
+        </div>
+      </div>
       {terminalInputSuggestionsEnabled && isActive && isVisible && !searchOpen && suggestionGhost && (
         <div
           aria-hidden="true"

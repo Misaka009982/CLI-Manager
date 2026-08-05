@@ -195,7 +195,7 @@ export const HISTORY_SOURCE_DESCRIPTORS: readonly HistorySourceDescriptor[] = [
     labelKey: "historySources.source.gemini",
     defaultLabel: "Gemini CLI",
     locations: [configRootSlot],
-    capabilities: jsonReaderCapabilities,
+    capabilities: { ...jsonReaderCapabilities, usage: "supported" },
     parserPlan: {
       stage: "native",
       batch: "batch-1",
