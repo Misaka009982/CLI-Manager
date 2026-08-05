@@ -33,6 +33,23 @@
 - `wsl::tests::converts_wsl_mnt_paths_to_windows_paths`
 - 手动对比：`git -C D:\... status --short` 为空，而 `wsl git -C /mnt/d/... status --short` 全量修改时，CLI-Manager Git 面板应按 Windows/native 结果展示。
 
+### WSL 自动刷新必须有终止边界
+
+**Context**：WSL UNC 不支持 Windows 文件监听器，文件浏览器会退化为 15 秒自动刷新。若目录不是 Git 仓库或 WSL 子进程失去响应，无边界轮询会持续制造失败请求，并在快速切换项目时形成积压。
+
+**Contract**：
+
+- `git_get_changes` 的 WSL `git` 与前置 `readlink` 子进程必须复用 `output_with_timeout`，单次最多运行 30 秒；禁止裸 `.output()`。
+- 明确识别为非 Git 仓库时返回稳定错误码 `not_git_repository`，其他权限、所有权和进程错误不得误归类。
+- 文件浏览器按规范化项目路径缓存 `not_git_repository`，文件监听回退轮询和窗口重新聚焦不得重复查询。
+- 用户手动刷新时清除当前路径的非 Git 缓存并重新探测，以支持运行期间初始化仓库。
+- 异步 Git 查询返回后必须校验当前项目文件位置；旧项目结果不得覆盖新项目状态。
+
+**Tests**：
+
+- Rust 单测覆盖英文和中文非 Git 错误识别，并拒绝把所有权错误误分类。
+- `node --test scripts/fileExplorerWslGitRefresh.test.mjs` 覆盖负缓存、手动重试、结果归属和超时执行器接入。
+
 ### Common Mistake: 只改 `collect_git_changes_from_repo` 导致面板无效果
 
 **Symptom**：修复/过滤逻辑单测全绿，但 Git 面板 UI 行为不变。

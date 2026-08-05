@@ -314,6 +314,7 @@ let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let searchRequestSeq = 0;
 let openProjectRequestSeq = 0;
 const inFlightGitChangeRequests = new Map<string, Promise<GitFileChange[]>>();
+const nonGitProjectPaths = new Set<string>();
 let refreshVisibleStateInFlight: Promise<void> | null = null;
 let pendingRefreshChangedPaths: Set<string> | null | undefined;
 const remoteFileContextReleases = new Map<string, Promise<void>>();
@@ -530,18 +531,34 @@ function collectEntriesByPath(entries: ProjectFileEntry[], map: Map<string, Proj
   }
 }
 
+function normalizeGitProjectPath(projectPath: string): string {
+  return projectPath.replace(/\\/g, "/").replace(/\/+$/u, "");
+}
+
 async function fetchGitChanges(projectPath: string): Promise<GitFileChange[]> {
-  const existing = inFlightGitChangeRequests.get(projectPath);
+  const projectKey = normalizeGitProjectPath(projectPath);
+  if (nonGitProjectPaths.has(projectKey)) return [];
+
+  const existing = inFlightGitChangeRequests.get(projectKey);
   if (existing) return existing;
 
   const request = invoke<GitFileChange[]>("git_get_changes", { projectPath })
-    .catch(() => [])
+    .then((changes) => {
+      nonGitProjectPaths.delete(projectKey);
+      return changes;
+    })
+    .catch((error) => {
+      if (errorHasCode(error, "not_git_repository")) {
+        nonGitProjectPaths.add(projectKey);
+      }
+      return [];
+    })
     .finally(() => {
-      if (inFlightGitChangeRequests.get(projectPath) === request) {
-        inFlightGitChangeRequests.delete(projectPath);
+      if (inFlightGitChangeRequests.get(projectKey) === request) {
+        inFlightGitChangeRequests.delete(projectKey);
       }
     });
-  inFlightGitChangeRequests.set(projectPath, request);
+  inFlightGitChangeRequests.set(projectKey, request);
   return request;
 }
 
@@ -833,6 +850,7 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
   refresh: async () => {
     const project = get().project;
     if (!project) return;
+    nonGitProjectPaths.delete(normalizeGitProjectPath(project.path));
     await get().refreshVisibleState();
   },
 
@@ -973,6 +991,7 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
       return;
     }
     const gitChanges = await fetchGitChanges(project.path);
+    if (!isSameProjectFileLocation(get().project, project)) return;
     set({ gitChanges });
   },
 

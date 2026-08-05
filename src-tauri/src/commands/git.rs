@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 
 pub use super::git_diff::{GitDiffOptions, GitFileDiffPayload};
 use crate::git_watcher::GitWatcherBridge;
-use crate::shell_resolver::silent_command;
+use crate::shell_resolver::{output_with_timeout, silent_command};
 
 const GIT_DIFF_LINE_STATS_STATUS_LIMIT: usize = 500;
 const GIT_DIFF_LINE_STATS_LINE_LIMIT: usize = 200_000;
@@ -15,6 +15,7 @@ const MAX_WORKTREE_PATCH_BYTES: usize = 4 * 1024 * 1024;
 const OOM_PATCH_WARN_BYTES: usize = MAX_WORKTREE_PATCH_BYTES;
 const OOM_SNAPSHOT_PATCH_RETURN_MAX_BYTES: usize = MAX_WORKTREE_PATCH_BYTES;
 const OOM_SNAPSHOT_FILES_WARN_COUNT: usize = 500;
+const WSL_GIT_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 static WORKTREE_OPERATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -332,6 +333,10 @@ fn git_get_changes_wsl(
         &["status", "--porcelain=v1", "-z", "-unormal"],
     )
     .map_err(|e| {
+        if e == "not_git_repository" {
+            log::debug!("[git_get_changes:wsl] 非 Git 仓库: project_path={project_path}");
+            return e;
+        }
         let err_msg = format!("获取 WSL Git 状态失败: {e}");
         log::error!("[git_get_changes:wsl] {}", err_msg);
         err_msg
@@ -526,18 +531,24 @@ pub(super) fn run_wsl_git(
     let args = build_wsl_git_command_args(distro, linux_path, git_args);
     cmd.args(&args);
 
-    let output = cmd.output().map_err(|e| format!("spawn_failed: {e}"))?;
+    let output = output_with_timeout(cmd, WSL_GIT_COMMAND_TIMEOUT).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::TimedOut {
+            "wsl_git_timeout".to_string()
+        } else {
+            format!("spawn_failed: {e}")
+        }
+    })?;
     if output.status.success() {
         return Ok(output.stdout);
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let snippet = format!("{stderr}{stdout}")
-        .trim()
-        .chars()
-        .take(300)
-        .collect::<String>();
+    let combined_output = format!("{stderr}{stdout}");
+    if is_not_git_repository_output(&combined_output) {
+        return Err("not_git_repository".to_string());
+    }
+    let snippet = combined_output.trim().chars().take(300).collect::<String>();
     Err(format!(
         "wsl_git_failed(exit={}): {}",
         output
@@ -547,6 +558,13 @@ pub(super) fn run_wsl_git(
             .unwrap_or_else(|| "?".to_string()),
         snippet
     ))
+}
+
+fn is_not_git_repository_output(output: &str) -> bool {
+    let normalized = output.to_ascii_lowercase();
+    normalized.contains("not a git repository")
+        || normalized.contains("不是一个 git 仓库")
+        || normalized.contains("不是 git 仓库")
 }
 
 pub(super) fn resolve_wsl_mnt_git_project_path(distro: &str, linux_path: &str) -> Option<String> {
@@ -577,10 +595,9 @@ fn resolve_wsl_linux_realpath(distro: &str, linux_path: &str) -> Option<String> 
         .as_deref()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "wsl.exe".to_string());
-    let output = silent_command(&program)
-        .args(["-d", distro, "--exec", "readlink", "-f", linux_path])
-        .output()
-        .ok()?;
+    let mut command = silent_command(&program);
+    command.args(["-d", distro, "--exec", "readlink", "-f", linux_path]);
+    let output = output_with_timeout(command, WSL_GIT_COMMAND_TIMEOUT).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -2626,9 +2643,10 @@ mod tests {
         build_reverse_hunk_patch, build_reverse_lines_patch, build_worktree_snapshot,
         build_wsl_git_command_args, collect_git_changes_from_repo, git_delete_untracked_paths,
         git_fork_worktree_snapshot, git_get_file_diff, git_restore_worktree_snapshot,
-        is_nested_repo_entry, is_no_stash_created, parse_wsl_git_status, parse_wsl_numstat,
-        remove_untracked_snapshot_file, scan_git_repository_paths, should_skip_diff_line_stats,
-        validate_branch_name, validate_repo_relative_path, validate_snapshot_branch_name,
+        is_nested_repo_entry, is_no_stash_created, is_not_git_repository_output,
+        parse_wsl_git_status, parse_wsl_numstat, remove_untracked_snapshot_file,
+        scan_git_repository_paths, should_skip_diff_line_stats, validate_branch_name,
+        validate_repo_relative_path, validate_snapshot_branch_name,
         GIT_DIFF_LINE_STATS_STATUS_LIMIT, MAX_WORKTREE_PATCH_BYTES,
     };
     use git2::{IndexAddOption, Repository, Signature};
@@ -2933,6 +2951,19 @@ mod tests {
                 "--porcelain=v1",
             ]
         );
+    }
+
+    #[test]
+    fn recognizes_wsl_non_git_repository_errors() {
+        assert!(is_not_git_repository_output(
+            "fatal: not a git repository (or any of the parent directories): .git"
+        ));
+        assert!(is_not_git_repository_output(
+            "致命错误：不是一个 Git 仓库（或者任何父目录）：.git"
+        ));
+        assert!(!is_not_git_repository_output(
+            "fatal: detected dubious ownership in repository"
+        ));
     }
 
     #[test]
