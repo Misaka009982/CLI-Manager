@@ -68,6 +68,14 @@ test("project synchronization effects read the latest store without subscribing 
   );
 });
 
+test("hidden Workspans do not activate their file editors", () => {
+  const paneLeaf = sliceBetween(terminalTabs, "function PaneLeafView", "const MemoPaneLeafView");
+  assert.match(
+    paneLeaf,
+    /<FileEditorPane[\s\S]*?isActive=\{!historyActive && isLayoutVisible && session\.id === activeSessionId\}/,
+  );
+});
+
 test("closing editor tabs checks dirty files in every location owned by each project", () => {
   const closeGuard = sliceBetween(
     terminalTabs,

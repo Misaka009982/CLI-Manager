@@ -1901,7 +1901,7 @@ function PaneLeafView({
               <Suspense fallback={null}>
                 <FileEditorPane
                   session={session}
-                  isActive={session.id === activeSessionId}
+                  isActive={!historyActive && isLayoutVisible && session.id === activeSessionId}
                   terminalThemeBackground={terminalThemeBackground}
                   onClose={() => onCloseSessions([session.id])}
                 />
