@@ -753,13 +753,21 @@ export function useTerminalInput({
     }: TerminalInputForwardingOptions,
   ): TerminalInputForwardingController => {
     let lastForwardedTerminalInput: { data: string; source: TerminalInputSource; at: number } | null = null;
-    const isImeDuplicateCandidate = (data: string) => {
+    const isImeDuplicateCandidate = (data: string, source: TerminalInputSource) => {
       if (!data || data === "\r" || data === "\x7f" || data === "\b" || data.startsWith("\x1b")) return false;
       const normalized = data.replace(/\r\n?/g, "\n");
-      return Boolean(normalized.trim()) && /[^\x00-\x7f]/.test(normalized);
+      if (!Boolean(normalized.trim())) return false;
+      // 跨源去重的目标：同一字符既被 IME 恢复（nativeTextInput）转发，又被 xterm 的
+      // onData 转发，导致双份。非 ASCII（中文/标点）一直是候选；ASCII 符号
+      // （如 Shift+1 的 ! 或 Shift+' 的 "）在 macOS 上也会走 IME 恢复路径，
+      // 因此来自 nativeTextInput 的单个可打印 ASCII 字符同样纳入候选。
+      if (/[^\x00-\x7f]/.test(normalized)) return true;
+      return source === "nativeTextInput"
+        && Array.from(normalized).length === 1
+        && normalized.charCodeAt(0) >= 32;
     };
     const shouldDropCrossSourceImeDuplicate = (data: string, source: TerminalInputSource, now: number) => {
-      if (!isImeDuplicateCandidate(data) || !lastForwardedTerminalInput) return false;
+      if (!isImeDuplicateCandidate(data, source) || !lastForwardedTerminalInput) return false;
       const deltaMs = now - lastForwardedTerminalInput.at;
       return (
         lastForwardedTerminalInput.source !== source
