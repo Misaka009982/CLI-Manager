@@ -349,8 +349,11 @@ import ReactMarkdown from "react-markdown";
 - Keep `skipHtml` enabled for untrusted Markdown.
 - Default links to preview-only behavior unless the surrounding flow explicitly allows opening external URLs.
 - Keep remote images as placeholders by default; do not load remote images from history/session content without a separate reviewed allowlist or setting.
+- Math Markdown must be enabled in this shared renderer with `remark-math` and `rehype-katex`; keep `skipHtml` enabled, leave formulas inside fenced code blocks as literal code, and keep long display formulas horizontally scrollable.
 - Terminal-specific Markdown theming must stay opt-in. If one caller needs a light/dark-aware code theme or palette override, add an explicit prop or caller-owned class instead of changing the shared `variant="terminal"` default for every consumer.
 - Scope terminal-variant CSS overrides to the caller container (for example a transcript shell or file-preview wrapper). Do not widen `.ui-markdown-terminal` defaults just to fix one surface.
+- The terminal background image is owned by `.ui-terminal-bg-layer`; when `data-bg-enabled="true"`, the Markdown preview must reveal that same pseudo-element layer through a translucent surface instead of loading a second asset. Controls that are direct children of the wrapper need a z-index above the generic direct-child stacking rule.
+- Terminal Markdown preview may unwrap one top-level `md` / `markdown` fenced source block before passing it to the shared renderer; nested code fences remain literal code. The preview must source all non-empty assistant messages from the loaded `HistorySessionDetail` and provide a stable message selector instead of silently discarding earlier responses.
 - When changing Markdown styles, update `src/components/ui/markdownSample.ts` so the manual preview covers the new element or edge case.
 
 **Tests**: Run `npx tsc --noEmit` and `npm run build`; manually inspect the Markdown style preview in Settings > About in both default and terminal variants. If the change targets a terminal-only caller such as a transcript or file preview, also verify that scoped caller still matches the active terminal theme while the other `variant="terminal"` callers keep their prior appearance.
@@ -1762,3 +1765,31 @@ if (!isEdit && !isClone && trimmedCliArgs) {
 ```
 
 **Tests**: Run `npx tsc --noEmit`; manually verify the overlay thumb appears only when content overflows, starts narrow, expands on hover, follows wheel/trackpad scrolling, drags to the correct document position, and does not change the transcript Pane width or cause line-wrap jitter.
+
+### Convention: Terminal Markdown preview controls must remain terminal-themed and history-addressable
+
+**What**: The terminal Markdown preview uses the existing Radix Select primitive for historical answer selection. Its portal content must receive the terminal theme variables explicitly, and its viewport must use `ui-thin-scroll` with `--ui-scrollbar-thumb` / `--ui-scrollbar-track` from the terminal theme. Do not use a native `<select>` when the popup scrollbar or surface needs terminal styling.
+
+The preview can open when the session is a supported Claude/Codex session with a bound `cliSessionId`; a current-turn Hook status is not a prerequisite because restored sessions may have no new Hook event. `Ctrl`/`Cmd` plus wheel changes the preview Markdown scale only within the preview content, clamped to `0.8`–`1.6`; an unmodified wheel must keep normal scrolling.
+
+KaTeX's package stylesheet owns the `.katex` base font size. Shared Markdown CSS may set its color, but must not force `.katex` to `font-size: 1em`, which makes terminal formulas smaller and visually soft. Preview zoom should scale the Markdown container instead of using transforms that introduce raster blur.
+
+**Correct**:
+
+```tsx
+<SelectPrimitive.Content style={terminalPreviewStyle}>
+  <SelectPrimitive.Viewport className="ui-thin-scroll overflow-y-auto" />
+</SelectPrimitive.Content>
+
+<div onWheel={handlePreviewWheel} style={{ "--markdown-preview-font-scale": scale }} />
+```
+
+**Wrong**:
+
+```tsx
+<select>{options}</select>
+<div onWheel={zoomEveryWheelEvent} />
+<style>.ui-markdown .katex { font-size: 1em; }</style>
+```
+
+**Tests**: Run `node --test scripts/terminalMarkdownPreview.test.mjs scripts/markdownRendering.test.mjs` and `npx tsc --noEmit`; manually verify long answer lists, keyboard selection, restored sessions without a new conversation, normal scrolling, `Ctrl`/`Cmd` wheel zoom limits, light/dark terminal themes, background images, and clear KaTeX formulas.

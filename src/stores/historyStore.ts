@@ -35,6 +35,11 @@ import type {
   HistoryTokenTrendPoint,
   HistoryToolEvent,
   HistoryToolCount,
+  RequestLogStatsModelItem,
+  RequestLogStatsPayload,
+  RequestLogStatsSourceItem,
+  RequestLogStatsTrendItem,
+  RequestLogSyncResult,
   PromptScope,
   Project,
   HistorySource,
@@ -743,6 +748,62 @@ export interface FetchHistoryStatsOptions {
   force?: boolean;
 }
 
+export interface FetchHistoryRequestLogStatsOptions {
+  sourceFilter: HistorySourceFilter;
+  projectKey?: string | null;
+  projectPath?: string | null;
+  model?: string | null;
+  startAt?: number | null;
+  endAt?: number | null;
+  force?: boolean;
+}
+
+let requestLogSyncPromise: Promise<unknown> | null = null;
+
+export async function syncHistoryRequestLogs(force = false): Promise<RequestLogSyncResult> {
+  if (requestLogSyncPromise && !force) {
+    await requestLogSyncPromise;
+    return {
+      scanned_files: 0,
+      changed_files: 0,
+      removed_files: 0,
+      written_rows: 0,
+      failed_files: 0,
+      synced_at_ms: 0,
+    };
+  }
+  const pathArgs = await getHistoryPathArgs();
+  const promise = invoke<RequestLogSyncResult>("history_sync_request_logs", {
+    ...pathArgs,
+    force,
+  });
+  requestLogSyncPromise = promise;
+  try {
+    return await promise;
+  } finally {
+    if (requestLogSyncPromise === promise) requestLogSyncPromise = null;
+  }
+}
+
+export async function fetchHistoryRequestLogStats(
+  options: FetchHistoryRequestLogStatsOptions,
+): Promise<RequestLogStatsPayload> {
+  await syncHistoryRequestLogs(options.force ?? false);
+  const filters = {
+    source: normalizeSourceFilter(options.sourceFilter),
+    project_key: options.projectKey?.trim() || null,
+    project_path: options.projectPath?.trim() || null,
+    model: options.model?.trim() || null,
+    start_at: typeof options.startAt === "number" && Number.isFinite(options.startAt) ? options.startAt : null,
+    end_at: typeof options.endAt === "number" && Number.isFinite(options.endAt) ? options.endAt : null,
+  };
+  const raw = await invoke<unknown>("history_get_request_log_stats", {
+    filters,
+    ...(await getHistoryPathArgs()),
+  });
+  return normalizeRequestLogStats(raw);
+}
+
 export async function fetchHistoryStatsProjectOptions(sourceFilter: HistorySourceFilter): Promise<string[]> {
   const raw = await invoke<unknown>("history_list_stats_projects", {
     source: normalizeSourceFilter(sourceFilter),
@@ -800,23 +861,26 @@ export async function fetchRemoteHistoryStatsPayload(
 // source 非空时只匹配对应 CLI（claude/codex），供按终端工具区分的场景使用。
 // 传入 prev（上次结果的 file_path/updated_at）时，若最近会话未变化则返回 "unchanged"，
 // 跳过整个 jsonl 的重新解析，供轮询场景使用。
-// forceCatalogRefresh：Hook 刚绑定 sessionId / 用量仍为 0 时后台触发扫盘索引；查询保持非阻塞。
+// forceCatalogRefresh：Hook 刚绑定 sessionId / 用量仍为 0 时触发扫盘索引。
+// waitForCatalogRefresh：需要严格绑定当前 session 的实时预览时，等待这次扫盘完成；默认不等待，保留统计轮询的非阻塞行为。
 export async function fetchLatestProjectSessionDetail(
   projectPath: string,
   prev?: { filePath: string; updatedAt: number },
   source?: HistorySource | null,
   cliSessionId?: string | null,
-  options?: { forceCatalogRefresh?: boolean; freshDetail?: boolean }
+  options?: { forceCatalogRefresh?: boolean; freshDetail?: boolean; waitForCatalogRefresh?: boolean }
 ): Promise<HistorySessionDetail | "unchanged" | null> {
   try {
     const forceCatalogRefresh = Boolean(options?.forceCatalogRefresh);
     const freshDetail = Boolean(options?.freshDetail);
+    const waitForCatalogRefresh = Boolean(options?.waitForCatalogRefresh);
     logInfo("history.realtime.lookup.start", {
       source: source ?? null,
       projectPath,
       cliSessionId: cliSessionId ?? null,
       forceCatalogRefresh,
       freshDetail,
+      waitForCatalogRefresh,
       previousFilePath: prev?.filePath ?? null,
       previousUpdatedAt: prev?.updatedAt ?? null,
     });
@@ -860,7 +924,7 @@ export async function fetchLatestProjectSessionDetail(
       if (summary?.session_id === sessionQuery) return summary;
       if (!forceCatalogRefresh) return null;
       try {
-        await invoke("history_refresh_index", { ...pathArgs, wait: false });
+        await invoke("history_refresh_index", { ...pathArgs, wait: waitForCatalogRefresh });
       } catch (error) {
         logWarn("history.realtime.lookup.refreshFailed", {
           source: source ?? null,
@@ -893,7 +957,9 @@ export async function fetchLatestProjectSessionDetail(
       });
       return null;
     }
-    if (prev && summary.file_path === prev.filePath && summary.updated_at === prev.updatedAt) {
+    const summaryChanged =
+      !prev || summary.file_path !== prev.filePath || summary.updated_at !== prev.updatedAt;
+    if (prev && !summaryChanged && !freshDetail) {
       logInfo("history.realtime.lookup.unchanged", {
         source: summary.source,
         projectPath,
@@ -909,7 +975,7 @@ export async function fetchLatestProjectSessionDetail(
       source: summary.source,
       projectKey: summary.project_key,
       aggregateSubtasks: false,
-      fresh: freshDetail,
+      fresh: freshDetail || summaryChanged,
     });
     const detail = normalizeDetail(detailRaw);
     logInfo("history.realtime.lookup.detail", {
@@ -1133,6 +1199,77 @@ export async function fetchRemoteProjectSessionSummaries(
   return {
     context,
     summaries: (raw ?? []).map((item) => normalizeSummary(item)),
+  };
+}
+
+function normalizeRequestLogStatsTrend(raw: unknown): RequestLogStatsTrendItem {
+  const rec = (raw ?? {}) as Record<string, unknown>;
+  return {
+    bucket_start_ms: asNumber(rec.bucket_start_ms ?? rec.bucketStartMs),
+    requests: asNumber(rec.requests),
+    input_tokens: asNumber(rec.input_tokens ?? rec.inputTokens),
+    output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
+    cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
+    cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
+    total_tokens: asNumber(rec.total_tokens ?? rec.totalTokens),
+    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
+    unpriced_tokens: asNumber(rec.unpriced_tokens ?? rec.unpricedTokens),
+  };
+}
+
+function normalizeRequestLogStatsSource(raw: unknown): RequestLogStatsSourceItem {
+  const rec = (raw ?? {}) as Record<string, unknown>;
+  return {
+    source: asString(rec.source) as RequestLogStatsSourceItem["source"],
+    requests: asNumber(rec.requests),
+    input_tokens: asNumber(rec.input_tokens ?? rec.inputTokens),
+    output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
+    cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
+    cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
+    total_tokens: asNumber(rec.total_tokens ?? rec.totalTokens),
+    ratio: asNumber(rec.ratio),
+    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
+    unpriced_tokens: asNumber(rec.unpriced_tokens ?? rec.unpricedTokens),
+  };
+}
+
+function normalizeRequestLogStatsModel(raw: unknown): RequestLogStatsModelItem {
+  const rec = (raw ?? {}) as Record<string, unknown>;
+  return {
+    model: asString(rec.model),
+    requests: asNumber(rec.requests),
+    input_tokens: asNumber(rec.input_tokens ?? rec.inputTokens),
+    output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
+    cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
+    cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
+    total_tokens: asNumber(rec.total_tokens ?? rec.totalTokens),
+    ratio: asNumber(rec.ratio),
+    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
+    unpriced_tokens: asNumber(rec.unpriced_tokens ?? rec.unpricedTokens),
+  };
+}
+
+function normalizeRequestLogStats(raw: unknown): RequestLogStatsPayload {
+  const rec = (raw ?? {}) as Record<string, unknown>;
+  const trendRaw = rec.trend;
+  const sourceRaw = rec.source_distribution ?? rec.sourceDistribution;
+  const modelRaw = rec.model_distribution ?? rec.modelDistribution;
+  return {
+    range_start_at: asNumber(rec.range_start_at ?? rec.rangeStartAt),
+    range_end_at: asNumber(rec.range_end_at ?? rec.rangeEndAt),
+    granularity: asString(rec.granularity) === "hour" ? "hour" : "day",
+    total_requests: asNumber(rec.total_requests ?? rec.totalRequests),
+    total_input_tokens: asNumber(rec.total_input_tokens ?? rec.totalInputTokens),
+    total_output_tokens: asNumber(rec.total_output_tokens ?? rec.totalOutputTokens),
+    total_cache_read_tokens: asNumber(rec.total_cache_read_tokens ?? rec.totalCacheReadTokens),
+    total_cache_creation_tokens: asNumber(rec.total_cache_creation_tokens ?? rec.totalCacheCreationTokens),
+    total_tokens: asNumber(rec.total_tokens ?? rec.totalTokens),
+    cache_hit_rate: asNumber(rec.cache_hit_rate ?? rec.cacheHitRate),
+    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
+    total_unpriced_tokens: asNumber(rec.total_unpriced_tokens ?? rec.totalUnpricedTokens),
+    trend: Array.isArray(trendRaw) ? trendRaw.map((item) => normalizeRequestLogStatsTrend(item)) : [],
+    source_distribution: Array.isArray(sourceRaw) ? sourceRaw.map((item) => normalizeRequestLogStatsSource(item)) : [],
+    model_distribution: Array.isArray(modelRaw) ? modelRaw.map((item) => normalizeRequestLogStatsModel(item)) : [],
   };
 }
 
