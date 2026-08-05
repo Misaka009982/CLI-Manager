@@ -2503,9 +2503,6 @@ export function TerminalTabs({
   const terminalSidePanelSkin = useSettingsStore((s) => s.terminalSidePanelSkin);
   const updateSettings = useSettingsStore((s) => s.update);
   const openFileProject = useFileExplorerStore((s) => s.openProject);
-  const fileProject = useFileExplorerStore((s) => s.project);
-  const openFiles = useFileExplorerStore((s) => s.openFiles);
-  const closeFile = useFileExplorerStore((s) => s.closeFile);
   const revealFilePath = useFileExplorerStore((s) => s.revealPath);
   const openFileEditorPane = useTerminalStore((s) => s.openFileEditorPane);
   const sessionHistoryShortcut = useSettingsStore((s) => s.keyboardShortcuts.sessionHistory);
@@ -3178,33 +3175,37 @@ export function TerminalTabs({
   }, [closeSession]);
 
   const closeSessionsWithDirtyGuard = useCallback(async (sessionIds: string[]) => {
-    const currentFileProject = useFileExplorerStore.getState().project;
-    const currentOpenFiles = useFileExplorerStore.getState().openFiles;
     const currentSessions = useTerminalStore.getState().sessions;
-    const closesCurrentFileEditor = currentSessions.some(
-      (session) => sessionIds.includes(session.id)
-        && session.kind === "file-editor"
-        && isSameProjectFileContext(currentFileProject, session.fileEditor?.project)
-    );
-    const dirtyFiles = closesCurrentFileEditor
-      ? currentOpenFiles.filter((file) => file.content !== file.savedContent)
-      : [];
+    const fileStore = useFileExplorerStore.getState();
+    const fileProjects = currentSessions
+      .filter((session) => sessionIds.includes(session.id) && session.kind === "file-editor")
+      .map((session) => session.fileEditor?.project)
+      .filter((project): project is Project => Boolean(project))
+      .filter((project, index, projects) => (
+        projects.findIndex((candidate) => candidate.id === project.id) === index
+      ));
+    const dirtyFiles = fileProjects.flatMap((project) => (
+      fileStore.getProjectEditorWorkspaces(project.id).flatMap((workspace) => (
+        workspace.openFiles
+          .filter((file) => file.content !== file.savedContent)
+          .map((file) => ({ project: workspace.project, file }))
+      ))
+    ));
 
     if (dirtyFiles.length > 0) {
       const confirmed = await confirm({
         title: t("files.editor.unsavedTitle"),
         message: t("files.editor.unsavedCloseWithFiles", {
-          files: dirtyFiles.map((file) => file.path).join("\n"),
+          files: dirtyFiles.map(({ project, file }) => `${project.name}: ${file.path}`).join("\n"),
         }),
         confirmText: t("files.editor.discard"),
         danger: true,
       });
       if (!confirmed) return;
-      dirtyFiles.forEach((file) => closeFile(file.path));
     }
 
     closeSessionIds(sessionIds);
-  }, [closeFile, closeSessionIds, confirm, t]);
+  }, [closeSessionIds, confirm, t]);
 
   const handleCloseSessions = useCallback((sessionIds: string[], anchor?: SplitPickerAnchor) => {
     const uniqueSessionIds = Array.from(new Set(sessionIds)).filter((sessionId) => sessions.some((session) => session.id === sessionId));
@@ -3406,18 +3407,10 @@ export function TerminalTabs({
   const syncFilePanelProject = useCallback(async (project: Project) => {
     if (rejectUnsupportedCapability(project, "files")) return false;
     try {
-      const sameFileContext = isSameProjectFileContext(fileProject, project);
-      const dirtyFiles = openFiles.filter((file) => file.content !== file.savedContent);
-      if (!sameFileContext && dirtyFiles.length > 0) {
-        const confirmed = await confirm({
-          title: t("sidebar.toast.unsavedFileConfirm"),
-          message: t("files.editor.unsavedSwitchWithFiles", {
-            files: dirtyFiles.map((file) => file.path).join("\n"),
-          }),
-          danger: true,
-        });
-        if (!confirmed) return false;
-      }
+      const sameFileContext = isSameProjectFileContext(
+        useFileExplorerStore.getState().project,
+        project,
+      );
       if (sameFileContext) return true;
       await openFileProject(project);
       return true;
@@ -3426,7 +3419,7 @@ export function TerminalTabs({
       toast.error(t("sidebar.toast.openProjectFilesFailed"), { description: String(err) });
       return false;
     }
-  }, [confirm, fileProject, openFileProject, openFiles, rejectUnsupportedCapability, t]);
+  }, [openFileProject, rejectUnsupportedCapability, t]);
 
   const closeFilesPanel = useCallback(() => {
     if (sidePanelMerged) {
