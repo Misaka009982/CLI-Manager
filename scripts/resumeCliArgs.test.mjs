@@ -189,9 +189,11 @@ test("remote and history resume command construction never appends a second resu
     startup_cmd: "",
     provider_overrides: JSON.stringify({
       codex: {
+        schemaVersion: 2,
+        source: "cli-manager",
+        appType: "codex",
         providerId: "provider-id",
         providerName: "Provider",
-        profileName: "cli-manager-provider",
       },
     }),
     shell: "powershell",
@@ -205,10 +207,10 @@ test("remote and history resume command construction never appends a second resu
 
   assert.equal(
     command,
-    `codex resume --no-alt-screen ${NEW_ID} --model o3 --sandbox workspace-write --profile cli-manager-provider`,
+    `codex resume --no-alt-screen ${NEW_ID} --model o3 --sandbox workspace-write`,
   );
   assert.equal(command.match(/(?:^|\s)resume(?:\s|$)/g)?.length, 1);
-  assert.equal(command.match(/(?:^|\s)--profile(?:\s|$)/g)?.length, 1);
+  assert.equal(command.match(/(?:^|\s)--profile(?:\s|$)/g), null);
 });
 
 test("saved-session CLI arguments reuse the same resume stripping rules", () => {
