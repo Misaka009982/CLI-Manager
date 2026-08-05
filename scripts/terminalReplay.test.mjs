@@ -201,6 +201,11 @@ class FakeTerminal {
     this.events.push(`scroll:${this.buffer.active.viewportY}`);
   }
 
+  scrollToBottom() {
+    this.buffer.active.viewportY = this.buffer.active.baseY;
+    this.events.push(`scroll-bottom:${this.buffer.active.viewportY}`);
+  }
+
   onResize(listener) {
     this.resizeListeners.add(listener);
     return { dispose: () => this.resizeListeners.delete(listener) };
@@ -308,7 +313,7 @@ test("horizontal reflow preserves the visible normal-buffer line", () => {
   detachViewport();
 });
 
-test("horizontal reflow keeps live-bottom following without forcing a scroll", () => {
+test("horizontal reflow restores live-bottom intent after asynchronous viewport drift", () => {
   const { display, terminal, events, detachViewport } = createDisplay({ cols: 60, rows: 24 });
   terminal.cols = 120;
   terminal.rows = 24;
@@ -317,14 +322,48 @@ test("horizontal reflow keeps live-bottom following without forcing a scroll", (
   terminal.buffer.active.viewportY = 277;
   terminal.viewportMaxScrollLine = 277;
   terminal.reflowBaseYDelta = 300;
-  terminal.reflowMarkerLineDelta = 177;
+
+  display.scheduleFit(true, false);
+  flushNextAnimationFrame();
+
+  assert.equal(terminal.buffer.active.viewportY, 577);
+  assert.deepEqual(events, ["resize:60x24", "scroll-bottom:577"]);
+
+  // Reproduce the delayed DOM viewport event that can leave xterm at the top.
+  terminal.buffer.active.viewportY = 0;
+  flushNextAnimationFrame();
+  assert.equal(terminal.buffer.active.viewportY, 0);
+
+  flushNextAnimationFrame();
+  assert.equal(terminal.buffer.active.viewportY, 577);
+  assert.deepEqual(events, ["resize:60x24", "scroll-bottom:577", "scroll-bottom:577"]);
+  detachViewport();
+});
+
+test("vertical resize does not force a live-bottom scroll", () => {
+  const { display, terminal, events, detachViewport } = createDisplay({ cols: 120, rows: 30 });
+  terminal.cols = 120;
+  terminal.rows = 24;
+  terminal.buffer.active.baseY = 277;
+  terminal.buffer.active.viewportY = 277;
 
   display.scheduleFit(true, false);
   flushAnimationFrames();
 
-  assert.equal(terminal.buffer.active.viewportY, 577);
+  assert.deepEqual(events, ["resize:120x30"]);
+  detachViewport();
+});
+
+test("alternate buffer resize does not force a live-bottom scroll", () => {
+  const { display, terminal, events, detachViewport } = createDisplay({ cols: 60, rows: 24 });
+  terminal.cols = 120;
+  terminal.rows = 24;
+  terminal.buffer.active.type = "alternate";
+
+  display.scheduleFit(true, false);
+  flushAnimationFrames();
+
   assert.deepEqual(events, ["resize:60x24"]);
-  assert.equal(terminal.markers.size, 0);
   detachViewport();
 });
 
@@ -349,6 +388,26 @@ test("cancelling a scheduled fit disposes a pending viewport marker", () => {
 
   assert.deepEqual(events, ["resize:60x24"]);
   assert.equal(terminal.markers.size, 0);
+  detachViewport();
+});
+
+test("cancelling a scheduled fit cancels pending live-bottom restoration", () => {
+  const { display, terminal, events, detachViewport } = createDisplay({ cols: 60, rows: 24 });
+  terminal.cols = 120;
+  terminal.rows = 24;
+  terminal.buffer.active.baseY = 277;
+  terminal.buffer.active.viewportY = 277;
+  terminal.reflowBaseYDelta = 300;
+
+  display.scheduleFit(true, false);
+  flushNextAnimationFrame();
+  terminal.buffer.active.viewportY = 0;
+
+  display.cancelScheduledFit();
+  flushAnimationFrames();
+
+  assert.equal(terminal.buffer.active.viewportY, 0);
+  assert.deepEqual(events, ["resize:60x24", "scroll-bottom:577"]);
   detachViewport();
 });
 
@@ -387,11 +446,23 @@ test("initial replay fits the current container before releasing buffered live o
 
   terminal.finishNextWrite();
   assert.equal(await replayPromise, true);
-  assert.deepEqual(events, ["resize:90x20", "write:replay", "resize:120x30"]);
+  assert.deepEqual(events, [
+    "resize:90x20",
+    "write:replay",
+    "resize:120x30",
+    "scroll-bottom:0",
+  ]);
   assert.deepEqual(managerStub.resizeCalls, [{ sessionId: "session-1", cols: 120, rows: 30 }]);
 
   flushAnimationFrames();
-  assert.deepEqual(events, ["resize:90x20", "write:replay", "resize:120x30", "write:live"]);
+  assert.deepEqual(events, [
+    "resize:90x20",
+    "write:replay",
+    "resize:120x30",
+    "scroll-bottom:0",
+    "write:live",
+    "scroll-bottom:0",
+  ]);
   terminal.finishNextWrite();
   assert.deepEqual(commits, [{ sequence: 3, charCount: 4 }]);
   output.dispose();
@@ -421,11 +492,12 @@ test("reconnect replay restores historical sizes serially and fits before live o
     "resize:100x25",
     "write:two",
     "resize:120x30",
+    "scroll-bottom:0",
   ]);
   assert.deepEqual(managerStub.resizeCalls, [{ sessionId: "session-1", cols: 120, rows: 30 }]);
 
   flushAnimationFrames();
-  assert.deepEqual(events.at(-1), "write:live");
+  assert.deepEqual(events.slice(-2), ["write:live", "scroll-bottom:0"]);
   terminal.finishNextWrite();
   assert.deepEqual(commits, [
     { sequence: 1, charCount: 3 },
@@ -447,7 +519,13 @@ test("resize-only reconnect replay is applied locally before current-size fit", 
   managerStub.emitOutput(delivery(frame(3, "live", 100, 25), commits));
   flushAnimationFrames();
 
-  assert.deepEqual(events, ["resize:100x25", "resize:120x30", "write:live"]);
+  assert.deepEqual(events, [
+    "resize:100x25",
+    "resize:120x30",
+    "scroll-bottom:0",
+    "write:live",
+    "scroll-bottom:0",
+  ]);
   assert.deepEqual(managerStub.resizeCalls, [{ sessionId: "session-1", cols: 120, rows: 30 }]);
   assert.deepEqual(commits, [{ sequence: 2, charCount: 0 }]);
   terminal.finishNextWrite();
