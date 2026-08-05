@@ -5,6 +5,7 @@ pub(crate) mod grok;
 pub(crate) mod home;
 pub(crate) mod import;
 mod migration;
+pub(crate) mod models;
 pub(crate) mod repository;
 pub(crate) mod runtime;
 pub(crate) mod scope;

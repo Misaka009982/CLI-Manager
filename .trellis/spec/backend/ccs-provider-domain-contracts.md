@@ -444,3 +444,73 @@ global current -> build each active-key plan -> compare every target
 - No IPC signature or writer contract changes are required for this metadata.
   Global writers continue to use existing target-specific config files,
   fingerprint checks, compensation and journal recovery.
+
+## Scenario: Provider model discovery and generated target documents (2026-08-05)
+
+### 1. Scope / Trigger
+
+- Trigger: fetching models from a persisted Claude/Codex/Grok provider or
+  materializing global/project provider files after common-config merge.
+
+### 2. Signatures
+
+```text
+provider_fetch_models(input: FetchModelsInput) -> FetchModelsResult
+FetchModelsInput = { appType, providerId, baseUrl, isFullUrl?, apiFormat?, apiKeyField? }
+FetchModelsResult = { models: string[] }
+```
+
+### 3. Contracts
+
+- The backend resolves the enabled active key; plaintext never crosses the IPC
+  response. Standard Base URLs append `/v1/models`; a full URL is used exactly.
+- Model responses accept an array, `data[]`, or `models[]`; string entries and
+  object `id`/`name` entries are trimmed, sorted and deduplicated.
+- Claude project snapshots serialize the complete effective JSON after common
+  merge and key projection. Do not pass it through the partial global writer.
+- Codex writes plaintext only to root-level `auth.json.OPENAI_API_KEY`.
+  `config.toml` contains no API key or `env_key`; endpoint/wire fields belong
+  under `[model_providers.<name>]`, never at the TOML root.
+
+### 4. Validation & Error Matrix
+
+| Condition | Error |
+| --- | --- |
+| Missing enabled active key | `provider_models_active_key_required` |
+| Empty Base URL | `provider_models_base_url_required` |
+| Request/timeout failure | `provider_models_request_failed` |
+| Non-JSON response | `provider_models_invalid_response` |
+| Non-success HTTP | `provider_models_http_<status>` |
+| Empty/unsupported list | `provider_models_empty` |
+
+### 5. Good / Base / Bad Cases
+
+- Good: `/v1/models` returns duplicate IDs; the UI receives one sorted entry
+  per ID and no credential.
+- Base: an existing provider without an active key remains editable but model
+  discovery returns a stable error.
+- Bad: put the Codex key or `env_key` in `config.toml`, nest it under an `auth`
+  object in `auth.json`, or drop common fields from a Claude snapshot.
+
+### 6. Tests Required
+
+- Unit-test full/base URL construction and all accepted model list shapes.
+- Assert Claude snapshot bytes retain both common and provider fields.
+- Assert Codex auth is root-level `OPENAI_API_KEY`; config removes root endpoint
+  aliases, secrets and `env_key` while preserving unowned MCP/Hook sections.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+config.toml: env_key = "CLI_MANAGER_PROVIDER_KEY"
+auth.json: { "auth": { "OPENAI_API_KEY": "..." } }
+```
+
+#### Correct
+
+```text
+auth.json: { "OPENAI_API_KEY": "..." }
+config.toml: model_provider + [model_providers.<name>] without credentials
+```

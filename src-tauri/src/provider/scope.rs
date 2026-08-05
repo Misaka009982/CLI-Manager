@@ -389,6 +389,13 @@ fn write_snapshot_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::write(path, bytes).map_err(|_| "provider_snapshot_write_failed".to_string())
 }
 
+fn claude_snapshot_bytes(effective: &Value) -> Result<Vec<u8>, String> {
+    let mut bytes = serde_json::to_vec_pretty(effective)
+        .map_err(|_| "provider_snapshot_write_failed".to_string())?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn snapshot_manifest_path(root: &Path) -> PathBuf {
     root.join("manifest.json")
 }
@@ -441,7 +448,7 @@ fn write_snapshot_bundle(
 
     match provider.app_type.as_str() {
         "claude" => {
-            let (bytes, _) = global::materialize_claude(None, effective, &provider.active_key)?;
+            let bytes = claude_snapshot_bytes(effective)?;
             let path = root.join("claude").join("settings.json");
             write_snapshot_file(&path, &bytes)?;
             claude_settings_path = Some(path.to_string_lossy().into_owned());
@@ -746,6 +753,18 @@ mod tests {
 
         assert_eq!(result, Err("provider_config_invalid".to_string()));
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn claude_snapshot_keeps_common_fields() {
+        let effective = serde_json::json!({
+            "env": { "ANTHROPIC_MODEL": "provider-model" },
+            "permissions": { "allow": ["Read"] },
+        });
+        let bytes = claude_snapshot_bytes(&effective).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["permissions"]["allow"][0], "Read");
+        assert_eq!(parsed["env"]["ANTHROPIC_MODEL"], "provider-model");
     }
 
     #[test]

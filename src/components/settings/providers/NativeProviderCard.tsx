@@ -131,14 +131,21 @@ export function NativeProviderCard({
               ? t("providerCatalog.activeKey", { name: provider.activeKeyLabel })
               : t("providerCatalog.noActiveKey")}
           </Text>
-          <Switch
-            size="sm"
-            color="cliPrimary"
-            checked={provider.enabled}
-            disabled={busy || provider.isCurrent}
-            aria-label={provider.enabled ? t("providerCatalog.disable") : t("providerCatalog.enable")}
-            onChange={(event) => onEnabledChange(event.currentTarget.checked)}
-          />
+          <Tooltip label={provider.isCurrent
+            ? t("providerCatalog.errors.currentCannotDisable")
+            : t(provider.enabled ? "providerCatalog.disableProviderDescription" : "providerCatalog.enableProviderDescription")}
+          >
+            <span className="inline-flex">
+              <Switch
+                size="sm"
+                color="cliPrimary"
+                checked={provider.enabled}
+                disabled={busy || provider.isCurrent}
+                aria-label={provider.enabled ? t("providerCatalog.disableProviderDescription") : t("providerCatalog.enableProviderDescription")}
+                onChange={(event) => onEnabledChange(event.currentTarget.checked)}
+              />
+            </span>
+          </Tooltip>
         </Group>
       </Stack>
     </Card>

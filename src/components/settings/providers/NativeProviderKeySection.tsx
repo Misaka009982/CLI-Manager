@@ -150,7 +150,9 @@ export function NativeProviderKeySection({
                   <Group gap="xs" wrap="wrap">
                     <Text size="sm" fw={600} truncate>{key.label}</Text>
                     {key.isActive && <Badge size="xs" color="cliPrimary">{t("providerCatalog.active")}</Badge>}
-                    {!key.enabled && <Badge size="xs" color="gray">{t("providerCatalog.disabled")}</Badge>}
+                    <Badge size="xs" variant="light" color={key.enabled ? "green" : "gray"}>
+                      {t(key.enabled ? "providerCatalog.enabled" : "providerCatalog.disabled")}
+                    </Badge>
                   </Group>
                   <Text size="xs" c="dimmed" ff="monospace" truncate>{key.maskedApiKey}</Text>
                   {key.tags.length > 0 && (
@@ -217,15 +219,20 @@ export function NativeProviderKeySection({
                       {t("providerCatalog.activate")}
                     </Button>
                   )}
-                  <Tooltip label={key.enabled ? t("providerCatalog.disable") : t("providerCatalog.enable")}>
-                    <Switch
-                      size="sm"
-                      color="cliPrimary"
-                      checked={key.enabled}
-                      disabled={Boolean(action) || key.isActive}
-                      aria-label={key.enabled ? t("providerCatalog.disable") : t("providerCatalog.enable")}
-                      onChange={(event) => void onSetEnabled(key.id, event.currentTarget.checked).catch(() => undefined)}
-                    />
+                  <Tooltip label={key.isActive
+                    ? t("providerCatalog.errors.activeKeyCannotDisable")
+                    : t(key.enabled ? "providerCatalog.disable" : "providerCatalog.enable")}
+                  >
+                    <span className="inline-flex">
+                      <Switch
+                        size="sm"
+                        color="cliPrimary"
+                        checked={key.enabled}
+                        disabled={Boolean(action) || key.isActive}
+                        aria-label={key.enabled ? t("providerCatalog.disable") : t("providerCatalog.enable")}
+                        onChange={(event) => void onSetEnabled(key.id, event.currentTarget.checked).catch(() => undefined)}
+                      />
+                    </span>
                   </Tooltip>
                   <Tooltip label={t(key.isActive ? "providerCatalog.replaceKey" : "providerCatalog.deleteKey")}>
                     <ActionIcon

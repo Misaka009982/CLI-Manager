@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Button, Group, Modal, PasswordInput, Stack, Switch, TextInput, Textarea } from "@mantine/core";
+import { invoke } from "@tauri-apps/api/core";
+import { Button, Group, Modal, PasswordInput, Stack, Switch, Text, TextInput, Textarea } from "@mantine/core";
 import { useI18n } from "@/lib/i18n";
 import type {
   NativeProviderAppType,
@@ -48,19 +49,48 @@ export function NativeProviderKeyFormModal({
   const { t } = useI18n();
   const [draft, setDraft] = useState<KeyDraft>(EMPTY_DRAFT);
   const [error, setError] = useState<"label" | "apiKey" | null>(null);
+  const [revealing, setRevealing] = useState(false);
+  const [revealError, setRevealError] = useState(false);
 
   useEffect(() => {
-    if (opened) {
-      setDraft(mode === "edit" && providerKey ? {
+    if (!opened) {
+      setDraft(EMPTY_DRAFT);
+      setRevealError(false);
+      return;
+    }
+    let cancelled = false;
+    const loadDraft = async () => {
+      const baseDraft = mode === "edit" && providerKey ? {
         label: providerKey.label,
         apiKey: "",
         tags: providerKey.tags.join(", "),
         notes: providerKey.notes,
         activate: false,
-      } : EMPTY_DRAFT);
+      } : EMPTY_DRAFT;
+      setDraft(baseDraft);
       setError(null);
-    }
-  }, [mode, opened, providerKey]);
+      setRevealError(false);
+      if (mode !== "edit" || !providerKey) return;
+      setRevealing(true);
+      try {
+        const apiKey = await invoke<string>("provider_key_reveal", {
+          appType,
+          providerId,
+          keyId: providerKey.id,
+        });
+        if (!cancelled) setDraft((current) => ({ ...current, apiKey }));
+      } catch {
+        if (!cancelled) setRevealError(true);
+      } finally {
+        if (!cancelled) setRevealing(false);
+      }
+    };
+    void loadDraft();
+    return () => {
+      cancelled = true;
+      setRevealing(false);
+    };
+  }, [appType, mode, opened, providerId, providerKey]);
 
   const updateDraft = <K extends keyof KeyDraft>(key: K, value: KeyDraft[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -123,14 +153,26 @@ export function NativeProviderKeyFormModal({
           autoFocus
           onChange={(event) => updateDraft("label", event.currentTarget.value)}
         />
-        <PasswordInput
-          label={t("providerCatalog.apiKeyLabel")}
-          placeholder={t(mode === "create" ? "providerCatalog.apiKeyPlaceholder" : "providerCatalog.apiKeyKeepExisting")}
-          value={draft.apiKey}
-          error={error === "apiKey" ? t("providerCatalog.apiKeyRequired") : undefined}
-          required={mode === "create"}
-          onChange={(event) => updateDraft("apiKey", event.currentTarget.value)}
-        />
+        {mode === "edit" ? (
+          <TextInput
+            label={t("providerCatalog.apiKeyLabel")}
+            placeholder={t("providerCatalog.apiKeyKeepExisting")}
+            value={draft.apiKey}
+            error={error === "apiKey" ? t("providerCatalog.apiKeyRequired") : undefined}
+            rightSection={revealing ? <Text size="xs" c="dimmed">...</Text> : undefined}
+            onChange={(event) => updateDraft("apiKey", event.currentTarget.value)}
+          />
+        ) : (
+          <PasswordInput
+            label={t("providerCatalog.apiKeyLabel")}
+            placeholder={t("providerCatalog.apiKeyPlaceholder")}
+            value={draft.apiKey}
+            error={error === "apiKey" ? t("providerCatalog.apiKeyRequired") : undefined}
+            required
+            onChange={(event) => updateDraft("apiKey", event.currentTarget.value)}
+          />
+        )}
+        {revealError && <Text size="xs" c="red">{t("providerCatalog.revealKeyFailed")}</Text>}
         <TextInput
           label={t("providerCatalog.tagsLabel")}
           placeholder={t("providerCatalog.tagsPlaceholder")}

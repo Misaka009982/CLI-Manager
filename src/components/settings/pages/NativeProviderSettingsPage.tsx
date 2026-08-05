@@ -44,6 +44,7 @@ const ERROR_TRANSLATIONS: Partial<Record<string, TranslationKey>> = {
   provider_disabled_cannot_current: "providerCatalog.errors.disabledCannotCurrent",
   provider_current_cannot_delete: "providerCatalog.errors.currentCannotDelete",
   provider_current_cannot_disable: "providerCatalog.errors.currentCannotDisable",
+  provider_referenced_cannot_disable: "providerCatalog.errors.referencedCannotDisable",
   provider_key_required: "providerCatalog.errors.keyRequired",
   provider_key_disabled_cannot_activate: "providerCatalog.errors.keyDisabledCannotActivate",
   provider_key_active_cannot_delete: "providerCatalog.errors.activeKeyCannotDelete",

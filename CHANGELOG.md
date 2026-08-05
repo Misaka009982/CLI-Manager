@@ -2,6 +2,12 @@
 
 ## [TEMP]
 
+- 供应商模型映射支持 Claude、Codex、Grok 获取远端模型列表；完整 URL 获取模型时不再追加 `/models`，Codex/Grok 的 Goal mode 与远程压缩字段继续兼容读取但不再展示为未生效开关。
+- 修复供应商通用配置折叠后重新打开导致 Monaco 实例已销毁的错误；三个供应商类别默认收起，编辑 API 密钥时直接加载明文密钥。
+- 修复项目级 Claude 供应商快照丢失通用配置的问题：生成的 `settings.json` 现在写入合并通用配置、供应商配置和当前密钥后的完整文档。
+- 明确供应商启停开关的作用和引用限制，补齐被项目/Worktree 引用时的错误提示；多密钥列表分别展示“当前密钥”和“已启用/已停用”状态。
+- 修正 Codex 全局写入：API 密钥只写入 `auth.json` 根级 `OPENAI_API_KEY`，`config.toml` 不再残留根级 `base_url`/`wire_api`，也不再写入多余的 `env_key`。
+
 ### Provider Domain Phase 0
 
 - Added an independent `providers.db` initialization boundary with CCS composite identity, manual multi-key storage, Home/import/repair/apply journal tables, and pre-migration backups; runtime provider commands still use the legacy CCS path until later cutover phases.

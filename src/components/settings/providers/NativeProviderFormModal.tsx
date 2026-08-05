@@ -28,6 +28,7 @@ import type {
   NativeProviderDetail,
   NativeProviderUpdateInput,
 } from "./nativeProviderTypes";
+import { useNativeProviderModels } from "./useNativeProviderModels";
 
 export interface NativeProviderFormValues {
   name: string;
@@ -163,9 +164,17 @@ export function NativeProviderFormModal({
   const [values, setValues] = useState<NativeProviderFormValues>(EMPTY_VALUES);
   const [nameError, setNameError] = useState(false);
   const [providerConfigManual, setProviderConfigManual] = useState(false);
+  const { models: availableModels, loading: fetchingModels, error: modelFetchError, fetchModels } = useNativeProviderModels();
   const configFormat = nativeProviderConfigFormat(appType);
   const configValid = isValidProviderConfigDocument(appType, values.providerConfig);
   const advancedConfigValid = appType === "claude" || isValidNativeProviderAdvancedConfig(values.advanced);
+  const fetchProviderModels = () => fetchModels({
+    appType,
+    providerId: provider?.id,
+    baseUrl: values.baseUrl,
+    claude: appType === "claude" ? values.claudeConfig : undefined,
+    apiFormat: appType === "claude" ? undefined : values.advanced.wireApi,
+  });
 
   useEffect(() => {
     if (opened) {
@@ -328,6 +337,11 @@ export function NativeProviderFormModal({
             value={values.claudeConfig}
             onChange={updateClaudeConfig}
             disabled={loading}
+            availableModels={availableModels}
+            fetchingModels={fetchingModels}
+            modelFetchError={modelFetchError}
+            onFetchModels={fetchProviderModels}
+            canFetchModels={Boolean(provider?.id)}
           />
         )}
         {appType !== "claude" && (
@@ -336,6 +350,11 @@ export function NativeProviderFormModal({
             value={values.advanced}
             onChange={updateAdvanced}
             disabled={loading}
+            availableModels={availableModels}
+            fetchingModels={fetchingModels}
+            modelFetchError={modelFetchError}
+            onFetchModels={fetchProviderModels}
+            canFetchModels={Boolean(provider?.id)}
           />
         )}
         {!advancedConfigValid && (

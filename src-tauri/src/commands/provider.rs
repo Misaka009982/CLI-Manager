@@ -8,6 +8,7 @@ use crate::provider::import::{
     self, ImportCommitInput, ImportIssue, ImportIssueResolveInput, ImportPreview, ImportResult,
     ImportSourceInput,
 };
+use crate::provider::models::{self, FetchModelsInput, FetchModelsResult};
 use crate::provider::repository::{
     self, CommonConfigDocument, CommonConfigSetInput, ProviderCard, ProviderCreateInput,
     ProviderDetail, ProviderDocumentUpdateInput, ProviderKeyCreateInput, ProviderKeySummary,
@@ -33,6 +34,11 @@ pub fn provider_catalog_get(
     provider_id: String,
 ) -> Result<ProviderDetail, String> {
     block_on(repository::get_provider(app_type, provider_id))
+}
+
+#[tauri::command]
+pub fn provider_fetch_models(input: FetchModelsInput) -> Result<FetchModelsResult, String> {
+    block_on(models::fetch(input))
 }
 
 #[tauri::command]

@@ -32,7 +32,6 @@ export function NativeProviderCodeEditor({
     >
       <Editor
         path={path}
-        keepCurrentModel
         height={height}
         language={format === "json" ? "json" : "ini"}
         theme="vs"

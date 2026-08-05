@@ -1,6 +1,5 @@
 import {
   Button,
-  Checkbox,
   Divider,
   Group,
   Select,
@@ -8,7 +7,7 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
-import { Plus, Trash2 } from "lucide-react";
+import { LoaderCircle, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { NativeProviderCodeEditor } from "./NativeProviderCodeEditor";
 import type {
@@ -22,6 +21,11 @@ interface NativeProviderAdvancedConfigSectionProps {
   value: NativeProviderAdvancedConfig;
   onChange: (value: NativeProviderAdvancedConfig) => void;
   disabled?: boolean;
+  availableModels?: string[];
+  fetchingModels?: boolean;
+  modelFetchError?: string | null;
+  onFetchModels?: () => void;
+  canFetchModels?: boolean;
 }
 
 function isJsonObject(value: string): boolean {
@@ -38,6 +42,11 @@ export function NativeProviderAdvancedConfigSection({
   value,
   onChange,
   disabled = false,
+  availableModels = [],
+  fetchingModels = false,
+  modelFetchError = null,
+  onFetchModels,
+  canFetchModels = false,
 }: NativeProviderAdvancedConfigSectionProps) {
   const { t } = useI18n();
   const appTypeLabel = appType === "codex"
@@ -89,7 +98,17 @@ export function NativeProviderAdvancedConfigSection({
         >
           {t("providerCatalog.compatibleAdvanced.addMapping")}
         </Button>
+        <Button
+          size="compact-sm"
+          variant="light"
+          leftSection={fetchingModels ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+          disabled={disabled || fetchingModels || !canFetchModels}
+          onClick={onFetchModels}
+        >
+          {t(fetchingModels ? "providerCatalog.models.fetching" : "providerCatalog.models.fetch")}
+        </Button>
       </Group>
+      {modelFetchError && <Text size="xs" c="red">{t("providerCatalog.models.fetchFailed")}</Text>}
       {value.modelMappings.map((mapping, index) => (
         <Group key={`${index}-${mapping.source}`} align="flex-end" wrap="nowrap">
           <TextInput
@@ -99,13 +118,26 @@ export function NativeProviderAdvancedConfigSection({
             disabled={disabled}
             onChange={(event) => updateMapping(index, { source: event.currentTarget.value })}
           />
-          <TextInput
-            className="min-w-0 flex-1"
-            label={index === 0 ? t("providerCatalog.compatibleAdvanced.modelTarget") : undefined}
-            value={mapping.target}
-            disabled={disabled}
-            onChange={(event) => updateMapping(index, { target: event.currentTarget.value })}
-          />
+          {availableModels.length > 0 ? (
+            <Select
+              className="min-w-0 flex-1"
+              label={index === 0 ? t("providerCatalog.compatibleAdvanced.modelTarget") : undefined}
+              value={mapping.target || null}
+              data={availableModels}
+              searchable
+              clearable
+              disabled={disabled}
+              onChange={(next) => updateMapping(index, { target: next ?? "" })}
+            />
+          ) : (
+            <TextInput
+              className="min-w-0 flex-1"
+              label={index === 0 ? t("providerCatalog.compatibleAdvanced.modelTarget") : undefined}
+              value={mapping.target}
+              disabled={disabled}
+              onChange={(event) => updateMapping(index, { target: event.currentTarget.value })}
+            />
+          )}
           <Button
             size="compact-sm"
             variant="subtle"
@@ -158,22 +190,6 @@ export function NativeProviderAdvancedConfigSection({
       </Group>
       <Text size="xs" c="dimmed">{t("providerCatalog.compatibleAdvanced.overrideDescription")}</Text>
 
-      <Divider />
-      <Text fw={600} size="sm">{t("providerCatalog.compatibleAdvanced.featureTitle")}</Text>
-      <Group gap="lg" wrap="wrap">
-        <Checkbox
-          label={t("providerCatalog.compatibleAdvanced.goalMode")}
-          checked={value.goalMode}
-          disabled={disabled}
-          onChange={(event) => update({ goalMode: event.currentTarget.checked })}
-        />
-        <Checkbox
-          label={t("providerCatalog.compatibleAdvanced.remoteCompression")}
-          checked={value.remoteCompression}
-          disabled={disabled}
-          onChange={(event) => update({ remoteCompression: event.currentTarget.checked })}
-        />
-      </Group>
     </Stack>
   );
 }

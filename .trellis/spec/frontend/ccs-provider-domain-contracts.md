@@ -175,10 +175,13 @@ generic configuration textarea.
 
 ## Runtime feedback fixes (2026-08-04)
 
-- Monaco-based provider editors must pass a stable `path`, keep their model
-  across temporary unmounts, and keep the common editor mounted while its
-  `Collapse` is closed. This prevents a collapse/reopen race from attempting
-  to attach a model to a disposed Monaco service.
+- Monaco-based provider editors pass a stable `path`, but collapsible editors
+  must not set `keepCurrentModel`. Closing the common editor unmounts and
+  disposes its model; reopening creates a fresh model from the controlled
+  draft value. Retaining the model across `Collapse` unmounts can reuse a
+  disposed Monaco instantiation service and throw on the second expansion.
+- Claude, Codex and Grok common editors default to collapsed and reset to
+  collapsed when the app type changes.
 - Effective provider/effective previews use a code-editor surface. Claude
   displays JSON; Codex and Grok Build unwrap the stored JSON envelope and
   display the nested `config` document as TOML. The source-documents view may
@@ -224,3 +227,18 @@ generic configuration textarea.
 - Header/body overrides must be JSON objects and every model mapping must have
   non-empty source and target values. Invalid advanced state disables save and
   keeps the draft visible; backend key-manager fields remain authoritative.
+
+## Provider model discovery and key status contract (2026-08-05)
+
+- Claude, Codex and Grok edit forms expose the same fetch-model action. It is
+  available only for a persisted provider because the backend resolves the
+  active key by provider identity; fetched IDs remain form-local until Save.
+- Claude role targets and Codex/Grok mapping targets become searchable selects
+  after discovery succeeds. Manual text input remains available before any
+  list has been fetched.
+- `key.isActive` means current request key, not enabled state. Render it as
+  “Current key” independently from the always-visible Enabled/Disabled badge.
+  The current key cannot be disabled until another enabled key is activated.
+- Provider-card enable switches control whether the provider may participate
+  in global/project/Worktree resolution. Current or referenced providers may
+  not be disabled, and their stable backend errors require localized feedback.

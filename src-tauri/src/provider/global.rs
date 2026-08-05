@@ -20,7 +20,6 @@ const CLAUDE_SETTINGS_FILE: &str = "settings.json";
 const CODEX_AUTH_FILE: &str = "auth.json";
 const CODEX_CONFIG_FILE: &str = "config.toml";
 const GROK_CONFIG_FILE: &str = "config.toml";
-const CODEX_PROVIDER_ENV_KEY: &str = "CLI_MANAGER_PROVIDER_KEY";
 const CODEX_DEFAULT_PROVIDER_NAME: &str = "cli_manager";
 
 const CLAUDE_OWNED_ENV_KEYS: [&str; 14] = [
@@ -599,37 +598,18 @@ pub(crate) fn materialize_claude(
 
 pub(crate) fn materialize_codex_auth(
     before: Option<&[u8]>,
-    effective: &Value,
+    _effective: &Value,
     secret: &str,
 ) -> Result<(Vec<u8>, Vec<String>), String> {
     let mut root = parse_json_object(before)?;
     for key in CODEX_OWNED_AUTH_KEYS {
         root.remove(key);
     }
-    let mut auth = root
-        .remove("auth")
-        .unwrap_or_else(|| Value::Object(Map::new()))
-        .as_object()
-        .cloned()
-        .ok_or_else(|| "provider_config_invalid".to_string())?;
-    let source = effective
-        .get("auth")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let credential_key = if source.contains_key("api_key") {
-        "api_key"
-    } else {
-        "OPENAI_API_KEY"
-    };
-    for key in CODEX_OWNED_AUTH_KEYS {
-        if key == credential_key {
-            auth.insert(key.to_string(), Value::String(secret.to_string()));
-        } else {
-            auth.remove(key);
-        }
-    }
-    root.insert("auth".to_string(), Value::Object(auth));
+    root.remove("auth");
+    root.insert(
+        "OPENAI_API_KEY".to_string(),
+        Value::String(secret.to_string()),
+    );
     Ok((
         json_bytes(root)?,
         CODEX_OWNED_AUTH_KEYS
@@ -667,6 +647,9 @@ pub(crate) fn materialize_codex_config(
     };
     let mut target = toml_document(before)?;
     let owned = copy_toml_owned(&source, &mut target, &CODEX_OWNED_CONFIG_KEYS);
+    for key in ["base_url", "wire_api", "requires_openai_auth", "env_key"] {
+        target.remove(key);
+    }
     let provider_name = source
         .get("model_provider")
         .and_then(|value| value.as_str())
@@ -688,7 +671,7 @@ pub(crate) fn materialize_codex_config(
         target["model_provider"] = toml_edit::value(provider_name.as_str());
         ensure_codex_provider_mapping(&mut target, &provider_name, base_url)?;
     }
-    sanitize_codex_model_providers(&mut target, Some(provider_name.as_str()));
+    sanitize_codex_model_providers(&mut target);
     Ok((target.to_string().into_bytes(), owned))
 }
 
@@ -715,7 +698,6 @@ fn ensure_codex_provider_mapping(
     if let Some(base_url) = base_url {
         provider.insert("base_url", toml_edit::value(base_url));
     }
-    provider.insert("env_key", toml_edit::value(CODEX_PROVIDER_ENV_KEY));
     Ok(())
 }
 
@@ -800,22 +782,19 @@ fn remove_toml_secret_value(value: &mut TomlValue) -> bool {
     removed
 }
 
-fn sanitize_codex_model_providers(target: &mut DocumentMut, selected_provider: Option<&str>) {
+fn sanitize_codex_model_providers(target: &mut DocumentMut) {
     let Some(item) = target.get_mut("model_providers") else {
         return;
     };
     let Some(table) = item.as_table_mut() else {
         return;
     };
-    for (name, provider) in table.iter_mut() {
-        let removed_secret = remove_toml_secret_fields(provider);
+    for (_, provider) in table.iter_mut() {
+        remove_toml_secret_fields(provider);
         let Some(provider_table) = provider.as_table_mut() else {
             continue;
         };
-        if removed_secret || selected_provider.is_some_and(|selected| selected == name.to_string())
-        {
-            provider_table.insert("env_key", toml_edit::value(CODEX_PROVIDER_ENV_KEY));
-        }
+        provider_table.remove("env_key");
     }
 }
 
@@ -2017,9 +1996,8 @@ mod tests {
         let effective = json!({"auth": {"api_key": "marker"}});
         let (bytes, _) = materialize_codex_auth(Some(before), &effective, "new-secret").unwrap();
         let value: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["auth"]["api_key"], "new-secret");
-        assert_eq!(value["auth"]["account_id"], "keep");
-        assert!(value.get("OPENAI_API_KEY").is_none());
+        assert_eq!(value["OPENAI_API_KEY"], "new-secret");
+        assert!(value.get("auth").is_none());
         assert!(!String::from_utf8(bytes)
             .unwrap()
             .contains("old-nested-secret"));
@@ -2043,7 +2021,7 @@ model = "old"
         assert!(text.contains("[mcp_servers.demo]"));
         assert!(text.contains("model = \"gpt-new\""));
         assert!(text.contains("model_provider = \"demo\""));
-        assert!(text.contains("env_key = \"CLI_MANAGER_PROVIDER_KEY\""));
+        assert!(!text.contains("env_key"));
         assert!(!text.contains("nested-secret"));
         assert!(!text.contains("authorization"));
     }
@@ -2070,7 +2048,25 @@ model = "old"
         assert!(document.contains("model = \"gpt-codex\""));
         assert!(document.contains("model_provider = \"cli_manager\""));
         assert!(document.contains("base_url = \"https://codex.test\""));
-        assert!(document.contains("env_key = \"CLI_MANAGER_PROVIDER_KEY\""));
+        assert!(!document.contains("env_key"));
+    }
+
+    #[test]
+    fn codex_writer_removes_legacy_root_endpoint_fields() {
+        let before = br#"base_url = "https://old.example"
+wire_api = "responses"
+"#;
+        let effective = json!({
+            "config": "model_provider = \"custom\"\n[model_providers.custom]\nbase_url = \"https://new.example/v1\"\nwire_api = \"responses\"\n",
+            "base_url": "https://new.example/v1",
+            "model": "gpt-test"
+        });
+        let (bytes, _) = materialize_codex_config(Some(before), &effective).unwrap();
+        let document = String::from_utf8(bytes).unwrap();
+        assert!(!document.starts_with("base_url ="));
+        assert!(!document.contains("wire_api = \"responses\"\n\n[model_providers]"));
+        assert!(document.contains("[model_providers.custom]"));
+        assert!(document.contains("base_url = \"https://new.example/v1\""));
     }
 
     #[test]

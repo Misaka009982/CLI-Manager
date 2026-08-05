@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Alert, Badge, Button, Card, Collapse, Group, Stack, Text } from "@mantine/core";
 import { AlertTriangle, Check, ChevronDown, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
@@ -28,8 +28,12 @@ function appTypeLabel(appType: NativeProviderAppType, t: (key: TranslationKey) =
 
 export function NativeProviderCommonConfigSection({ appType, state }: NativeProviderCommonConfigSectionProps) {
   const { t } = useI18n();
-  const [opened, setOpened] = useState(true);
+  const [opened, setOpened] = useState(false);
   const [validated, setValidated] = useState(false);
+  useEffect(() => {
+    setOpened(false);
+    setValidated(false);
+  }, [appType]);
   const format = state.document?.format ?? (appType === "claude" ? "json" : "toml");
   const validation = useMemo(() => {
     if (!state.draft.trim()) return "required" as const;

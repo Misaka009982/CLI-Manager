@@ -1116,6 +1116,7 @@ pub fn run() {
             commands::ccusage::ccusage_refresh_report,
             commands::provider::provider_catalog_list,
             commands::provider::provider_catalog_get,
+            commands::provider::provider_fetch_models,
             commands::provider::provider_catalog_create,
             commands::provider::provider_catalog_update,
             commands::provider::provider_document_update,

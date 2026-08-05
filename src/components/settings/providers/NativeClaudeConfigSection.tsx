@@ -9,7 +9,7 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
-import { Wand2 } from "lucide-react";
+import { LoaderCircle, RefreshCw, Wand2 } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
 import type {
   NativeClaudeApiFormat,
@@ -21,6 +21,11 @@ interface NativeClaudeConfigSectionProps {
   value: NativeProviderClaudeConfig;
   onChange: (value: NativeProviderClaudeConfig) => void;
   disabled?: boolean;
+  availableModels?: string[];
+  fetchingModels?: boolean;
+  modelFetchError?: string | null;
+  onFetchModels?: () => void;
+  canFetchModels?: boolean;
 }
 
 type ModelKey =
@@ -109,6 +114,11 @@ export function NativeClaudeConfigSection({
   value,
   onChange,
   disabled = false,
+  availableModels = [],
+  fetchingModels = false,
+  modelFetchError = null,
+  onFetchModels,
+  canFetchModels = false,
 }: NativeClaudeConfigSectionProps) {
   const { t } = useI18n();
   const update = (patch: Partial<NativeProviderClaudeConfig>) => {
@@ -194,7 +204,17 @@ export function NativeClaudeConfigSection({
         >
           {t("providerCatalog.claude.quickSet")}
         </Button>
+        <Button
+          size="compact-sm"
+          variant="light"
+          leftSection={fetchingModels ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+          disabled={disabled || fetchingModels || !canFetchModels}
+          onClick={onFetchModels}
+        >
+          {t(fetchingModels ? "providerCatalog.models.fetching" : "providerCatalog.models.fetch")}
+        </Button>
       </Group>
+      {modelFetchError && <Text size="xs" c="red">{t("providerCatalog.models.fetchFailed")}</Text>}
 
       <div className="grid grid-cols-1 gap-2 md:grid-cols-[96px_minmax(0,1fr)_minmax(0,1fr)_68px]">
         <Text size="xs" c="dimmed">{t("providerCatalog.claude.modelRole")}</Text>
@@ -219,12 +239,24 @@ export function NativeClaudeConfigSection({
             ) : (
               <TextInput value={t("providerCatalog.claude.hiddenFromModelMenu")} readOnly aria-label={t("providerCatalog.claude.hiddenFromModelMenu")} />
             )}
-            <TextInput
-              value={modelBase}
-              disabled={disabled}
-              aria-label={t("providerCatalog.claude.requestModelFor", { role: t(role.labelKey) })}
-              onChange={(event) => updateRoleModel(role, event.currentTarget.value)}
-            />
+            {availableModels.length > 0 ? (
+              <Select
+                value={modelBase || null}
+                data={availableModels}
+                searchable
+                clearable
+                disabled={disabled}
+                aria-label={t("providerCatalog.claude.requestModelFor", { role: t(role.labelKey) })}
+                onChange={(next) => updateRoleModel(role, next ?? "")}
+              />
+            ) : (
+              <TextInput
+                value={modelBase}
+                disabled={disabled}
+                aria-label={t("providerCatalog.claude.requestModelFor", { role: t(role.labelKey) })}
+                onChange={(event) => updateRoleModel(role, event.currentTarget.value)}
+              />
+            )}
             {role.supportsOneM ? (
               <Checkbox
                 mt={7}
