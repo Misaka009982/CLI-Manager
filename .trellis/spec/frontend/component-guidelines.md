@@ -1793,3 +1793,33 @@ KaTeX's package stylesheet owns the `.katex` base font size. Shared Markdown CSS
 ```
 
 **Tests**: Run `node --test scripts/terminalMarkdownPreview.test.mjs scripts/markdownRendering.test.mjs` and `npx tsc --noEmit`; manually verify long answer lists, keyboard selection, restored sessions without a new conversation, normal scrolling, `Ctrl`/`Cmd` wheel zoom limits, light/dark terminal themes, background images, and clear KaTeX formulas.
+
+### Convention: Settings pages fill the available content width and wrap controls
+
+**What**: A settings page rendered inside `SettingsLayout` should use the available content width instead of imposing a page-level fixed `max-width`. Card headers and action groups that contain labels, badges, or buttons must allow wrapping; internal grids should keep responsive column breakpoints.
+
+**Why**: A fixed page width leaves large unused areas on wide displays, while non-wrapping controls can overflow when the settings pane is narrow or the UI language is longer.
+
+**Correct**:
+
+```tsx
+<Stack gap="md" w="100%">
+  <Group justify="space-between" wrap="wrap" gap="sm">
+    <Text>{title}</Text>
+    <Group gap="xs" wrap="wrap">{actions}</Group>
+  </Group>
+</Stack>
+```
+
+**Wrong**:
+
+```tsx
+<Stack gap="md" maw={1040}>
+  <Group justify="space-between">
+    <Text>{title}</Text>
+    <Group gap="xs">{actions}</Group>
+  </Group>
+</Stack>
+```
+
+**Tests**: Run `npx tsc --noEmit`; manually verify the page at a wide window, a narrow window, and both `zh-CN` and `en-US`, checking that cards use the available width and headers/actions do not overflow.
