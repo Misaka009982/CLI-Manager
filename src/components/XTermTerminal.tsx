@@ -420,6 +420,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const visibilityRestoreRevealTimerRef = useRef<number | null>(null);
   const visibilityRestoreRevealRafRef = useRef<number | null>(null);
   const visibilityRestoreFallbackRafRef = useRef<number | null>(null);
+  const codexCursorShowTimerRef = useRef<number | null>(null);
   const displayNormalizeOutputRef = useRef<(text: string) => string>((text) => text);
   const displayTransformOutputRef = useRef<(text: string) => string>((text) => text);
   const displayAfterWriteRef = useRef<((terminal: Terminal) => void) | null>(null);
@@ -433,6 +434,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const disableHardwareAcceleration = useSettingsStore((s) => s.disableHardwareAcceleration);
   const terminalInputSuggestionsEnabled = useSettingsStore((s) => s.terminalInputSuggestionsEnabled);
   const terminalInputSuggestionProvider = useSettingsStore((s) => s.terminalInputSuggestionProvider);
+  const hideCodexRuntimeCursor = useSettingsStore((s) => s.hideCodexRuntimeCursor);
+  const hideCodexRuntimeCursorRef = useRef(hideCodexRuntimeCursor);
+  hideCodexRuntimeCursorRef.current = hideCodexRuntimeCursor;
   const terminalTextColor = useSettingsStore((s) => s.terminalTextColor);
   const terminalTuiUserColor = useSettingsStore((s) => s.terminalTuiUserColor);
   const terminalTuiAssistantColor = useSettingsStore((s) => s.terminalTuiAssistantColor);
@@ -755,14 +759,59 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     isCodexTerminalContext(context)
     || (runtimeTerminal !== undefined && hasCodexTuiViewport(runtimeTerminal))
   );
+  const shouldHideCodexCursor = (runtimeTerminal = terminalRef.current) => (
+    hideCodexRuntimeCursorRef.current
+    && runtimeTerminal !== null
+    && isCodexSession(undefined, runtimeTerminal)
+  );
+  const cancelPendingCodexCursorShow = () => {
+    if (codexCursorShowTimerRef.current !== null) {
+      window.clearTimeout(codexCursorShowTimerRef.current);
+      codexCursorShowTimerRef.current = null;
+    }
+  };
+  const scheduleCodexCursorShow = () => {
+    cancelPendingCodexCursorShow();
+    codexCursorShowTimerRef.current = window.setTimeout(() => {
+      codexCursorShowTimerRef.current = null;
+      terminalRef.current?.write("\x1b[?25h");
+    }, 80);
+  };
+  const processCodexCursorVisibility = (text: string) => {
+    if (!shouldHideCodexCursor()) return text;
+    const cursorPattern = /\x1b\[\?25[hl]/g;
+    let processed = "";
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = cursorPattern.exec(text)) !== null) {
+      processed += text.slice(lastIndex, match.index);
+      if (match[0].endsWith("l")) {
+        cancelPendingCodexCursorShow();
+        processed += match[0];
+      } else {
+        scheduleCodexCursorShow();
+      }
+      lastIndex = match.index + match[0].length;
+    }
+
+    return processed + text.slice(lastIndex);
+  };
   displayAfterWriteRef.current = (terminal) => {
     tuiColorSync.normalize(terminal);
     tuiColorSync.schedule(terminal);
   };
 
-  displayTransformOutputRef.current = (text) => (
-    piTerminalCompatibilityRef.current?.transformOutput(text) ?? text
+  displayTransformOutputRef.current = (text) => processCodexCursorVisibility(
+    piTerminalCompatibilityRef.current?.transformOutput(text) ?? text,
   );
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    cancelPendingCodexCursorShow();
+    terminal.write(shouldHideCodexCursor(terminal) ? "\x1b[?25l" : "\x1b[?25h");
+  }, [hideCodexRuntimeCursor, sessionId]);
 
   const clearVisibilityRestoreRevealSchedule = () => {
     if (visibilityRestoreRevealTimerRef.current !== null) {
@@ -1059,6 +1108,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const baseDisposables: TerminalSubsystemDisposable[] = [];
     const displayDisposables: TerminalSubsystemDisposable[] = [];
     const inputDisposables: TerminalSubsystemDisposable[] = [];
+    baseDisposables.push({ dispose: cancelPendingCodexCursorShow });
     let processTraitsApplied = false;
     const applyProcessTraits = (traits: TerminalProcessTraits | null | undefined) => {
       if (!traits || processTraitsApplied) return;
@@ -1245,6 +1295,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
+    if (shouldHideCodexCursor(terminal)) terminal.write("\x1b[?25l");
     scheduleFit(true);
     const sessionSnapshot = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
     const initialTerminalOutput = sessionSnapshot?.initialTerminalOutput;
@@ -1296,7 +1347,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           terminal.resize(dimensions.cols, dimensions.rows);
         }
         const restoredOutput = displayTransformOutputRef.current(initialTerminalOutput);
-        terminal.write(`${restoredOutput}\x1b[?6l\x1b[r\x1b[0m\x1b[?25h\x1b[999B\r\n`, () => {
+        const restoredCursor = shouldHideCodexCursor(terminal) ? "\x1b[?25l" : "\x1b[?25h";
+        terminal.write(`${restoredOutput}\x1b[?6l\x1b[r\x1b[0m${restoredCursor}\x1b[999B\r\n`, () => {
           if (terminalRef.current !== terminal) return;
           terminal.scrollToBottom();
           refreshTerminalViewport(terminal);

@@ -1323,16 +1323,15 @@ terminal.focus();
 
 **Prevention**: For user-facing terminal clear actions, send Ctrl+L (`\x0c`) through `pty_write` so the shell/TUI clears or redraws through the same path as keyboard input. Reserve `terminal.clear()` for internal buffer maintenance where IME/helper textarea position is irrelevant.
 
-### Convention: Keep application cursor visibility sequences intact
+### Convention: Keep application cursor visibility sequences intact by default
 
-**Contract**: PTY output must pass DECTCEM sequences (`CSI ?25h` show cursor and `CSI ?25l` hide cursor) to xterm without filtering, delayed reinjection, or a CLI-specific visual cursor overlay.
+**Contract**: PTY output passes DECTCEM sequences (`CSI ?25h` show cursor and `CSI ?25l` hide cursor) through unchanged for every CLI. When the opt-in `hideCodexRuntimeCursor` setting is enabled and the active terminal is identified as Codex, only the Codex display transform may delay `CSI ?25h` by 80ms; `CSI ?25l` remains immediate.
 
-**Why**: TUI applications own their cursor visibility and position. Delaying only the show sequence can hide the cursor throughout continuous output, while replacing a TUI cursor from inferred viewport structure creates new disagreement during redraw and input editing.
+**Why**: Other TUIs own cursor visibility and must keep native behavior. The compatibility switch restores the pre-V1.3.0 Codex workaround without changing Shell, Claude, Pi, or disabled-setting sessions.
 
-**Prevention**: Do not add Codex-specific cursor stabilization in `XTermTerminal`. Cursor-position flicker emitted during Codex redraw remains native application behavior; Claude background-image caret preservation belongs to buffer background normalization and must not rewrite DECTCEM.
+**Prevention**: Keep the suppression at the display transform boundary, preserve raw PTY frame lengths for ACK accounting, cancel pending show timers on teardown or disable, and do not create a visual cursor overlay or alter PTY input.
 
-**Tests**: Run `node --test scripts/terminalPiCompatibility.test.mjs scripts/terminalNewlineShortcut.test.mjs` and `npx tsc --noEmit`. Assert the shared output transform contains only the existing Pi compatibility transform and no cursor visibility filter or visual cursor overlay.
-
+**Tests**: Run `node --test scripts/terminalPiCompatibility.test.mjs scripts/terminalNewlineShortcut.test.mjs` and `npx tsc --noEmit`. Assert the shared transform keeps Pi behavior and the Codex cursor filter is guarded by `hideCodexRuntimeCursor` plus Codex session detection.
 ### Common Mistake: Letting xterm helper textarea follow non-IME redraw cursors
 
 **Symptom**: During TUI redraws, including but not limited to Claude Code `/compact`, the hidden input proxy appears to make the terminal input anchor jump with a non-input cursor, often the tail/status line.
