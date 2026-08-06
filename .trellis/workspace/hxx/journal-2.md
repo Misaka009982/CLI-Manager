@@ -534,3 +534,36 @@ Claude、Codex、Pi、Grok 的非强制配置目录解析在已选目录失效�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 75: 修复 Grok 供应商真实 Home 启动
+
+**Date**: 2026-08-06
+**Task**: 修复 Grok 供应商真实 Home 启动
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+修复 Grok 全局、项目、Worktree 与显式供应商启动覆盖 GROK_HOME 的回归；改用进程级 endpoint/key/model 覆盖，恢复 Hook、MCP、历史与实时统计可见性，并补齐跨层测试和供应商合同。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f38bd412` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
