@@ -165,8 +165,11 @@ legacy cli-manager.db migration unchanged
   heuristic maps a legacy CCS reference; import refs perform the mapping or a
   repair issue is retained.
 - Project materialization is not global switch: Claude generated settings +
-  `--settings`; Codex generated profile/config; Grok per-process
-  `GROK_HOME`. Secrets are child-process environment/config data, never shell
+  `--settings`; Codex process config overrides; Grok keeps the resolved real
+  Home and applies the selected provider per process through `--model`,
+  `GROK_MODELS_BASE_URL`, and `XAI_API_KEY`. Provider launches must never
+  replace `GROK_HOME`, because Hook, MCP, history, skills, and user state share
+  that Home. Secrets are child-process environment/config data, never shell
   command text. Remote SSH does not receive local key material.
 - `CliHomeResolver` is the only default source for global targets, Hook/
   statusline targets and automatic history roots. Explicit feature roots have
@@ -529,7 +532,7 @@ config.toml: model_provider + [model_providers.<name>] without credentials
 ```text
 provider_scope_prepare(input: ScopePrepareInput) -> ProviderLaunchSnapshot?
 ProviderLaunchSnapshot.configOverrides: string[]
-ProviderLaunchConfig = { appType, providerId, snapshotId, claudeSettingsPath?, generatedHome? }
+ProviderLaunchConfig = { appType, providerId, snapshotId, claudeSettingsPath?, generatedHome?, grokModel? }
 ```
 
 ### 3. Contracts
@@ -593,4 +596,82 @@ provider scope -> generated/codex/{auth.json,config.toml}
 global -> real Home files, no snapshot
 project/Worktree -> real CODEX_HOME + non-secret `-c` overrides
   + active key in PTY child environment
+```
+
+## Scenario: Grok scoped providers preserve the real Home (2026-08-06)
+
+### 1. Scope / Trigger
+
+- Trigger: launching local Grok Build with a native global provider, project
+  override, Worktree override, or explicit restored provider.
+- `GROK_HOME` owns Hook, MCP, sessions, skills, plugins and other user state;
+  it is not a provider-only configuration path.
+
+### 2. Signatures
+
+```text
+ProviderLaunchSnapshot.grokModel: string?
+PTY environment: GROK_MODELS_BASE_URL + XAI_API_KEY
+startup command: grok --model <validated-model> ...
+```
+
+### 3. Contracts
+
+- Every Grok provider scope keeps the resolved real Home and returns a
+  releasable snapshot containing a secret key file plus manifest-validated
+  Base URL/model metadata. It must not create a generated Grok Home or set
+  `GROK_HOME` in child-process overrides.
+- PTY preparation validates provider/snapshot/model identity before reading the
+  key and injecting `GROK_MODELS_BASE_URL` plus `XAI_API_KEY`.
+- The frontend replaces any existing `-m`/`--model` argument with one safely
+  quoted `--model` value on direct Grok commands. Model IDs accept only the
+  bounded identifier character set; unsupported wrapper commands fail closed.
+- Persisted legacy Grok snapshots with `generatedHome` or without `grokModel`
+  are released and rebuilt before PTY recreation.
+- SSH continues to discard local provider snapshots and secrets.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Snapshot contains a generated Grok Home | `provider_snapshot_mismatch` |
+| Manifest lacks Base URL/model or key | `provider_snapshot_invalid` / `provider_snapshot_missing` |
+| DTO model differs from manifest | `provider_snapshot_mismatch` |
+| Startup command is not direct Grok | `provider_grok_command_unsupported`; release snapshot |
+| Model contains whitespace, quotes, controls or shell metacharacters | `provider_grok_model_invalid` |
+
+### 5. Good / Base / Bad Cases
+
+- Good: two Worktree terminals select different Grok providers; each receives
+  its own endpoint/key/model while both read the same real Hook/MCP/history.
+- Base: a global provider uses the same process override mechanism and leaves
+  the already materialized real Home intact.
+- Bad: point `GROK_HOME` at a snapshot containing only `config.toml`; this
+  hides Hook, MCP, sessions, skills and realtime history consumers.
+
+### 6. Tests Required
+
+- Assert Grok snapshot creation writes no generated Home/config and returns the
+  selected model with manifest Base URL/model metadata.
+- Assert PTY environment injection preserves an existing `GROK_HOME` while
+  replacing endpoint/key only.
+- Assert command handling replaces existing model flags, rejects wrapper and
+  unsafe model input, and keeps resume arguments.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+provider scope -> generated/grokbuild/<snapshot>/grok/config.toml
+  -> GROK_HOME=generated/grokbuild/<snapshot>/grok
+  -> real Hook/MCP/sessions/skills disappear
+```
+
+#### Correct
+
+```text
+provider scope -> manifest(base URL/model) + protected key file
+  -> real GROK_HOME unchanged
+  -> GROK_MODELS_BASE_URL + XAI_API_KEY + grok --model <model>
 ```

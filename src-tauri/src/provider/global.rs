@@ -798,17 +798,6 @@ fn sanitize_codex_model_providers(target: &mut DocumentMut) {
     }
 }
 
-pub(crate) fn materialize_grok_config(
-    before: Option<&[u8]>,
-    effective: &Value,
-) -> Result<(Vec<u8>, Vec<String>), String> {
-    grok::materialize(
-        before,
-        effective,
-        CredentialProjection::Environment(grok::ENV_KEY),
-    )
-}
-
 pub(crate) fn materialize_grok_global_config(
     before: Option<&[u8]>,
     effective: &Value,
@@ -2067,24 +2056,6 @@ wire_api = "responses"
         assert!(!document.contains("wire_api = \"responses\"\n\n[model_providers]"));
         assert!(document.contains("[model_providers.custom]"));
         assert!(document.contains("base_url = \"https://new.example/v1\""));
-    }
-
-    #[test]
-    fn grok_project_writer_uses_environment_key() {
-        let before = br#"[mcp]
-enabled = true
-"#;
-        let effective = json!({
-            "config": "[models]\ndefault = \"proxy\"\n[model.proxy]\nmodel = \"grok-test\"\nbase_url = \"https://grok.test\"\nname = \"Grok\"\napi_key = \"old-secret\"\n"
-        });
-        let (bytes, _) = materialize_grok_config(Some(before), &effective).unwrap();
-        let text = String::from_utf8(bytes).unwrap();
-        assert!(text.contains("[mcp]"));
-        assert!(text.contains("enabled = true"));
-        assert!(text.contains("base_url = \"https://grok.test\""));
-        assert!(text.contains("env_key = \"XAI_API_KEY\""));
-        assert!(!text.contains("old-secret"));
-        assert!(!text.contains("api_key"));
     }
 
     #[test]

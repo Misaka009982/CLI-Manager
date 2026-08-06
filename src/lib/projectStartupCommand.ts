@@ -6,13 +6,14 @@ import {
   isExactCodexProject,
   isNativeProviderReference,
 } from "./providerSwitching";
-import { stripResumeCliArgs } from "./resumeCliArgs";
+import { replaceGrokModelArg, stripResumeCliArgs } from "./resumeCliArgs";
 import { normalizeShellKey } from "./shell";
 
 const CODEX_PROFILE_ARG = "--profile";
 const CLAUDE_SETTINGS_ARG = "--settings";
 const CODEX_LIGHT_TUI_THEME_ARG = "-c theme=catppuccin-latte";
 const DIRECT_CODEX_COMMAND_PATTERN = /^(\s*codex(?:\.(?:cmd|exe|ps1))?)(?=\s|$)/i;
+const DIRECT_GROK_COMMAND_PATTERN = /^(\s*grok(?:\.(?:cmd|exe|ps1))?)(?=\s|$)/i;
 
 export function isDirectCodexStartupCommand(command?: string | null): boolean {
   const trimmed = command?.trim();
@@ -86,6 +87,16 @@ export function withCodexConfigOverrides(
     return `-c "${override}"`;
   });
   return `${match[1]} ${args.join(" ")}${normalized.slice(match[1].length)}`;
+}
+
+export function withGrokModelOverride(
+  command: string | undefined,
+  model: string,
+): string | undefined {
+  const normalized = command?.trim();
+  if (!normalized) return undefined;
+  if (!DIRECT_GROK_COMMAND_PATTERN.test(normalized)) return undefined;
+  return replaceGrokModelArg(normalized, model);
 }
 
 function appendProviderOverrideArgs(

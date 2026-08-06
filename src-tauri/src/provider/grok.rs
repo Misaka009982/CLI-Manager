@@ -1,8 +1,6 @@
 use serde_json::{Map, Value};
 use toml_edit::{DocumentMut, Item, Table, Value as TomlValue};
 
-pub(crate) const ENV_KEY: &str = "XAI_API_KEY";
-
 const DEFAULT_PROFILE: &str = "cli_manager";
 const DEFAULT_API_BACKEND: &str = "responses";
 const DEFAULT_CONTEXT_WINDOW: i64 = 500_000;
@@ -11,7 +9,6 @@ const DEFAULT_CONTEXT_WINDOW: i64 = 500_000;
 pub(crate) enum CredentialProjection<'a> {
     Preserve,
     Inline(&'a str),
-    Environment(&'a str),
 }
 
 fn parse_settings(raw: &str) -> Result<Map<String, Value>, String> {
@@ -265,10 +262,6 @@ fn apply_fields(
             selected.insert("api_key", toml_edit::value(secret));
             selected.remove("env_key");
         }
-        CredentialProjection::Environment(env_key) => {
-            selected.remove("api_key");
-            selected.insert("env_key", toml_edit::value(env_key));
-        }
     }
     let base_url = table_text(selected, "base_url");
     let model = table_text(selected, "model");
@@ -455,18 +448,6 @@ mod tests {
         );
         assert!(!config.contains("old-secret"));
         assert!(!config.contains("env_key"));
-    }
-
-    #[test]
-    fn project_materializer_uses_process_environment_without_inline_secret() {
-        let effective = json!({"config": CONFIG});
-        let (bytes, fields) =
-            materialize(None, &effective, CredentialProjection::Environment(ENV_KEY)).unwrap();
-        let text = String::from_utf8(bytes).unwrap();
-        assert!(text.contains("env_key = \"XAI_API_KEY\""));
-        assert!(!text.contains("old-secret"));
-        assert!(!text.contains("api_key"));
-        assert_eq!(fields, ["models", "model.proxy"]);
     }
 
     #[test]

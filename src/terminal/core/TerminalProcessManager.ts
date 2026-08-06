@@ -30,7 +30,7 @@ export interface TerminalGrokProviderLaunchConfig {
   appType: "grokbuild";
   providerId: string;
   snapshotId: string;
-  generatedHome: string;
+  grokModel: string;
 }
 
 export interface TerminalColors {

@@ -385,6 +385,7 @@ mod tests {
                 snapshot_id: "snapshot".to_string(),
                 claude_settings_path: Some("claude/settings.json".to_string()),
                 generated_home: None,
+                grok_model: None,
             }),
             Some(ProviderLaunchConfig {
                 app_type: "codex".to_string(),
@@ -392,13 +393,15 @@ mod tests {
                 snapshot_id: "snapshot".to_string(),
                 claude_settings_path: None,
                 generated_home: Some("codex".to_string()),
+                grok_model: None,
             }),
             Some(ProviderLaunchConfig {
                 app_type: "grokbuild".to_string(),
                 provider_id: "grok-provider".to_string(),
                 snapshot_id: "snapshot".to_string(),
                 claude_settings_path: None,
-                generated_home: Some("grok".to_string()),
+                generated_home: None,
+                grok_model: Some("grok-test".to_string()),
             }),
         )
     }

@@ -1,5 +1,5 @@
-use super::global;
-use crate::{app_paths, provider::repository, wsl};
+use super::grok;
+use crate::{app_paths, provider::repository};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
@@ -15,6 +15,7 @@ const SNAPSHOT_KEY_FILE: &str = "provider.key";
 const CODEX_PROVIDER_ENV_KEY: &str = "CLI_MANAGER_PROVIDER_KEY";
 const CODEX_SCOPED_PROVIDER_NAME: &str = "cli_manager_scope";
 const GROK_PROVIDER_ENV_KEY: &str = "XAI_API_KEY";
+const GROK_BASE_URL_ENV_KEY: &str = "GROK_MODELS_BASE_URL";
 const SNAPSHOT_APP_TYPES: [&str; 3] = ["claude", "codex", "grokbuild"];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -43,6 +44,7 @@ pub(crate) struct ProviderLaunchConfig {
     pub snapshot_id: String,
     pub claude_settings_path: Option<String>,
     pub generated_home: Option<String>,
+    pub grok_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,6 +66,7 @@ pub(crate) struct ProviderLaunchSnapshot {
     pub snapshot_id: String,
     pub claude_settings_path: Option<String>,
     pub generated_home: Option<String>,
+    pub grok_model: Option<String>,
     pub config_overrides: Vec<String>,
 }
 
@@ -74,6 +77,8 @@ struct SnapshotManifest {
     provider_id: String,
     active_key_id: String,
     snapshot_id: String,
+    grok_base_url: Option<String>,
+    grok_model: Option<String>,
 }
 
 #[derive(Clone)]
@@ -417,22 +422,6 @@ fn read_manifest(app_type: &str, snapshot_id: &str) -> Result<(PathBuf, Snapshot
     Ok((root, manifest))
 }
 
-fn wsl_shell(shell: Option<&str>) -> bool {
-    cfg!(target_os = "windows")
-        && matches!(
-            shell.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
-            Some("wsl") | Some("bash")
-        )
-}
-
-fn path_for_shell(path: &Path, shell: Option<&str>) -> String {
-    let value = path.to_string_lossy().into_owned();
-    if wsl_shell(shell) {
-        return wsl::windows_path_to_wsl(&value).unwrap_or(value);
-    }
-    value
-}
-
 fn path_matches(expected: &Path, actual: Option<&str>) -> bool {
     actual
         .map(PathBuf::from)
@@ -495,9 +484,11 @@ fn write_snapshot_bundle(
     provider: &NativeProvider,
     effective: &Value,
     snapshot_id: &str,
-) -> Result<(Option<String>, Option<String>, Vec<String>), String> {
+) -> Result<(Option<String>, Option<String>, Option<String>, Vec<String>), String> {
     let mut claude_settings_path = None;
-    let mut generated_home = None;
+    let generated_home = None;
+    let mut grok_base_url = None;
+    let mut grok_model = None;
     let mut config_overrides = Vec::new();
 
     match provider.app_type.as_str() {
@@ -511,10 +502,14 @@ fn write_snapshot_bundle(
             config_overrides = codex_config_overrides(&provider.id, effective)?;
         }
         "grokbuild" => {
-            let (config, _) = global::materialize_grok_config(None, effective)?;
-            let home = root.join("grok");
-            write_snapshot_file(&home.join("config.toml"), &config)?;
-            generated_home = Some(home.to_string_lossy().into_owned());
+            let settings = serde_json::to_string(effective)
+                .map_err(|_| "provider_config_invalid".to_string())?;
+            let (base_url, model, _) = grok::summary(&settings);
+            grok_base_url = base_url.filter(|value| !value.trim().is_empty());
+            grok_model = model.filter(|value| !value.trim().is_empty());
+            if grok_base_url.is_none() || grok_model.is_none() {
+                return Err("provider_config_invalid".to_string());
+            }
         }
         _ => return Err("provider_invalid_app_type".to_string()),
     }
@@ -530,9 +525,16 @@ fn write_snapshot_bundle(
             provider_id: provider.id.clone(),
             active_key_id: provider.active_key_id.clone(),
             snapshot_id: snapshot_id.to_string(),
+            grok_base_url,
+            grok_model: grok_model.clone(),
         },
     )?;
-    Ok((claude_settings_path, generated_home, config_overrides))
+    Ok((
+        claude_settings_path,
+        generated_home,
+        grok_model,
+        config_overrides,
+    ))
 }
 
 fn write_snapshot_bundle_or_cleanup(
@@ -540,7 +542,7 @@ fn write_snapshot_bundle_or_cleanup(
     provider: &NativeProvider,
     effective: &Value,
     snapshot_id: &str,
-) -> Result<(Option<String>, Option<String>, Vec<String>), String> {
+) -> Result<(Option<String>, Option<String>, Option<String>, Vec<String>), String> {
     match write_snapshot_bundle(root, provider, effective, snapshot_id) {
         Ok(paths) => Ok(paths),
         Err(error) => {
@@ -577,7 +579,7 @@ pub(crate) async fn prepare(
     let snapshot_id = Uuid::new_v4().to_string();
     let root = generated_root(&selection.provider.app_type, &snapshot_id)?;
     fs::create_dir_all(&root).map_err(|_| "provider_snapshot_write_failed".to_string())?;
-    let (claude_settings_path, generated_home, config_overrides) =
+    let (claude_settings_path, generated_home, grok_model, config_overrides) =
         write_snapshot_bundle_or_cleanup(&root, &selection.provider, &effective, &snapshot_id)?;
 
     Ok(Some(ProviderLaunchSnapshot {
@@ -588,6 +590,7 @@ pub(crate) async fn prepare(
         snapshot_id,
         claude_settings_path,
         generated_home,
+        grok_model,
         config_overrides,
     }))
 }
@@ -677,7 +680,7 @@ pub(crate) async fn apply_launch_environment(
 
 async fn apply_launch_environment_inner(
     config: ProviderLaunchConfig,
-    shell: Option<String>,
+    _shell: Option<String>,
     mut env_vars: HashMap<String, String>,
 ) -> Result<HashMap<String, String>, String> {
     let app_type = normalize_type(&config.app_type)?;
@@ -714,13 +717,21 @@ async fn apply_launch_environment_inner(
         env_vars.insert(CODEX_PROVIDER_ENV_KEY.to_string(), active_key);
         return Ok(env_vars);
     }
-    let expected_home = root.join("grok");
-    if !path_matches(&expected_home, config.generated_home.as_deref()) {
+    if config.generated_home.is_some() {
         return Err("provider_snapshot_mismatch".to_string());
     }
-    let required_files = vec![expected_home.join("config.toml")];
-    if required_files.iter().any(|path| !path.is_file()) {
-        return Err("provider_snapshot_missing".to_string());
+    let base_url = manifest
+        .grok_base_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "provider_snapshot_invalid".to_string())?;
+    let model = manifest
+        .grok_model
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "provider_snapshot_invalid".to_string())?;
+    if config.grok_model.as_deref() != Some(model) {
+        return Err("provider_snapshot_mismatch".to_string());
     }
     let active_key = fs::read(root.join(SNAPSHOT_KEY_FILE))
         .map_err(|_| "provider_snapshot_missing".to_string())
@@ -734,10 +745,17 @@ async fn apply_launch_environment_inner(
         "CLI_MANAGER_PROVIDER_KEY_SCOPE".to_string(),
         "snapshot".to_string(),
     );
-    env_vars.insert(GROK_PROVIDER_ENV_KEY.to_string(), active_key);
-    let home_value = path_for_shell(&expected_home, shell.as_deref());
-    env_vars.insert("GROK_HOME".to_string(), home_value);
+    apply_grok_runtime_environment(&mut env_vars, base_url, active_key);
     Ok(env_vars)
+}
+
+fn apply_grok_runtime_environment(
+    env_vars: &mut HashMap<String, String>,
+    base_url: &str,
+    active_key: String,
+) {
+    env_vars.insert(GROK_PROVIDER_ENV_KEY.to_string(), active_key);
+    env_vars.insert(GROK_BASE_URL_ENV_KEY.to_string(), base_url.to_string());
 }
 
 #[cfg(test)]
@@ -806,10 +824,11 @@ mod tests {
             "auth": {"OPENAI_API_KEY": "test-secret"}
         });
 
-        let (_, generated_home, overrides) =
+        let (_, generated_home, grok_model, overrides) =
             write_snapshot_bundle(&root, &provider, &effective, "snapshot-1").unwrap();
 
         assert!(generated_home.is_none());
+        assert!(grok_model.is_none());
         assert!(!root.join("codex").exists());
         assert!(overrides
             .iter()
@@ -819,6 +838,66 @@ mod tests {
         assert_eq!(
             fs::read_to_string(root.join(SNAPSHOT_KEY_FILE)).unwrap(),
             "test-secret"
+        );
+    }
+
+    #[test]
+    fn grok_scope_snapshot_keeps_real_home_and_exposes_runtime_model() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("snapshot");
+        let provider = NativeProvider {
+            id: "provider-1".to_string(),
+            name: "Provider".to_string(),
+            app_type: "grokbuild".to_string(),
+            settings_config: "{}".to_string(),
+            meta: "{}".to_string(),
+            active_key_id: "key-1".to_string(),
+            active_key: "test-secret".to_string(),
+        };
+        let effective = json!({
+            "config": "[models]\ndefault = \"proxy\"\n[model.proxy]\nmodel = \"grok-test\"\nbase_url = \"https://api.example.com/v1\"\n"
+        });
+
+        let (_, generated_home, grok_model, overrides) =
+            write_snapshot_bundle(&root, &provider, &effective, "snapshot-1").unwrap();
+        let manifest: SnapshotManifest =
+            serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
+
+        assert!(generated_home.is_none());
+        assert!(!root.join("grok").exists());
+        assert_eq!(grok_model.as_deref(), Some("grok-test"));
+        assert_eq!(manifest.grok_model.as_deref(), Some("grok-test"));
+        assert_eq!(
+            manifest.grok_base_url.as_deref(),
+            Some("https://api.example.com/v1")
+        );
+        assert!(overrides.is_empty());
+    }
+
+    #[test]
+    fn grok_runtime_environment_does_not_replace_home() {
+        let mut env_vars = HashMap::from([(
+            "GROK_HOME".to_string(),
+            r"C:\Users\tester\.grok".to_string(),
+        )]);
+
+        apply_grok_runtime_environment(
+            &mut env_vars,
+            "https://api.example.com/v1",
+            "test-secret".to_string(),
+        );
+
+        assert_eq!(
+            env_vars.get("GROK_HOME").map(String::as_str),
+            Some(r"C:\Users\tester\.grok")
+        );
+        assert_eq!(
+            env_vars.get(GROK_BASE_URL_ENV_KEY).map(String::as_str),
+            Some("https://api.example.com/v1")
+        );
+        assert_eq!(
+            env_vars.get(GROK_PROVIDER_ENV_KEY).map(String::as_str),
+            Some("test-secret")
         );
     }
 
@@ -868,20 +947,5 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed["permissions"]["allow"][0], "Read");
         assert_eq!(parsed["env"]["ANTHROPIC_MODEL"], "provider-model");
-    }
-
-    #[test]
-    fn wsl_shell_converts_generated_windows_path() {
-        let path = Path::new(r"C:\Users\me\.cli-manager\generated\codex");
-        if cfg!(target_os = "windows") {
-            assert_eq!(
-                path_for_shell(path, Some("wsl")),
-                "/mnt/c/Users/me/.cli-manager/generated/codex"
-            );
-        }
-        assert_eq!(
-            path_for_shell(path, Some("powershell")),
-            path.to_string_lossy()
-        );
     }
 }

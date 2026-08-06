@@ -26,6 +26,7 @@ import {
   withClaudeSettingsPath,
   withCodexConfigOverrides,
   withCodexLightTuiTheme,
+  withGrokModelOverride,
 } from "../lib/projectStartupCommand";
 import { getTerminalTheme } from "../lib/terminalThemes";
 import { normalizeHexColor } from "../lib/terminalColor";
@@ -1368,12 +1369,15 @@ async function prepareProviderLaunchSnapshot(
   const appType = project ? getProviderSwitchAppType(project) : null;
   if (!project || !appType) return null;
   const persistedSnapshotIsCurrent = persistedSnapshot?.appType === appType && (
-    appType !== "codex"
-    || (
+    appType === "codex"
+      ? (
       !persistedSnapshot.generatedHome
       && Array.isArray(persistedSnapshot.configOverrides)
       && persistedSnapshot.configOverrides.length > 0
-    )
+      )
+      : appType === "grokbuild"
+        ? !persistedSnapshot.generatedHome && Boolean(persistedSnapshot.grokModel?.trim())
+        : true
   );
   if (persistedSnapshotIsCurrent) return persistedSnapshot;
   if (persistedSnapshot) releaseProviderSnapshot(persistedSnapshot);
@@ -1425,7 +1429,9 @@ function buildNativeProviderLaunchConfigs(
       grokProvider: null,
     };
   }
-  if (!snapshot.generatedHome) throw new Error("provider_snapshot_missing");
+  if (snapshot.generatedHome || !snapshot.grokModel?.trim()) {
+    throw new Error("provider_snapshot_missing");
+  }
   return {
     claudeProvider: null,
     codexProvider: null,
@@ -1433,7 +1439,7 @@ function buildNativeProviderLaunchConfigs(
       appType: "grokbuild",
       providerId: snapshot.providerId,
       snapshotId: snapshot.snapshotId,
-      generatedHome: snapshot.generatedHome,
+      grokModel: snapshot.grokModel,
     },
   };
 }
@@ -1583,6 +1589,15 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
     if (!providerStartupCmd) {
       releaseProviderSnapshot(providerSnapshot);
       throw new Error("provider_codex_command_unsupported");
+    }
+  } else if (providerSnapshot?.appType === "grokbuild") {
+    providerStartupCmd = withGrokModelOverride(
+      resolvedStartupCmd,
+      providerSnapshot.grokModel ?? "",
+    );
+    if (!providerStartupCmd) {
+      releaseProviderSnapshot(providerSnapshot);
+      throw new Error("provider_grok_command_unsupported");
     }
   }
   let startupCmd = prepareStartupCommandForPty(

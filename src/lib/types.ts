@@ -376,6 +376,7 @@ export interface NativeProviderLaunchSnapshot {
   snapshotId: string;
   claudeSettingsPath: string | null;
   generatedHome: string | null;
+  grokModel: string | null;
   configOverrides: string[];
 }
 
