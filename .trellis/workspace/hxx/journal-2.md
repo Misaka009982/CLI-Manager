@@ -501,3 +501,36 @@ Claude、Codex、Pi、Grok 的非强制配置目录解析在已选目录失效�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 74: 修复 Codex 供应商启动覆盖真实 Home
+
+**Date**: 2026-08-06
+**Task**: 修复 Codex 供应商启动覆盖真实 Home
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+修复原生 Codex 全局、项目与 Worktree 供应商启动错误替换 CODEX_HOME 的回归；全局使用真实 Home，scope 使用安全配置覆盖与子进程密钥，恢复 MCP、Hook、沙箱、历史和实时统计链路。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b8a41dee` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
