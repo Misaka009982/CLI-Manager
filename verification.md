@@ -886,3 +886,21 @@
 - `node scripts/remoteHandoff.test.mjs`：5 项通过。
 - `cargo fmt --all -- --check`、`cargo check`、`npx tsc --noEmit`、`npm run build`、`git diff --check`：通过。
 - 尚未执行真实 Telegram、微信、飞书、企业微信授权及安装包冒烟；该项留给后续打包测试阶段。
+
+## 桌宠状态气泡顶部裁切修复（2026-08-06）
+
+### 根因与发现清单
+
+- 根因位于桌宠 CSS 缩放与 Tauri 原生窗口尺寸的同步边界：宠物画面和状态气泡已按用户尺寸渲染时，隐藏窗口首次显示、WebView2 残留缩放或跨 DPI 显示器恢复可能仍保留基础 `190 x 210` 窗口，超出透明 WebView 顶边的气泡会被根节点裁切。
+- `desktop_pet_window_sync` 现在按目标显示器 DPI 直接计算物理窗口尺寸，先应用目标位置和尺寸，显示后校验并在窗口管理器改写几何信息时重新应用；Windows 桌宠 WebView 同时恢复为 100% 页面缩放。
+- 桌宠窗口发出 ready 事件后会强制重跑一次原生窗口同步，再发送配置与状态，覆盖首次显示时窗口尚未稳定的时序。
+- 已修改 `src-tauri/src/commands/desktop_pet.rs` 与 `src/hooks/useDesktopPetCoordinator.ts`；已复核但未修改状态气泡 CSS、宠物资源解析、目录扫描、菜单展开几何、任务状态和远程托管逻辑。
+- GitNexus MCP 当前未暴露；已降级使用 codebase-memory moderate 索引、调用路径、`rg`、源码和 Git diff。工作区检测仅包含上述两处实现及本验证记录。
+
+### 场景与验证
+
+- 覆盖宠物尺寸 40%～150%、显示器 DPI 100%/125%/150%、保存位置与默认位置、隐藏窗口首次显示、桌宠 ready 后恢复，以及 Windows WebView2 非 100% 残留缩放。
+- `cargo test desktop_pet --lib`：15 项通过，包含新增的尺寸与 DPI 组合测试。
+- `node --test scripts/desktopPetSize.test.mjs scripts/desktopPetMenuGeometry.test.mjs scripts/desktopPetTransport.test.mjs scripts/desktopPetStatus.test.mjs`：25 项通过。
+- `npx tsc --noEmit`、`npm run build`、`cargo check`、`cargo fmt -- --check`、`git diff --check`：通过。
+- 当前机器未复现 Issue #196 用户的 WebView2/显示器状态；最终仍需由受影响 Windows 11 机器验证内置小猫和 Codex Pets 在原尺寸设置下的气泡完整性。
