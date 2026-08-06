@@ -24,6 +24,7 @@ import { useTerminalStore } from "../stores/terminalStore";
 const MIN_TERMINAL_COLS = 40;
 const MIN_TERMINAL_ROWS = 8;
 const HIDDEN_WEBGL_DISPOSE_DELAY_MS = 10_000;
+const PTY_LIVE_WRITE_BATCH_BYTES = 64 * 1024;
 
 type NormalizeTerminalOutput = (text: string) => string;
 type TransformTerminalOutput = (text: string) => string;
@@ -38,6 +39,7 @@ export interface TerminalOutputDiagnostics {
 interface PendingTerminalWrite {
   text: string;
   charCount: number;
+  byteLength: number;
   commit: ((charCount: number) => void) | null;
   replay: boolean;
   replayBatchEnd: boolean;
@@ -277,12 +279,23 @@ export function useTerminalDisplay({
       if (!first) return;
       const pending = [first];
       if (!first.replay && !first.reset) {
+        let pendingBytes = first.byteLength;
+        // Keep each live write bounded at complete PTY frame boundaries so a
+        // continuous producer cannot monopolize the WebView main thread.
         while (
           ptyPendingChunksRef.current[0]
           && !ptyPendingChunksRef.current[0].replay
           && !ptyPendingChunksRef.current[0].reset
         ) {
+          const next = ptyPendingChunksRef.current[0];
+          if (
+            pending.length > 0
+            && pendingBytes + next.byteLength > PTY_LIVE_WRITE_BATCH_BYTES
+          ) {
+            break;
+          }
           pending.push(ptyPendingChunksRef.current.shift()!);
+          pendingBytes += next.byteLength;
         }
       } else {
         forwardPtyResizeRef.current = false;
@@ -338,6 +351,7 @@ export function useTerminalDisplay({
       ptyPendingChunksRef.current.push({
         text,
         charCount: rawText.length,
+        byteLength: payload.data.byteLength,
         commit: delivery.commit,
         replay: payload.kind === "replay",
         replayBatchEnd: payload.replayBatchEnd === true,

@@ -536,3 +536,33 @@ test("resize-only reconnect replay is applied locally before current-size fit", 
   output.dispose();
   detachViewport();
 });
+
+test("continuous live output yields between bounded xterm writes", async () => {
+  managerStub.resetManager();
+  const { display, terminal, events, detachViewport } = createDisplay();
+  const commits = [];
+  const output = display.attachPtyOutput();
+  await output.ready;
+  const firstText = "a".repeat(40 * 1024);
+  const secondText = "b".repeat(40 * 1024);
+
+  managerStub.emitOutput(delivery(frame(3, firstText, 120, 30), commits));
+  managerStub.emitOutput(delivery(frame(4, secondText, 120, 30), commits));
+  flushNextAnimationFrame();
+
+  assert.deepEqual(events, [`write:${firstText}`]);
+  assert.deepEqual(commits, []);
+  terminal.finishNextWrite();
+  assert.deepEqual(commits, [
+    { sequence: 3, charCount: firstText.length },
+  ]);
+  flushNextAnimationFrame();
+  assert.deepEqual(events, [`write:${firstText}`, `write:${secondText}`]);
+  terminal.finishNextWrite();
+  assert.deepEqual(commits, [
+    { sequence: 3, charCount: firstText.length },
+    { sequence: 4, charCount: secondText.length },
+  ]);
+  output.dispose();
+  detachViewport();
+});
