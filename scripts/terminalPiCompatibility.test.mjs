@@ -281,6 +281,8 @@ test("live, replay, reset, and serialized snapshot use the shared transform", ()
   assert.match(componentSource, /displayTransformOutputRef\.current = \(text\) => processCodexCursorVisibility\(/);
   assert.match(componentSource, /const processCodexCursorVisibility = \(text: string\) =>/);
   assert.match(componentSource, /hideCodexRuntimeCursorRef\.current/);
+  assert.match(componentSource, /codexSessionDetectedRef\.current = true/);
+  assert.match(componentSource, /const focusTerminalWithCodexCursorPolicy = \(terminal: Terminal\) =>/);
   assert.doesNotMatch(componentSource, /stabilizeCodexCursorVisibility|codexVisualCursor|resolveStableTuiCursorAnchor/);
   assert.doesNotMatch(componentSource, /normalizeToolBackgrounds|toolPendingBg|toolSuccessBg|toolErrorBg/);
 });

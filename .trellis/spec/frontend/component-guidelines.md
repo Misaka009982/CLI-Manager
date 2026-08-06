@@ -1325,11 +1325,11 @@ terminal.focus();
 
 ### Convention: Keep application cursor visibility sequences intact by default
 
-**Contract**: PTY output passes DECTCEM sequences (`CSI ?25h` show cursor and `CSI ?25l` hide cursor) through unchanged for every CLI. When the opt-in `hideCodexRuntimeCursor` setting is enabled and the active terminal is identified as Codex, only the Codex display transform may delay `CSI ?25h` by 80ms; `CSI ?25l` remains immediate.
+**Contract**: PTY output passes DECTCEM sequences (`CSI ?25h` show cursor and `CSI ?25l` hide cursor) through unchanged for every CLI. When the opt-in `hideCodexRuntimeCursor` setting is enabled and the active terminal is identified as Codex, the Codex display transform may delay `CSI ?25h` by 80ms; `CSI ?25l` remains immediate. Codex identity must be latched from immutable session metadata, the visible TUI viewport, or the current output frame before cursor filtering is decided.
 
 **Why**: Other TUIs own cursor visibility and must keep native behavior. The compatibility switch restores the pre-V1.3.0 Codex workaround without changing Shell, Claude, Pi, or disabled-setting sessions.
 
-**Prevention**: Keep the suppression at the display transform boundary, preserve raw PTY frame lengths for ACK accounting, cancel pending show timers on teardown or disable, and do not create a visual cursor overlay or alter PTY input.
+**Prevention**: Keep the suppression at the display transform boundary, preserve raw PTY frame lengths for ACK accounting, latch first-frame Codex signatures before filtering, reapply hidden state after xterm focus, cancel pending show timers on teardown or disable, and do not create a visual cursor overlay or alter PTY input.
 
 **Tests**: Run `node --test scripts/terminalPiCompatibility.test.mjs scripts/terminalNewlineShortcut.test.mjs` and `npx tsc --noEmit`. Assert the shared transform keeps Pi behavior and the Codex cursor filter is guarded by `hideCodexRuntimeCursor` plus Codex session detection.
 ### Common Mistake: Letting xterm helper textarea follow non-IME redraw cursors
