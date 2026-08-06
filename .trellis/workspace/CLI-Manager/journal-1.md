@@ -1254,3 +1254,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 38: 统一终端侧边栏标题与缓存命中率
+
+**Date**: 2026-08-06
+**Task**: 统一终端侧边栏标题与缓存命中率
+**Branch**: `master`
+
+### Summary
+
+统一实时统计、文件、Git 变更、时间轴和系统资源面板的标题尺寸与终端主题背景，并在 Token 用量卡片中补充缓存命中率。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fb89406a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
