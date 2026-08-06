@@ -561,7 +561,7 @@ const DEFAULTS: Settings = {
   shellRuntimeMonitoringEnabled: false,
   ccusageAnalyticsEnabled: false,
   ccusageUseWsl: false,
-  windowsConptyCompatibilityFixEnabled: false,
+  windowsConptyCompatibilityFixEnabled: true,
   terminalSessionRestoreEnabled: true,
   terminalSessionRestoreMode: "ask",
   projectWorktreeConfigEnabled: true,
