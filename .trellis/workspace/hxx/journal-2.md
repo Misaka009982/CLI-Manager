@@ -567,3 +567,36 @@ Claude、Codex、Pi、Grok 的非强制配置目录解析在已选目录失效�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 76: 修复 Codex 光标隐藏未生效
+
+**Date**: 2026-08-06
+**Task**: 修复 Codex 光标隐藏未生效
+**Branch**: `master`
+
+### Summary
+
+定位并修复 Codex 光标隐藏开关未生效：首帧 Codex 输出在写入前锁存识别结果，重新 focus 的全部路径重新应用 CSI ?25l；同步更新终端契约、变更记录、功能清单和回归断言。类型检查与 21 个相关测试通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4a605543` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
