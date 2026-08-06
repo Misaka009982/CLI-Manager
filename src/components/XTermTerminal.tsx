@@ -1278,14 +1278,32 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         markInitialDisplayReady();
       });
     };
+    let initialDisplayRestoreRaf: number | null = null;
     if (initialTerminalOutput) {
-      terminal.write(displayTransformOutputRef.current(initialTerminalOutput), () => {
+      // The serialized shell snapshot contains cursor coordinates from the old
+      // terminal geometry. Fit first, then end on a clean line so output from
+      // the recreated PTY cannot overwrite restored text at that stale cursor.
+      initialDisplayRestoreRaf = window.requestAnimationFrame(() => {
+        initialDisplayRestoreRaf = null;
         if (terminalRef.current !== terminal) return;
-        terminal.scrollToBottom();
-        refreshTerminalViewport(terminal);
-        scheduleViewportRefresh();
-        writeDeferredStartup();
-        finishInitialDisplayRestore();
+        const dimensions = fitAddon.proposeDimensions();
+        if (
+          dimensions
+          && dimensions.cols > 0
+          && dimensions.rows > 0
+          && (terminal.cols !== dimensions.cols || terminal.rows !== dimensions.rows)
+        ) {
+          terminal.resize(dimensions.cols, dimensions.rows);
+        }
+        const restoredOutput = displayTransformOutputRef.current(initialTerminalOutput);
+        terminal.write(`${restoredOutput}\x1b[?6l\x1b[r\x1b[0m\x1b[?25h\x1b[999B\r\n`, () => {
+          if (terminalRef.current !== terminal) return;
+          terminal.scrollToBottom();
+          refreshTerminalViewport(terminal);
+          scheduleViewportRefresh();
+          writeDeferredStartup();
+          finishInitialDisplayRestore();
+        });
       });
     } else {
       writeDeferredStartup();
@@ -1624,6 +1642,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       if (attachOutputTimer !== null) {
         window.clearTimeout(attachOutputTimer);
         attachOutputTimer = null;
+      }
+      if (initialDisplayRestoreRaf !== null) {
+        window.cancelAnimationFrame(initialDisplayRestoreRaf);
+        initialDisplayRestoreRaf = null;
       }
       resolveInitialDisplayReady?.();
       resolveInitialDisplayReady = null;
