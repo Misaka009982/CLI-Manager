@@ -667,6 +667,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const tuiColorSync = useMemo(
     () => createTerminalTuiColorSyncController(() => ({
       getContext: getSessionToolContext,
+      isVisible: isVisibleRef.current,
       isTransparent: isTransparentRef.current,
       isLightTheme: isLightTerminalRef.current,
       terminalTextColor: terminalTextColorRef.current,
@@ -756,6 +757,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     || (runtimeTerminal !== undefined && hasCodexTuiViewport(runtimeTerminal))
   );
   displayAfterWriteRef.current = (terminal) => {
+    if (!isVisibleRef.current) return;
     tuiColorSync.normalize(terminal);
     tuiColorSync.schedule(terminal);
   };
@@ -866,8 +868,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     if (terminal.options.scrollback !== effectiveTerminalScrollbackRows) {
       terminal.options.scrollback = effectiveTerminalScrollbackRows;
     }
-    tuiColorSync.normalize(terminal);
-    tuiColorSync.schedule(terminal);
+    if (isVisibleRef.current) {
+      tuiColorSync.normalize(terminal);
+      tuiColorSync.schedule(terminal);
+    }
   }, [fontSize, effectiveFontFamily, effectiveTerminalScrollbackRows, resolvedTheme, terminalThemeName, terminalTextColor, terminalTuiUserColor, terminalTuiAssistantColor, lightThemePalette, darkThemePalette, isTransparent, background.overlayDarken, lowMemoryMode, disableHardwareAcceleration, linuxGraphicsDisableWebgl, searchOpen, tuiColorSync]);
 
   // Hidden terminals stay attached and continue parsing output. Visibility only
@@ -1592,10 +1596,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     displayDisposables.push({ dispose: detachViewport });
     displayDisposables.push(terminal.onRender((range) => {
       handleVisibilityRestoreRender(terminal, range);
-      tuiColorSync.schedule(terminal);
+      if (isVisibleRef.current) tuiColorSync.schedule(terminal);
     }));
     displayDisposables.push(terminal.onScroll(() => {
-      tuiColorSync.schedule(terminal);
+      if (isVisibleRef.current) tuiColorSync.schedule(terminal);
     }));
     const detachIme = attachIme(terminal, {
       forwarding: inputForwarding,
