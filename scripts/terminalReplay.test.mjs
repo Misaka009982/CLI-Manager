@@ -83,22 +83,22 @@ export const useTerminalStore = {
 };
 `);
 writeFileSync(join(tempDir, "manager.mjs"), `
-let outputListener = null;
+const outputListeners = new Map();
 export const resizeCalls = [];
 export const replayAcknowledgments = [];
 export const terminalProcessManager = {
-  async subscribeOutput(_sessionId, listener) {
-    outputListener = listener;
-    return () => { if (outputListener === listener) outputListener = null; };
+  async subscribeOutput(sessionId, listener) {
+    outputListeners.set(sessionId, listener);
+    return () => { if (outputListeners.get(sessionId) === listener) outputListeners.delete(sessionId); };
   },
   async resize(sessionId, cols, rows) { resizeCalls.push({ sessionId, cols, rows }); },
   acknowledgeOutput(sessionId, sequence, charCount) {
     replayAcknowledgments.push({ sessionId, sequence, charCount });
   },
 };
-export function emitOutput(delivery) { outputListener?.(delivery); }
+export function emitOutput(delivery, sessionId = "session-1") { outputListeners.get(sessionId)?.(delivery); }
 export function resetManager() {
-  outputListener = null;
+  outputListeners.clear();
   resizeCalls.length = 0;
   replayAcknowledgments.length = 0;
 }
@@ -214,7 +214,10 @@ class FakeTerminal {
   loadAddon() {}
 }
 
-function createDisplay(proposedDimensions = { cols: 120, rows: 30 }) {
+function createDisplay(
+  proposedDimensions = { cols: 120, rows: 30 },
+  { sessionId = "session-1", isVisible = true } = {},
+) {
   visibilityStub.resetVisibility();
   const events = [];
   const terminal = new FakeTerminal(events);
@@ -226,11 +229,11 @@ function createDisplay(proposedDimensions = { cols: 120, rows: 30 }) {
   };
   const terminalRef = { current: terminal };
   const display = useTerminalDisplay({
-    sessionId: "session-1",
+    sessionId,
     containerRef: { current: container },
     terminalRef,
     fitAddonRef: { current: { proposeDimensions: () => proposedDimensions } },
-    isVisibleRef: { current: true },
+    isVisibleRef: { current: isVisible },
     isComposingRef: { current: false },
     lowMemoryMode: false,
     disableHardwareAcceleration: true,
@@ -565,4 +568,70 @@ test("continuous live output yields between bounded xterm writes", async () => {
   ]);
   output.dispose();
   detachViewport();
+});
+
+test("multiple terminals start only one xterm write per animation frame", async () => {
+  managerStub.resetManager();
+  const first = createDisplay(undefined, { sessionId: "session-1" });
+  const second = createDisplay(undefined, { sessionId: "session-2" });
+  const firstOutput = first.display.attachPtyOutput();
+  const secondOutput = second.display.attachPtyOutput();
+  await Promise.all([firstOutput.ready, secondOutput.ready]);
+
+  managerStub.emitOutput(delivery(frame(1, "first", 120, 30), []), "session-1");
+  managerStub.emitOutput(delivery(frame(1, "second", 120, 30), []), "session-2");
+  flushNextAnimationFrame();
+
+  const writeCount = [...first.events, ...second.events]
+    .filter((event) => event.startsWith("write:"))
+    .length;
+  assert.equal(writeCount, 1);
+  const pending = first.terminal.writeCallbacks.length > 0 ? first : second;
+  const waiting = pending === first ? second : first;
+  pending.terminal.finishNextWrite();
+  flushNextAnimationFrame();
+  assert.equal(waiting.terminal.writeCallbacks.length, 1);
+
+  waiting.terminal.finishNextWrite();
+  firstOutput.dispose();
+  secondOutput.dispose();
+  first.detachViewport();
+  second.detachViewport();
+});
+
+test("hidden terminal is not starved by continuous visible output", async () => {
+  managerStub.resetManager();
+  const visible = createDisplay(undefined, { sessionId: "visible", isVisible: true });
+  const hidden = createDisplay(undefined, { sessionId: "hidden", isVisible: false });
+  const visibleOutput = visible.display.attachPtyOutput();
+  const hiddenOutput = hidden.display.attachPtyOutput();
+  await Promise.all([visibleOutput.ready, hiddenOutput.ready]);
+  const visibleCommits = [];
+  const hiddenCommits = [];
+
+  for (let sequence = 1; sequence <= 4; sequence += 1) {
+    managerStub.emitOutput(
+      delivery(frame(sequence, String(sequence).repeat(40 * 1024), 120, 30), visibleCommits),
+      "visible",
+    );
+  }
+  managerStub.emitOutput(delivery(frame(1, "background", 120, 30), hiddenCommits), "hidden");
+
+  for (let index = 0; index < 3; index += 1) {
+    flushNextAnimationFrame();
+    assert.equal(hidden.events.length, 0);
+    visible.terminal.finishNextWrite();
+  }
+  flushNextAnimationFrame();
+  assert.deepEqual(
+    hidden.events.filter((event) => event.startsWith("write:")),
+    ["write:background"],
+  );
+  hidden.terminal.finishNextWrite();
+  assert.deepEqual(hiddenCommits, [{ sequence: 1, charCount: 10 }]);
+
+  visibleOutput.dispose();
+  hiddenOutput.dispose();
+  visible.detachViewport();
+  hidden.detachViewport();
 });

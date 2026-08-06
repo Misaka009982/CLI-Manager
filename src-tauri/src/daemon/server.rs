@@ -49,7 +49,7 @@ pub const MAX_SESSIONS: usize = 64;
 /// 无客户端时缓存的 hook 上报条数上限（契约：200，attach 后补发）。
 pub const HOOK_CACHE_MAX: usize = 200;
 const OUTPUT_BUFFERING_DURATION: Duration = Duration::from_millis(5);
-const OUTPUT_BUFFERING_MAX_BYTES: usize = 256 * 1024;
+const OUTPUT_BUFFERING_MAX_BYTES: usize = 64 * 1024;
 const CLIENT_OUTPUT_QUEUE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const CLIENT_CONTROL_QUEUE_MAX_FRAMES: usize = 256;
 
@@ -1168,45 +1168,58 @@ enum DaemonPtyEvent {
 impl DaemonPtyEventSink {
     fn new(host: Arc<DaemonHost>, session_id: String) -> Self {
         let (sender, receiver) = sync_channel(1);
-        std::thread::spawn(move || loop {
-            let first = match receiver.recv() {
-                Ok(event) => event,
-                Err(_) => return,
-            };
-            match first {
-                DaemonPtyEvent::Status(status) => {
-                    emit_daemon_status(&host, &session_id, status);
-                    return;
-                }
-                DaemonPtyEvent::Output(data) => {
-                    let mut pending = data;
-                    let deadline = Instant::now() + OUTPUT_BUFFERING_DURATION;
-                    let mut final_status = None;
-                    while pending.len() < OUTPUT_BUFFERING_MAX_BYTES {
-                        let now = Instant::now();
-                        if now >= deadline {
-                            break;
-                        }
-                        match receiver.recv_timeout(deadline.saturating_duration_since(now)) {
-                            Ok(DaemonPtyEvent::Output(data)) => pending.extend_from_slice(&data),
-                            Ok(DaemonPtyEvent::Status(status)) => {
-                                final_status = Some(status);
-                                break;
-                            }
-                            Err(RecvTimeoutError::Timeout) => break,
-                            Err(RecvTimeoutError::Disconnected) => break,
-                        }
-                    }
-                    emit_daemon_output(&host, &session_id, &pending);
-                    if let Some(status) = final_status {
+        std::thread::spawn(move || {
+            let mut carried = None;
+            loop {
+                let first = match carried.take().or_else(|| receiver.recv().ok()) {
+                    Some(event) => event,
+                    None => return,
+                };
+                match first {
+                    DaemonPtyEvent::Status(status) => {
                         emit_daemon_status(&host, &session_id, status);
                         return;
+                    }
+                    DaemonPtyEvent::Output(data) => {
+                        let mut pending = data;
+                        let deadline = Instant::now() + OUTPUT_BUFFERING_DURATION;
+                        let mut final_status = None;
+                        while pending.len() < OUTPUT_BUFFERING_MAX_BYTES {
+                            let now = Instant::now();
+                            if now >= deadline {
+                                break;
+                            }
+                            match receiver.recv_timeout(deadline.saturating_duration_since(now)) {
+                                Ok(DaemonPtyEvent::Output(data)) => {
+                                    if output_batch_would_overflow(pending.len(), data.len()) {
+                                        carried = Some(DaemonPtyEvent::Output(data));
+                                        break;
+                                    }
+                                    pending.extend_from_slice(&data);
+                                }
+                                Ok(DaemonPtyEvent::Status(status)) => {
+                                    final_status = Some(status);
+                                    break;
+                                }
+                                Err(RecvTimeoutError::Timeout) => break,
+                                Err(RecvTimeoutError::Disconnected) => break,
+                            }
+                        }
+                        emit_daemon_output(&host, &session_id, &pending);
+                        if let Some(status) = final_status {
+                            emit_daemon_status(&host, &session_id, status);
+                            return;
+                        }
                     }
                 }
             }
         });
         Self { sender }
     }
+}
+
+fn output_batch_would_overflow(pending_bytes: usize, next_bytes: usize) -> bool {
+    pending_bytes > 0 && pending_bytes.saturating_add(next_bytes) > OUTPUT_BUFFERING_MAX_BYTES
 }
 
 impl PtyEventSink for DaemonPtyEventSink {
@@ -2264,6 +2277,13 @@ fn maybe_activate_app_for_hook(payload: &crate::claude_hook::ClaudeHookPayload) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daemon_output_batch_stops_before_crossing_live_frame_budget() {
+        assert!(!output_batch_would_overflow(0, 80 * 1024));
+        assert!(!output_batch_would_overflow(32 * 1024, 32 * 1024));
+        assert!(output_batch_would_overflow(40 * 1024, 40 * 1024));
+    }
 
     fn test_session(session_id: &str, buffer: SessionBuffer, next_sequence: u64) -> SharedSession {
         Arc::new(Mutex::new(SessionEntry {

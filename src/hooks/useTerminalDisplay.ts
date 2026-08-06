@@ -25,6 +25,55 @@ const MIN_TERMINAL_COLS = 40;
 const MIN_TERMINAL_ROWS = 8;
 const HIDDEN_WEBGL_DISPOSE_DELAY_MS = 10_000;
 const PTY_LIVE_WRITE_BATCH_BYTES = 64 * 1024;
+const PTY_VISIBLE_WRITE_BURST = 3;
+
+interface ScheduledTerminalWrite {
+  token: symbol;
+  isVisible: () => boolean;
+  flush: () => void;
+}
+
+const scheduledTerminalWrites = new Map<symbol, ScheduledTerminalWrite>();
+let terminalWriteSchedulerRafId: number | null = null;
+let visibleWriteBurst = 0;
+
+const scheduleGlobalTerminalWrite = () => {
+  if (terminalWriteSchedulerRafId !== null || scheduledTerminalWrites.size === 0) return;
+  terminalWriteSchedulerRafId = requestAnimationFrame(() => {
+    terminalWriteSchedulerRafId = null;
+    const entries = [...scheduledTerminalWrites.values()];
+    const visible = entries.find((entry) => entry.isVisible());
+    const hidden = entries.find((entry) => !entry.isVisible());
+    const selected = visible && (!hidden || visibleWriteBurst < PTY_VISIBLE_WRITE_BURST)
+      ? visible
+      : hidden ?? visible;
+    if (!selected) return;
+    visibleWriteBurst = selected.isVisible() ? visibleWriteBurst + 1 : 0;
+    scheduledTerminalWrites.delete(selected.token);
+    selected.flush();
+    if (scheduledTerminalWrites.size === 0) {
+      visibleWriteBurst = 0;
+      return;
+    }
+    scheduleGlobalTerminalWrite();
+  });
+};
+
+const requestGlobalTerminalWrite = (entry: ScheduledTerminalWrite) => {
+  scheduledTerminalWrites.set(entry.token, entry);
+  scheduleGlobalTerminalWrite();
+};
+
+const cancelGlobalTerminalWrite = (token: symbol) => {
+  scheduledTerminalWrites.delete(token);
+  if (scheduledTerminalWrites.size === 0) {
+    if (terminalWriteSchedulerRafId !== null) {
+      cancelAnimationFrame(terminalWriteSchedulerRafId);
+      terminalWriteSchedulerRafId = null;
+    }
+    visibleWriteBurst = 0;
+  }
+};
 
 type NormalizeTerminalOutput = (text: string) => string;
 type TransformTerminalOutput = (text: string) => string;
@@ -123,7 +172,7 @@ export function useTerminalDisplay({
   const fitRafRef = useRef<number | null>(null);
   const needsViewportRefreshRef = useRef(false);
   const ptyPendingChunksRef = useRef<PendingTerminalWrite[]>([]);
-  const ptyWriteRafIdRef = useRef<number | null>(null);
+  const ptyWriteScheduleTokenRef = useRef(Symbol(sessionId));
   const ptyWriteInProgressRef = useRef(false);
   const ptyUnlistenRef = useRef<UnlistenFn | null>(null);
   const lastObservedSizeRef = useRef<{ width: number; height: number } | null>(null);
@@ -263,15 +312,17 @@ export function useTerminalDisplay({
       if (
         cancelled
         || ptyWriteInProgressRef.current
-        || ptyWriteRafIdRef.current !== null
         || ptyPendingChunksRef.current.length === 0
       ) {
         return;
       }
-      ptyWriteRafIdRef.current = requestAnimationFrame(flushPendingWrites);
+      requestGlobalTerminalWrite({
+        token: ptyWriteScheduleTokenRef.current,
+        isVisible: () => isVisibleRef.current,
+        flush: flushPendingWrites,
+      });
     };
     const flushPendingWrites = () => {
-      ptyWriteRafIdRef.current = null;
       if (cancelled || ptyWriteInProgressRef.current) return;
       const terminal = terminalRef.current;
       if (!terminal) return;
@@ -419,10 +470,7 @@ export function useTerminalDisplay({
       cancelled = true;
       bufferedLivePayloads.length = 0;
       forwardPtyResizeRef.current = true;
-      if (ptyWriteRafIdRef.current !== null) {
-        cancelAnimationFrame(ptyWriteRafIdRef.current);
-        ptyWriteRafIdRef.current = null;
-      }
+      cancelGlobalTerminalWrite(ptyWriteScheduleTokenRef.current);
       ptyPendingChunksRef.current = [];
       ptyWriteInProgressRef.current = false;
       ptyUnlistenRef.current?.();
@@ -492,10 +540,7 @@ export function useTerminalDisplay({
 
   const resetOutputState = () => {
     cancelPendingViewportRestore();
-    if (ptyWriteRafIdRef.current !== null) {
-      cancelAnimationFrame(ptyWriteRafIdRef.current);
-      ptyWriteRafIdRef.current = null;
-    }
+    cancelGlobalTerminalWrite(ptyWriteScheduleTokenRef.current);
     ptyPendingChunksRef.current = [];
     ptyWriteInProgressRef.current = false;
     forwardPtyResizeRef.current = true;

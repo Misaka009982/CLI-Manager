@@ -2,6 +2,10 @@
 
 ## [TEMP]
 
+### 终端输出调度
+
+- 修复多个终端持续输出时各自调度 xterm 写入导致同一浏览器帧集中占用主线程的问题；daemon live 输出改为 64 KiB 有界聚合，前端按可见优先且隐藏不饥饿的全局队列每帧只启动一个写入批次，并保持 Replay、Reset 与 write callback 后 ACK 时序不变。
+
 ### 终端会话恢复
 
 - 修复普通 Shell 会话恢复旧画面时，终端尺寸与快照光标坐标不同步，导致后续 PowerShell、CMD、Git Bash 或 WSL 输出覆盖已有文字的问题。
