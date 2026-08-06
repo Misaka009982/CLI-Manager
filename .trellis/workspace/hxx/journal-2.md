@@ -567,3 +567,37 @@ Claude、Codex、Pi、Grok 的非强制配置目录解析在已选目录失效�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 76: 修复 Grok Home 隔离并恢复旧会话
+
+**Date**: 2026-08-06
+**Task**: 修复 Grok Home 隔离并恢复旧会话
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+所有供应商作用域保留真实 GROK_HOME；endpoint/key/model 改用进程级覆盖，并在清理旧快照前备份和恢复历史会话。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f38bd412` | (see git log) |
+| `f4ae4c5e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
