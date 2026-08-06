@@ -425,7 +425,10 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const worktrees = useWorktreeStore((state) => state.worktrees);
 
   const [latestSession, setLatestSession] = useState<HistorySessionDetail | null>(null);
-  const [todayStats, setTodayStats] = useState<TodayProjectStats | null>(null);
+  const [todayStatsState, setTodayStatsState] = useState<{
+    scopeKey: string;
+    value: TodayProjectStats | null;
+  } | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [, setNowTick] = useState(0);
   const [refreshSeq, setRefreshSeq] = useState(0);
@@ -488,6 +491,21 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     ),
     [latestSession?.project_key, todayUsageProjectPaths]
   );
+  const todayUsageScopeKey = useMemo(
+    () => todayUsageScope
+      ? JSON.stringify([
+          project?.id ?? "",
+          sourceFilter ?? "",
+          todayUsageScope.projectKey,
+          todayUsageScope.projectPaths,
+        ])
+      : null,
+    [project?.id, sourceFilter, todayUsageScope]
+  );
+  // 统计结果必须与当前项目作用域一致；切换项目后旧结果立即失效，等待新请求返回。
+  const todayStats = todayStatsState?.scopeKey === todayUsageScopeKey
+    ? todayStatsState.value
+    : null;
 
   // 「会话级」卡片只认 hook 绑定的当前 CLI 会话；未绑定时保持空态。
   // 「今日项目用量」仍按项目聚合，不受此门控影响。
@@ -611,12 +629,12 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   // 今日项目用量：会话数据变化时同步刷新（与终端 CLI 来源保持一致）
   // Issue #137：聚合主项目 + worktree 路径，主仓库 Tab 与 worktree Tab 看到同一套「今日项目」合计。
   useEffect(() => {
-    if (!panelActive || !todayUsageScope) {
-      setTodayStats(null);
+    if (!panelActive || !todayUsageScope || !todayUsageScopeKey) {
+      setTodayStatsState(null);
       return;
     }
     if (isSshProject) {
-      setTodayStats(null);
+      setTodayStatsState(null);
       return;
     }
     let cancelled = false;
@@ -627,16 +645,20 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
           sourceFilter,
           todayUsageScope.projectPaths
         );
-        if (!cancelled) setTodayStats(result);
+        if (!cancelled) {
+          setTodayStatsState({ scopeKey: todayUsageScopeKey, value: result });
+        }
       } catch {
-        if (!cancelled) setTodayStats(null);
+        if (!cancelled) {
+          setTodayStatsState({ scopeKey: todayUsageScopeKey, value: null });
+        }
       }
     };
     void loadTodayStats();
     return () => {
       cancelled = true;
     };
-  }, [isSshProject, latestSession?.updated_at, panelActive, project, sourceFilter, todayUsageScope]);
+  }, [isSshProject, latestSession?.updated_at, panelActive, project, sourceFilter, todayUsageScope, todayUsageScopeKey]);
 
   // 空闲时数据轮询返回 unchanged 不会触发重渲染，需独立 tick 让头部相对时间文案随时间走字
   useEffect(() => {
