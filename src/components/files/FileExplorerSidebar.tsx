@@ -48,6 +48,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
 import { Portal } from "../ui/Portal";
 import { ChevronRight, Copy, EyeOff, File, FileCode, Folder, FolderOpen, FolderPlus, Pencil, RefreshCw, Search, Trash2, X } from "../icons";
 import { TERM } from "../stats/termStatsUi";
+import { TerminalPanelHeader } from "../terminal/TerminalPanelHeader";
 
 interface FileExplorerSidebarProps {
   mode?: "sidebar" | "panel";
@@ -1685,6 +1686,65 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const searchLabel = searchMode === "content" ? t("files.searchCodePlaceholder") : t("files.searchPlaceholder");
   const searchToggleLabel = searchControlsVisible ? t("files.hideSearch") : searchLabel;
   const displayPathName = getDisplayPathName(readOnly ? project.remote_path : project.path);
+  const hasHeaderExtras = searchControlsVisible || readOnly || Boolean(clipboard);
+  const headerActions = (
+    <>
+      <button
+        className="ui-file-tooltip ui-icon-action"
+        data-tooltip={searchToggleLabel}
+        aria-label={searchToggleLabel}
+        aria-pressed={searchControlsVisible}
+        onClick={toggleSearchControls}
+      >
+        {searchControlsVisible ? <EyeOff size={13} /> : <Search size={13} />}
+      </button>
+      <button className="ui-file-tooltip ui-icon-action" data-tooltip={t("common.refresh")} aria-label={t("files.refreshList")} onClick={() => void refresh()}>
+        <RefreshCw size={13} />
+      </button>
+      <button className="ui-file-tooltip ui-icon-action" data-tooltip={closeLabel} aria-label={closeLabel} onClick={handleClose}>
+        <X size={14} />
+      </button>
+    </>
+  );
+  const headerExtras = (
+    <>
+      {searchControlsVisible && (
+        <div className="ui-file-search-input-shell flex items-center gap-1 rounded-md border border-border bg-surface-container-lowest px-1.5">
+          <Search size={13} className="text-text-muted" />
+          <input
+            ref={searchInputRef}
+            className="min-w-0 flex-1 bg-transparent py-1 text-xs text-on-surface outline-none"
+            value={searchQuery}
+            aria-label={searchLabel}
+            placeholder={searchLabel}
+            onChange={(event) => void setSearchQuery(event.currentTarget.value)}
+          />
+          <div className="ui-file-search-mode-inline flex shrink-0 items-center gap-0.5 rounded border border-border bg-surface-container-low p-0.5">
+            {SEARCH_MODES.map((searchModeOption) => {
+              const active = searchMode === searchModeOption.value;
+              return (
+                <button
+                  key={searchModeOption.value}
+                  type="button"
+                  className={[
+                    "ui-file-search-mode-option rounded px-1.5 py-0.5 text-[10px] leading-4 transition-colors",
+                    active ? "text-on-surface" : "text-text-muted hover:text-on-surface",
+                  ].join(" ")}
+                  data-selected={active ? "true" : "false"}
+                  aria-pressed={active}
+                  onClick={() => setSearchMode(searchModeOption.value)}
+                >
+                  {t(searchModeOption.labelKey)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {readOnly && <div className="mt-1 text-[10px] text-text-muted">{t("files.readOnly")}</div>}
+      {!readOnly && clipboard && <div className="mt-1 truncate text-[10px] text-text-muted">{clipboard.mode === "copy" ? t("files.clipboard.copy") : t("files.clipboard.move")}：{clipboard.name}</div>}
+    </>
+  );
   const panelStyle = mode === "panel"
     ? ({
         "--surface-container": TERM.card,
@@ -1729,69 +1789,33 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
           </div>
         </Portal>
       )}
-      <div className="shrink-0 border-b border-border px-2 py-2">
-        <div className="mb-2 flex items-center gap-2">
-          <span className="flex shrink-0" onDoubleClick={readOnly ? undefined : openProjectRootFolder}>
-            <Folder size={15} className="ui-file-explorer-root-icon" />
-          </span>
-          <div className="min-w-0 flex-1" onDoubleClick={readOnly ? undefined : openProjectRootFolder}>
-            <div className="ui-file-explorer-title truncate text-xs font-semibold">{project.name}</div>
-            <div className="ui-file-explorer-subtitle truncate text-[10px]">{displayPathName}</div>
-          </div>
-          <button
-            className="ui-file-tooltip ui-icon-action"
-            data-tooltip={searchToggleLabel}
-            aria-label={searchToggleLabel}
-            aria-pressed={searchControlsVisible}
-            onClick={toggleSearchControls}
-          >
-            {searchControlsVisible ? <EyeOff size={13} /> : <Search size={13} />}
-          </button>
-          <button className="ui-file-tooltip ui-icon-action" data-tooltip={t("common.refresh")} aria-label={t("files.refreshList")} onClick={() => void refresh()}>
-            <RefreshCw size={13} />
-          </button>
-          <button className="ui-file-tooltip ui-icon-action" data-tooltip={closeLabel} aria-label={closeLabel} onClick={handleClose}>
-            <X size={14} />
-          </button>
-        </div>
-        {searchControlsVisible && (
-          <>
-            <div className="ui-file-search-input-shell flex items-center gap-1 rounded-md border border-border bg-surface-container-lowest px-1.5">
-              <Search size={13} className="text-text-muted" />
-              <input
-                ref={searchInputRef}
-                className="min-w-0 flex-1 bg-transparent py-1 text-xs text-on-surface outline-none"
-                value={searchQuery}
-                aria-label={searchLabel}
-                placeholder={searchLabel}
-                onChange={(event) => void setSearchQuery(event.currentTarget.value)}
-              />
-              <div className="ui-file-search-mode-inline flex shrink-0 items-center gap-0.5 rounded border border-border bg-surface-container-low p-0.5">
-                {SEARCH_MODES.map((mode) => {
-                  const active = searchMode === mode.value;
-                  return (
-                    <button
-                      key={mode.value}
-                      type="button"
-                      className={[
-                        "ui-file-search-mode-option rounded px-1.5 py-0.5 text-[10px] leading-4 transition-colors",
-                        active ? "text-on-surface" : "text-text-muted hover:text-on-surface",
-                      ].join(" ")}
-                      data-selected={active ? "true" : "false"}
-                      aria-pressed={active}
-                      onClick={() => setSearchMode(mode.value)}
-                    >
-                      {t(mode.labelKey)}
-                    </button>
-                  );
-                })}
-              </div>
+      {mode === "panel" ? (
+        <>
+          <TerminalPanelHeader
+            icon={<Folder size={14} />}
+            accent={TERM.blue}
+            title={project.name}
+            subtitle={displayPathName}
+            onTitleDoubleClick={readOnly ? undefined : openProjectRootFolder}
+            actions={headerActions}
+          />
+          {hasHeaderExtras && <div className="shrink-0 border-b border-border px-2 py-2">{headerExtras}</div>}
+        </>
+      ) : (
+        <div className="shrink-0 border-b border-border px-2 py-2">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="flex shrink-0" onDoubleClick={readOnly ? undefined : openProjectRootFolder}>
+              <Folder size={15} className="ui-file-explorer-root-icon" />
+            </span>
+            <div className="min-w-0 flex-1" onDoubleClick={readOnly ? undefined : openProjectRootFolder}>
+              <div className="ui-file-explorer-title truncate text-xs font-semibold">{project.name}</div>
+              <div className="ui-file-explorer-subtitle truncate text-[10px]">{displayPathName}</div>
             </div>
-          </>
-        )}
-        {readOnly && <div className="mt-1 text-[10px] text-text-muted">{t("files.readOnly")}</div>}
-        {!readOnly && clipboard && <div className="mt-1 truncate text-[10px] text-text-muted">{clipboard.mode === "copy" ? t("files.clipboard.copy") : t("files.clipboard.move")}：{clipboard.name}</div>}
-      </div>
+            {headerActions}
+          </div>
+          {headerExtras}
+        </div>
+      )}
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div

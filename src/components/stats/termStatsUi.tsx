@@ -354,13 +354,17 @@ export function StatChip({
   dotColor,
   label,
   value,
+  valueSuffix,
   valueColor,
 }: {
   dotColor: string;
   label: string;
   value: string;
+  valueSuffix?: string;
   valueColor?: string;
 }) {
+  const displayValue = valueSuffix ? `${value}/${valueSuffix}` : value;
+
   return (
     <div
       className="flex min-w-0 flex-col gap-0.5 rounded-lg px-2 py-1.5"
@@ -370,8 +374,13 @@ export function StatChip({
         <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: dotColor }} />
         <span className="truncate">{label}</span>
       </span>
-      <span className="truncate text-[12px] font-bold" style={{ color: valueColor ?? TERM.fg }} title={value}>
+      <span className="truncate text-[12px] font-bold" style={{ color: valueColor ?? TERM.fg }} title={displayValue}>
         {value}
+        {valueSuffix ? (
+          <span className="ml-0.5 text-[9px] font-medium" style={{ color: TERM.dim }}>
+            /{valueSuffix}
+          </span>
+        ) : null}
       </span>
     </div>
   );

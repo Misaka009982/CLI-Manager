@@ -1055,6 +1055,34 @@ const { suffixParts, leaf: displayNode } = collectCompactDirectoryChain(node);
 
 ## Styling Patterns
 
+### Convention: Terminal auxiliary panels share one themed header
+
+**What**: Realtime stats, Git changes, project files in `mode="panel"`, replay, and system resources must render their top title through `TerminalPanelHeader`. The shared header uses `TERM_PANEL.bg` as its fallback and mirrors the terminal pane Tab bar gradient in both light and dark terminal themes.
+
+**Why**: These panels share one resizable terminal-side shell. Independent header markup drifts in height, icon scale, border color, and light-skin background, making adjacent Tab and title bands look unrelated.
+
+**Contracts**:
+
+- Keep the shared header at the same 36 px height and background treatment as `.ui-workspan-tabbar`. Keep its 24 px icon container, 12 px title, and terminal-theme border unchanged.
+- Preserve panel-owned titles, subtitles, badges, and actions through component slots; do not move data loading or interaction state into the header component.
+- Keep panel body backgrounds independent. Patterned or card backgrounds start below the header.
+- `FileExplorerSidebar` uses the shared header only in `mode="panel"`; the primary left-sidebar header keeps its existing navigation behavior and styling.
+
+```tsx
+// Correct: shared shell, panel-owned content.
+<TerminalPanelHeader
+  icon={<GitBranch size={13} />}
+  accent={TERM_PANEL.yellow}
+  title={t("git.title")}
+  actions={headerActions}
+/>
+
+// Wrong: another one-off title row that inherits a body-only background.
+<div className="px-2 py-1 text-[15px] font-bold">{t("git.title")}</div>
+```
+
+**Tests**: Run `npx tsc --noEmit`; manually compare all five panels in merged and independent modes, at their minimum widths, with one dark and one light terminal-side skin.
+
 ### Convention: Stats charts use a shared semantic palette
 
 **What**: Stats and usage-analysis chart components should import semantic colors from `src/components/stats/statsPalette.ts` instead of hard-coding one-off hex/RGBA colors for token series, peak markers, cost fills, or chart tooltips.

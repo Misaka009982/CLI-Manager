@@ -49,6 +49,7 @@ import {
   resolveTodayUsageProjectPaths,
 } from "../../lib/historyProjectPaths";
 import { TerminalSquare } from "../icons";
+import { TerminalPanelHeader } from "./TerminalPanelHeader";
 
 interface TerminalStatsPanelProps {
   activeSessionId: string | null;
@@ -784,8 +785,8 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   };
 
   const containerClassName = embedded
-    ? "flex h-full min-h-0 flex-col gap-2 overflow-y-auto p-2 font-mono ui-thin-scroll"
-    : "relative z-[1] flex w-[188px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-border p-2 font-mono ui-thin-scroll";
+    ? "flex h-full min-h-0 flex-col overflow-hidden font-mono"
+    : "relative z-[1] flex w-[188px] shrink-0 flex-col overflow-hidden border-l border-border font-mono";
   const Container = embedded ? "div" : "aside";
   const containerStyle = {
     backgroundColor: TERM.bg,
@@ -797,16 +798,16 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       className={containerClassName}
       style={containerStyle}
     >
-      <div className="flex items-center justify-between px-1 py-0.5">
-        <span className="flex items-center gap-2 text-[11px] font-bold" style={{ color: TERM.fg }}>
-          <LiveDot />
-          {t("termStats.live")}
-          {sourceFilter && (
-            <SourcePill source={sourceFilter} />
-          )}
-        </span>
-        <span className="flex items-center gap-1.5 text-[10px]" style={{ color: TERM.dim }}>
+      <TerminalPanelHeader
+        icon={<LiveDot />}
+        accent={TERM.cyan}
+        title={t("termStats.live")}
+        titleAccessory={sourceFilter ? <SourcePill source={sourceFilter} /> : undefined}
+        actions={(
+          <>
+            <span className="text-[10px]" style={{ color: TERM.dim }}>
           {updatedAt && <span>{formatRelativeTime(updatedAt)}</span>}
+            </span>
           <button
             onClick={handleRefresh}
             className="ui-focus-ring rounded p-0.5"
@@ -816,20 +817,23 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
           >
             <RefreshCw size={11} />
           </button>
-        </span>
-      </div>
+          </>
+        )}
+      />
 
-      {!displayProjectPath ? (
-        <EmptyHint text={t("termStats.noProject")} />
-      ) : !displaySession ? (
-        <EmptyHint text={t("termStats.noSessionRecord", { source: sourceFilter ?? "CLI" })} />
-      ) : !hasVisibleCard ? (
-        <EmptyHint text={t("termStats.noVisibleCards")} />
-      ) : (
-        <>
-          {terminalStatsCardOrder.map(renderStatsCard)}
-        </>
-      )}
+      <div className="ui-thin-scroll flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+        {!displayProjectPath ? (
+          <EmptyHint text={t("termStats.noProject")} />
+        ) : !displaySession ? (
+          <EmptyHint text={t("termStats.noSessionRecord", { source: sourceFilter ?? "CLI" })} />
+        ) : !hasVisibleCard ? (
+          <EmptyHint text={t("termStats.noVisibleCards")} />
+        ) : (
+          <>
+            {terminalStatsCardOrder.map(renderStatsCard)}
+          </>
+        )}
+      </div>
       {diffFileChange && displayProjectPath && (
         <DiffViewerModal
           open={Boolean(diffFileChange)}
