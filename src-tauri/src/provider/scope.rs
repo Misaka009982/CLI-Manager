@@ -1,5 +1,9 @@
 use super::grok;
-use crate::{app_paths, provider::repository};
+use crate::{
+    app_paths,
+    provider::{home, repository},
+    wsl,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
@@ -16,6 +20,7 @@ const CODEX_PROVIDER_ENV_KEY: &str = "CLI_MANAGER_PROVIDER_KEY";
 const CODEX_SCOPED_PROVIDER_NAME: &str = "cli_manager_scope";
 const GROK_PROVIDER_ENV_KEY: &str = "XAI_API_KEY";
 const GROK_BASE_URL_ENV_KEY: &str = "GROK_MODELS_BASE_URL";
+const GROK_HISTORY_BACKUP_DIR: &str = "provider-grok-history";
 const SNAPSHOT_APP_TYPES: [&str; 3] = ["claude", "codex", "grokbuild"];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -396,6 +401,162 @@ fn write_snapshot_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::write(path, bytes).map_err(|_| "provider_snapshot_write_failed".to_string())
 }
 
+fn copy_regular_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination)
+        .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+    let entries = fs::read_dir(source)
+        .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+        let target = destination.join(entry.file_name());
+        if file_type.is_symlink() {
+            return Err("provider_snapshot_history_recovery_unsafe_entry".to_string());
+        }
+        if file_type.is_dir() {
+            copy_regular_tree(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), target)
+                .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+        } else {
+            return Err("provider_snapshot_history_recovery_unsafe_entry".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn stage_directory_copy(source: &Path, destination: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
+            return Ok(())
+        }
+        Ok(_) => return Err("provider_snapshot_history_recovery_conflict".to_string()),
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err("provider_snapshot_history_recovery_failed".to_string())
+        }
+        Err(_) => {}
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "provider_snapshot_history_recovery_failed".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+    let name = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "provider_snapshot_history_recovery_failed".to_string())?;
+    let staging = parent.join(format!(".{name}.recovery-{}", Uuid::new_v4()));
+    let result = copy_regular_tree(source, &staging).and_then(|_| {
+        fs::rename(&staging, destination)
+            .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())
+    });
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result
+}
+
+fn contains_grok_session_directories(sessions_root: &Path) -> Result<bool, String> {
+    let Ok(projects) = fs::read_dir(sessions_root) else {
+        return Ok(false);
+    };
+    for project in projects {
+        let project =
+            project.map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+        if !project
+            .file_type()
+            .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?
+            .is_dir()
+        {
+            continue;
+        }
+        let sessions = fs::read_dir(project.path())
+            .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+        for session in sessions {
+            if session
+                .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?
+                .file_type()
+                .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?
+                .is_dir()
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn restore_grok_sessions_from_backup(
+    backup_sessions: &Path,
+    target_sessions: &Path,
+) -> Result<(), String> {
+    fs::create_dir_all(target_sessions)
+        .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+    let projects = fs::read_dir(backup_sessions)
+        .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+    for project in projects {
+        let project =
+            project.map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+        let project_type = project
+            .file_type()
+            .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+        if project_type.is_symlink() {
+            return Err("provider_snapshot_history_recovery_unsafe_entry".to_string());
+        }
+        if !project_type.is_dir() {
+            continue;
+        }
+        let target_project = target_sessions.join(project.file_name());
+        fs::create_dir_all(&target_project)
+            .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+        let sessions = fs::read_dir(project.path())
+            .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+        for session in sessions {
+            let session =
+                session.map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+            let session_type = session
+                .file_type()
+                .map_err(|_| "provider_snapshot_history_recovery_failed".to_string())?;
+            if session_type.is_symlink() {
+                return Err("provider_snapshot_history_recovery_unsafe_entry".to_string());
+            }
+            if !session_type.is_dir() {
+                continue;
+            }
+            stage_directory_copy(&session.path(), &target_project.join(session.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
+fn recover_legacy_grok_history_to(
+    snapshot_root: &Path,
+    backup_root: &Path,
+    target_sessions: &Path,
+) -> Result<(), String> {
+    let source_sessions = snapshot_root.join("grok").join("sessions");
+    if !contains_grok_session_directories(&source_sessions)? {
+        return Ok(());
+    }
+    if wsl::parse_wsl_unc_path(&target_sessions.to_string_lossy()).is_some() {
+        return Err("provider_snapshot_history_recovery_wsl_unsupported".to_string());
+    }
+    let backup_sessions = backup_root.join("sessions");
+    stage_directory_copy(&source_sessions, &backup_sessions)?;
+    restore_grok_sessions_from_backup(&backup_sessions, target_sessions)
+}
+
+fn recover_legacy_grok_history(snapshot_root: &Path, snapshot_id: &str) -> Result<(), String> {
+    let backup_root = app_paths::history_backups_dir()?
+        .join(GROK_HISTORY_BACKUP_DIR)
+        .join(snapshot_id);
+    let target_sessions = home::default_history_root("grok")
+        .ok_or_else(|| "provider_snapshot_history_recovery_target_missing".to_string())?;
+    recover_legacy_grok_history_to(snapshot_root, &backup_root, &target_sessions)
+}
+
 fn claude_snapshot_bytes(effective: &Value) -> Result<Vec<u8>, String> {
     let mut bytes = serde_json::to_vec_pretty(effective)
         .map_err(|_| "provider_snapshot_write_failed".to_string())?;
@@ -611,6 +772,9 @@ pub(crate) async fn release_snapshot(snapshot_id: String) -> Result<(), String> 
         if manifest.snapshot_id != snapshot_id || manifest.app_type != app_type {
             continue;
         }
+        if app_type == "grokbuild" {
+            recover_legacy_grok_history(&root, snapshot_id)?;
+        }
         fs::remove_dir_all(root).map_err(|_| "provider_snapshot_release_failed".to_string())?;
     }
     Ok(())
@@ -659,6 +823,9 @@ pub(crate) async fn garbage_collect_snapshots(
             };
             if manifest.snapshot_id != snapshot_id || manifest.app_type != app_type {
                 continue;
+            }
+            if app_type == "grokbuild" {
+                recover_legacy_grok_history(&path, snapshot_id)?;
             }
             fs::remove_dir_all(path).map_err(|_| "provider_snapshot_release_failed".to_string())?;
         }
@@ -899,6 +1066,91 @@ mod tests {
             env_vars.get(GROK_PROVIDER_ENV_KEY).map(String::as_str),
             Some("test-secret")
         );
+    }
+
+    #[test]
+    fn legacy_grok_history_is_backed_up_and_restored_idempotently() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = directory.path().join("snapshot");
+        let source_session = snapshot
+            .join("grok")
+            .join("sessions")
+            .join("project")
+            .join("session-1");
+        fs::create_dir_all(&source_session).unwrap();
+        fs::write(source_session.join("updates.jsonl"), "original\n").unwrap();
+        let backup = directory.path().join("backup");
+        let target = directory.path().join("real-sessions");
+
+        recover_legacy_grok_history_to(&snapshot, &backup, &target).unwrap();
+        recover_legacy_grok_history_to(&snapshot, &backup, &target).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(backup.join("sessions/project/session-1/updates.jsonl")).unwrap(),
+            "original\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("project/session-1/updates.jsonl")).unwrap(),
+            "original\n"
+        );
+    }
+
+    #[test]
+    fn legacy_grok_history_never_overwrites_existing_real_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = directory.path().join("snapshot");
+        let source_session = snapshot
+            .join("grok")
+            .join("sessions")
+            .join("project")
+            .join("session-1");
+        fs::create_dir_all(&source_session).unwrap();
+        fs::write(source_session.join("updates.jsonl"), "legacy\n").unwrap();
+        let backup = directory.path().join("backup");
+        let target_session = directory
+            .path()
+            .join("real-sessions")
+            .join("project")
+            .join("session-1");
+        fs::create_dir_all(&target_session).unwrap();
+        fs::write(target_session.join("updates.jsonl"), "current\n").unwrap();
+
+        recover_legacy_grok_history_to(&snapshot, &backup, &directory.path().join("real-sessions"))
+            .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(target_session.join("updates.jsonl")).unwrap(),
+            "current\n"
+        );
+        assert_eq!(
+            fs::read_to_string(backup.join("sessions/project/session-1/updates.jsonl")).unwrap(),
+            "legacy\n"
+        );
+    }
+
+    #[test]
+    fn legacy_grok_history_wsl_target_fails_before_source_or_backup_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = directory.path().join("snapshot");
+        let source_session = snapshot
+            .join("grok")
+            .join("sessions")
+            .join("project")
+            .join("session-1");
+        fs::create_dir_all(&source_session).unwrap();
+        fs::write(source_session.join("updates.jsonl"), "legacy\n").unwrap();
+        let backup = directory.path().join("backup");
+
+        assert_eq!(
+            recover_legacy_grok_history_to(
+                &snapshot,
+                &backup,
+                Path::new(r"\\wsl.localhost\Ubuntu\home\tester\.grok\sessions"),
+            ),
+            Err("provider_snapshot_history_recovery_wsl_unsupported".to_string())
+        );
+        assert!(source_session.join("updates.jsonl").is_file());
+        assert!(!backup.exists());
     }
 
     #[test]

@@ -675,3 +675,73 @@ provider scope -> manifest(base URL/model) + protected key file
   -> real GROK_HOME unchanged
   -> GROK_MODELS_BASE_URL + XAI_API_KEY + grok --model <model>
 ```
+
+## Scenario: Recover history written by legacy Grok snapshots (2026-08-06)
+
+### 1. Scope / Trigger
+
+- Trigger: release or garbage collection encounters an old Grok snapshot whose
+  generated `grok/sessions` contains session directories.
+
+### 2. Signatures
+
+```text
+release_snapshot(snapshotId) -> Result<(), provider_snapshot_history_recovery_*>
+garbage_collect_snapshots(activeSnapshotIds) -> Result<(), provider_snapshot_history_recovery_*>
+backup root = <cli-manager>/backups/provider-grok-history/<snapshotId>/sessions
+```
+
+### 3. Contracts
+
+- Snapshot deletion is ordered after recovery: atomically stage a durable
+  backup, copy only absent project/session directories into the current real
+  Grok history root, then delete the snapshot.
+- Existing destination sessions are never overwritten. The durable backup is
+  retained after success and is the manual recovery source for conflicts.
+- Copy only regular files/directories and reject symlinks or special entries.
+- Any backup/restore failure aborts deletion, so source history remains
+  retryable. WSL UNC targets fail closed because host `std::fs` access is not a
+  valid WSL history operation.
+- New Grok snapshots contain no generated Home/sessions and take the ordinary
+  empty-recovery path.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| No legacy session directory | Continue normal snapshot deletion |
+| Existing real session ID | Keep real session; retain legacy copy in backup |
+| Backup/restore I/O failure | `provider_snapshot_history_recovery_failed`; keep source snapshot |
+| Symlink/special entry | `provider_snapshot_history_recovery_unsafe_entry`; keep source snapshot |
+| WSL UNC target | `provider_snapshot_history_recovery_wsl_unsupported`; keep source snapshot |
+
+### 5. Good / Base / Bad Cases
+
+- Good: legacy session is backed up, restored under the same project/session
+  path, then the obsolete snapshot is removed.
+- Base: retry after successful backup/restore is idempotent and changes no
+  existing destination bytes.
+- Bad: recursively delete a Grok snapshot before checking `grok/sessions`.
+
+### 6. Tests Required
+
+- Assert backup and restore preserve session bytes and repeated calls succeed.
+- Assert an existing real session is not overwritten while backup keeps the
+  legacy bytes.
+- Assert WSL target rejection occurs before backup/source mutation.
+- Run provider scope/module tests and `cargo check`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+release/GC -> remove_dir_all(snapshot) -> legacy Grok conversation is lost
+```
+
+#### Correct
+
+```text
+release/GC -> backup -> restore missing sessions -> remove snapshot
+           -> on any error: keep snapshot
+```
