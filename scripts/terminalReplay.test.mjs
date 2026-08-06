@@ -551,7 +551,11 @@ test("continuous live output yields between bounded xterm writes", async () => {
   flushNextAnimationFrame();
 
   assert.deepEqual(events, [`write:${firstText}`]);
+  assert.deepEqual(commits, []);
   terminal.finishNextWrite();
+  assert.deepEqual(commits, [
+    { sequence: 3, charCount: firstText.length },
+  ]);
   flushNextAnimationFrame();
   assert.deepEqual(events, [`write:${firstText}`, `write:${secondText}`]);
   terminal.finishNextWrite();
