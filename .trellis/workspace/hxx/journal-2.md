@@ -534,3 +534,36 @@ Claude、Codex、Pi、Grok 的非强制配置目录解析在已选目录失效�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 75: 新增 Codex 运行时光标隐藏开关
+
+**Date**: 2026-08-06
+**Task**: 新增 Codex 运行时光标隐藏开关
+**Branch**: `master`
+
+### Summary
+
+在 Windows 开发者设置中新增默认关闭的隐藏 CODEX 运行时光标开关，复用 V1.3.0 前 80ms 光标显示合并逻辑，仅对 Codex 会话生效；补齐中英文文案、设置持久化、文档和回归检查。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `66e71e22` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

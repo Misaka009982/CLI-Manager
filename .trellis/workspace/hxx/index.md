@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 74
+- **Total Sessions**: 75
 - **Last Active**: 2026-08-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~536 | Active |
+| `journal-2.md` | ~569 | Active |
 | `journal-1.md` | ~2014 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 75 | 2026-08-06 | 新增 Codex 运行时光标隐藏开关 | `66e71e22` | `master` |
 | 74 | 2026-08-06 | 修复远程连接设置页面响应式布局 | `89c84ce2` | `master` |
 | 73 | 2026-07-31 | 修复终端光标原生显隐 | `5f562763` | `master` |
 | 72 | 2026-07-31 | 增加资源持续上涨诊断日志 | `ce3c9360` | `master` |
