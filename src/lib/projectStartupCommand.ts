@@ -70,6 +70,24 @@ export function withCodexLightTuiTheme(command?: string): string | undefined {
   return `${match[1]} ${CODEX_LIGHT_TUI_THEME_ARG}${normalized.slice(match[1].length)}`;
 }
 
+export function withCodexConfigOverrides(
+  command: string | undefined,
+  overrides: string[],
+): string | undefined {
+  const normalized = normalizeDirectCodexStartupCommand(command);
+  if (!normalized || overrides.length === 0) return normalized;
+  const match = DIRECT_CODEX_COMMAND_PATTERN.exec(normalized);
+  if (!match) return undefined;
+
+  const args = overrides.map((override) => {
+    if (!override.trim() || /["\r\n\0$`%!^&|<>]/.test(override)) {
+      throw new Error("provider_codex_override_invalid");
+    }
+    return `-c "${override}"`;
+  });
+  return `${match[1]} ${args.join(" ")}${normalized.slice(match[1].length)}`;
+}
+
 function appendProviderOverrideArgs(
   baseCommand: string,
   project: Pick<Project, "cli_tool" | "provider_overrides" | "shell">,

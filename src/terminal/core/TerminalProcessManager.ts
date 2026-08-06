@@ -24,7 +24,6 @@ export interface TerminalCodexProviderLaunchConfig {
   appType: "codex";
   providerId: string;
   snapshotId: string;
-  generatedHome: string;
 }
 
 export interface TerminalGrokProviderLaunchConfig {

@@ -13,6 +13,7 @@ use uuid::Uuid;
 const GENERATED_ROOT: &str = "generated";
 const SNAPSHOT_KEY_FILE: &str = "provider.key";
 const CODEX_PROVIDER_ENV_KEY: &str = "CLI_MANAGER_PROVIDER_KEY";
+const CODEX_SCOPED_PROVIDER_NAME: &str = "cli_manager_scope";
 const GROK_PROVIDER_ENV_KEY: &str = "XAI_API_KEY";
 const SNAPSHOT_APP_TYPES: [&str; 3] = ["claude", "codex", "grokbuild"];
 
@@ -63,6 +64,7 @@ pub(crate) struct ProviderLaunchSnapshot {
     pub snapshot_id: String,
     pub claude_settings_path: Option<String>,
     pub generated_home: Option<String>,
+    pub config_overrides: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -437,14 +439,66 @@ fn path_matches(expected: &Path, actual: Option<&str>) -> bool {
         .is_some_and(|path| path == expected)
 }
 
+fn codex_toml_literal(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().any(|ch| {
+            ch.is_control()
+                || matches!(
+                    ch,
+                    '\'' | '"' | '%' | '!' | '^' | '&' | '|' | '<' | '>' | '$' | '`'
+                )
+        })
+    {
+        return Err("provider_config_invalid".to_string());
+    }
+    Ok(format!("'{value}'"))
+}
+
+fn codex_config_overrides(provider_id: &str, effective: &Value) -> Result<Vec<String>, String> {
+    let settings =
+        serde_json::to_string(effective).map_err(|_| "provider_config_invalid".to_string())?;
+    let runtime = crate::provider::runtime::parse_runtime_config(provider_id, &settings)
+        .map_err(|_| "provider_config_invalid".to_string())?;
+    let provider = CODEX_SCOPED_PROVIDER_NAME;
+    let mut overrides = vec![
+        format!("model_provider={}", codex_toml_literal(provider)?),
+        format!(
+            "model_providers.{provider}.name={}",
+            codex_toml_literal("CLI-Manager")?
+        ),
+        format!(
+            "model_providers.{provider}.base_url={}",
+            codex_toml_literal(&runtime.base_url)?
+        ),
+        format!(
+            "model_providers.{provider}.env_key={}",
+            codex_toml_literal(CODEX_PROVIDER_ENV_KEY)?
+        ),
+        format!(
+            "model_providers.{provider}.wire_api={}",
+            codex_toml_literal(runtime.wire_api.as_deref().unwrap_or("responses"))?
+        ),
+    ];
+    if let Some(model) = runtime.model.as_deref() {
+        overrides.push(format!("model={}", codex_toml_literal(model)?));
+    }
+    Ok(overrides)
+}
+
+fn codex_global_passthrough(app_type: &str, source: &str) -> bool {
+    app_type == "codex" && source == "global"
+}
+
 fn write_snapshot_bundle(
     root: &Path,
     provider: &NativeProvider,
     effective: &Value,
     snapshot_id: &str,
-) -> Result<(Option<String>, Option<String>), String> {
+) -> Result<(Option<String>, Option<String>, Vec<String>), String> {
     let mut claude_settings_path = None;
     let mut generated_home = None;
+    let mut config_overrides = Vec::new();
 
     match provider.app_type.as_str() {
         "claude" => {
@@ -454,12 +508,7 @@ fn write_snapshot_bundle(
             claude_settings_path = Some(path.to_string_lossy().into_owned());
         }
         "codex" => {
-            let (auth, _) = global::materialize_codex_auth(None, effective, &provider.active_key)?;
-            let (config, _) = global::materialize_codex_config(None, effective)?;
-            let home = root.join("codex");
-            write_snapshot_file(&home.join("auth.json"), &auth)?;
-            write_snapshot_file(&home.join("config.toml"), &config)?;
-            generated_home = Some(home.to_string_lossy().into_owned());
+            config_overrides = codex_config_overrides(&provider.id, effective)?;
         }
         "grokbuild" => {
             let (config, _) = global::materialize_grok_config(None, effective)?;
@@ -483,7 +532,7 @@ fn write_snapshot_bundle(
             snapshot_id: snapshot_id.to_string(),
         },
     )?;
-    Ok((claude_settings_path, generated_home))
+    Ok((claude_settings_path, generated_home, config_overrides))
 }
 
 fn write_snapshot_bundle_or_cleanup(
@@ -491,7 +540,7 @@ fn write_snapshot_bundle_or_cleanup(
     provider: &NativeProvider,
     effective: &Value,
     snapshot_id: &str,
-) -> Result<(Option<String>, Option<String>), String> {
+) -> Result<(Option<String>, Option<String>, Vec<String>), String> {
     match write_snapshot_bundle(root, provider, effective, snapshot_id) {
         Ok(paths) => Ok(paths),
         Err(error) => {
@@ -511,7 +560,9 @@ pub(crate) async fn resolve(input: ScopeResolveInput) -> Result<ResolvedProvider
     })
 }
 
-pub(crate) async fn prepare(input: ScopePrepareInput) -> Result<ProviderLaunchSnapshot, String> {
+pub(crate) async fn prepare(
+    input: ScopePrepareInput,
+) -> Result<Option<ProviderLaunchSnapshot>, String> {
     let resolve_input = ScopeResolveInput {
         app_type: input.app_type,
         project_id: input.project_id,
@@ -519,14 +570,17 @@ pub(crate) async fn prepare(input: ScopePrepareInput) -> Result<ProviderLaunchSn
         provider_id: input.provider_id,
     };
     let selection = resolve_selection(resolve_input).await?;
+    if codex_global_passthrough(&selection.provider.app_type, selection.source) {
+        return Ok(None);
+    }
     let effective = effective_settings(selection.provider.clone()).await?;
     let snapshot_id = Uuid::new_v4().to_string();
     let root = generated_root(&selection.provider.app_type, &snapshot_id)?;
     fs::create_dir_all(&root).map_err(|_| "provider_snapshot_write_failed".to_string())?;
-    let (claude_settings_path, generated_home) =
+    let (claude_settings_path, generated_home, config_overrides) =
         write_snapshot_bundle_or_cleanup(&root, &selection.provider, &effective, &snapshot_id)?;
 
-    Ok(ProviderLaunchSnapshot {
+    Ok(Some(ProviderLaunchSnapshot {
         app_type: selection.provider.app_type,
         provider_id: selection.provider.id,
         provider_name: selection.provider.name,
@@ -534,7 +588,8 @@ pub(crate) async fn prepare(input: ScopePrepareInput) -> Result<ProviderLaunchSn
         snapshot_id,
         claude_settings_path,
         generated_home,
-    })
+        config_overrides,
+    }))
 }
 
 pub(crate) async fn release_snapshot(snapshot_id: String) -> Result<(), String> {
@@ -633,11 +688,6 @@ async fn apply_launch_environment_inner(
     {
         return Err("provider_snapshot_mismatch".to_string());
     }
-    let expected_home = match app_type.as_str() {
-        "codex" => root.join("codex"),
-        "grokbuild" => root.join("grok"),
-        _ => root.clone(),
-    };
     if app_type == "claude" {
         let expected = root.join("claude").join("settings.json");
         if !path_matches(&expected, config.claude_settings_path.as_deref()) || !expected.is_file() {
@@ -645,17 +695,30 @@ async fn apply_launch_environment_inner(
         }
         return Ok(env_vars);
     }
+    if app_type == "codex" {
+        if config.generated_home.is_some() {
+            return Err("provider_snapshot_mismatch".to_string());
+        }
+        let active_key = fs::read(root.join(SNAPSHOT_KEY_FILE))
+            .map_err(|_| "provider_snapshot_missing".to_string())
+            .and_then(|bytes| {
+                String::from_utf8(bytes).map_err(|_| "provider_snapshot_invalid".to_string())
+            })?;
+        if active_key.trim().is_empty() {
+            return Err("provider_snapshot_invalid".to_string());
+        }
+        env_vars.insert(
+            "CLI_MANAGER_PROVIDER_KEY_SCOPE".to_string(),
+            "snapshot".to_string(),
+        );
+        env_vars.insert(CODEX_PROVIDER_ENV_KEY.to_string(), active_key);
+        return Ok(env_vars);
+    }
+    let expected_home = root.join("grok");
     if !path_matches(&expected_home, config.generated_home.as_deref()) {
         return Err("provider_snapshot_mismatch".to_string());
     }
-    let required_files = if app_type == "codex" {
-        vec![
-            expected_home.join("auth.json"),
-            expected_home.join("config.toml"),
-        ]
-    } else {
-        vec![expected_home.join("config.toml")]
-    };
+    let required_files = vec![expected_home.join("config.toml")];
     if required_files.iter().any(|path| !path.is_file()) {
         return Err("provider_snapshot_missing".to_string());
     }
@@ -667,25 +730,13 @@ async fn apply_launch_environment_inner(
     if active_key.trim().is_empty() {
         return Err("provider_snapshot_invalid".to_string());
     }
-    let env_key = if app_type == "codex" {
-        CODEX_PROVIDER_ENV_KEY
-    } else {
-        GROK_PROVIDER_ENV_KEY
-    };
     env_vars.insert(
         "CLI_MANAGER_PROVIDER_KEY_SCOPE".to_string(),
         "snapshot".to_string(),
     );
-    env_vars.insert(env_key.to_string(), active_key);
+    env_vars.insert(GROK_PROVIDER_ENV_KEY.to_string(), active_key);
     let home_value = path_for_shell(&expected_home, shell.as_deref());
-    env_vars.insert(
-        if app_type == "codex" {
-            "CODEX_HOME".to_string()
-        } else {
-            "GROK_HOME".to_string()
-        },
-        home_value,
-    );
+    env_vars.insert("GROK_HOME".to_string(), home_value);
     Ok(env_vars)
 }
 
@@ -727,6 +778,58 @@ mod tests {
     #[test]
     fn snapshot_app_types_are_native_only() {
         assert_eq!(SNAPSHOT_APP_TYPES, ["claude", "codex", "grokbuild"]);
+    }
+
+    #[test]
+    fn codex_global_source_uses_real_home() {
+        assert!(codex_global_passthrough("codex", "global"));
+        assert!(!codex_global_passthrough("codex", "project"));
+        assert!(!codex_global_passthrough("claude", "global"));
+    }
+
+    #[test]
+    fn codex_scope_snapshot_contains_only_non_secret_overrides() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("snapshot");
+        let provider = NativeProvider {
+            id: "provider-1".to_string(),
+            name: "Provider".to_string(),
+            app_type: "codex".to_string(),
+            settings_config: "{}".to_string(),
+            meta: "{}".to_string(),
+            active_key_id: "key-1".to_string(),
+            active_key: "test-secret".to_string(),
+        };
+        let effective = json!({
+            "base_url": "https://api.example.com/v1",
+            "model": "gpt-test",
+            "auth": {"OPENAI_API_KEY": "test-secret"}
+        });
+
+        let (_, generated_home, overrides) =
+            write_snapshot_bundle(&root, &provider, &effective, "snapshot-1").unwrap();
+
+        assert!(generated_home.is_none());
+        assert!(!root.join("codex").exists());
+        assert!(overrides
+            .iter()
+            .any(|value| value.contains("base_url='https://api.example.com/v1'")));
+        assert!(overrides.iter().any(|value| value == "model='gpt-test'"));
+        assert!(overrides.iter().all(|value| !value.contains("test-secret")));
+        assert_eq!(
+            fs::read_to_string(root.join(SNAPSHOT_KEY_FILE)).unwrap(),
+            "test-secret"
+        );
+    }
+
+    #[test]
+    fn codex_scope_overrides_reject_shell_interpolation() {
+        for value in ["$(whoami)", "`whoami`", "100%", "a&b", "a|b"] {
+            assert_eq!(
+                codex_toml_literal(value),
+                Err("provider_config_invalid".to_string())
+            );
+        }
     }
 
     #[test]

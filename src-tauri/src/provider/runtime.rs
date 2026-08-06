@@ -70,7 +70,7 @@ pub(crate) async fn load_codex_runtime_config(
     parse_runtime_config(provider_id, &projected)
 }
 
-fn parse_runtime_config(
+pub(crate) fn parse_runtime_config(
     provider_id: &str,
     settings_config: &str,
 ) -> Result<CodexProviderRuntimeConfig, String> {

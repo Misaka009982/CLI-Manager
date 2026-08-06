@@ -376,6 +376,7 @@ export interface NativeProviderLaunchSnapshot {
   snapshotId: string;
   claudeSettingsPath: string | null;
   generatedHome: string | null;
+  configOverrides: string[];
 }
 
 export type SubagentTranscriptSourceKind = "pending" | "child-jsonl" | "parent-jsonl" | "lifecycle-only";

@@ -257,7 +257,9 @@ pub fn provider_scope_resolve(input: ScopeResolveInput) -> Result<ResolvedProvid
 }
 
 #[tauri::command]
-pub fn provider_scope_prepare(input: ScopePrepareInput) -> Result<ProviderLaunchSnapshot, String> {
+pub fn provider_scope_prepare(
+    input: ScopePrepareInput,
+) -> Result<Option<ProviderLaunchSnapshot>, String> {
     block_on(scope::prepare(input))
 }
 

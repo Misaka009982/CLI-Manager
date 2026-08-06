@@ -80,7 +80,7 @@ const {
 } = await import(
   pathToFileURL(join(tempDir, "resumeCliArgs.mjs")).href
 );
-const { appendResumeCliArgs } = await import(pathToFileURL(projectStartupPath).href);
+const { appendResumeCliArgs, withCodexConfigOverrides } = await import(pathToFileURL(projectStartupPath).href);
 const { buildResumeCliArgs } = await import(pathToFileURL(saveSessionPath).href);
 const { buildHistoryResumeCommand, stripPiResumeCliArgs } = await import(
   pathToFileURL(historyResumeCommandPath).href
@@ -211,6 +211,32 @@ test("remote and history resume command construction never appends a second resu
   );
   assert.equal(command.match(/(?:^|\s)resume(?:\s|$)/g)?.length, 1);
   assert.equal(command.match(/(?:^|\s)--profile(?:\s|$)/g), null);
+});
+
+test("scoped Codex overrides keep the real CODEX_HOME and prepend safe config args", () => {
+  const command = withCodexConfigOverrides(
+    `codex resume ${NEW_ID}`,
+    [
+      "model_provider='cli_manager_scope'",
+      "model_providers.cli_manager_scope.base_url='https://api.example.com/v1'",
+      "model='gpt-test'",
+    ],
+  );
+
+  assert.equal(
+    command,
+    `codex -c "model_provider='cli_manager_scope'" -c "model_providers.cli_manager_scope.base_url='https://api.example.com/v1'" -c "model='gpt-test'" resume ${NEW_ID}`,
+  );
+  assert.equal(command.includes("CODEX_HOME"), false);
+  assert.equal(withCodexConfigOverrides("pwsh -File launch.ps1", ["model='gpt-test'"]), undefined);
+  assert.throws(
+    () => withCodexConfigOverrides("codex", ["model=\"unsafe\""]),
+    /provider_codex_override_invalid/,
+  );
+  assert.throws(
+    () => withCodexConfigOverrides("codex", ["model='$(whoami)'"]),
+    /provider_codex_override_invalid/,
+  );
 });
 
 test("saved-session CLI arguments reuse the same resume stripping rules", () => {

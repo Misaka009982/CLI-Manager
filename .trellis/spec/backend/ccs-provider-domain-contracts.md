@@ -514,3 +514,83 @@ auth.json: { "auth": { "OPENAI_API_KEY": "..." } }
 auth.json: { "OPENAI_API_KEY": "..." }
 config.toml: model_provider + [model_providers.<name>] without credentials
 ```
+
+## Scenario: Codex scoped providers preserve the real Home (2026-08-06)
+
+### 1. Scope / Trigger
+
+- Trigger: launching or resuming local Codex with the native global provider,
+  a project override, a Worktree override, or an explicit restored provider.
+- `CODEX_HOME` owns config, Hooks, MCP, sandbox policy, plugins, skills,
+  project trust and sessions. It is not a provider-only config path.
+
+### 2. Signatures
+
+```text
+provider_scope_prepare(input: ScopePrepareInput) -> ProviderLaunchSnapshot?
+ProviderLaunchSnapshot.configOverrides: string[]
+ProviderLaunchConfig = { appType, providerId, snapshotId, claudeSettingsPath?, generatedHome? }
+```
+
+### 3. Contracts
+
+- Codex global resolution returns `null`: global apply already materialized the
+  provider into the selected real Home, so launch must not create a snapshot
+  or override `CODEX_HOME`.
+- Codex project/Worktree/explicit resolution returns a snapshot containing a
+  secret key file plus non-secret `-c` overrides for only `model`,
+  `model_provider` and the selected `model_providers` entry. It must not create
+  generated `auth.json`, `config.toml` or `generatedHome`.
+- PTY preparation validates the snapshot manifest, injects the active key as
+  `CLI_MANAGER_PROVIDER_KEY`, and leaves `CODEX_HOME` unchanged.
+- The frontend appends each override as a separate quoted `-c` argument only
+  to a direct Codex command. SSH continues to discard local provider launch
+  data.
+- Persisted legacy Codex snapshots with `generatedHome` or without
+  `configOverrides` are released and rebuilt before a recreated PTY starts.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Global Codex provider | `provider_scope_prepare` returns `null`; use real Home |
+| Scoped Codex command is not direct | `provider_codex_command_unsupported`; release snapshot |
+| Override contains quotes, control or shell interpolation characters | `provider_config_invalid` / `provider_codex_override_invalid` |
+| Snapshot carries legacy Codex `generatedHome` | `provider_snapshot_mismatch` |
+| Missing/empty snapshot key | `provider_snapshot_missing` / `provider_snapshot_invalid` |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a project override changes endpoint/model/key while the real Home MCP,
+  Hook, `danger-full-access` sandbox and sessions remain available.
+- Base: follow-global launches with no provider snapshot and uses the files
+  written by global apply.
+- Bad: point `CODEX_HOME` at a generated directory containing only
+  `auth.json` and `config.toml`; this hides Hooks, MCP, sandbox and history.
+
+### 6. Tests Required
+
+- Assert global Codex selection is passthrough and project/Worktree sources
+  still materialize scoped launch data.
+- Assert scoped snapshots create no Codex Home, expose no secret in DTO
+  overrides, and keep the key only in the protected snapshot file/environment.
+- Assert direct new/resume commands receive quoted `-c` values, unsupported
+  commands fail closed, and shell interpolation characters are rejected.
+- Type-check all launch DTO consumers and run provider module Rust tests.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+provider scope -> generated/codex/{auth.json,config.toml}
+  -> CODEX_HOME=generated/codex -> Hooks/MCP/sandbox/sessions disappear
+```
+
+#### Correct
+
+```text
+global -> real Home files, no snapshot
+project/Worktree -> real CODEX_HOME + non-secret `-c` overrides
+  + active key in PTY child environment
+```

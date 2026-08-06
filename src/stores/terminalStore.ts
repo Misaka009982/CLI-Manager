@@ -24,6 +24,7 @@ import {
   normalizeDirectCodexStartupCommand,
   resolveProjectStartupCommand,
   withClaudeSettingsPath,
+  withCodexConfigOverrides,
   withCodexLightTuiTheme,
 } from "../lib/projectStartupCommand";
 import { getTerminalTheme } from "../lib/terminalThemes";
@@ -1366,9 +1367,18 @@ async function prepareProviderLaunchSnapshot(
 ): Promise<ProviderLaunchSnapshotResponse | null> {
   const appType = project ? getProviderSwitchAppType(project) : null;
   if (!project || !appType) return null;
-  if (persistedSnapshot?.appType === appType) return persistedSnapshot;
+  const persistedSnapshotIsCurrent = persistedSnapshot?.appType === appType && (
+    appType !== "codex"
+    || (
+      !persistedSnapshot.generatedHome
+      && Array.isArray(persistedSnapshot.configOverrides)
+      && persistedSnapshot.configOverrides.length > 0
+    )
+  );
+  if (persistedSnapshotIsCurrent) return persistedSnapshot;
+  if (persistedSnapshot) releaseProviderSnapshot(persistedSnapshot);
   if (!startupCmd?.trim()) return null;
-  return invoke<ProviderLaunchSnapshotResponse>("provider_scope_prepare", {
+  return invoke<ProviderLaunchSnapshotResponse | null>("provider_scope_prepare", {
     input: {
       appType,
       projectId: project.id,
@@ -1401,19 +1411,21 @@ function buildNativeProviderLaunchConfigs(
       grokProvider: null,
     };
   }
-  if (!snapshot.generatedHome) throw new Error("provider_snapshot_missing");
   if (snapshot.appType === "codex") {
+    if (snapshot.generatedHome || snapshot.configOverrides.length === 0) {
+      throw new Error("provider_snapshot_missing");
+    }
     return {
       claudeProvider: null,
       codexProvider: {
         appType: "codex",
         providerId: snapshot.providerId,
         snapshotId: snapshot.snapshotId,
-        generatedHome: snapshot.generatedHome,
       },
       grokProvider: null,
     };
   }
+  if (!snapshot.generatedHome) throw new Error("provider_snapshot_missing");
   return {
     claudeProvider: null,
     codexProvider: null,
@@ -1562,8 +1574,19 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
   const providerConfigs = buildNativeProviderLaunchConfigs(
     providerSnapshot,
   );
+  let providerStartupCmd = resolvedStartupCmd;
+  if (providerSnapshot?.appType === "codex") {
+    providerStartupCmd = withCodexConfigOverrides(
+      resolvedStartupCmd,
+      providerSnapshot.configOverrides,
+    );
+    if (!providerStartupCmd) {
+      releaseProviderSnapshot(providerSnapshot);
+      throw new Error("provider_codex_command_unsupported");
+    }
+  }
   let startupCmd = prepareStartupCommandForPty(
-    resolvedStartupCmd,
+    providerStartupCmd,
     normalizeShellKey(resolvedShell) ?? null,
   );
   if (providerSnapshot?.appType === "claude" && CLAUDE_COMMAND_PATTERN.test(startupCmd ?? "")) {
@@ -1800,13 +1823,24 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     let resumeProject = project;
     const recordedProviderId = lockedSession.remoteHandoff.providerId?.trim() || null;
     let providerSnapshot: ProviderLaunchSnapshotResponse | null = lockedSession.providerSnapshot ?? null;
+    if (
+      providerSnapshot?.appType === "codex"
+      && (
+        providerSnapshot.generatedHome
+        || !Array.isArray(providerSnapshot.configOverrides)
+        || providerSnapshot.configOverrides.length === 0
+      )
+    ) {
+      releaseProviderSnapshot(providerSnapshot);
+      providerSnapshot = null;
+    }
     let providerConfigs = {
       claudeProvider: null as TerminalClaudeProviderLaunchConfig | null,
       codexProvider: null as TerminalCodexProviderLaunchConfig | null,
       grokProvider: null as TerminalGrokProviderLaunchConfig | null,
     };
     if (!sshHandoff && !providerSnapshot) {
-      providerSnapshot = await invoke<ProviderLaunchSnapshotResponse>(
+      providerSnapshot = await invoke<ProviderLaunchSnapshotResponse | null>(
         "provider_scope_prepare",
         {
           input: {
@@ -1823,12 +1857,23 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         providerSnapshot,
       );
     }
-    const resumeCommand = buildCliResumeStartupCommand(
+    let resumeCommand = buildCliResumeStartupCommand(
       "codex",
       lockedSession.remoteHandoff.cliSessionId || lockedSession.cliSessionId,
       resumeProject,
       providerSnapshot ? { includeProviderOverrides: false } : {},
     );
+    if (!sshHandoff && providerSnapshot?.appType === "codex") {
+      const scopedResumeCommand = withCodexConfigOverrides(
+        resumeCommand,
+        providerSnapshot.configOverrides,
+      );
+      if (!scopedResumeCommand) {
+        releaseProviderSnapshot(providerSnapshot);
+        throw new Error("provider_codex_command_unsupported");
+      }
+      resumeCommand = scopedResumeCommand;
+    }
     const launch: ResolvedPtyLaunch = sshHandoff
       ? await resolvePtyLaunch({
           projectId: project.id,
