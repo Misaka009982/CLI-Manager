@@ -601,3 +601,36 @@ Claude、Codex、Pi、Grok 的非强制配置目录解析在已选目录失效�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 77: 修复 Grok 会话历史路径并提交任务
+
+**Date**: 2026-08-07
+**Task**: 修复 Grok 会话历史路径并提交任务
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+修复 Grok 历史读取把 sessionRoot 重复追加 sessions 的根因；统一默认与显式 session root，补充回归测试、规范、变更日志和产品文档，并提交对应 Trellis 任务。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0fc7f495` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
