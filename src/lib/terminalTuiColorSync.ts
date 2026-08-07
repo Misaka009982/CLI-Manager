@@ -12,6 +12,7 @@ import {
 } from "../terminal/browser/TerminalCliContext";
 
 export interface TerminalTuiColorSyncOptions {
+  isVisible: boolean;
   isTransparent: boolean;
   isLightTheme: boolean;
   terminalTextColor?: string;
@@ -35,6 +36,9 @@ export function createTerminalTuiColorSyncController(
 
   const normalize = (terminal: Terminal) => {
     const options = getOptions();
+    // Hidden terminals still parse every PTY frame, but their TUI color scan only
+    // affects rendered cells. Defer that expensive work until the tab is visible.
+    if (!options.isVisible) return;
     const context = options.getContext();
     const hasContextualTuiPrompt = (
       (isCodexTerminalContext(context) || isClaudeTerminalContext(context))

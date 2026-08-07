@@ -5,6 +5,7 @@ export type CliToolIconKey =
   | "claude-code"
   | "codex"
   | "opencode"
+  | "kimi"
   | "grok"
   | "qwen"
   | "gemini-cli"
@@ -52,6 +53,13 @@ export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
     icon: "opencode",
     vendor: null,
     historySourceId: "opencode",
+  },
+  {
+    id: "kimi",
+    command: "kimi",
+    label: "Kimi",
+    icon: "kimi",
+    vendor: "kimi",
   },
   {
     id: "grok",

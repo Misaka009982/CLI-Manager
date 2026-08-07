@@ -955,11 +955,11 @@ export function CcConnectSettingsPage() {
   };
 
   return (
-    <Stack gap="md" maw={1040}>
+    <Stack gap="md" w="100%">
       <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
-        <Group justify="space-between" align="flex-start">
+        <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
           <div>
-            <Group gap="xs">
+            <Group gap="xs" wrap="wrap">
               <Wifi size={18} />
               <Text fw={700}>{t("settings.ccConnect.overview.title")}</Text>
             </Group>
@@ -992,7 +992,7 @@ export function CcConnectSettingsPage() {
             rightSection={<FolderSearch size={16} />}
           />
           <Stack gap={6} justify="flex-end">
-            <Group gap="xs">
+            <Group gap="xs" wrap="wrap">
               <Button size="xs" variant="default" disabled={busy} onClick={() => void chooseExecutable()} leftSection={<FolderSearch size={14} />}>
                 {t("settings.ccConnect.chooseExecutable")}
               </Button>
@@ -1019,7 +1019,7 @@ export function CcConnectSettingsPage() {
       </Card>
 
       <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
-        <Group justify="space-between" align="flex-start">
+        <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
           <div>
             <Group gap="xs">
               <BellRing size={18} />
@@ -1214,7 +1214,7 @@ export function CcConnectSettingsPage() {
       </Card>
 
       <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
-        <Group justify="space-between">
+        <Group justify="space-between" wrap="wrap" gap="sm">
           <div>
             <Text fw={700}>{t("settings.ccConnect.credentials.title")}</Text>
             <Text mt={4} size="xs" c="var(--text-muted)">{t("settings.ccConnect.credentials.description")}</Text>
@@ -1302,7 +1302,7 @@ export function CcConnectSettingsPage() {
       ) : null}
 
       <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
-        <Group justify="space-between">
+        <Group justify="space-between" wrap="wrap" gap="sm">
           <Text fw={700}>{t("settings.ccConnect.process.title")}</Text>
           <Badge color={status?.running ? "green" : status?.starting ? "yellow" : "gray"}>{processLabel}</Badge>
         </Group>
@@ -1325,7 +1325,7 @@ export function CcConnectSettingsPage() {
       </Card>
 
       {profile.loggingEnabled && <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
-        <Group justify="space-between">
+        <Group justify="space-between" wrap="wrap" gap="sm">
           <Text fw={700}>{t("settings.ccConnect.logs.title")}</Text>
           <Group gap="xs">
             <Button size="xs" variant="subtle" leftSection={<Copy size={14} />} disabled={logs.length === 0} onClick={() => void copyLogs()}>{t("settings.ccConnect.logs.copy")}</Button>

@@ -1055,6 +1055,34 @@ const { suffixParts, leaf: displayNode } = collectCompactDirectoryChain(node);
 
 ## Styling Patterns
 
+### Convention: Terminal auxiliary panels share one themed header
+
+**What**: Realtime stats, Git changes, project files in `mode="panel"`, replay, and system resources must render their top title through `TerminalPanelHeader`. The shared header uses `TERM_PANEL.bg` as its fallback and mirrors the terminal pane Tab bar gradient in both light and dark terminal themes.
+
+**Why**: These panels share one resizable terminal-side shell. Independent header markup drifts in height, icon scale, border color, and light-skin background, making adjacent Tab and title bands look unrelated.
+
+**Contracts**:
+
+- Keep the shared header at the same 36 px height and background treatment as `.ui-workspan-tabbar`. Keep its 24 px icon container, 12 px title, and terminal-theme border unchanged.
+- Preserve panel-owned titles, subtitles, badges, and actions through component slots; do not move data loading or interaction state into the header component.
+- Keep panel body backgrounds independent. Patterned or card backgrounds start below the header.
+- `FileExplorerSidebar` uses the shared header only in `mode="panel"`; the primary left-sidebar header keeps its existing navigation behavior and styling.
+
+```tsx
+// Correct: shared shell, panel-owned content.
+<TerminalPanelHeader
+  icon={<GitBranch size={13} />}
+  accent={TERM_PANEL.yellow}
+  title={t("git.title")}
+  actions={headerActions}
+/>
+
+// Wrong: another one-off title row that inherits a body-only background.
+<div className="px-2 py-1 text-[15px] font-bold">{t("git.title")}</div>
+```
+
+**Tests**: Run `npx tsc --noEmit`; manually compare all five panels in merged and independent modes, at their minimum widths, with one dark and one light terminal-side skin.
+
 ### Convention: Stats charts use a shared semantic palette
 
 **What**: Stats and usage-analysis chart components should import semantic colors from `src/components/stats/statsPalette.ts` instead of hard-coding one-off hex/RGBA colors for token series, peak markers, cost fills, or chart tooltips.
@@ -1295,16 +1323,15 @@ terminal.focus();
 
 **Prevention**: For user-facing terminal clear actions, send Ctrl+L (`\x0c`) through `pty_write` so the shell/TUI clears or redraws through the same path as keyboard input. Reserve `terminal.clear()` for internal buffer maintenance where IME/helper textarea position is irrelevant.
 
-### Convention: Keep application cursor visibility sequences intact
+### Convention: Keep application cursor visibility sequences intact by default
 
-**Contract**: PTY output must pass DECTCEM sequences (`CSI ?25h` show cursor and `CSI ?25l` hide cursor) to xterm without filtering, delayed reinjection, or a CLI-specific visual cursor overlay.
+**Contract**: PTY output passes DECTCEM sequences (`CSI ?25h` show cursor and `CSI ?25l` hide cursor) through unchanged for every CLI. When the opt-in `hideCodexRuntimeCursor` setting is enabled and the active terminal is identified as Codex, the Codex display transform may delay `CSI ?25h` by 80ms; `CSI ?25l` remains immediate. Codex identity must be latched from immutable session metadata, the visible TUI viewport, or the current output frame before cursor filtering is decided.
 
-**Why**: TUI applications own their cursor visibility and position. Delaying only the show sequence can hide the cursor throughout continuous output, while replacing a TUI cursor from inferred viewport structure creates new disagreement during redraw and input editing.
+**Why**: Other TUIs own cursor visibility and must keep native behavior. The compatibility switch restores the pre-V1.3.0 Codex workaround without changing Shell, Claude, Pi, or disabled-setting sessions.
 
-**Prevention**: Do not add Codex-specific cursor stabilization in `XTermTerminal`. Cursor-position flicker emitted during Codex redraw remains native application behavior; Claude background-image caret preservation belongs to buffer background normalization and must not rewrite DECTCEM.
+**Prevention**: Keep the suppression at the display transform boundary, preserve raw PTY frame lengths for ACK accounting, latch first-frame Codex signatures before filtering, reapply hidden state after xterm focus, cancel pending show timers on teardown or disable, and do not create a visual cursor overlay or alter PTY input.
 
-**Tests**: Run `node --test scripts/terminalPiCompatibility.test.mjs scripts/terminalNewlineShortcut.test.mjs` and `npx tsc --noEmit`. Assert the shared output transform contains only the existing Pi compatibility transform and no cursor visibility filter or visual cursor overlay.
-
+**Tests**: Run `node --test scripts/terminalPiCompatibility.test.mjs scripts/terminalNewlineShortcut.test.mjs` and `npx tsc --noEmit`. Assert the shared transform keeps Pi behavior and the Codex cursor filter is guarded by `hideCodexRuntimeCursor` plus Codex session detection.
 ### Common Mistake: Letting xterm helper textarea follow non-IME redraw cursors
 
 **Symptom**: During TUI redraws, including but not limited to Claude Code `/compact`, the hidden input proxy appears to make the terminal input anchor jump with a non-input cursor, often the tail/status line.
@@ -1793,3 +1820,33 @@ KaTeX's package stylesheet owns the `.katex` base font size. Shared Markdown CSS
 ```
 
 **Tests**: Run `node --test scripts/terminalMarkdownPreview.test.mjs scripts/markdownRendering.test.mjs` and `npx tsc --noEmit`; manually verify long answer lists, keyboard selection, restored sessions without a new conversation, normal scrolling, `Ctrl`/`Cmd` wheel zoom limits, light/dark terminal themes, background images, and clear KaTeX formulas.
+
+### Convention: Settings pages fill the available content width and wrap controls
+
+**What**: A settings page rendered inside `SettingsLayout` should use the available content width instead of imposing a page-level fixed `max-width`. Card headers and action groups that contain labels, badges, or buttons must allow wrapping; internal grids should keep responsive column breakpoints.
+
+**Why**: A fixed page width leaves large unused areas on wide displays, while non-wrapping controls can overflow when the settings pane is narrow or the UI language is longer.
+
+**Correct**:
+
+```tsx
+<Stack gap="md" w="100%">
+  <Group justify="space-between" wrap="wrap" gap="sm">
+    <Text>{title}</Text>
+    <Group gap="xs" wrap="wrap">{actions}</Group>
+  </Group>
+</Stack>
+```
+
+**Wrong**:
+
+```tsx
+<Stack gap="md" maw={1040}>
+  <Group justify="space-between">
+    <Text>{title}</Text>
+    <Group gap="xs">{actions}</Group>
+  </Group>
+</Stack>
+```
+
+**Tests**: Run `npx tsc --noEmit`; manually verify the page at a wide window, a narrow window, and both `zh-CN` and `en-US`, checking that cards use the available width and headers/actions do not overflow.

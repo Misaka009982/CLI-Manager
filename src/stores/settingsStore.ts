@@ -387,6 +387,7 @@ export interface Settings {
   ccusageAnalyticsEnabled: boolean;
   ccusageUseWsl: boolean;
   windowsConptyCompatibilityFixEnabled: boolean;
+  hideCodexRuntimeCursor: boolean;
   terminalSessionRestoreEnabled: boolean;
   /** 恢复方式：启动时弹窗询问（默认）或静默自动恢复。仅在 terminalSessionRestoreEnabled 为真时生效。 */
   terminalSessionRestoreMode: TerminalSessionRestoreMode;
@@ -561,7 +562,8 @@ const DEFAULTS: Settings = {
   shellRuntimeMonitoringEnabled: false,
   ccusageAnalyticsEnabled: false,
   ccusageUseWsl: false,
-  windowsConptyCompatibilityFixEnabled: false,
+  windowsConptyCompatibilityFixEnabled: true,
+  hideCodexRuntimeCursor: false,
   terminalSessionRestoreEnabled: true,
   terminalSessionRestoreMode: "ask",
   projectWorktreeConfigEnabled: true,
@@ -1373,6 +1375,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.windowsConptyCompatibilityFixEnabled === "boolean"
         ? entries.windowsConptyCompatibilityFixEnabled
         : DEFAULTS.windowsConptyCompatibilityFixEnabled;
+    entries.hideCodexRuntimeCursor =
+      typeof entries.hideCodexRuntimeCursor === "boolean"
+        ? entries.hideCodexRuntimeCursor
+        : DEFAULTS.hideCodexRuntimeCursor;
     entries.terminalSessionRestoreEnabled =
       typeof entries.terminalSessionRestoreEnabled === "boolean"
         ? entries.terminalSessionRestoreEnabled

@@ -4269,6 +4269,15 @@
     inset 0 -1px 0 color-mix(in srgb, black 28%, transparent);
 }
 
+.ui-terminal-panel-header {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 72%, var(--terminal-theme-foreground, #f8fafc) 12%) 0%,
+      color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 88%, black 12%) 100%
+    );
+}
+
 .ui-workspan-tabbar {
   height: 36px;
   min-height: 36px;
@@ -4402,7 +4411,8 @@
     inset 0 1px 0 color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 16%, transparent);
 }
 
-.ui-terminal-well[data-terminal-theme-tone="light"] .ui-terminal-chrome {
+.ui-terminal-well[data-terminal-theme-tone="light"] .ui-terminal-chrome,
+.ui-terminal-well[data-terminal-theme-tone="light"] .ui-terminal-panel-header {
   background:
     linear-gradient(
       180deg,

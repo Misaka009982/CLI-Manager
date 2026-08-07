@@ -8,6 +8,7 @@ import CursorMono from "@lobehub/icons/es/Cursor/components/Mono";
 import GeminiCliColor from "@lobehub/icons/es/GeminiCLI/components/Color";
 import GooseMono from "@lobehub/icons/es/Goose/components/Mono";
 import GrokMono from "@lobehub/icons/es/Grok/components/Mono";
+import KimiColor from "@lobehub/icons/es/Kimi/components/Color";
 import KiroColor from "@lobehub/icons/es/Kiro/components/Color";
 import OpenCodeMono from "@lobehub/icons/es/OpenCode/components/Mono";
 import OpenAI from "@lobehub/icons/es/OpenAI/components/Mono";
@@ -24,6 +25,7 @@ const CLI_TOOL_ICONS: Record<CliToolIconKey, IconComponent> = {
   "claude-code": ClaudeColor,
   codex: OpenAI,
   opencode: OpenCodeMono,
+  kimi: KimiColor,
   grok: GrokMono,
   qwen: QwenColor,
   "gemini-cli": GeminiCliColor,
