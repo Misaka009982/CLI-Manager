@@ -2,7 +2,7 @@
 
 ## [TEMP]
 
-- 修复原生 Grok Build 供应商启动替换 `GROK_HOME` 导致 Hook、MCP、历史会话和实时统计不可用的问题：全局、项目、Worktree 与显式供应商均保留真实 Home，所选 endpoint/key/model 改用 `GROK_MODELS_BASE_URL`、`XAI_API_KEY` 与 `--model` 做进程级覆盖；旧临时 Home 中已产生的会话会先持久备份，再恢复到真实历史目录，恢复失败时保留源快照。
+- 修复原生 Grok Build 供应商启动替换 `GROK_HOME` 导致 Hook、MCP、历史会话和实时统计不可用的问题：全局、项目、Worktree 与显式供应商均保留真实 Home，所选 endpoint/key/model 改用 `GROK_MODELS_BASE_URL`、`XAI_API_KEY` 与 `--model` 做进程级覆盖；旧临时 Home 中已产生的会话会先持久备份，再恢复到真实历史目录，恢复失败时保留源快照；修正历史 IPC 已传入 `.grok\\sessions` 却再次追加 `sessions` 导致历史列表为空的问题。
 - 修复原生 Codex 供应商启动错误替换 `CODEX_HOME` 的回归：全局供应商直接使用真实 Home，项目/Worktree 覆盖改用安全的启动配置参数与子进程密钥环境，因此原有 MCP、Hook、沙箱策略、插件、历史会话和实时统计继续生效。
 - 供应商模型映射支持 Claude、Codex、Grok 获取远端模型列表；完整 URL 获取模型时不再追加 `/models`，Codex/Grok 的 Goal mode 与远程压缩字段继续兼容读取但不再展示为未生效开关。
 - 修复供应商通用配置折叠后重新打开导致 Monaco 实例已销毁的错误；三个供应商类别默认收起，编辑 API 密钥时直接加载明文密钥。

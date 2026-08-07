@@ -5502,8 +5502,7 @@ fn resolve_antigravity_history_root() -> PathBuf {
 
 fn resolve_grok_history_root(roots: &HistoryRoots) -> PathBuf {
     roots.grok_session_root.clone().unwrap_or_else(|| {
-        crate::provider::home::default_config_root("grok")
-            .map(|root| root.join("sessions"))
+        crate::provider::home::default_history_root("grok")
             .or_else(|| detect_home_dir().map(|home| home.join(".grok").join("sessions")))
             .unwrap_or_else(|| PathBuf::from(".grok").join("sessions"))
     })
@@ -6757,12 +6756,11 @@ fn collect_antigravity_session_files(root: &Path) -> Vec<SessionFileRef> {
 }
 
 fn collect_grok_session_files(root: &Path) -> Vec<SessionFileRef> {
-    let sessions = root.join("sessions");
-    if !sessions.exists() {
+    if !root.exists() {
         return Vec::new();
     }
     let mut files = Vec::new();
-    collect_files_recursive(&sessions, &mut files, &looks_like_grok_updates_file);
+    collect_files_recursive(root, &mut files, &looks_like_grok_updates_file);
     files
         .into_iter()
         .map(|path| SessionFileRef {
@@ -6785,7 +6783,7 @@ fn find_exact_grok_session_in_root(
     let target_project_path = project_path
         .map(normalize_history_path)
         .filter(|value| !value.is_empty());
-    for workspace in read_dir_entries(&root.join("sessions")) {
+    for workspace in read_dir_entries(root) {
         let path = workspace.path().join(session_id).join("updates.jsonl");
         if !looks_like_grok_updates_file(&path) {
             continue;
@@ -12606,6 +12604,56 @@ mod tests {
         );
     }
 
+    #[test]
+    fn default_grok_history_root_is_the_real_session_root() {
+        let roots = history_roots(None, None, None);
+        let expected = crate::provider::home::default_history_root("grok")
+            .or_else(|| detect_home_dir().map(|home| home.join(".grok").join("sessions")))
+            .unwrap_or_else(|| PathBuf::from(".grok").join("sessions"));
+
+        assert_eq!(resolve_grok_history_root(&roots), expected);
+    }
+
+    #[test]
+    fn explicit_grok_session_root_is_scanned_without_appending_sessions() {
+        let temp_dir = TempDir::new().unwrap();
+        let session_root = temp_dir.path().join(".grok").join("sessions");
+        let session_dir = session_root.join("project").join("session-1");
+        write_text(
+            &session_dir.join("summary.json"),
+            &json!({
+                "info": { "id": "session-1", "cwd": r"F:\project" },
+                "session_summary": "Explicit root"
+            })
+            .to_string(),
+        );
+        write_text(
+            &session_dir.join("updates.jsonl"),
+            &json!({
+                "method": "session/update",
+                "params": {
+                    "sessionId": "session-1",
+                    "update": {
+                        "sessionUpdate": "user_message_chunk",
+                        "content": { "type": "text", "text": "hello" }
+                    }
+                }
+            })
+            .to_string(),
+        );
+
+        let roots = history_roots(
+            None,
+            None,
+            Some(session_root.to_string_lossy().into_owned()),
+        );
+        assert_eq!(resolve_grok_history_root(&roots), session_root);
+        let files = collect_grok_session_files(&resolve_grok_history_root(&roots));
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, session_dir.join("updates.jsonl"));
+    }
+
     fn expect_string_err<T>(result: Result<T, String>) -> String {
         match result {
             Ok(_) => panic!("expected error"),
@@ -13131,9 +13179,8 @@ mod tests {
     #[test]
     fn grok_updates_parser_covers_history_pipeline() {
         let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().join(".grok");
+        let root = temp_dir.path().join(".grok").join("sessions");
         let path = root
-            .join("sessions")
             .join("F%3A%5Cidea-work%5Cbusiness-center")
             .join("grok-session")
             .join("updates.jsonl");
@@ -13302,10 +13349,9 @@ mod tests {
     #[test]
     fn exact_grok_session_lookup_bypasses_catalog_miss() {
         let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().join(".grok");
+        let root = temp_dir.path().join(".grok").join("sessions");
         let session_id = "019f8f73-cf03-7eb1-88bd-ae350e2cb327";
         let path = root
-            .join("sessions")
             .join("F%3A%5Cgithub%5CCLI-Manager")
             .join(session_id)
             .join("updates.jsonl");

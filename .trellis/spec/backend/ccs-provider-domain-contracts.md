@@ -745,3 +745,78 @@ release/GC -> remove_dir_all(snapshot) -> legacy Grok conversation is lost
 release/GC -> backup -> restore missing sessions -> remove snapshot
            -> on any error: keep snapshot
 ```
+
+## Scenario: Grok history IPC uses the session root (2026-08-06)
+
+### 1. Scope / Trigger
+
+- Trigger: the frontend loads Grok history after the history source settings
+  store has an active `locations.sessionRoot` instance.
+- The IPC field `grokSessionRoot` is already the complete
+  `<home>/.grok/sessions` directory.
+
+### 2. Signatures
+
+```text
+HistoryRoots.grok_session_root = <home>/.grok/sessions
+resolve_grok_history_root(roots) -> <home>/.grok/sessions
+collect_grok_session_files(root) -> scans root/*/*/updates.jsonl
+```
+
+### 3. Contracts
+
+- `HistoryRoots.grok_session_root` and `resolve_grok_history_root` represent
+  the complete Grok session root, not the parent `.grok` configuration root.
+- Explicit `grokSessionRoot` values are used as-is after whitespace/path
+  normalization. The scanner and exact-session lookup must not append another
+  `sessions` segment.
+- When no explicit root is supplied, the default resolver returns the real
+  user's `.grok/sessions` directory.
+- List, exact lookup, detail validation, search, stats and catalog refresh share
+  this same root contract.
+- The IPC command signatures and frontend history source settings schema remain
+  unchanged.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Explicit root is `<home>/.grok/sessions` | Scan sessions directly below root |
+| Explicit root contains no sessions | Return an empty list without error |
+| No explicit root | Resolve the real default `.grok/sessions` |
+| Root path is WSL UNC | Preserve existing WSL-aware handling |
+| Path would be `<home>/.grok/sessions/sessions` | Never construct or scan it |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a session under `<root>/<project>/<session>/updates.jsonl` appears in
+  history when the frontend passes `<root>` as `grokSessionRoot`.
+- Base: default and explicit roots produce the same session shape and project
+  filtering behavior.
+- Bad: treat the IPC `sessionRoot` as a config root and append `sessions` a
+  second time.
+
+### 6. Tests Required
+
+- Assert an explicit `.grok/sessions` root is scanned without a duplicate
+  `sessions` segment.
+- Assert the Grok parser and exact-session lookup use a session-root fixture.
+- Keep catalog/history module tests and `cargo check` passing.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+frontend sessionRoot = <home>/.grok/sessions
+  -> backend collect(root.join("sessions"))
+  -> <home>/.grok/sessions/sessions
+```
+
+#### Correct
+
+```text
+frontend sessionRoot = <home>/.grok/sessions
+  -> backend collect(root)
+  -> <home>/.grok/sessions/<project>/<session>/updates.jsonl
+```
