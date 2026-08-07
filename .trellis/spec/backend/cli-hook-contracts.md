@@ -884,7 +884,7 @@ Exact ownership prevents upgrades or uninstalls from deleting third-party and ot
 ### 1. Scope / Trigger
 
 - Trigger: Pi Agent uses auto-discovered TypeScript Extensions instead of Claude/Codex shell hook configuration.
-- Applies to: Hook settings commands, generated extension ownership, install status, PTY callback environment enablement, local Hook payload validation, and realtime stats session binding.
+- Applies to: Hook settings commands, generated extension ownership, install status, PTY callback environment enablement, local Hook payload validation, realtime stats session binding, Pi heartbeat/final interruption reporting, and pending user-decision brokering.
 
 ### 2. Signatures
 
@@ -894,7 +894,9 @@ hook_settings_uninstall_pi({ selectedDir, codexSelectedDir, piSelectedDir, ccSwi
 
 Pi extension path: ~/.pi/agent/extensions/cli-manager-hook.ts
 Pi source: pi
-Pi events: SessionStart | UserPromptSubmit | Stop
+Pi events: SessionStart | UserPromptSubmit | Stop | StopFailure
+Decision endpoints: /api/pi-decision/open | /poll | /resolve | /ack | /cancel
+Decision kinds: question | questionnaire | permission
 Stable conflict error: pi_extension_conflict
 ```
 
@@ -903,10 +905,14 @@ Stable conflict error: pi_extension_conflict
 - The generated extension is owned only when its content contains `PI_EXTENSION_MARKER`.
 - Install and per-module install may create a missing file or rewrite a marker-owned file; they must not rewrite an existing unowned file.
 - Uninstall may remove only a marker-owned file.
-- Required Pi modules are session start, running, stop, and the built-in Extension loading mechanism. Pi has no attention, failure, or sub-agent module requirement.
+- Required Pi modules remain session start, running, stop, and the built-in Extension loading mechanism. The managed source is installed as one coherent lifecycle/decision bridge; module markers are installation-status metadata only and continue to drive the existing settings UI plus selective install compatibility. Selecting one marker still writes the coherent source rather than disabling unrelated handlers at runtime.
 - Full Pi installation reports `installed`; any non-empty strict subset reports `partialInstalled`; no modules reports `notInstalled`.
-- `session_start` maps to one `SessionStart`, `agent_start` maps to one `UserPromptSubmit`, and `agent_settled` maps to one `Stop`. Do not also map `before_agent_start` to `UserPromptSubmit`, because one Pi run emits both lifecycle events.
+- `session_start` maps to one `SessionStart`; `agent_start` maps to one non-heartbeat `UserPromptSubmit`, resets any prior attempt failure, and starts a 20-second heartbeat; `agent_end` inspects only the last assistant message and captures `error`/`aborted` for that attempt without stopping the turn heartbeat; a retry's next `agent_start` clears it, while `agent_settled` stops the heartbeat and emits exactly one final `Stop` or `StopFailure`. Do not also map `before_agent_start` to `UserPromptSubmit`.
+- Every Pi lifecycle payload and heartbeat carries a valid process-scoped `sourceInstanceId`, Pi `sessionId`, and recent RFC 3339 timestamp. The extension allocates lifecycle and decision timestamps monotonically within the process so same-millisecond heartbeat/final-event races still have a strict order. Heartbeats set `heartbeat=true`; they may refresh only an already-running Pi turn, must not recreate done/failed/attention state, trigger Replay/toast/system/third-party notifications, or occupy the daemon Hook replay cache. Both frontend and daemon reject stale status timestamps and independently declare interruption after 60 seconds without a heartbeat, so a closed frontend cannot leave daemon state permanently running and a late heartbeat cannot overwrite a newer terminal state. Both guards use the same stable incident identity and detect system-sleep/watchdog drift, allowing one fresh heartbeat window after resume rather than treating a suspended host as an Agent interruption; non-Pi Hook timeouts keep their prior fallback behavior.
 - The extension reads `CLI_MANAGER_TAB_ID`, `CLI_MANAGER_NOTIFY_PORT`, and `CLI_MANAGER_NOTIFY_TOKEN` from its PTY environment and silently skips reporting if any are missing.
+- The loopback decision broker is bearer-token protected, bounded to 128 live requests, expires requests after 24 hours, and rejects missing session identity or stale/future timestamps. An open request contains `(requestId, brokerEpoch, sourceInstanceId, tabId, sessionId)`, one or more questions, and explicit options. The open response echoes the broker-owned payload so the extension verifies all identity fields before polling. The broker validates every answer against the open request and treats duplicate identical resolution as idempotent. Pending polls also observe the active daemon frontend consumer: a newly connected consumer receives a bounded periodic rebroadcast, a never-connected app gets a 15-second activation grace, and a disconnected consumer makes polling unavailable so the extension cancels and returns to native UI. Live Pi decision cards are not put into the no-client Hook replay cache because the broker owns recovery; `ack`/`cancel`/expiry emits a lightweight close tombstone which may be cached once so a transient frontend disconnect cannot leave an expired card behind. Decision event emission is serialized, so a concurrent poll rebroadcast cannot arrive after a later close tombstone.
+- The managed extension overrides `question` and `questionnaire` with bridge-first tools, preserves their native result details and native no-options/non-interactive error semantics (including fixed-option indexes), then falls back to Pi's native `ctx.ui` prompt when the bridge is unavailable or disconnects. Long-lived polling removes settled abort listeners, and a failed answer acknowledgement falls through to best-effort broker cancellation instead of leaking the request. Permission decisions use the same broker shape with exactly `allow`/`deny`, `allowOther=false`, and must never be auto-decided. The extension observes only tool calls explicitly named `cli_manager_permission`; it does not register that model-callable tool itself. A separate permission producer owns whether and when that explicit call exists, so ordinary safe commands are never intercepted by this bridge.
+- The extension does not register desktop-pet lifecycle commands. CLI-Manager creates, shows, hides, and synchronizes the pet window from application state.
 - New user-visible Pi errors must pass through the frontend language selector in every install consumer, including Hook settings and sidebar repair; `zh-TW` uses the existing OpenCC conversion path.
 
 ### 4. Validation & Error Matrix
@@ -918,25 +924,34 @@ Stable conflict error: pi_extension_conflict
 | Extension file exists without the ownership marker | Return `pi_extension_conflict`; preserve exact content. |
 | Selected Pi directory is missing during install | Create it. |
 | Selected Pi directory is missing during status/uninstall | Return the existing directory-missing behavior; do not invent installed state. |
-| Hook callback environment is incomplete | Extension returns without throwing or interrupting Pi. |
+| Hook callback environment is incomplete | Extension returns without throwing or interrupting Pi; decision tools use native UI. |
+| Decision bridge disappears or its frontend consumer disconnects while waiting | Cancel the broker request, emit/cache a card-close tombstone, and resume with Pi native UI; do not synthesize an answer. |
+| Permission answer is custom, missing, duplicated, or not `allow`/`deny` | Reject it; keep the permission unresolved. |
+| Heartbeat arrives after Stop/StopFailure/attention | Ignore it for status transitions. |
+| Final assistant stop reason is `error` or `aborted` | Emit one `StopFailure` after `agent_settled`; all other settled outcomes emit `Stop`. |
 | Full three-module install | Return `installed`, allowing PTY callback environment injection. |
 
 ### 5. Good/Base/Bad Cases
 
-- Good: a Pi-only user installs all modules, the shared Hook environment is injected, `SessionStart` binds the Pi session id, and realtime stats load.
+- Good: a Pi-only user installs all modules, the shared Hook environment is injected, `SessionStart` binds the Pi session id, realtime stats load, and active turns refresh their heartbeat without creating Replay noise.
+- Good: `question` waits indefinitely in the desktop-pet card until the user explicitly answers; if CLI-Manager disconnects, the extension returns to Pi's native prompt without deciding for the user.
+- Good: an explicit permission producer opens `allow`/`deny`; closing the pet or waiting does not imply either answer.
 - Good: a user already has an unrelated `cli-manager-hook.ts`; install fails with a localized conflict message and preserves the file byte-for-byte.
 - Base: only session-start is enabled; status is `partialInstalled` and the module UI reflects that subset.
 - Bad: reuse Claude/Codex required-module assumptions for Pi and require an attention hook that Pi does not provide.
 - Bad: listen to both `before_agent_start` and `agent_start` for the same running event; this duplicates replay and notification traffic.
+- Bad: expose pet show/hide/settings/status commands from the Pi extension; desktop-pet lifecycle belongs to CLI-Manager.
+- Bad: treat every tool call as a permission request or auto-allow after a timeout.
 
 ### 6. Tests Required
 
-- Rust: full install reports `HookInstallStatus::Installed`, contains `session_start`, `agent_start`, and `agent_settled`, and does not contain `before_agent_start`.
+- Rust: full install reports `HookInstallStatus::Installed`, contains `session_start`, `agent_start`, `agent_end`, `agent_settled`, `StopFailure`, decision endpoints, bridge tools, and the explicit `cli_manager_permission` observer, but no model-callable `cli_manager_permission` registration, `registerCommand`, or `before_agent_start`.
+- Rust: validate Pi heartbeat scope, recent timestamp, daemon timeout watchdog identity/idempotence, and late-heartbeat monotonicity; validate decision request identifiers/options, close-tombstone serialization/cache semantics, and permission answer membership; reject custom permission answers.
 - Rust: one selected module reports `HookInstallStatus::PartialInstalled`.
 - Rust: install against an unowned same-name extension returns `pi_extension_conflict` and preserves exact content.
 - Rust: install then uninstall removes the marker-owned extension.
 - TypeScript: type-check after frontend status or localized error handling changes.
-- Manual: verify Hook settings in `zh-CN`, `zh-TW`, and `en-US`, then start one Pi run and confirm exactly one running transition.
+- Manual: verify Hook settings in `zh-CN`, `zh-TW`, and `en-US`; start one Pi run and confirm one running transition plus silent heartbeat; exercise question/questionnaire and explicit permission producer; disconnect CLI-Manager while waiting and confirm native UI fallback.
 
 ### 7. Wrong vs Correct
 
@@ -962,4 +977,84 @@ if checks.attention_hook_required {
 
 ```typescript
 pi.on("agent_start", reportRunning);
+```
+
+## Scenario: Desktop Pet Dual-Window Transport Boundary
+
+### 1. Scope / Trigger
+
+- Trigger：修改 `desktop_pet_window_sync`、桌宠/ Bubble bounds 与 hit-region 原生命令、两个静态 WebView 窗口或 Pi 决策卡的前端路由。
+- Applies to：Tauri 窗口生命周期、调用方授权、Windows 原生窗口区域、跨平台回退，以及现有 Pi broker 与 Bubble UI 的边界。
+
+### 2. Signatures
+
+```text
+desktop_pet_window_sync(config { lifecycleToken, petSurfaceEpoch?, bubbleSurfaceEpoch?, syncPetGeometry, ... }) // caller: main
+desktop_pet_window_set_bounds(lifecycleToken, surfaceEpoch, ...)  // caller: desktop-pet
+desktop_pet_bubble_window_set_bounds(lifecycleToken, surfaceEpoch, ...)
+desktop_pet_window_set_hit_regions(lifecycleToken, surfaceEpoch, ...)
+desktop_pet_window_hide(lifecycleToken, surfaceEpoch)             // caller: desktop-pet
+
+Window labels: main | desktop-pet | desktop-pet-bubble
+Authorization generation: lifecycleToken + pet/bubble surfaceEpoch
+Ordering: visibility generation > boundsRevision > regionRevision
+```
+
+### 3. Contracts
+
+- 只有 `main` 可建立新的桌宠可见性代际。每次同步先在 Rust 中原子替换高熵 `lifecycleToken`、期望可见性和两个 surface epoch，再隐藏/配置窗口；前端事件只能在该状态提交成功后发送。双表面状态投递必须携带目标 epoch 和单调 `deliveryRevision`，等待全部 config 成功后才启动 snapshot，旧 token/epoch/revision 的状态不得覆盖当前 WebView；coordinator-ready/ready 双向握手负责恢复首次加载与主窗口重载。`syncPetGeometry=false` 只用于 Bubble ready 或新警报恢复：它保留当前宠物 bounds/菜单锚点，随后由 Pet 以新 revision 认领；Pet ready、设置或位置变化仍使用完整几何同步。
+- `desktop-pet` 只能修改自身 bounds/region、根据已授权测量修改 `desktop-pet-bubble` bounds，或同时隐藏两个窗口；`desktop-pet-bubble` 只能修改自身 region。命令必须从注入的真实 `WebviewWindow` label 判断 caller，不能信任 payload 自报 caller/target。双窗口隐藏全部成功后由 Rust 向 `main` 发出带 token/epoch 的 `desktop-pet-hidden`；若只有该事件发送失败，Rust 返回 `pet_window_hidden_event_failed`，当前 Pet 可用同一 token/epoch 补发并清空本地渲染，其他隐藏错误不得走该回退。
+- 所有 bounds、region 和 hide 请求必须同时匹配当前 `lifecycleToken` 与对应 caller `surfaceEpoch`。bounds revision 单调递增；region 除自身单调外还必须引用当前 bounds revision。resize 前清除旧 region，旧 token、旧 epoch、旧 revision 或不可见代际一律拒绝，迟到请求不得重新显示窗口。
+- Windows Bubble 完成 bounds 更新后使用 `SW_SHOWNOACTIVATE` 显示，并重新应用 skip-taskbar 与 always-on-top；显示行为不得改变前台窗口。Windows hit regions 使用新建临时 HRGN 完整合并后一次性交给 `SetWindowRgn`，系统接管成功 region 的所有权。
+- 区域输入有数量、正尺寸、整数范围、窗口边界和表面必需区域约束。验证、创建、合并或应用任一步失败都必须清除 region 并恢复完整矩形命中，不能留下部分可点击窗口。非 Windows 实现验证请求后保留完整窗口命中并返回安全回退状态，不模拟不存在的原生穿透。
+- `desktop-pet-bubble` 使用独立最小权限 capability；不得通过默认 capability 继承 SQL、文件、剪贴板、更新器、进程或通知权限。自定义 Tauri 命令仍在 Rust 边界执行 caller/token/epoch/revision 校验。
+- Bubble 的决策提交只向主窗口发送既有 `desktop-pet-decision-resolve-request`，主窗口继续调用现有 broker 命令。窗口 transport 不新增模型可调用工具、不直接访问 loopback broker、不生成答案、不改变 `allow`/`deny` 校验，也不把决策/事故/完成正文送入 Replay、toast、系统通知或第三方通知。
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| 非 `main` 调用 lifecycle sync | 返回 `pet_window_caller_forbidden`；不改状态或窗口。 |
+| token 或 surface epoch 过期 | 返回稳定 stale 错误；不应用 bounds/region/show。 |
+| 不可见代际提交 bounds/region | 返回 `pet_window_visibility_stale`；保持隐藏。 |
+| bounds/region revision 倒退 | 返回对应 revision stale 错误；保留最新提交。 |
+| Bubble 缺失但当前不需要显示 | 同步仍可完成；不扩大权限或创建动态窗口。 |
+| Bubble 需要显示但静态窗口缺失 | 返回 `pet_bubble_window_missing`；主窗口 transport 不提交 fingerprint，可重试。 |
+| Windows region 事务失败 | 尝试清除旧 region 并恢复完整矩形命中；清除成功时返回 `false`，清除本身失败时返回稳定错误，绝不提交部分新 region。 |
+| macOS/Linux region 请求 | 保留完整窗口命中并返回 `false`；窗口与 broker 继续可用。 |
+| Bubble WebView 直接调用 decision broker | 不提供该能力；必须经主窗口现有动作事件。 |
+
+### 5. Good/Base/Bad Cases
+
+- Good：宠物拖动产生多次测量，只有当前 token/epoch 的最新 bounds 生效，Bubble 以 inactive show 跟到最终锚点。
+- Good：`SetWindowRgn` 合并失败后整个 Bubble 仍可点击，用户可以继续回答决策。
+- Base：macOS/Linux 显示独立 Bubble，但透明间隙按完整窗口命中，不宣称 Windows 等价能力。
+- Bad：把 caller label、target label 或 token 当成普通 payload 字段后直接执行 Win32 调用。
+- Bad：Bubble 直接 resolve broker、注册新的 permission 工具，或在窗口隐藏/超时后合成 `allow`/`deny`。
+
+### 6. Tests Required
+
+- Rust：bounds/token/surface epoch 格式、caller/target 矩阵、可见性与 revision 单调性、region 数量/边界/必需区域及 fail-open 路径测试源。
+- 静态 capability 差集：Bubble 无 SQL、文件、剪贴板、更新器、进程与通知权限。
+- TypeScript/Node：严格 config-before-snapshot、双表面扇出、目标 epoch/delivery revision、layout request/measurement/geometry 迟到拒绝、失败不提交 fingerprint、surface epoch 接受/去重与隐藏清空策略；coordinator-ready/ready 启动握手由定向静态审查和平台冒烟覆盖。
+- 手动 Windows：前台窗口保持、任务栏/Alt+Tab、完整交互区、透明间隙穿透、跨 DPI 跟随和迟到 show 拒绝。
+- 手动 macOS/Linux：独立 Bubble 与完整窗口命中回退可操作，Pi 断连仍回退原生 UI。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+// Payload 声称来自 main 就直接显示，旧 WebView 可以复活已隐藏窗口。
+if payload.caller == "main" {
+    bubble.show()?;
+}
+```
+
+#### Correct
+
+```rust
+let caller = window.label();
+authorize_surface_request(caller, target, lifecycle_token, surface_epoch, revision)?;
+show_window_inactive(&bubble)?;
 ```

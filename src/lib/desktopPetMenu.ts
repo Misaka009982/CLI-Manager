@@ -28,13 +28,14 @@ export interface DesktopPetMenuWindowGeometry {
 export interface DesktopPetMenuWindowOptions {
   showActionMenu?: boolean;
   maxVisibleItems?: number;
+  contentHeight?: number;
 }
 
-const DESKTOP_PET_MENU_TARGET_EXTRA_WIDTH = 440;
-const DESKTOP_PET_MENU_TARGET_ONLY_EXTRA_WIDTH = 280;
+const DESKTOP_PET_MENU_TARGET_EXTRA_WIDTH = 570;
+const DESKTOP_PET_MENU_TARGET_ONLY_EXTRA_WIDTH = 410;
 const DESKTOP_PET_MENU_ACTIONS_EXTRA_WIDTH = 190;
-const DESKTOP_PET_MENU_CARD_HEIGHT = 58;
-const DESKTOP_PET_MENU_CARD_STEP = 54;
+const DESKTOP_PET_MENU_CARD_HEIGHT = 104;
+const DESKTOP_PET_MENU_CARD_STEP = 100;
 const DESKTOP_PET_MENU_CARD_BREATHING_ROOM = 12;
 export const DESKTOP_PET_MENU_MAX_VISIBLE_TARGETS = 3;
 export const DESKTOP_PET_MENU_MAX_VISIBLE_PLATFORMS = 5;
@@ -127,12 +128,16 @@ export function calculateDesktopPetMenuWindowGeometry(
     Math.max(0, Math.floor(Number.isFinite(targetCount) ? targetCount : 0)),
     maxVisibleItems
   );
-  const requestedTargetListHeight = visibleTargets > 0
+  const estimatedTargetListHeight = visibleTargets > 0
     ? DESKTOP_PET_MENU_CARD_HEIGHT
       + (visibleTargets - 1) * DESKTOP_PET_MENU_CARD_STEP
       + DESKTOP_PET_MENU_CARD_BREATHING_ROOM
       + Math.max(0, Number.isFinite(secondaryHeaderHeight) ? secondaryHeaderHeight : 0)
     : 0;
+  const requestedTargetListHeight = typeof options.contentHeight === "number"
+    && Number.isFinite(options.contentHeight)
+    ? Math.max(estimatedTargetListHeight, options.contentHeight)
+    : estimatedTargetListHeight;
   const requestedPanelWidth = visibleTargets > 0
     ? showActionMenu
       ? DESKTOP_PET_MENU_TARGET_EXTRA_WIDTH

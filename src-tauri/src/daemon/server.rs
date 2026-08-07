@@ -13,7 +13,10 @@ use super::protocol::{
     CONTROL_PROTOCOL_VERSION, MAX_FRAME_BYTES,
 };
 use super::ssh_agent_bridge::SshAgentBridgeManager;
-use crate::claude_hook::{remote_hook_payload_from_spool, spawn_hook_listener, HookPayloadSink};
+use crate::claude_hook::{
+    pi_heartbeat_timeout_payload, remote_hook_payload_from_spool, spawn_hook_listener,
+    HookConsumerProbe, HookPayloadSink,
+};
 use crate::commands::cc_connect::handoff_notification::RemoteHandoffNotifier;
 use crate::pty::manager::{PtyEventSink, PtyManager, PtyProcessStatus};
 use crate::ssh_launch::SshLaunchPlan;
@@ -39,6 +42,10 @@ use tungstenite::{accept_hdr, Message, WebSocket};
 pub const IDLE_EXIT_AFTER: Duration = Duration::from_secs(10 * 60);
 /// 空闲 watchdog 检查间隔。
 const IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+/// Pi 心跳超时与前端契约一致，daemon 独立看门以覆盖主窗口未运行的时段。
+const PI_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
+const PI_HEARTBEAT_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+const PI_HEARTBEAT_WATCHDOG_DRIFT: Duration = Duration::from_secs(10);
 /// 单会话 ring buffer 字节上限（契约：2 MiB）。
 pub const SESSION_BUFFER_MAX_BYTES: usize = 2 * 1024 * 1024;
 pub const SESSION_SPOOL_MAX_BYTES: usize = 10 * 1024 * 1024;
@@ -682,6 +689,14 @@ struct SshHookBinding {
 
 type SharedSession = Arc<Mutex<SessionEntry>>;
 
+struct PiHeartbeatWatch {
+    tab_id: String,
+    session_id: String,
+    source_instance_id: String,
+    last_heartbeat_at_ms: u64,
+    expires_at: Instant,
+}
+
 /// daemon 共享宿主：PTY 管理器 + 会话表 + 客户端注册表。
 pub struct DaemonHost {
     pty: PtyManager,
@@ -692,6 +707,7 @@ pub struct DaemonHost {
     hook_cache: Mutex<VecDeque<serde_json::Value>>,
     hook_gap_cache: Mutex<VecDeque<(String, u64)>>,
     hook_sink: Mutex<Option<HookPayloadSink>>,
+    pi_heartbeat_watches: Mutex<HashMap<(String, String), PiHeartbeatWatch>>,
     ssh_agent_bridges: SshAgentBridgeManager,
     spool_dir: PathBuf,
 }
@@ -714,6 +730,7 @@ impl DaemonHost {
             hook_cache: Mutex::new(VecDeque::new()),
             hook_gap_cache: Mutex::new(VecDeque::new()),
             hook_sink: Mutex::new(None),
+            pi_heartbeat_watches: Mutex::new(HashMap::new()),
             ssh_agent_bridges: SshAgentBridgeManager::default(),
             spool_dir,
         }
@@ -733,6 +750,98 @@ impl DaemonHost {
     fn set_hook_sink(&self, sink: HookPayloadSink) {
         if let Ok(mut current) = self.hook_sink.lock() {
             *current = Some(sink);
+        }
+    }
+
+    fn update_pi_heartbeat_watch(
+        &self,
+        payload: &serde_json::Value,
+        tab_id: &str,
+        event: &str,
+        updated_at_ms: u64,
+    ) {
+        if payload.get("source").and_then(|value| value.as_str()) != Some("pi") {
+            return;
+        }
+        let Some(source_instance_id) = payload
+            .get("sourceInstanceId")
+            .and_then(|value| value.as_str())
+        else {
+            return;
+        };
+        let Some(session_id) = payload.get("sessionId").and_then(|value| value.as_str()) else {
+            return;
+        };
+        let key = (source_instance_id.to_string(), session_id.to_string());
+        let Ok(mut watches) = self.pi_heartbeat_watches.lock() else {
+            return;
+        };
+        match event {
+            "UserPromptSubmit" => {
+                watches.retain(|current_key, watch| {
+                    watch.tab_id != tab_id || current_key == &key
+                });
+                watches.insert(
+                    key,
+                    PiHeartbeatWatch {
+                        tab_id: tab_id.to_string(),
+                        session_id: session_id.to_string(),
+                        source_instance_id: source_instance_id.to_string(),
+                        last_heartbeat_at_ms: updated_at_ms,
+                        expires_at: Instant::now() + PI_HEARTBEAT_TIMEOUT,
+                    },
+                );
+            }
+            "Stop" | "StopFailure" => {
+                watches.remove(&key);
+            }
+            _ => {}
+        }
+    }
+
+    fn defer_pi_heartbeat_watches_after_host_pause(&self) {
+        if let Ok(mut watches) = self.pi_heartbeat_watches.lock() {
+            let expires_at = Instant::now() + PI_HEARTBEAT_TIMEOUT;
+            for watch in watches.values_mut() {
+                watch.expires_at = expires_at;
+            }
+        }
+    }
+
+    fn report_expired_pi_heartbeats(&self) {
+        let expired = {
+            let Ok(mut watches) = self.pi_heartbeat_watches.lock() else {
+                return;
+            };
+            let now = Instant::now();
+            let expired_keys: Vec<(String, String)> = watches
+                .iter()
+                .filter(|(_, watch)| watch.expires_at <= now)
+                .map(|(key, _)| key.clone())
+                .collect();
+            expired_keys
+                .into_iter()
+                .filter_map(|key| watches.remove(&key))
+                .collect::<Vec<_>>()
+        };
+        if expired.is_empty() {
+            return;
+        }
+        let sink = self
+            .hook_sink
+            .lock()
+            .ok()
+            .and_then(|current| current.as_ref().cloned());
+        let Some(sink) = sink else {
+            return;
+        };
+        for watch in expired {
+            sink(pi_heartbeat_timeout_payload(
+                watch.tab_id,
+                watch.session_id,
+                watch.source_instance_id,
+                watch.last_heartbeat_at_ms,
+            ));
         }
     }
 
@@ -869,7 +978,7 @@ impl DaemonHost {
         Ok(())
     }
 
-    /// hook 上报广播给全部客户端；无客户端时进缓存（有界）。
+    /// hook 上报广播给全部客户端；无客户端或全部客户端不可写时进缓存（有界）。
     fn broadcast_hook(&self, payload: serde_json::Value) {
         let frame = DaemonFrame::HookReport {
             payload: payload.clone(),
@@ -887,8 +996,19 @@ impl DaemonHost {
             }
             return;
         }
+        let mut delivered = false;
         for client in clients.values() {
-            let _ = client.writer.send_frame(&frame);
+            delivered |= client.writer.send_frame(&frame).is_ok();
+        }
+        if delivered {
+            return;
+        }
+        drop(clients);
+        if let Ok(mut cache) = self.hook_cache.lock() {
+            cache.push_back(payload);
+            while cache.len() > HOOK_CACHE_MAX {
+                cache.pop_front();
+            }
         }
     }
 
@@ -926,21 +1046,50 @@ impl DaemonHost {
         let Some(event) = payload.get("event").and_then(|value| value.as_str()) else {
             return;
         };
+        let heartbeat = payload
+            .get("heartbeat")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
         let Some(task_status) = map_hook_event_to_task_status(event) else {
             return;
         };
-        let updated_at_ms = now_ms();
-        if let Some(session) = self.get_session(session_id) {
+        let updated_at_ms = payload
+            .get("timestamp")
+            .and_then(|value| value.as_str())
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .and_then(|value| u64::try_from(value.timestamp_millis()).ok())
+            .unwrap_or_else(now_ms);
+        let status_updated = if let Some(session) = self.get_session(session_id) {
             if let Ok(mut entry) = session.lock() {
-                entry.meta.task_status = Some(task_status.to_string());
-                entry.meta.task_updated_at_ms = Some(updated_at_ms);
-                log::debug!(
-                    "daemon task status updated: session_id={}, event={}, status={}",
-                    session_id,
-                    event,
-                    task_status
-                );
+                if entry
+                    .meta
+                    .task_updated_at_ms
+                    .is_some_and(|current| updated_at_ms <= current)
+                {
+                    // Hook 进程彼此独立，旧事件可能晚到；不能回退 daemon 任务状态。
+                    false
+                } else if heartbeat && entry.meta.task_status.as_deref() != Some("running") {
+                    // 迟到的 Pi 心跳不能覆盖 daemon 已记录的完成、失败或待处理状态。
+                    false
+                } else {
+                    entry.meta.task_status = Some(task_status.to_string());
+                    entry.meta.task_updated_at_ms = Some(updated_at_ms);
+                    log::debug!(
+                        "daemon task status updated: session_id={}, event={}, status={}",
+                        session_id,
+                        event,
+                        task_status
+                    );
+                    true
+                }
+            } else {
+                false
             }
+        } else {
+            false
+        };
+        if status_updated {
+            self.update_pi_heartbeat_watch(payload, session_id, event, updated_at_ms);
         }
     }
 
@@ -981,6 +1130,18 @@ impl DaemonHost {
 
     fn client_count(&self) -> usize {
         self.clients.lock().map(|c| c.len()).unwrap_or(0)
+    }
+
+    fn hook_consumer_state(&self) -> (bool, u64) {
+        self.clients
+            .lock()
+            .map(|clients| {
+                (
+                    !clients.is_empty(),
+                    clients.keys().copied().max().unwrap_or_default(),
+                )
+            })
+            .unwrap_or((false, 0))
     }
 
     /// 总 buffer 超限时从最旧的 exited 会话开始整会话丢弃（契约资源上限）。
@@ -1460,22 +1621,38 @@ impl DaemonServer {
             // 下方 broadcast_hook 送达前端，由前端决定是否通知/切换，绝不在此
             // 抢占前台——否则用户在其他应用里工作时会被 PermissionRequest（含
             // Codex 改代码时的误报）强制切回 CLI-Manager。
-            if hook_host.client_count() == 0 {
+            let has_clients = hook_host.client_count() > 0;
+            if !has_clients && !payload.is_heartbeat() {
                 maybe_activate_app_for_hook(&payload);
             }
-            dispatcher.try_enqueue(payload.to_notification_job());
+            if !payload.is_heartbeat() && !payload.is_pi_decision() {
+                dispatcher.try_enqueue(payload.to_notification_job());
+            }
             match serde_json::to_value(&payload) {
                 Ok(value) => {
-                    handoff_notifier.try_enqueue(value.clone());
-                    hook_host.update_task_status_from_hook(&value);
-                    hook_host.broadcast_hook(value);
+                    if !payload.is_heartbeat() && !payload.is_pi_decision() {
+                        handoff_notifier.try_enqueue(value.clone());
+                    }
+                    if !payload.is_pi_decision() {
+                        hook_host.update_task_status_from_hook(&value);
+                    }
+                    if has_clients
+                        || (!payload.is_heartbeat() && !payload.is_pi_decision_open())
+                    {
+                        // 无前端时不缓存高频心跳或仍由 broker 持有的 Pi 决策；
+                        // ack/cancel/过期墓碑必须缓存一次，避免短暂断线后遗留失效卡片。
+                        hook_host.broadcast_hook(value);
+                    }
                 }
                 Err(err) => log::warn!("daemon hook payload serialize failed: {err}"),
             }
         });
         server.host.set_hook_sink(Arc::clone(&hook_sink));
-        spawn_hook_listener(hook_listener, token, hook_sink);
+        let consumer_host = Arc::clone(&server.host);
+        let consumer_probe: HookConsumerProbe = Arc::new(move || consumer_host.hook_consumer_state());
+        spawn_hook_listener(hook_listener, token, hook_sink, consumer_probe);
 
+        server.spawn_pi_heartbeat_watchdog();
         server.spawn_idle_watchdog();
 
         let websocket_server = Arc::clone(&server);
@@ -1501,6 +1678,24 @@ impl DaemonServer {
             }
         }
         Ok(())
+    }
+
+    fn spawn_pi_heartbeat_watchdog(self: &Arc<Self>) {
+        let host = Arc::clone(&self.host);
+        std::thread::spawn(move || {
+            let mut last_check = Instant::now();
+            loop {
+                std::thread::sleep(PI_HEARTBEAT_CHECK_INTERVAL);
+                let now = Instant::now();
+                if now.duration_since(last_check) > PI_HEARTBEAT_WATCHDOG_DRIFT {
+                    // 整机睡眠或调度长暂停后先等待新的心跳，避免恢复瞬间误报。
+                    host.defer_pi_heartbeat_watches_after_host_pause();
+                } else {
+                    host.report_expired_pi_heartbeats();
+                }
+                last_check = Instant::now();
+            }
+        });
     }
 
     fn spawn_idle_watchdog(self: &Arc<Self>) {
@@ -2781,5 +2976,88 @@ mod tests {
         assert_eq!(map_hook_event_to_task_status("Stop"), Some("done"));
         assert_eq!(map_hook_event_to_task_status("StopFailure"), Some("failed"));
         assert_eq!(map_hook_event_to_task_status("SessionStart"), None);
+    }
+
+    #[test]
+    fn daemon_reports_pi_heartbeat_timeout_once_with_stable_identity() {
+        let host = DaemonHost::new();
+        let tab_id = "0e0f7b0a-1234-4c5d-9e8f-aabbccddeeff";
+        host.sessions.lock().unwrap().insert(
+            tab_id.to_string(),
+            test_session(tab_id, SessionBuffer::new(), 1),
+        );
+        let captured = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let captured_for_sink = Arc::clone(&captured);
+        host.set_hook_sink(Arc::new(move |payload| {
+            captured_for_sink
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(payload).unwrap());
+        }));
+        let started_at = chrono::Utc::now();
+        let started_at_text = started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let started_at_ms = started_at.timestamp_millis() as u64;
+        host.update_task_status_from_hook(&serde_json::json!({
+            "tabId": tab_id,
+            "source": "pi",
+            "sourceInstanceId": "pi-instance-1",
+            "sessionId": "pi-session-1",
+            "event": "UserPromptSubmit",
+            "timestamp": started_at_text
+        }));
+        {
+            let mut watches = host.pi_heartbeat_watches.lock().unwrap();
+            assert_eq!(watches.len(), 1);
+            watches.values_mut().next().unwrap().expires_at = Instant::now();
+        }
+        host.defer_pi_heartbeat_watches_after_host_pause();
+        {
+            let mut watches = host.pi_heartbeat_watches.lock().unwrap();
+            assert!(watches.values().next().unwrap().expires_at > Instant::now());
+            watches.values_mut().next().unwrap().expires_at = Instant::now();
+        }
+
+        host.report_expired_pi_heartbeats();
+        host.report_expired_pi_heartbeats();
+
+        assert!(host.pi_heartbeat_watches.lock().unwrap().is_empty());
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0]["event"], "StopFailure");
+        assert_eq!(captured[0]["source"], "pi");
+        assert_eq!(captured[0]["tabId"], tab_id);
+        assert_eq!(captured[0]["sessionId"], "pi-session-1");
+        let expected_event_id = format!("pi-heartbeat:pi-instance-1:{started_at_ms}");
+        assert_eq!(
+            captured[0]["remoteEventId"].as_str(),
+            Some(expected_event_id.as_str())
+        );
+    }
+
+    #[test]
+    fn stale_hook_timestamp_does_not_regress_daemon_task_status() {
+        let host = DaemonHost::new();
+        let session_id = "0e0f7b0a-1234-4c5d-9e8f-aabbccddeeff";
+        host.sessions.lock().unwrap().insert(
+            session_id.to_string(),
+            test_session(session_id, SessionBuffer::new(), 1),
+        );
+
+        host.update_task_status_from_hook(&serde_json::json!({
+            "tabId": session_id,
+            "event": "Stop",
+            "timestamp": "2026-08-06T12:00:02Z"
+        }));
+        host.update_task_status_from_hook(&serde_json::json!({
+            "tabId": session_id,
+            "event": "UserPromptSubmit",
+            "timestamp": "2026-08-06T12:00:01Z",
+            "heartbeat": true
+        }));
+
+        let session = host.get_session(session_id).unwrap();
+        let entry = session.lock().unwrap();
+        assert_eq!(entry.meta.task_status.as_deref(), Some("done"));
+        assert_eq!(entry.meta.task_updated_at_ms, Some(1_786_017_602_000));
     }
 }

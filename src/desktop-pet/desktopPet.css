@@ -33,7 +33,7 @@
 
 .desktop-pet-root:active { cursor: grabbing; }
 .desktop-pet-root[data-menu-open="true"] { cursor: default; }
-.desktop-pet-root[data-mood="waiting"] { --pet-accent: #facc15; }
+.desktop-pet-root[data-mood="waiting"] { --pet-accent: #5ac8e0; }
 .desktop-pet-root[data-mood="error"] { --pet-accent: #fb7185; }
 .desktop-pet-root[data-mood="success"] { --pet-accent: #5ac8e0; }
 .desktop-pet-root[data-mood="sleeping"] { --pet-accent: #94a3b8; }
@@ -54,76 +54,58 @@
   height: var(--pet-anchor-height);
 }
 
-.desktop-pet-status {
+.desktop-pet-status-rail {
   position: absolute;
-  bottom: calc(8px + var(--pet-stage-size) - 6px);
-  left: 50%;
-  z-index: 3;
+  bottom: 24px;
+  left: calc(50% + var(--pet-stage-size) * .34);
+  z-index: 4;
   display: flex;
-  width: 144px;
-  min-height: 36px;
-  max-height: 48px;
-  box-sizing: border-box;
-  transform: translateX(-50%) scale(var(--pet-scale));
-  transform-origin: 50% 100%;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  overflow: visible;
-  border: 1px solid color-mix(in srgb, var(--pet-accent) 48%, transparent);
-  border-radius: 14px;
-  color: #eafff3;
-  background:
-    linear-gradient(145deg, rgb(20 39 44 / 82%), rgb(5 15 22 / 72%)),
-    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--pet-accent) 13%, transparent), transparent 62%);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 12%),
-    0 8px 22px rgb(0 0 0 / 28%);
-  padding: 3px 9px;
-  text-align: center;
-  backdrop-filter: blur(16px) saturate(145%);
-  -webkit-backdrop-filter: blur(16px) saturate(145%);
+  gap: 5px;
+  pointer-events: auto;
 }
 
-.desktop-pet-status::before,
-.desktop-pet-status::after {
-  position: absolute;
-  bottom: -7px;
-  left: 50%;
-  width: 0;
-  height: 0;
-  transform: translateX(-50%);
-  border-top: 7px solid color-mix(in srgb, var(--pet-accent) 48%, transparent);
-  border-right: 7px solid transparent;
-  border-left: 7px solid transparent;
-  content: "";
+.desktop-pet-status-rail button {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border: 2px solid rgb(5 14 20 / 82%);
+  border-radius: 999px;
+  color: #061018;
+  background: #64748b;
+  box-shadow: 0 5px 12px rgb(0 0 0 / 34%);
+  padding: 0;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: transform .16s ease, filter .16s ease;
 }
 
-.desktop-pet-status::after {
-  bottom: -5px;
-  border-top-color: rgb(10 23 29 / 92%);
-  border-right-width: 6px;
-  border-left-width: 6px;
+.desktop-pet-status-rail button[data-color="green"] {
+  background: #3dd68c;
+  box-shadow: 0 5px 12px rgb(0 0 0 / 34%), 0 0 14px rgb(61 214 140 / 42%);
 }
 
-.desktop-pet-status strong {
-  color: var(--pet-accent);
-  font-size: 12px;
-  line-height: 1.2;
+.desktop-pet-status-rail button[data-color="red"] {
+  color: #fff;
+  background: #fb5f6f;
+  box-shadow: 0 5px 12px rgb(0 0 0 / 34%), 0 0 14px rgb(251 95 111 / 44%);
 }
 
-.desktop-pet-status span {
-  width: 100%;
-  overflow: hidden;
-  color: #dbe7e1;
-  font-size: 10px;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.desktop-pet-status-rail button[data-color="blue"] {
+  background: #5ac8e0;
+  box-shadow: 0 5px 12px rgb(0 0 0 / 34%), 0 0 14px rgb(90 200 224 / 42%);
 }
 
-.desktop-pet-status small { color: #9fb1a8; font-size: 9px; line-height: 1.15; }
+.desktop-pet-status-rail button:hover,
+.desktop-pet-status-rail button:focus-visible {
+  outline: none;
+  filter: brightness(1.12);
+  transform: translateX(2px) scale(1.08);
+}
 
 .desktop-pet-stage {
   position: absolute;
@@ -215,7 +197,7 @@
   right: calc(var(--pet-anchor-width) + 128px);
   bottom: 12px;
   display: flex;
-  width: min(260px, max(132px, calc(var(--pet-menu-panel-width) - 166px)));
+  width: min(380px, max(180px, calc(var(--pet-menu-panel-width) - 174px)));
   height: var(--pet-target-list-height);
   box-sizing: border-box;
   flex-direction: column;
@@ -252,7 +234,7 @@
 
 .desktop-pet-root[data-show-action-menu="false"] .desktop-pet-target-list {
   right: calc(var(--pet-anchor-width) - 20px);
-  width: min(260px, max(132px, calc(var(--pet-menu-panel-width) - 20px)));
+  width: min(380px, max(180px, calc(var(--pet-menu-panel-width) - 24px)));
 }
 
 .desktop-pet-secondary-header {
@@ -359,12 +341,12 @@
   position: relative;
   display: flex;
   width: calc(100% - 8px);
-  min-height: 58px;
+  min-height: 62px;
   box-sizing: border-box;
-  flex: 0 0 58px;
-  align-items: center;
+  flex: 0 0 auto;
+  align-items: flex-start;
   gap: 9px;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid rgb(212 255 235 / 22%);
   border-radius: 8px;
   color: #e5f9ef;
@@ -465,9 +447,22 @@
   background: #3dd68c;
   box-shadow: 0 0 0 3px rgb(61 214 140 / 18%), 0 0 15px rgb(61 214 140 / 38%);
 }
+.desktop-pet-target[data-status="running"] {
+  border-color: rgb(61 214 140 / 72%);
+}
+
+.desktop-pet-target[data-status="attention"],
+.desktop-pet-target[data-status="done"] {
+  border-color: rgb(90 200 224 / 74%);
+}
+
+.desktop-pet-target[data-status="failed"] {
+  border-color: rgb(251 95 111 / 78%);
+}
+
 .desktop-pet-target[data-status="attention"] .desktop-pet-target-indicator {
-  background: #facc15;
-  box-shadow: 0 0 0 3px rgb(250 204 21 / 18%), 0 0 15px rgb(250 204 21 / 34%);
+  background: #5ac8e0;
+  box-shadow: 0 0 0 3px rgb(90 200 224 / 18%), 0 0 15px rgb(90 200 224 / 34%);
 }
 .desktop-pet-target[data-status="done"] .desktop-pet-target-indicator {
   background: #5ac8e0;
@@ -490,9 +485,8 @@
 
 .desktop-pet-target-copy strong,
 .desktop-pet-target-copy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .desktop-pet-target-copy strong {
@@ -503,6 +497,16 @@
 }
 
 .desktop-pet-target-copy small { color: rgb(202 224 214 / 74%); font-size: 10px; }
+
+.desktop-pet-card-message {
+  margin: 6px 0 0;
+  color: rgb(232 244 239 / 88%);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
 
 .desktop-pet-target-current {
   position: relative;

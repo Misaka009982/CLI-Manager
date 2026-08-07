@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-pet-bubble",
+  "description": "Minimal event and logging capability for the desktop pet Bubble window",
+  "windows": [
+    "desktop-pet-bubble"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "core:event:allow-emit-to",
+    "log:default"
+  ]
+}

@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -8,7 +9,7 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, emitTo, listen } from "@tauri-apps/api/event";
-import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
+import { availableMonitors, currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AppWindow,
   ArrowLeft,
@@ -28,9 +29,16 @@ import { CliCat } from "../components/desktop-pet/CliCat";
 import { PetArtwork } from "../components/desktop-pet/PetArtwork";
 import {
   DESKTOP_PET_CONFIG_EVENT,
+  DESKTOP_PET_BUBBLE_GEOMETRY_EVENT,
+  DESKTOP_PET_BUBBLE_FOCUS_EVENT,
+  DESKTOP_PET_BUBBLE_LAYOUT_REQUEST_EVENT,
+  DESKTOP_PET_BUBBLE_MEASURE_EVENT,
+  DESKTOP_PET_BUBBLE_WINDOW_LABEL,
   DESKTOP_PET_CLOSE_MENU_EVENT,
+  DESKTOP_PET_COORDINATOR_READY_EVENT,
   DESKTOP_PET_HANDOFF_CANCEL_EVENT,
   DESKTOP_PET_HANDOFF_START_EVENT,
+  DESKTOP_PET_HIDDEN_EVENT,
   DESKTOP_PET_OPEN_SETTINGS_EVENT,
   DESKTOP_PET_OPEN_TARGET_EVENT,
   DESKTOP_PET_POSITION_EVENT,
@@ -43,22 +51,46 @@ import {
   DESKTOP_PET_MENU_MAX_VISIBLE_PLATFORMS,
   DESKTOP_PET_MENU_MAX_VISIBLE_TARGETS,
   calculateDesktopPetMenuWindowGeometry,
+  buildDesktopPetLabels,
   createLatestAsyncTaskRunner,
   desktopPetScale,
   normalizeDesktopPetSizePercent,
   resizeDesktopPetCollapsedWindowBounds,
   stepDesktopPetSizePercent,
   type DesktopPetConfigPayload,
+  type DesktopPetConfigEventPayload,
+  type DesktopPetBubbleGeometryPayload,
+  type DesktopPetBubbleLayoutRequestPayload,
+  type DesktopPetBubbleMeasurementPayload,
+  type DesktopPetHitRegion,
   type DesktopPetMenuWindowGeometry,
   type DesktopPetMood,
   type DesktopPetWindowRect,
   type LatestAsyncTaskRunner,
   type DesktopPetSnapshot,
+  type DesktopPetSnapshotEventPayload,
+  type DesktopPetStatusColor,
   type DesktopPetTarget,
   type InstalledPet,
   localizedPetText,
 } from "../lib/desktopPet";
-import { convertChineseForLanguage, getCurrentLanguage, translate } from "../lib/i18n";
+import {
+  calculateDesktopPetBubbleGeometry,
+  createDesktopPetLatestFrameTaskRunner,
+  normalizeDesktopPetHitRegions,
+  type DesktopPetLatestFrameTaskRunner,
+} from "../lib/desktopPetBubble";
+import {
+  normalizeDesktopPetStatusFilter,
+  visibleDesktopPetStatusColors,
+} from "../lib/desktopPetStatus";
+import {
+  createDesktopPetSurfaceEpoch,
+  shouldAcceptDesktopPetBubbleMeasurement,
+  shouldAcceptDesktopPetConfigDelivery,
+  shouldAcceptDesktopPetSnapshotDelivery,
+} from "../lib/desktopPetTransport";
+import { convertChineseForLanguage, getCurrentLanguage } from "../lib/i18n";
 import { logWarn } from "../lib/logger";
 import type {
   CcConnectHandoffPlatformTarget,
@@ -67,62 +99,13 @@ import type {
 import { BUILTIN_DESKTOP_PET_ID } from "../stores/settingsStore";
 import "./desktopPet.css";
 
-function buildDesktopPetLabels(language: DesktopPetConfigPayload["language"]): DesktopPetConfigPayload["labels"] {
-  return {
-    openMain: translate(language, "desktopPet.actions.openMain"),
-    openSettings: translate(language, "desktopPet.actions.openSettings"),
-    size: translate(language, "desktopPet.settings.size"),
-    hide: translate(language, "desktopPet.actions.hide"),
-    idle: translate(language, "desktopPet.mood.idle"),
-    working: translate(language, "desktopPet.mood.working"),
-    waiting: translate(language, "desktopPet.mood.waiting"),
-    success: translate(language, "desktopPet.mood.success"),
-    error: translate(language, "desktopPet.mood.error"),
-    sleeping: translate(language, "desktopPet.mood.sleeping"),
-    runningCount: translate(language, "desktopPet.mood.runningCount"),
-    taskList: translate(language, "desktopPet.actions.taskList"),
-    currentTask: translate(language, "desktopPet.actions.currentTask"),
-    unnamedTask: translate(language, "desktopPet.actions.unnamedTask"),
-    openCurrent: translate(language, "desktopPet.actions.openCurrent"),
-    remoteHandoff: translate(language, "desktopPet.actions.remoteHandoff"),
-    cancelHandoff: translate(language, "desktopPet.actions.cancelHandoff"),
-    handoffPlatforms: translate(language, "desktopPet.actions.handoffPlatforms"),
-    handoffSessions: translate(language, "desktopPet.actions.handoffSessions"),
-    handoffBack: translate(language, "desktopPet.actions.handoffBack"),
-    platformReady: translate(language, "desktopPet.actions.platformReady"),
-    platformNotRunning: translate(language, "desktopPet.actions.platformNotRunning"),
-    platformCredentialsMissing: translate(
-      language,
-      "desktopPet.actions.platformCredentialsMissing"
-    ),
-    platformUserMissing: translate(language, "desktopPet.actions.platformUserMissing"),
-    platformSessionMissing: translate(language, "desktopPet.actions.platformSessionMissing"),
-    platformUnavailable: translate(language, "desktopPet.actions.platformUnavailable"),
-    platformTelegram: translate(language, "settings.ccConnect.platformTelegram"),
-    platformFeishu: translate(language, "settings.ccConnect.platformFeishu"),
-    platformWeixin: translate(language, "settings.ccConnect.platformWeixin"),
-    platformWecom: translate(language, "settings.ccConnect.platformWecom"),
-    handoffPending: translate(language, "remoteHandoff.overlay.pending"),
-    handoffCancelling: translate(language, "remoteHandoff.overlay.cancelling"),
-    handedOff: translate(language, "desktopPet.actions.handedOff"),
-    handoffRecoveryFailed: translate(language, "desktopPet.actions.handoffRecoveryFailed"),
-    noHandoffSessions: translate(language, "desktopPet.actions.noHandoffSessions"),
-    handoffReady: translate(language, "desktopPet.actions.handoffReady"),
-    handoffResolveRemoteSession: translate(
-      language,
-      "desktopPet.actions.handoffResolveRemoteSession"
-    ),
-    handoffTaskRunning: translate(language, "desktopPet.actions.handoffTaskRunning"),
-    handoffStateUnknown: translate(language, "desktopPet.actions.handoffStateUnknown"),
-    handoffUnavailable: translate(language, "desktopPet.actions.handoffUnavailable"),
-  };
-}
-
 const DEFAULT_LANGUAGE = getCurrentLanguage();
 
 const DEFAULT_CONFIG: DesktopPetConfigPayload = {
   language: DEFAULT_LANGUAGE,
   visible: false,
+  bubbleVisible: false,
+  lifecycleToken: "",
   settings: {
     enabled: true,
     petId: BUILTIN_DESKTOP_PET_ID,
@@ -150,8 +133,11 @@ const DEFAULT_SNAPSHOT: DesktopPetSnapshot = {
   projectName: null,
   runningCount: 0,
   attentionCount: 0,
+  statusCounts: { green: 0, red: 0, blue: 0 },
   updatedAt: Date.now(),
   targets: [],
+  decisionRequests: [],
+  incidents: [],
   handoff: null,
   handoffPlatforms: [],
   handoffBusy: false,
@@ -251,6 +237,13 @@ function PlatformIcon({ platform }: { platform: CcConnectPlatform }) {
   return <Icon size={15} aria-hidden="true" />;
 }
 
+function desktopPetStatusColor(status: DesktopPetTarget["status"]): DesktopPetStatusColor | null {
+  if (status === "running") return "green";
+  if (status === "failed") return "red";
+  if (status === "attention" || status === "done") return "blue";
+  return null;
+}
+
 interface CollapsedPetWindowGeometry {
   bounds: DesktopPetWindowRect;
   scaleFactor: number;
@@ -262,9 +255,36 @@ interface DesktopPetMenuWindowRequest {
   open: boolean;
   petScale: number;
   secondaryItemCount: number;
+  secondaryContentHeight: number;
   secondaryHeaderHeight: number;
   showActionMenu: boolean;
   maxVisibleItems: number;
+}
+
+interface DesktopPetBubbleGeometryRequest {
+  measurement: DesktopPetBubbleMeasurementPayload;
+  followRevision: number;
+}
+
+interface DesktopPetAnchorContext {
+  anchor: DesktopPetWindowRect;
+  workArea: DesktopPetWindowRect | null;
+  scaleFactor: number;
+}
+
+function desktopPetEnvironmentSignature(context: DesktopPetAnchorContext): string {
+  const workArea = context.workArea;
+  return [
+    context.scaleFactor,
+    context.anchor.x,
+    context.anchor.y,
+    context.anchor.width,
+    context.anchor.height,
+    workArea?.x ?? "none",
+    workArea?.y ?? "none",
+    workArea?.width ?? "none",
+    workArea?.height ?? "none",
+  ].join(":");
 }
 
 const DESKTOP_PET_HOVER_OPEN_DELAY_MS = 200;
@@ -281,8 +301,58 @@ const DESKTOP_PET_SIZE_ADJUSTMENT_KEYS = new Set([
   "PageUp",
 ]);
 
-function setDesktopPetWindowBounds(bounds: DesktopPetWindowRect): Promise<void> {
-  return invoke("desktop_pet_window_set_bounds", { bounds });
+interface DesktopPetMonitorLike {
+  workArea: {
+    position: { x: number; y: number };
+    size: { width: number; height: number };
+  };
+}
+
+function monitorWorkArea(monitor: DesktopPetMonitorLike): DesktopPetWindowRect {
+  return {
+    x: monitor.workArea.position.x,
+    y: monitor.workArea.position.y,
+    width: monitor.workArea.size.width,
+    height: monitor.workArea.size.height,
+  };
+}
+
+function workAreaForAnchor(
+  monitors: readonly DesktopPetMonitorLike[],
+  anchor: DesktopPetWindowRect
+): DesktopPetWindowRect | null {
+  if (monitors.length === 0) return null;
+  const centerX = anchor.x + anchor.width / 2;
+  const centerY = anchor.y + anchor.height / 2;
+  const containing = monitors.find((monitor) => {
+    const workArea = monitorWorkArea(monitor);
+    return centerX >= workArea.x
+      && centerX < workArea.x + workArea.width
+      && centerY >= workArea.y
+      && centerY < workArea.y + workArea.height;
+  });
+  if (containing) return monitorWorkArea(containing);
+  return monitorWorkArea([...monitors].sort((left, right) => {
+    const leftArea = monitorWorkArea(left);
+    const rightArea = monitorWorkArea(right);
+    const leftCenterX = leftArea.x + leftArea.width / 2;
+    const leftCenterY = leftArea.y + leftArea.height / 2;
+    const rightCenterX = rightArea.x + rightArea.width / 2;
+    const rightCenterY = rightArea.y + rightArea.height / 2;
+    return Math.hypot(centerX - leftCenterX, centerY - leftCenterY)
+      - Math.hypot(centerX - rightCenterX, centerY - rightCenterY);
+  })[0]);
+}
+
+function estimatedWrappedLines(text: string | null | undefined, charsPerLine: number): number {
+  if (!text) return 0;
+  return text.split(/\r?\n/).reduce((lines, line) => {
+    const visualLength = Array.from(line).reduce(
+      (length, character) => length + ((character.codePointAt(0) ?? 0) > 0xff ? 2 : 1),
+      0
+    );
+    return lines + Math.max(1, Math.ceil(visualLength / charsPerLine));
+  }, 0);
 }
 
 function targetFanStyle(index: number, count: number, maxVisibleItems: number): CSSProperties {
@@ -304,14 +374,21 @@ export default function DesktopPetApp() {
   const [displayMood, setDisplayMood] = useState<DesktopPetMood>(DEFAULT_SNAPSHOT.mood);
   const [installedPet, setInstalledPet] = useState<InstalledPet | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<DesktopPetStatusColor | null>(null);
   const [targetMode, setTargetMode] = useState<"open" | "platforms" | "handoff">("open");
   const [selectedPlatform, setSelectedPlatform] = useState<CcConnectPlatform | null>(null);
   const [menuGeometry, setMenuGeometry] = useState<DesktopPetMenuWindowGeometry | null>(null);
+  const [menuLayoutRevision, setMenuLayoutRevision] = useState(0);
   const [previewSize, setPreviewSize] = useState<number | null>(null);
   const [documentVisible, setDocumentVisible] = useState(() => !document.hidden);
+  const visibleStatusColors = visibleDesktopPetStatusColors(snapshot.statusCounts);
+  const visibleStatusKey = visibleStatusColors.join(":");
+  const filteredTargets = statusFilter
+    ? snapshot.targets.filter((target) => desktopPetStatusColor(target.status) === statusFilter)
+    : snapshot.targets;
   const menuTargets = targetMode === "handoff"
     ? snapshot.targets.filter((target) => target.handoffCandidate)
-    : snapshot.targets;
+    : filteredTargets;
   const handoffPlatforms = useMemo(
     () => snapshot.handoffPlatforms.filter((platform) => platform.enabled),
     [snapshot.handoffPlatforms]
@@ -319,14 +396,48 @@ export default function DesktopPetApp() {
   const secondaryItemCount = targetMode === "platforms"
     ? handoffPlatforms.length
     : menuTargets.length;
+  const secondaryContentHeight = targetMode === "platforms"
+    ? 0
+    : menuTargets.reduce((height, target) => (
+        height
+        + 72
+        + Math.max(0, estimatedWrappedLines(target.sessionTitle, 38) - 1) * 15
+        + estimatedWrappedLines(target.message, 44) * 15
+      ), 0);
   const secondaryHeaderHeight = targetMode === "open" ? 0 : 34;
   const maxVisibleSecondaryItems = targetMode === "platforms"
     ? DESKTOP_PET_MENU_MAX_VISIBLE_PLATFORMS
     : DESKTOP_PET_MENU_MAX_VISIBLE_TARGETS;
-  const secondaryListScrollable = secondaryItemCount > maxVisibleSecondaryItems;
-  const canOpenMenu = config.settings.showActionMenu || snapshot.targets.length > 0;
+  const secondaryListScrollable = targetMode === "platforms"
+    ? secondaryItemCount > maxVisibleSecondaryItems
+    : false;
+  const canOpenMenu = config.settings.showActionMenu
+    || snapshot.targets.length > 0;
   const effectiveSize = previewSize ?? config.settings.size;
   const petScale = desktopPetScale(config.settings.size);
+  const surfaceEpochRef = useRef(createDesktopPetSurfaceEpoch());
+  const configRef = useRef(config);
+  const petAnchorRef = useRef<HTMLDivElement | null>(null);
+  const petStageRef = useRef<HTMLDivElement | null>(null);
+  const statusRailRef = useRef<HTMLElement | null>(null);
+  const petBoundsRequestRevisionRef = useRef(0);
+  const petBoundsRevisionRef = useRef(0);
+  const petRegionRevisionRef = useRef(0);
+  const configDeliveryRevisionRef = useRef(0);
+  const snapshotDeliveryRevisionRef = useRef(0);
+  const bubbleLayoutRequestRevisionRef = useRef(0);
+  const bubbleBoundsRevisionRef = useRef(0);
+  const bubbleFollowRevisionRef = useRef(0);
+  const bubbleMeasurementRef = useRef<DesktopPetBubbleMeasurementPayload | null>(null);
+  const bubbleEnvironmentSignatureRef = useRef<string | null>(null);
+  const bubbleGeometryTaskRef = useRef<LatestAsyncTaskRunner<DesktopPetBubbleGeometryRequest> | null>(null);
+  const bubbleFollowFrameTaskRef = useRef<DesktopPetLatestFrameTaskRunner<number> | null>(null);
+  const scheduleBubbleFollowRef = useRef<() => void>(() => {});
+  const requestBubbleLayoutRef = useRef<() => void>(() => {});
+  const synchronizeCurrentPetBoundsRef = useRef<() => void>(() => {});
+  const petHitRegionFrameRef = useRef<number | null>(null);
+  const reportPetHitRegionsRef = useRef<() => Promise<void>>(async () => {});
+  const schedulePetHitRegionReportRef = useRef<() => void>(() => {});
   const moveTimerRef = useRef<number | null>(null);
   const dragResetTimerRef = useRef<number | null>(null);
   const userDraggingRef = useRef(false);
@@ -349,6 +460,251 @@ export default function DesktopPetApp() {
   menuOpenRef.current = menuOpen;
   previewSizeRef.current = previewSize;
   lockPositionRef.current = config.settings.lockPosition;
+  configRef.current = config;
+
+  const requestBubbleLayout = () => {
+    const current = configRef.current;
+    if (!current.visible || !current.bubbleVisible || !current.lifecycleToken) return;
+    const revision = bubbleLayoutRequestRevisionRef.current + 1;
+    bubbleLayoutRequestRevisionRef.current = revision;
+    const payload: DesktopPetBubbleLayoutRequestPayload = {
+      lifecycleToken: current.lifecycleToken,
+      petSurfaceEpoch: surfaceEpochRef.current,
+      revision,
+    };
+    void emitTo(
+      DESKTOP_PET_BUBBLE_WINDOW_LABEL,
+      DESKTOP_PET_BUBBLE_LAYOUT_REQUEST_EVENT,
+      payload
+    ).catch((error) => {
+      if (configRef.current.lifecycleToken === payload.lifecycleToken) {
+        logWarn("Failed to request desktop pet Bubble layout", error);
+      }
+    });
+  };
+  requestBubbleLayoutRef.current = requestBubbleLayout;
+
+  const readDesktopPetAnchorContext = async (): Promise<DesktopPetAnchorContext> => {
+    const appWindow = getCurrentWindow();
+    const [position, size, scaleFactor, monitors, fallbackMonitor] = await Promise.all([
+      appWindow.outerPosition(),
+      appWindow.outerSize(),
+      appWindow.scaleFactor(),
+      availableMonitors().catch(() => []),
+      currentMonitor().catch(() => null),
+    ]);
+    const safeScale = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1;
+    const anchorElement = petAnchorRef.current;
+    const stageElement = petStageRef.current;
+    let anchor: DesktopPetWindowRect;
+    if (anchorElement && stageElement) {
+      const anchorRect = anchorElement.getBoundingClientRect();
+      const statusRail = statusRailRef.current;
+      const left = Math.min(stageElement.offsetLeft, statusRail?.offsetLeft ?? Number.POSITIVE_INFINITY);
+      const top = Math.min(stageElement.offsetTop, statusRail?.offsetTop ?? Number.POSITIVE_INFINITY);
+      const right = Math.max(
+        stageElement.offsetLeft + stageElement.offsetWidth,
+        statusRail ? statusRail.offsetLeft + statusRail.offsetWidth : Number.NEGATIVE_INFINITY
+      );
+      const bottom = Math.max(
+        stageElement.offsetTop + stageElement.offsetHeight,
+        statusRail ? statusRail.offsetTop + statusRail.offsetHeight : Number.NEGATIVE_INFINITY
+      );
+      anchor = {
+        x: Math.round(position.x + (anchorRect.left + left) * safeScale),
+        y: Math.round(position.y + (anchorRect.top + top) * safeScale),
+        width: Math.max(1, Math.round((right - left) * safeScale)),
+        height: Math.max(1, Math.round((bottom - top) * safeScale)),
+      };
+    } else {
+      const stageSize = Math.max(1, Math.round(144 * desktopPetScale(configRef.current.settings.size) * safeScale));
+      anchor = {
+        x: Math.round(position.x + (size.width - stageSize) / 2),
+        y: Math.round(position.y + size.height - stageSize - 8 * safeScale),
+        width: stageSize,
+        height: stageSize,
+      };
+    }
+    const monitorCandidates: DesktopPetMonitorLike[] = monitors.length > 0
+      ? monitors
+      : fallbackMonitor
+        ? [fallbackMonitor]
+        : [];
+    return {
+      anchor,
+      workArea: workAreaForAnchor(monitorCandidates, anchor),
+      scaleFactor: safeScale,
+    };
+  };
+
+  const initializeBubbleRunners = () => {
+    if (!bubbleGeometryTaskRef.current) {
+      bubbleGeometryTaskRef.current = createLatestAsyncTaskRunner<DesktopPetBubbleGeometryRequest>(
+        async (request, context) => {
+          const measurement = request.measurement;
+          const current = configRef.current;
+          const latestMeasurement = bubbleMeasurementRef.current;
+          if (
+            !current.visible
+            || !current.bubbleVisible
+            || current.lifecycleToken !== measurement.lifecycleToken
+            || measurement.petSurfaceEpoch !== surfaceEpochRef.current
+            || !latestMeasurement
+            || latestMeasurement.bubbleSurfaceEpoch !== measurement.bubbleSurfaceEpoch
+            || latestMeasurement.measurementRevision !== measurement.measurementRevision
+          ) {
+            return;
+          }
+          const anchorContext = await readDesktopPetAnchorContext();
+          if (!context.isLatest()) return;
+          const geometry = calculateDesktopPetBubbleGeometry({
+            anchor: anchorContext.anchor,
+            workArea: anchorContext.workArea,
+            naturalWidth: measurement.naturalWidth,
+            naturalHeight: measurement.naturalHeight,
+            scaleFactor: anchorContext.scaleFactor,
+          });
+          const nativeRevision = bubbleBoundsRevisionRef.current + 1;
+          bubbleBoundsRevisionRef.current = nativeRevision;
+          await invoke("desktop_pet_bubble_window_set_bounds", {
+            lifecycleToken: measurement.lifecycleToken,
+            surfaceEpoch: surfaceEpochRef.current,
+            revision: nativeRevision,
+            bounds: geometry.bounds,
+          });
+          if (!context.isLatest()) return;
+          const payload: DesktopPetBubbleGeometryPayload = {
+            lifecycleToken: measurement.lifecycleToken,
+            petSurfaceEpoch: measurement.petSurfaceEpoch,
+            revision: measurement.revision,
+            bubbleSurfaceEpoch: measurement.bubbleSurfaceEpoch,
+            measurementRevision: measurement.measurementRevision,
+            geometryRevision: nativeRevision,
+            placement: geometry.placement,
+            logicalWidth: geometry.logicalWidth,
+            logicalHeight: geometry.logicalHeight,
+            arrowOffset: geometry.arrowOffset,
+          };
+          await emitTo(
+            DESKTOP_PET_BUBBLE_WINDOW_LABEL,
+            DESKTOP_PET_BUBBLE_GEOMETRY_EVENT,
+            payload
+          );
+          if (context.isLatest()) {
+            bubbleEnvironmentSignatureRef.current = desktopPetEnvironmentSignature(anchorContext);
+          }
+        },
+        (error) => {
+          if (configRef.current.visible && configRef.current.bubbleVisible) {
+            logWarn("Failed to place desktop pet Bubble window", error);
+          }
+        }
+      );
+    }
+
+    if (!bubbleFollowFrameTaskRef.current) {
+      bubbleFollowFrameTaskRef.current = createDesktopPetLatestFrameTaskRunner(
+        (followRevision) => {
+          const measurement = bubbleMeasurementRef.current;
+          if (measurement) {
+            bubbleGeometryTaskRef.current?.schedule({ measurement, followRevision });
+          }
+        },
+        {
+          requestFrame: (callback) => window.requestAnimationFrame(callback),
+          cancelFrame: (handle) => window.cancelAnimationFrame(handle),
+          setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
+          clearTimer: (handle) => window.clearTimeout(handle),
+        },
+        80
+      );
+    }
+  };
+  initializeBubbleRunners();
+
+  const scheduleBubbleFollow = () => {
+    bubbleFollowRevisionRef.current += 1;
+    bubbleFollowFrameTaskRef.current?.schedule(bubbleFollowRevisionRef.current);
+  };
+  scheduleBubbleFollowRef.current = scheduleBubbleFollow;
+
+  const reportPetHitRegions = async () => {
+    const current = configRef.current;
+    const boundsRevision = petBoundsRevisionRef.current;
+    if (!current.visible || !current.lifecycleToken || boundsRevision <= 0) return;
+    const lifecycleToken = current.lifecycleToken;
+    const scaleFactor = await getCurrentWindow().scaleFactor().catch(() => (
+      Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+        ? window.devicePixelRatio
+        : 1
+    ));
+    if (configRef.current.lifecycleToken !== lifecycleToken) return;
+    const elements = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-pet-hit-region]")
+    );
+    const regions: DesktopPetHitRegion[] = [];
+    for (const element of elements) {
+      const kind = element.dataset.petHitRegion === "stage" ? "stage" : "control";
+      const elementRect = element.getBoundingClientRect();
+      const stableStageRect = kind === "stage" && petAnchorRef.current && element === petStageRef.current
+        ? (() => {
+            const anchorRect = petAnchorRef.current!.getBoundingClientRect();
+            const horizontalPadding = 12;
+            const topPadding = Math.max(
+              24,
+              configRef.current.settings.workingBounceDistancePx + 8
+            );
+            return {
+              x: anchorRect.left + element.offsetLeft - horizontalPadding,
+              y: anchorRect.top + element.offsetTop - topPadding,
+              width: element.offsetWidth + horizontalPadding * 2,
+              height: element.offsetHeight + topPadding + 8,
+            };
+          })()
+        : {
+            x: elementRect.x - 3,
+            y: elementRect.y - 3,
+            width: elementRect.width + 6,
+            height: elementRect.height + 6,
+          };
+      const normalized = normalizeDesktopPetHitRegions(
+        [stableStageRect],
+        window.innerWidth,
+        window.innerHeight,
+        scaleFactor,
+        1
+      )[0];
+      if (!normalized) continue;
+      regions.push({ kind, ...normalized });
+      if (regions.length >= 64) break;
+    }
+    const regionRevision = petRegionRevisionRef.current + 1;
+    petRegionRevisionRef.current = regionRevision;
+    await invoke("desktop_pet_window_set_hit_regions", {
+      lifecycleToken,
+      surfaceEpoch: surfaceEpochRef.current,
+      boundsRevision,
+      regionRevision,
+      regions,
+    }).catch((error) => {
+      if (
+        configRef.current.lifecycleToken === lifecycleToken
+        && petBoundsRevisionRef.current === boundsRevision
+      ) {
+        logWarn("Failed to update desktop pet hit regions", error);
+      }
+    });
+  };
+  reportPetHitRegionsRef.current = reportPetHitRegions;
+
+  const schedulePetHitRegionReport = () => {
+    if (petHitRegionFrameRef.current !== null) return;
+    petHitRegionFrameRef.current = window.requestAnimationFrame(() => {
+      petHitRegionFrameRef.current = null;
+      void reportPetHitRegionsRef.current();
+    });
+  };
+  schedulePetHitRegionReportRef.current = schedulePetHitRegionReport;
 
   const stopUserDragTracking = () => {
     userDraggingRef.current = false;
@@ -376,107 +732,155 @@ export default function DesktopPetApp() {
     });
   };
 
-  const setManagedDesktopPetWindowBounds = (bounds: DesktopPetWindowRect) => {
-    // SetWindowPos emits onMoved too; never persist menu geometry as a user drag.
-    stopUserDragTracking();
-    expectedProgrammaticPositionRef.current = { x: bounds.x, y: bounds.y };
-    return setDesktopPetWindowBounds(bounds);
+  const applyDesktopPetWindowBounds = async (bounds: DesktopPetWindowRect) => {
+    const current = configRef.current;
+    if (!current.visible || !current.lifecycleToken) {
+      throw new Error("desktop_pet_lifecycle_unavailable");
+    }
+    const lifecycleToken = current.lifecycleToken;
+    const revision = petBoundsRequestRevisionRef.current + 1;
+    petBoundsRequestRevisionRef.current = revision;
+    await invoke("desktop_pet_window_set_bounds", {
+      lifecycleToken,
+      surfaceEpoch: surfaceEpochRef.current,
+      revision,
+      bounds,
+    });
+    if (configRef.current.lifecycleToken !== lifecycleToken) return;
+    petBoundsRevisionRef.current = revision;
+    petRegionRevisionRef.current = 0;
+    schedulePetHitRegionReportRef.current();
+    scheduleBubbleFollowRef.current();
   };
 
-  if (!menuWindowTaskRef.current) {
-    menuWindowTaskRef.current = createLatestAsyncTaskRunner<DesktopPetMenuWindowRequest>(
-      async (request, context) => {
-        if (request.open) {
-          let collapsed = collapsedWindowGeometryRef.current;
-          try {
-            if (!collapsed) {
-              const appWindow = getCurrentWindow();
-              const [position, size, scaleFactor, monitor] = await Promise.all([
-                appWindow.outerPosition(),
-                appWindow.outerSize(),
-                appWindow.scaleFactor(),
-                currentMonitor().catch(() => null),
-              ]);
-              collapsed = {
-                bounds: {
-                  x: position.x,
-                  y: position.y,
-                  width: size.width,
-                  height: size.height,
-                },
-                scaleFactor,
-                petScale: request.petScale,
-                workArea: monitor
-                  ? {
-                      x: monitor.workArea.position.x,
-                      y: monitor.workArea.position.y,
-                      width: monitor.workArea.size.width,
-                      height: monitor.workArea.size.height,
-                    }
-                  : null,
-              };
-              collapsedWindowGeometryRef.current = collapsed;
-            }
+  const setManagedDesktopPetWindowBounds = (bounds: DesktopPetWindowRect) => {
+    // `SetWindowPos` 也会触发 `onMoved`；菜单几何绝不能按用户拖动结果持久化。
+    stopUserDragTracking();
+    expectedProgrammaticPositionRef.current = { x: bounds.x, y: bounds.y };
+    return applyDesktopPetWindowBounds(bounds);
+  };
 
-            const geometry = calculateDesktopPetMenuWindowGeometry(
-              collapsed.bounds,
-              collapsed.scaleFactor,
-              request.secondaryItemCount,
-              collapsed.workArea,
-              request.secondaryHeaderHeight,
-              {
-                showActionMenu: request.showActionMenu,
-                maxVisibleItems: request.maxVisibleItems,
-              }
-            );
-            if (!context.isLatest()) return;
-
-            setMenuGeometry(geometry);
-            await setManagedDesktopPetWindowBounds({
-              x: geometry.x,
-              y: geometry.y,
-              width: geometry.physicalWidth,
-              height: geometry.physicalHeight,
-            });
-          } catch (error) {
-            if (context.isLatest()) {
-              if (collapsed) {
-                await setManagedDesktopPetWindowBounds(collapsed.bounds).catch(() => {});
-              }
-              collapsedWindowGeometryRef.current = null;
-              setMenuGeometry(null);
-              setMenuOpen(false);
-              setTargetMode("open");
-              setSelectedPlatform(null);
-            }
-            throw error;
-          }
-          return;
-        }
-
-        if (!context.isLatest()) return;
-        const collapsed = collapsedWindowGeometryRef.current;
-        if (!collapsed) {
-          setMenuGeometry(null);
-          return;
-        }
-
-        await setManagedDesktopPetWindowBounds(collapsed.bounds);
-        if (!context.isLatest()) return;
-        collapsedWindowGeometryRef.current = null;
-        setMenuGeometry(null);
-        if (pendingDragAfterMenuCloseRef.current) {
-          pendingDragAfterMenuCloseRef.current = false;
-          startNativeDragging();
-        }
-      },
-      (error) => {
-        logWarn("Failed to resize desktop pet menu window", error);
+  synchronizeCurrentPetBoundsRef.current = () => {
+    const lifecycleToken = configRef.current.lifecycleToken;
+    if (!configRef.current.visible || !lifecycleToken) return;
+    void Promise.all([
+      getCurrentWindow().outerPosition(),
+      getCurrentWindow().outerSize(),
+    ]).then(([position, size]) => {
+      if (configRef.current.lifecycleToken !== lifecycleToken) return;
+      return setManagedDesktopPetWindowBounds({
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+      });
+    }).catch((error) => {
+      if (configRef.current.lifecycleToken === lifecycleToken) {
+        logWarn("Failed to establish desktop pet window bounds", error);
       }
-    );
-  }
+    });
+  };
+
+  const initializeMenuRunner = () => {
+    if (!menuWindowTaskRef.current) {
+      menuWindowTaskRef.current = createLatestAsyncTaskRunner<DesktopPetMenuWindowRequest>(
+        async (request, context) => {
+          if (request.open) {
+            let collapsed = collapsedWindowGeometryRef.current;
+            try {
+              if (!collapsed) {
+                const appWindow = getCurrentWindow();
+                const [position, size, scaleFactor, monitor] = await Promise.all([
+                  appWindow.outerPosition(),
+                  appWindow.outerSize(),
+                  appWindow.scaleFactor(),
+                  currentMonitor().catch(() => null),
+                ]);
+                collapsed = {
+                  bounds: {
+                    x: position.x,
+                    y: position.y,
+                    width: size.width,
+                    height: size.height,
+                  },
+                  scaleFactor,
+                  petScale: request.petScale,
+                  workArea: monitor
+                    ? {
+                        x: monitor.workArea.position.x,
+                        y: monitor.workArea.position.y,
+                        width: monitor.workArea.size.width,
+                        height: monitor.workArea.size.height,
+                      }
+                    : null,
+                };
+                collapsedWindowGeometryRef.current = collapsed;
+              }
+
+              const geometry = calculateDesktopPetMenuWindowGeometry(
+                collapsed.bounds,
+                collapsed.scaleFactor,
+                request.secondaryItemCount,
+                collapsed.workArea,
+                request.secondaryHeaderHeight,
+                {
+                  showActionMenu: request.showActionMenu,
+                  maxVisibleItems: request.maxVisibleItems,
+                  contentHeight: request.secondaryContentHeight,
+                }
+              );
+              if (!context.isLatest()) return;
+
+              setMenuGeometry(geometry);
+              await setManagedDesktopPetWindowBounds({
+                x: geometry.x,
+                y: geometry.y,
+                width: geometry.physicalWidth,
+                height: geometry.physicalHeight,
+              });
+            } catch (error) {
+              if (context.isLatest()) {
+                if (collapsed) {
+                  await setManagedDesktopPetWindowBounds(collapsed.bounds).catch(() => {});
+                }
+                collapsedWindowGeometryRef.current = null;
+                setMenuGeometry(null);
+                setMenuOpen(false);
+                setTargetMode("open");
+                setSelectedPlatform(null);
+              }
+              throw error;
+            }
+            return;
+          }
+
+          if (!context.isLatest()) return;
+          const collapsed = collapsedWindowGeometryRef.current;
+          if (!collapsed) {
+            setMenuGeometry(null);
+            return;
+          }
+
+          await setManagedDesktopPetWindowBounds(collapsed.bounds);
+          if (!context.isLatest()) return;
+          collapsedWindowGeometryRef.current = null;
+          setMenuGeometry(null);
+          if (pendingDragAfterMenuCloseRef.current) {
+            pendingDragAfterMenuCloseRef.current = false;
+            startNativeDragging();
+          }
+        },
+        (error) => {
+          logWarn("Failed to resize desktop pet menu window", error);
+        }
+      );
+    }
+  };
+  initializeMenuRunner();
 
   useEffect(() => {
+    initializeBubbleRunners();
+    initializeMenuRunner();
     const rootElements = [document.documentElement, document.body, document.getElementById("root")];
     rootElements.forEach((element) => {
       if (element) element.style.background = "transparent";
@@ -485,30 +889,117 @@ export default function DesktopPetApp() {
     const handleVisibilityChange = () => setDocumentVisible(!document.hidden);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     let disposed = false;
-    const unlistenConfig = listen<DesktopPetConfigPayload>(DESKTOP_PET_CONFIG_EVENT, (event) => {
-      if (!disposed) {
-        setConfig(event.payload);
+    const announceReady = () => {
+      if (disposed) return;
+      void emit(DESKTOP_PET_READY_EVENT, {
+        surfaceEpoch: surfaceEpochRef.current,
+      });
+    };
+    const unlistenCoordinatorReady = listen(
+      DESKTOP_PET_COORDINATOR_READY_EVENT,
+      announceReady
+    );
+    const unlistenConfig = listen<DesktopPetConfigEventPayload>(
+      DESKTOP_PET_CONFIG_EVENT,
+      (event) => {
+        if (disposed) return;
+        if (!shouldAcceptDesktopPetConfigDelivery(
+          surfaceEpochRef.current,
+          configDeliveryRevisionRef.current,
+          event.payload
+        )) {
+          return;
+        }
+        configDeliveryRevisionRef.current = event.payload.deliveryRevision;
+        const nextConfig: DesktopPetConfigPayload = event.payload;
+        const tokenChanged = configRef.current.lifecycleToken !== nextConfig.lifecycleToken;
+        configRef.current = nextConfig;
+        setConfig(nextConfig);
+        if (tokenChanged) {
+          bubbleMeasurementRef.current = null;
+          bubbleEnvironmentSignatureRef.current = null;
+          announceReady();
+          window.requestAnimationFrame(() => {
+            synchronizeCurrentPetBoundsRef.current();
+            requestBubbleLayoutRef.current();
+          });
+        }
         if (!sizeAdjustingRef.current) {
           previewSizeRef.current = null;
           setPreviewSize(null);
         }
       }
-    });
-    const unlistenSnapshot = listen<DesktopPetSnapshot>(DESKTOP_PET_SNAPSHOT_EVENT, (event) => {
-      if (!disposed) {
+    );
+    const unlistenSnapshot = listen<DesktopPetSnapshotEventPayload>(
+      DESKTOP_PET_SNAPSHOT_EVENT,
+      (event) => {
+        if (
+          disposed
+          || !shouldAcceptDesktopPetSnapshotDelivery(
+            configRef.current.lifecycleToken,
+            surfaceEpochRef.current,
+            configDeliveryRevisionRef.current,
+            snapshotDeliveryRevisionRef.current,
+            event.payload
+          )
+        ) {
+          return;
+        }
+        snapshotDeliveryRevisionRef.current = event.payload.deliveryRevision;
+        const nextSnapshot: DesktopPetSnapshot = event.payload;
         setSnapshot({
-          ...event.payload,
-          handoffPlatforms: event.payload.handoffPlatforms ?? [],
+          ...nextSnapshot,
+          handoffPlatforms: nextSnapshot.handoffPlatforms ?? [],
+        });
+        window.requestAnimationFrame(() => requestBubbleLayoutRef.current());
+      }
+    );
+    const unlistenMeasurement = listen<DesktopPetBubbleMeasurementPayload>(
+      DESKTOP_PET_BUBBLE_MEASURE_EVENT,
+      (event) => {
+        if (disposed) return;
+        const current = configRef.current;
+        const measurement = event.payload;
+        const previous = bubbleMeasurementRef.current;
+        if (
+          !current.visible
+          || !current.bubbleVisible
+          || !shouldAcceptDesktopPetBubbleMeasurement({
+            expectedLifecycleToken: current.lifecycleToken,
+            expectedPetSurfaceEpoch: surfaceEpochRef.current,
+            expectedLayoutRevision: bubbleLayoutRequestRevisionRef.current,
+            previous,
+            candidate: measurement,
+          })
+        ) {
+          return;
+        }
+        bubbleMeasurementRef.current = measurement;
+        bubbleFollowRevisionRef.current += 1;
+        bubbleGeometryTaskRef.current?.schedule({
+          measurement,
+          followRevision: bubbleFollowRevisionRef.current,
         });
       }
-    });
+    );
     const unlistenCloseMenu = listen(DESKTOP_PET_CLOSE_MENU_EVENT, () => {
       if (!disposed) {
         closeMenuRef.current(true);
       }
     });
     const appWindow = getCurrentWindow();
+    const handleWindowResize = () => {
+      scheduleBubbleFollowRef.current();
+      schedulePetHitRegionReportRef.current();
+    };
+    window.addEventListener("resize", handleWindowResize);
+    const layoutObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(handleWindowResize);
+    if (petAnchorRef.current) layoutObserver?.observe(petAnchorRef.current);
+    if (petStageRef.current) layoutObserver?.observe(petStageRef.current);
     const unlistenMoved = appWindow.onMoved(({ payload }) => {
+      scheduleBubbleFollowRef.current();
       const expected = expectedProgrammaticPositionRef.current;
       if (
         expected
@@ -519,6 +1010,13 @@ export default function DesktopPetApp() {
         return;
       }
       if (!userDraggingRef.current) return;
+      if (dragResetTimerRef.current !== null) {
+        window.clearTimeout(dragResetTimerRef.current);
+      }
+      dragResetTimerRef.current = window.setTimeout(() => {
+        userDraggingRef.current = false;
+        dragResetTimerRef.current = null;
+      }, 5_000);
       if (moveTimerRef.current !== null) window.clearTimeout(moveTimerRef.current);
       moveTimerRef.current = window.setTimeout(() => {
         userDraggingRef.current = false;
@@ -527,10 +1025,18 @@ export default function DesktopPetApp() {
           window.clearTimeout(dragResetTimerRef.current);
           dragResetTimerRef.current = null;
         }
-        void emitTo("main", DESKTOP_PET_POSITION_EVENT, { x: payload.x, y: payload.y });
+        const current = configRef.current;
+        void emitTo("main", DESKTOP_PET_POSITION_EVENT, {
+          x: payload.x,
+          y: payload.y,
+          lifecycleToken: current.lifecycleToken,
+          petSurfaceEpoch: surfaceEpochRef.current,
+        });
       }, 400);
     });
-    void emit(DESKTOP_PET_READY_EVENT);
+    void unlistenCoordinatorReady.then(() => {
+      announceReady();
+    });
     return () => {
       disposed = true;
       if (moveTimerRef.current !== null) window.clearTimeout(moveTimerRef.current);
@@ -540,10 +1046,23 @@ export default function DesktopPetApp() {
       if (sizeWheelCommitTimerRef.current !== null) {
         window.clearTimeout(sizeWheelCommitTimerRef.current);
       }
+      if (petHitRegionFrameRef.current !== null) {
+        window.cancelAnimationFrame(petHitRegionFrameRef.current);
+        petHitRegionFrameRef.current = null;
+      }
+      bubbleGeometryTaskRef.current?.dispose();
+      bubbleGeometryTaskRef.current = null;
+      bubbleFollowFrameTaskRef.current?.dispose();
+      bubbleFollowFrameTaskRef.current = null;
+      layoutObserver?.disconnect();
+      window.removeEventListener("resize", handleWindowResize);
       menuWindowTaskRef.current?.dispose();
+      menuWindowTaskRef.current = null;
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      void unlistenCoordinatorReady.then((unlisten) => unlisten());
       void unlistenConfig.then((unlisten) => unlisten());
       void unlistenSnapshot.then((unlisten) => unlisten());
+      void unlistenMeasurement.then((unlisten) => unlisten());
       void unlistenCloseMenu.then((unlisten) => unlisten());
       void unlistenMoved.then((unlisten) => unlisten());
     };
@@ -554,6 +1073,7 @@ export default function DesktopPetApp() {
       open: menuOpen,
       petScale,
       secondaryItemCount,
+      secondaryContentHeight,
       secondaryHeaderHeight,
       showActionMenu: config.settings.showActionMenu,
       maxVisibleItems: maxVisibleSecondaryItems,
@@ -561,11 +1081,65 @@ export default function DesktopPetApp() {
   }, [
     config.settings.showActionMenu,
     maxVisibleSecondaryItems,
+    menuLayoutRevision,
     menuOpen,
     petScale,
+    secondaryContentHeight,
     secondaryHeaderHeight,
     secondaryItemCount,
   ]);
+
+  useEffect(() => {
+    setStatusFilter((current) => normalizeDesktopPetStatusFilter(
+      current,
+      snapshot.statusCounts
+    ));
+  }, [snapshot.statusCounts]);
+
+  useLayoutEffect(() => {
+    schedulePetHitRegionReportRef.current();
+    scheduleBubbleFollowRef.current();
+  }, [
+    config.settings.showStatus,
+    menuGeometry,
+    petScale,
+    visibleStatusKey,
+  ]);
+
+  useEffect(() => {
+    if (!config.visible || !config.bubbleVisible || !config.lifecycleToken) return;
+    const lifecycleToken = config.lifecycleToken;
+    let disposed = false;
+    let reading = false;
+    const inspectEnvironment = () => {
+      if (disposed || reading) return;
+      const measurement = bubbleMeasurementRef.current;
+      if (!measurement || measurement.lifecycleToken !== lifecycleToken) {
+        requestBubbleLayoutRef.current();
+        return;
+      }
+      reading = true;
+      void readDesktopPetAnchorContext().then((context) => {
+        if (
+          disposed
+          || configRef.current.lifecycleToken !== lifecycleToken
+          || bubbleEnvironmentSignatureRef.current === desktopPetEnvironmentSignature(context)
+        ) {
+          return;
+        }
+        scheduleBubbleFollowRef.current();
+      }).catch(() => {}).finally(() => {
+        reading = false;
+      });
+    };
+    requestBubbleLayoutRef.current();
+    scheduleBubbleFollowRef.current();
+    const timer = window.setInterval(inspectEnvironment, 1_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [config.bubbleVisible, config.lifecycleToken, config.visible]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -662,15 +1236,6 @@ export default function DesktopPetApp() {
   const labels = useMemo(() => buildDesktopPetLabels(config.language), [config.language]);
   const localizeDisplayText = (text: string | null | undefined): string =>
     text ? convertChineseForLanguage(config.language, text) : "";
-  const detail = config.settings.showSessionName
-    ? distinctDisplayLabels(
-        localizeDisplayText(snapshot.projectName),
-        localizeDisplayText(snapshot.sessionTitle)
-      ).join(" · ")
-    : "";
-  const runningDetail = snapshot.runningCount > 1
-    ? `${snapshot.runningCount} ${labels.runningCount}`
-    : "";
   const stageSize = Math.round(144 * petScale);
   const renderingActive = config.visible && documentVisible;
   const rootStyle = {
@@ -748,6 +1313,8 @@ export default function DesktopPetApp() {
           size,
           x: collapsed.bounds.x,
           y: collapsed.bounds.y,
+          lifecycleToken: configRef.current.lifecycleToken,
+          petSurfaceEpoch: surfaceEpochRef.current,
         }).catch((err) => logWarn("Failed to persist desktop pet size", err));
       }
     }
@@ -767,6 +1334,7 @@ export default function DesktopPetApp() {
     commitSizePreview();
     if (suppressHover) hoverSuppressedUntilLeaveRef.current = true;
     setMenuOpen(false);
+    setStatusFilter(null);
     setTargetMode("open");
     setSelectedPlatform(null);
   };
@@ -797,6 +1365,7 @@ export default function DesktopPetApp() {
       ) {
         return;
       }
+      setStatusFilter(null);
       setTargetMode("open");
       setSelectedPlatform(null);
       setMenuOpen(true);
@@ -875,7 +1444,30 @@ export default function DesktopPetApp() {
     void emitTo("main", DESKTOP_PET_OPEN_TARGET_EVENT, {
       sessionId: target?.sessionId ?? snapshot.sessionId,
       daemonOnly: target?.daemonOnly ?? snapshot.daemonOnly,
+      lifecycleToken: configRef.current.lifecycleToken,
+      surfaceEpoch: surfaceEpochRef.current,
     }).catch((err) => logWarn("Failed to request desktop pet target activation", err));
+  };
+
+  const openStatusGroup = (color: DesktopPetStatusColor) => {
+    if (color !== "green" && config.lifecycleToken) {
+      void emitTo(DESKTOP_PET_BUBBLE_WINDOW_LABEL, DESKTOP_PET_BUBBLE_FOCUS_EVENT, {
+        lifecycleToken: config.lifecycleToken,
+        color,
+      }).catch((error) => {
+        logWarn("Failed to focus desktop pet Bubble status group", error);
+      });
+    }
+    if (!snapshot.targets.some((target) => desktopPetStatusColor(target.status) === color)) {
+      return;
+    }
+    clearHoverOpenTimer();
+    clearHoverCloseTimer();
+    hoverSuppressedUntilLeaveRef.current = false;
+    setStatusFilter(color);
+    setTargetMode("open");
+    setSelectedPlatform(null);
+    setMenuOpen(true);
   };
 
   const requestHandoff = (target: DesktopPetTarget) => {
@@ -938,6 +1530,7 @@ export default function DesktopPetApp() {
           closeMenu(true);
         } else if (canOpenMenu) {
           hoverSuppressedUntilLeaveRef.current = false;
+          setStatusFilter(null);
           setTargetMode("open");
           setSelectedPlatform(null);
           setMenuOpen(true);
@@ -945,17 +1538,44 @@ export default function DesktopPetApp() {
       }}
       aria-label={moodLabel(labels, displayMood)}
     >
-      <div className="desktop-pet-anchor">
-        {config.settings.showStatus ? (
-          <section className="desktop-pet-status" aria-live="polite">
-            <strong>{moodLabel(labels, displayMood)}</strong>
-            {detail ? <span title={detail}>{detail}</span> : null}
-            {runningDetail ? <small>{runningDetail}</small> : null}
-          </section>
+      <div ref={petAnchorRef} className="desktop-pet-anchor">
+        {config.settings.showStatus && visibleStatusColors.length > 0 ? (
+          <nav
+            ref={statusRailRef}
+            className="desktop-pet-status-rail"
+            aria-label={labels.taskList}
+          >
+            {visibleStatusColors.map((color) => {
+              const count = snapshot.statusCounts[color];
+              const label = color === "green"
+                ? labels.working
+                : color === "red"
+                  ? labels.error
+                  : labels.waiting;
+              return (
+                <button
+                  key={color}
+                  type="button"
+                  data-color={color}
+                  data-pet-hit-region="control"
+                  aria-label={`${label}: ${count}`}
+                  title={`${label}: ${count}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    openStatusGroup(color);
+                  }}
+                >
+                  <span aria-hidden="true">{count}</span>
+                </button>
+              );
+            })}
+          </nav>
         ) : null}
 
         <div
+          ref={petStageRef}
           className="desktop-pet-stage"
+          data-pet-hit-region="stage"
           title={moodLabel(labels, displayMood)}
           onPointerEnter={scheduleHoverOpen}
           onPointerLeave={() => {
@@ -975,9 +1595,6 @@ export default function DesktopPetApp() {
           ) : (
             <CliCat className="desktop-pet-cat" ariaLabel={moodLabel(labels, displayMood)} />
           )}
-          {snapshot.attentionCount > 0 ? (
-            <span className="desktop-pet-badge" aria-label={moodLabel(labels, "waiting")}>!</span>
-          ) : null}
         </div>
       </div>
 
@@ -997,6 +1614,7 @@ export default function DesktopPetApp() {
           {targetMode === "platforms" && handoffPlatforms.length > 0 ? (
             <div
               className="desktop-pet-target-list desktop-pet-platform-list"
+              data-pet-hit-region="control"
               data-scrollable={secondaryListScrollable || undefined}
             >
               <div className="desktop-pet-secondary-header">
@@ -1043,9 +1661,10 @@ export default function DesktopPetApp() {
                 );
               })}
             </div>
-          ) : menuTargets.length > 0 ? (
+          ) : secondaryItemCount > 0 ? (
             <div
               className="desktop-pet-target-list"
+              data-pet-hit-region="control"
               data-scrollable={secondaryListScrollable || undefined}
             >
             {targetMode === "handoff" ? (
@@ -1118,6 +1737,9 @@ export default function DesktopPetApp() {
                       {secondary ? `${secondary} · ` : ""}
                       {status}
                     </small>
+                    {target.message ? (
+                      <p className="desktop-pet-card-message">{target.message}</p>
+                    ) : null}
                   </span>
                   {target.active ? (
                     <span className="desktop-pet-target-current">{labels.currentTask}</span>
@@ -1128,7 +1750,10 @@ export default function DesktopPetApp() {
             </div>
           ) : null}
           {config.settings.showActionMenu ? (
-          <div className="desktop-pet-menu-actions">
+          <div
+            className="desktop-pet-menu-actions"
+            data-pet-hit-region="control"
+          >
             <button
               type="button"
               role="menuitem"
@@ -1229,7 +1854,10 @@ export default function DesktopPetApp() {
               role="menuitem"
               onClick={() => {
                 closeMenu();
-                void emitTo("main", DESKTOP_PET_OPEN_SETTINGS_EVENT).catch((err) => {
+                void emitTo("main", DESKTOP_PET_OPEN_SETTINGS_EVENT, {
+                  lifecycleToken: configRef.current.lifecycleToken,
+                  surfaceEpoch: surfaceEpochRef.current,
+                }).catch((err) => {
                   logWarn("Failed to request desktop pet settings", err);
                 });
               }}
@@ -1240,10 +1868,32 @@ export default function DesktopPetApp() {
             <button
               type="button"
               role="menuitem"
+              disabled={snapshot.decisionRequests.length > 0 || snapshot.incidents.length > 0}
               onClick={() => {
                 closeMenu();
-                setConfig((current) => ({ ...current, visible: false }));
-                void invoke("desktop_pet_window_hide").catch((err) => {
+                const lifecycleToken = configRef.current.lifecycleToken;
+                const petSurfaceEpoch = surfaceEpochRef.current;
+                const hideLocally = () => {
+                  setConfig((current) => ({
+                    ...current,
+                    visible: false,
+                    bubbleVisible: false,
+                  }));
+                };
+                void invoke("desktop_pet_window_hide", {
+                  lifecycleToken,
+                  surfaceEpoch: petSurfaceEpoch,
+                }).then(() => {
+                  hideLocally();
+                }).catch((err) => {
+                  if (String(err).includes("pet_window_hidden_event_failed")) {
+                    hideLocally();
+                    void emitTo("main", DESKTOP_PET_HIDDEN_EVENT, {
+                      lifecycleToken,
+                      petSurfaceEpoch,
+                    }).catch(() => {});
+                    return;
+                  }
                   logWarn("Failed to hide desktop pet window", err);
                 });
               }}

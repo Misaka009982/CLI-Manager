@@ -71,3 +71,23 @@ test("recent PTY output only supplies a short-lived hint when no lifecycle state
     updatedAt: 0,
   });
 });
+
+test("status rail only exposes colors with a positive finite count", () => {
+  assert.deepEqual(status.visibleDesktopPetStatusColors({
+    green: 2,
+    red: 0,
+    blue: 1,
+  }), ["green", "blue"]);
+  assert.deepEqual(status.visibleDesktopPetStatusColors({
+    green: 0,
+    red: Number.NaN,
+    blue: 0,
+  }), []);
+});
+
+test("status filters clear as soon as their color disappears", () => {
+  const counts = { green: 1, red: 0, blue: 2 };
+  assert.equal(status.normalizeDesktopPetStatusFilter("blue", counts), "blue");
+  assert.equal(status.normalizeDesktopPetStatusFilter("red", counts), null);
+  assert.equal(status.normalizeDesktopPetStatusFilter(null, counts), null);
+});

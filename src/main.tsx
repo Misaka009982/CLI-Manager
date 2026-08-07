@@ -12,8 +12,19 @@ window.addEventListener("contextmenu", (e) => {
 
 async function bootstrap() {
   const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
-  const isDesktopPetWindow = getCurrentWindow().label === "desktop-pet";
-  if (isDesktopPetWindow) {
+  const windowLabel = getCurrentWindow().label;
+  if (windowLabel === "desktop-pet-bubble") {
+    const { default: DesktopPetBubbleApp } = await import(
+      "./desktop-pet/DesktopPetBubbleApp"
+    );
+    root.render(
+      <React.StrictMode>
+        <DesktopPetBubbleApp />
+      </React.StrictMode>
+    );
+    return;
+  }
+  if (windowLabel === "desktop-pet") {
     const { default: DesktopPetApp } = await import("./desktop-pet/DesktopPetApp");
     root.render(
       <React.StrictMode>

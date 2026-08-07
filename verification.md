@@ -1,3 +1,51 @@
+# Alpha Release GitHub Actions 静态验证（2026-08-07）
+
+- `.github/workflows/alpha-release.yml` 仅支持 `workflow_dispatch`，并在准备阶段拒绝从非默认分支创建 Alpha Release。
+- 默认版本由仓库稳定版本递增补丁号后追加 `-alpha.<run_number>.<run_attempt>`；显式目标版本必须是更高的无前导零 `major.minor.patch`。构建仅在 Actions 临时工作区同步 `package.json`、`package-lock.json`、`Cargo.toml`、`Cargo.lock` 与 `tauri.conf.json`，不会提交版本改写。
+- Windows、macOS Apple Silicon 与 Linux 复用正式发布的签名和 SSH Agent 捆绑链；三个桌面构建全部完成且安装包、`latest.json` 与 SSH Agent 资产齐全后，才将草稿发布为 GitHub prerelease。
+- 工作流未包含 `aws s3` 或 R2 上传命令，并显式使用 `make_latest: false`、`--latest=false` 及发布前后稳定 latest tag 比对，避免覆盖稳定版 R2/`latest` 或 GitHub `releases/latest`。
+- YAML 解析、四阶段依赖、三平台矩阵、17 个 shell 脚本块与 2 个内嵌 Node 模块通过静态语法检查；UTF-8、冲突标记和高置信密钥模式扫描通过。
+- GitHub Actions Alpha 工作流：**NOT RUN**；未创建实际 tag、draft 或 prerelease，签名密钥、三平台 runner、资产命名和 GitHub Release 发布行为仍由首次手动运行验证。
+
+---
+
+# 桌宠独立 Bubble 窗口静态验证（2026-08-07）
+
+## 根因、边界与场景清单
+
+- 原桌宠把宠物舞台、普通任务菜单、决策、事故和完成消息放在同一透明 WebView 中；完整消息与自由悬浮宠物共享原生 bounds，容易在固定窗口内裁切、扩大透明命中面或让菜单几何影响宠物位置真相。本次拆为静态预创建的 `desktop-pet` 与 `desktop-pet-bubble` 两个窗口：前者只拥有宠物/状态/普通菜单，后者唯一拥有决策、事故和最新完成摘要。
+- Bubble 内容策略下沉到 `src/lib/desktopPetBubble.ts`：权限优先于问卷和普通问题，事故按新到旧，完成摘要只取最新稳定 done target；完成寿命从源 `updatedAt` 起算 8 秒，重复快照或 WebView 重载不重置，悬停只暂停剩余时间。
+- Pet 负责单一锚点和目标显示器选择；Bubble 通过 layout-request、measurement、native bounds、geometry 四段握手定位。移动事件使用动画帧合并并保留 trailing apply；菜单、尺寸、DPI、工作区、内容和状态轨变化都只重算 Bubble，不持久化 Bubble 坐标。
+- 主窗口先向 Rust 提交新的高熵 lifecycle token 与两个 surface epoch，再按 config-before-snapshot 顺序扇出状态；所有 config 成功后才启动 snapshot，两类状态事件还携带目标 epoch 与单调 delivery revision。主窗口与两个静态 WebView 使用 coordinator-ready/ready 双向启动握手覆盖任意加载顺序；bounds 和 hit-region 使用独立单调 revision。Rust 从真实 `WebviewWindow` label 判断 caller，拒绝旧 token、旧 epoch、旧 revision、不可见代际和越权 target，避免隐藏后的迟到 show/geometry 恢复窗口。
+- Windows 对宠物舞台、可见状态按钮、展开菜单和 Bubble 可见卡片分别应用 `SetWindowRgn` 多矩形区域；DOM rect 先裁到 viewport，再按各自 scale factor 向外取整。区域验证或原生事务失败会清除区域并恢复整窗命中；非 Windows 保留整窗命中安全回退，因此未宣称三平台具有相同透明区点击穿透。
+- Bubble 使用独立 capability，仅保留必要 event 与 log 权限；静态差集未发现 SQL、文件、剪贴板、更新器、进程或通知权限。决策提交仍经主窗口现有 broker 回路，Bubble 不直接访问 loopback broker、不注册模型工具，也没有关闭/隐藏/超时自动决议路径。
+- Agent 正文与自定义回答均通过 React 文本/表单值处理；定向源码搜索未发现 `dangerouslySetInnerHTML`、`innerHTML` 或将正文/答案写入新增日志的路径。Bubble 显示和分组强调不主动聚焦，移除当前卡时保留焦点接续与完成摘要礼貌播报。
+- 产品要求完整显示事故与决策正文，因此屏幕共享或录屏时可能暴露当前可见内容；本批不做自动脱敏或内容折叠，以免违反完整展示和显式决策契约。
+
+## 已完成的静态验证
+
+- `git diff --check`：**PASS（静态）**；无空白错误或冲突标记。仓库的 Windows 行尾策略提示不等同于内容错误。
+- UTF-8 与结构扫描：**PASS（静态）**；新增/修改的 TypeScript、TSX、Rust、JSON、CSS、测试源与本节文档未发现替换字符；TS/TSX/CSS 分隔符平衡，Rust 通过忽略字符串/注释的词法分隔符扫描。该结果不是编译证明。
+- JSON 解析：**PASS（静态）**；`src-tauri/tauri.conf.json`、`src-tauri/capabilities/default.json` 与 `src-tauri/capabilities/desktop-pet-bubble.json` 可解析，Bubble capability 权限差集符合最小权限约束。
+- 定向 import/残留扫描：**PASS（静态）**；新桌宠模块未发现明显未使用的命名导入，旧 `desktop-pet-show-actions` 的 Pet 监听残留已移除，两个窗口的渲染职责与事件方向可追踪。
+- 生命周期/安全审查：**PASS（静态）**；检查了严格 config-before-snapshot、目标 epoch/delivery revision、coordinator-ready/ready 启动恢复、失败不提交 fingerprint、token/epoch/revision、隐藏清空、inactive show、region fail-open、decision-result 失败回执和无自动回答路径。
+- 测试源已新增或扩充：`desktopPetBubblePolicy.test.mjs`、`desktopPetBubbleGeometry.test.mjs`、`desktopPetStatus.test.mjs`、`desktopPetTransport.test.mjs`，其中 transport 源覆盖严格 config-before-snapshot、目标 epoch/delivery revision、失败时不启动 snapshot、layout request/measurement/geometry 迟到拒绝与 surface epoch 接受/去重；coordinator-ready/ready 启动握手仅完成定向静态审查，仍需平台冒烟。Rust `desktop_pet` 测试源覆盖 token、surface epoch、caller/target 与 region 输入。仅确认源码存在和场景覆盖，未执行。
+
+## NOT RUN 与发布边界
+
+- `node scripts/desktopPetBubblePolicy.test.mjs`：**NOT RUN**（用户/CI 门禁）。
+- `node scripts/desktopPetBubbleGeometry.test.mjs`：**NOT RUN**（用户/CI 门禁）。
+- `node scripts/desktopPetStatus.test.mjs`：**NOT RUN**（用户/CI 门禁）。
+- `node scripts/desktopPetTransport.test.mjs`：**NOT RUN**（用户/CI 门禁）。
+- `node scripts/desktopPetMenuGeometry.test.mjs`：**NOT RUN**（用户/CI 门禁）。
+- `cargo test --manifest-path src-tauri/Cargo.toml desktop_pet`：**NOT RUN**；Rust API、Win32 符号和单测结果尚未由编译器确认。
+- `npm run build`：**NOT RUN**；TypeScript/Vite 生产构建尚未确认。
+- Windows 10/11 多显示器/DPI、前台焦点、任务栏/Alt+Tab、透明间隙点击穿透、region 回退与迟到 show 冒烟：**NOT RUN**。
+- macOS/Linux 独立 Bubble 与整窗命中安全回退冒烟：**NOT RUN**。
+- 未安装依赖、未启动服务、未编译、未运行测试、未打包、未创建 PR。本节只证明允许范围内的静态实现与审查完成，**不能据此声明发布就绪**。
+
+---
+
 # SSH NVM Codex 启动环境修复验证（2026-07-28）
 
 ## 根因与发现清单

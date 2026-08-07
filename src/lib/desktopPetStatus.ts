@@ -1,5 +1,9 @@
 import type { TabNotificationState, TabStatusDetails } from "../stores/terminalStore";
-import type { BackgroundPetTask } from "./desktopPet";
+import type {
+  BackgroundPetTask,
+  DesktopPetStatusColor,
+  DesktopPetStatusCounts,
+} from "./desktopPet";
 
 export const DESKTOP_PET_OUTPUT_ACTIVITY_TTL_MS = 6000;
 
@@ -37,8 +41,8 @@ export function resolveDesktopPetOpenSessionStatus(input: {
     ? { status: daemonStatus, updatedAt: daemonUpdatedAt }
     : { status: input.frontendStatus, updatedAt: frontendUpdatedAt };
 
-  // PTY output is only an activity hint. Once Hook/daemon has supplied a task
-  // lifecycle state, terminal repaint output must never reopen a finished turn.
+  // PTY 输出仅是活动提示。Hook/daemon 一旦提供任务生命周期状态，
+  // 终端重绘输出就不得重新打开已经结束的回合。
   if (resolved.status !== "none") return resolved;
   const recentOutput = input.outputActivityAt > 0
     && input.now >= input.outputActivityAt
@@ -46,4 +50,21 @@ export function resolveDesktopPetOpenSessionStatus(input: {
   return recentOutput
     ? { status: "running", updatedAt: input.outputActivityAt }
     : resolved;
+}
+
+export function visibleDesktopPetStatusColors(
+  counts: DesktopPetStatusCounts
+): DesktopPetStatusColor[] {
+  return (["green", "red", "blue"] as const).filter((color) => (
+    Number.isFinite(counts[color]) && counts[color] > 0
+  ));
+}
+
+export function normalizeDesktopPetStatusFilter(
+  filter: DesktopPetStatusColor | null,
+  counts: DesktopPetStatusCounts
+): DesktopPetStatusColor | null {
+  return filter && visibleDesktopPetStatusColors(counts).includes(filter)
+    ? filter
+    : null;
 }

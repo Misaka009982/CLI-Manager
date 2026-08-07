@@ -54,6 +54,7 @@ const PI_MODULE_SESSION_START: &str = "CLI_MANAGER_MODULE:sessionStart";
 const PI_MODULE_RUNNING: &str = "CLI_MANAGER_MODULE:running";
 const PI_MODULE_STOP: &str = "CLI_MANAGER_MODULE:stop";
 const PI_EXTENSION_CONFLICT_ERROR: &str = "pi_extension_conflict";
+const PI_EXTENSION_SOURCE: &str = include_str!("../../resources/pi-extension/cli-manager-hook.ts");
 const CLAUDE_QUESTION_TOOL_NAME: &str = "AskUserQuestion";
 const CODEX_QUESTION_TOOL_NAME: &str = "request_user_input";
 
@@ -3098,115 +3099,12 @@ fn pi_module_marker(module: PiHookModule) -> &'static str {
 }
 
 fn pi_extension_source(modules: &[PiHookModule]) -> String {
-    let session_start = modules
-        .iter()
-        .any(|module| matches!(module, PiHookModule::SessionStart));
-    let running = modules
-        .iter()
-        .any(|module| matches!(module, PiHookModule::Running));
-    let stop = modules
-        .iter()
-        .any(|module| matches!(module, PiHookModule::Stop));
-
-    let mut source = format!(
-        r#"// {marker}
-// Managed by CLI-Manager. Do not edit manually; reinstall from Hook settings.
-// Bridges Pi Agent lifecycle events into CLI-Manager tab notifications / live stats.
-
-import type {{ ExtensionAPI }} from "@earendil-works/pi-coding-agent";
-
-const MARKER = "{marker}";
-const ENABLED = {{
-  sessionStart: {session_start},
-  running: {running},
-  stop: {stop},
-}};
-
-type NotifyEvent = "SessionStart" | "UserPromptSubmit" | "Stop";
-
-function nonEmpty(value: string | undefined | null): string | null {{
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}}
-
-async function postHookEvent(event: NotifyEvent, sessionId: string | null, message?: string | null) {{
-  const tabId = nonEmpty(process.env.CLI_MANAGER_TAB_ID);
-  const port = nonEmpty(process.env.CLI_MANAGER_NOTIFY_PORT);
-  const token = nonEmpty(process.env.CLI_MANAGER_NOTIFY_TOKEN);
-  if (!tabId || !port || !token) return;
-
-  const payload = {{
-    tabId,
-    source: "pi",
-    event,
-    title: titleFor(event),
-    message: message ?? null,
-    sessionId,
-    cwd: process.cwd(),
-    timestamp: new Date().toISOString(),
-  }};
-
-  try {{
-    await fetch(`http://127.0.0.1:${{port}}/api/claude-hook`, {{
-      method: "POST",
-      headers: {{
-        Authorization: `Bearer ${{token}}`,
-        "Content-Type": "application/json",
-      }},
-      body: JSON.stringify(payload),
-    }});
-  }} catch {{
-    // Hook bridge failures must never interrupt Pi.
-  }}
-}}
-
-function titleFor(event: NotifyEvent): string {{
-  switch (event) {{
-    case "SessionStart":
-      return "Pi Agent session started";
-    case "UserPromptSubmit":
-      return "Pi Agent running";
-    case "Stop":
-      return "Pi Agent done";
-  }}
-}}
-
-function readSessionId(ctx: {{ sessionManager?: {{ getSessionId?: () => string | undefined }} }}): string | null {{
-  try {{
-    return nonEmpty(ctx.sessionManager?.getSessionId?.() ?? null);
-  }} catch {{
-    return null;
-  }}
-}}
-
-export default function (pi: ExtensionAPI) {{
-  if (ENABLED.sessionStart) {{
-    pi.on("session_start", async (_event, ctx) => {{
-      await postHookEvent("SessionStart", readSessionId(ctx));
-    }});
-  }}
-
-  if (ENABLED.running) {{
-    pi.on("agent_start", async (_event, ctx) => {{
-      await postHookEvent("UserPromptSubmit", readSessionId(ctx));
-    }});
-  }}
-
-  if (ENABLED.stop) {{
-    pi.on("agent_settled", async (_event, ctx) => {{
-      await postHookEvent("Stop", readSessionId(ctx));
-    }});
-  }}
-
-  void MARKER;
-}}
-"#,
-        marker = PI_EXTENSION_MARKER,
-        session_start = if session_start { "true" } else { "false" },
-        running = if running { "true" } else { "false" },
-        stop = if stop { "true" } else { "false" },
-    );
-
+    let mut source = PI_EXTENSION_SOURCE.to_string();
+    if !source.ends_with('\n') {
+        source.push('\n');
+    }
+    // 模块标记继续服务现有设置页的分项安装状态；扩展本身始终保持完整桥接，
+    // 避免生命周期、心跳与最终错误检测被拆成不一致的半套状态机。
     for module in modules {
         source.push_str(&format!("// {}\n", pi_module_marker(*module)));
     }
@@ -5289,7 +5187,20 @@ model_instructions_file = "./instruction.md"
         assert!(extension.contains(r#"source: "pi""#));
         assert!(extension.contains("session_start"));
         assert!(extension.contains("agent_start"));
+        assert!(extension.contains("agent_end"));
+        assert!(extension.contains("finalAssistant"));
         assert!(extension.contains("agent_settled"));
+        assert!(extension.contains("StopFailure"));
+        assert!(extension.contains("/api/pi-decision/open"));
+        assert!(extension.contains("/api/pi-decision/poll"));
+        assert!(extension.contains("registerQuestionBridge"));
+        assert!(extension.contains("registerQuestionnaireBridge"));
+        assert!(extension.contains("Error: No options provided"));
+        assert!(extension.contains("ctx.mode !== \"tui\""));
+        assert!(extension.contains("removeEventListener(\"abort\", handleAbort)"));
+        assert!(extension.contains("cli_manager_permission"));
+        assert!(!extension.contains(r#"name: "cli_manager_permission""#));
+        assert!(!extension.contains("registerCommand"));
         assert!(!extension.contains("before_agent_start"));
 
         uninstall_pi_hooks(&pi_dir).unwrap();
