@@ -41,7 +41,14 @@ interface UseNativeProviderCatalogResult {
   clearError: () => void;
 }
 
-export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNativeProviderCatalogResult {
+/** 无历史选择时的默认供应商：优先全局启用的那个（`is_current`），否则列表第一个。 */
+function defaultProviderId(providers: NativeProviderCard[]): string | null {
+  return providers.find((provider) => provider.isCurrent)?.id ?? providers[0]?.id ?? null;
+}
+
+export function useNativeProviderCatalog(
+  appType: NativeProviderAppType,
+): UseNativeProviderCatalogResult {
   const [providers, setProviders] = useState<NativeProviderCard[]>([]);
   const [detail, setDetail] = useState<NativeProviderDetail | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
@@ -51,6 +58,12 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const listRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
+  // 会话内的手动选中锚点：让 refresh()（增删改、启停后都会跑）不把用户当前看的供应商顶掉。
+  // 打开设置页或切换 appType 时会被清空，从而回落到「全局启用优先」的默认选中。
+  const preferredRef = useRef<{ appType: NativeProviderAppType; providerId: string | null }>({
+    appType,
+    providerId: null,
+  });
 
   const fetchDetail = useCallback(async (providerId: string | null) => {
     const requestId = detailRequestRef.current + 1;
@@ -86,10 +99,17 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
     try {
       const next = await invoke<NativeProviderCard[]>("provider_catalog_list", { appType });
       if (listRequestRef.current === requestId) {
+        const preferred = preferredRef.current;
+        const preferredId = preferred.appType === appType
+          && preferred.providerId
+          && next.some((provider) => provider.id === preferred.providerId)
+          ? preferred.providerId
+          : null;
         setProviders(next);
         setSelectedProviderId((current) => {
+          if (preferredId) return preferredId;
           if (current && next.some((provider) => provider.id === current)) return current;
-          return next[0]?.id ?? null;
+          return defaultProviderId(next);
         });
       }
     } catch (error) {
@@ -108,12 +128,19 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
     setProviders([]);
     setDetail(null);
     setSelectedProviderId(null);
+    // 进入设置页或切换 appType：丢弃手动选中锚点，让 refresh 回落到「全局启用优先」的默认选中。
+    preferredRef.current = { appType, providerId: null };
     void refresh();
   }, [appType, refresh]);
 
   useEffect(() => {
     void fetchDetail(selectedProviderId);
   }, [fetchDetail, selectedProviderId]);
+
+  const selectProvider = useCallback((providerId: string | null) => {
+    preferredRef.current = { appType, providerId };
+    setSelectedProviderId(providerId);
+  }, [appType]);
 
   const runAction = useCallback(async <T,>(name: string, work: () => Promise<T>): Promise<T> => {
     setAction(name);
@@ -129,10 +156,10 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
   }, []);
 
   const refreshSelection = useCallback(async (providerId: string | null) => {
-    if (providerId) setSelectedProviderId(providerId);
+    if (providerId) selectProvider(providerId);
     await refresh();
     await fetchDetail(providerId);
-  }, [fetchDetail, refresh]);
+  }, [fetchDetail, refresh, selectProvider]);
 
   const createProvider = useCallback(async (input: NativeProviderCreateInput) => {
     await runAction("create-provider", async () => {
@@ -270,7 +297,7 @@ export function useNativeProviderCatalog(appType: NativeProviderAppType): UseNat
     detailLoading,
     action,
     errorCode,
-    setSelectedProviderId,
+    setSelectedProviderId: selectProvider,
     refresh,
     refreshSelection,
     createProvider,

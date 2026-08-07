@@ -402,7 +402,16 @@ export function NativeProviderFormModal({
           checked={values.commonConfigEnabled}
           onChange={(event) => updateValue("commonConfigEnabled", event.currentTarget.checked)}
         />
-        <Group justify="flex-end" mt="xs">
+        <Group
+          justify="flex-end"
+          className="sticky bottom-0 z-[1000] border-t border-border/60 py-3"
+          style={{
+            marginInline: "calc(var(--mb-padding, var(--mantine-spacing-md)) * -1)",
+            marginBottom: "calc(var(--mb-padding, var(--mantine-spacing-md)) * -1)",
+            paddingInline: "var(--mb-padding, var(--mantine-spacing-md))",
+            backgroundColor: "var(--mantine-color-body)",
+          }}
+        >
           <Button variant="subtle" color="gray" onClick={onClose}>{t("common.cancel")}</Button>
           <Button
             color="cliPrimary"

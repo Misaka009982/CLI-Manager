@@ -161,27 +161,27 @@ export function NativeProviderAdvancedConfigSection({
       />
 
       <Group grow align="flex-start">
-        <Stack gap="xs" className="min-w-0">
+        <Stack gap={4} className="min-w-0">
           <Text size="sm" fw={500}>{t("providerCatalog.compatibleAdvanced.headerOverride")}</Text>
           <NativeProviderCodeEditor
             format="json"
             value={value.headerOverride}
             path={`native-provider-${appType}-header-override`}
             ariaLabel={t("providerCatalog.compatibleAdvanced.headerOverride")}
-            height="140px"
+            height="84px"
             invalid={!isJsonObject(value.headerOverride)}
             readOnly={disabled}
             onChange={(next) => update({ headerOverride: next })}
           />
         </Stack>
-        <Stack gap="xs" className="min-w-0">
+        <Stack gap={4} className="min-w-0">
           <Text size="sm" fw={500}>{t("providerCatalog.compatibleAdvanced.bodyOverride")}</Text>
           <NativeProviderCodeEditor
             format="json"
             value={value.bodyOverride}
             path={`native-provider-${appType}-body-override`}
             ariaLabel={t("providerCatalog.compatibleAdvanced.bodyOverride")}
-            height="140px"
+            height="84px"
             invalid={!isJsonObject(value.bodyOverride)}
             readOnly={disabled}
             onChange={(next) => update({ bodyOverride: next })}

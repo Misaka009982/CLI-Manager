@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Modal, SegmentedControl, Stack, Tabs } from "@mantine/core";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
@@ -18,7 +18,6 @@ import { NativeProviderTypeTabs } from "../providers/NativeProviderTypeTabs";
 import {
   DEFAULT_NATIVE_PROVIDER_DETAIL_VIEW,
   normalizeNativeProviderDetailView,
-  resetNativeProviderDetailView,
   type NativeProviderDetailView,
 } from "../providers/nativeProviderDetailView";
 import { useNativeProviderCatalog } from "../providers/useNativeProviderCatalog";
@@ -30,6 +29,23 @@ import {
   type NativeProviderCreateInput,
   type NativeProviderUpdateInput,
 } from "../providers/nativeProviderTypes";
+
+interface NativeProviderPageCache {
+  appType: NativeProviderAppType;
+  selectedProviderId: string | null;
+  detailViewByProvider: Map<string, NativeProviderDetailView>;
+}
+
+const pageCache: NativeProviderPageCache = {
+  appType: NATIVE_PROVIDER_APP_TYPES[0],
+  selectedProviderId: null,
+  detailViewByProvider: new Map(),
+};
+
+function readCachedDetailView(providerId: string | null): NativeProviderDetailView {
+  if (!providerId) return DEFAULT_NATIVE_PROVIDER_DETAIL_VIEW;
+  return pageCache.detailViewByProvider.get(providerId) ?? DEFAULT_NATIVE_PROVIDER_DETAIL_VIEW;
+}
 
 interface NativeProviderSettingsPageProps {
   searchValue: string;
@@ -69,12 +85,11 @@ function ignoreProviderError(promise: Promise<unknown>): void {
 export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettingsPageProps) {
   const { t } = useI18n();
   const { confirm, confirmDialog } = useAppConfirm();
-  const [appType, setAppType] = useState<NativeProviderAppType>(NATIVE_PROVIDER_APP_TYPES[0]);
+  const [appType, setAppType] = useState<NativeProviderAppType>(pageCache.appType);
   const [surface, setSurface] = useState<NativeProviderSettingsSurface>("catalog");
   const [importOpened, setImportOpened] = useState(false);
   const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
   const [documentDirty, setDocumentDirty] = useState(false);
-  const [detailView, setDetailView] = useState<NativeProviderDetailView>(DEFAULT_NATIVE_PROVIDER_DETAIL_VIEW);
   const catalog = useNativeProviderCatalog(appType);
   const commonConfig = useNativeProviderCommonConfig(appType);
   const claudeHookConfigDir = useSettingsStore((settings) => settings.claudeHookConfigDir);
@@ -85,6 +100,17 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
     codex: codexHookConfigDir,
     grok: grokHookConfigDir,
   }), [claudeHookConfigDir, codexHookConfigDir, grokHookConfigDir]);
+
+  const [detailView, setDetailViewState] = useState<NativeProviderDetailView>(
+    () => readCachedDetailView(pageCache.selectedProviderId),
+  );
+
+  const setDetailView = useCallback((view: NativeProviderDetailView) => {
+    setDetailViewState(view);
+    if (catalog.selectedProviderId) {
+      pageCache.detailViewByProvider.set(catalog.selectedProviderId, view);
+    }
+  }, [catalog.selectedProviderId]);
 
   const query = searchValue.trim().toLocaleLowerCase();
   const filteredProviders = useMemo(() => {
@@ -109,7 +135,8 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
     configuredRoots,
   );
   useEffect(() => {
-    setDetailView(resetNativeProviderDetailView());
+    pageCache.selectedProviderId = catalog.selectedProviderId;
+    setDetailViewState(readCachedDetailView(catalog.selectedProviderId));
   }, [catalog.selectedProviderId]);
   const errorKey = catalog.errorCode ? ERROR_TRANSLATIONS[catalog.errorCode] : undefined;
   const errorMessage = t(errorKey ?? "providerCatalog.errors.generic");
@@ -127,7 +154,7 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
       if (!confirmed) return false;
     }
     setDocumentDirty(false);
-    setDetailView(resetNativeProviderDetailView());
+    pageCache.appType = next;
     setAppType(next);
     setFormMode(null);
     catalog.clearError();
@@ -156,9 +183,21 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
   };
 
   const handleActivateKey = async (keyId: string) => {
+    const providerId = selectedDetail?.card.id ?? "";
     const wasCurrent = selectedDetail?.card.isCurrent ?? false;
-    await catalog.activateKey(selectedDetail?.card.id ?? "", keyId);
-    if (wasCurrent) toast.warning(t("providerCatalog.activeKeyChanged"));
+    await catalog.activateKey(providerId, keyId);
+    if (!wasCurrent) return;
+    try {
+      const result = await homeState.applyGlobal();
+      if (!result) {
+        toast.warning(t("providerCatalog.activeKeyChanged"));
+        return;
+      }
+      await catalog.refreshSelection(providerId);
+      toast.success(t("providerCatalog.activeKeyApplied"));
+    } catch {
+      toast.error(t("providerCatalog.activeKeyApplyFailed"));
+    }
   };
 
   const appTypeLabels: Record<NativeProviderAppType, string> = {
@@ -174,7 +213,6 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
   };
 
   const handleProviderSelect = (providerId: string) => {
-    setDetailView(resetNativeProviderDetailView());
     catalog.setSelectedProviderId(providerId);
   };
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Card, Group, Loader, ScrollArea, Stack, Text } from "@mantine/core";
 import { FileDown, Plus, RefreshCw } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
@@ -21,6 +21,7 @@ interface NativeProviderCatalogProps {
   onEnabledChange: (providerId: string, enabled: boolean) => void;
   onReorder: (providerIds: string[]) => void;
 }
+
 export function NativeProviderCatalog({
   providers,
   allProviders,
@@ -39,6 +40,7 @@ export function NativeProviderCatalog({
 }: NativeProviderCatalogProps) {
   const { t } = useI18n();
   const [draggedProviderId, setDraggedProviderId] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   const moveProvider = (providerId: string, offset: number) => {
     const ids = allProviders.map((provider) => provider.id);
@@ -61,6 +63,16 @@ export function NativeProviderCatalog({
   };
 
   const currentProvider = allProviders.find((provider) => provider.isCurrent);
+
+  // 选中项（含切换 appType 后自动落到的全局启用供应商）滚入可见区域，避免它落在长列表的折叠位置。
+  useEffect(() => {
+    if (loading || !selectedProviderId) return;
+    const viewport = listRef.current;
+    const target = viewport?.querySelector<HTMLElement>(
+      `[data-provider-id="${CSS.escape(selectedProviderId)}"]`,
+    );
+    target?.scrollIntoView({ block: "nearest" });
+  }, [loading, providers, selectedProviderId]);
 
   return (
     <Card withBorder radius="lg" padding="md" className="flex h-full min-h-0 min-w-0 flex-col border-border/70 bg-surface-container-low">
@@ -117,11 +129,12 @@ export function NativeProviderCatalog({
           )}
         </Stack>
       ) : (
-        <ScrollArea type="auto" offsetScrollbars className="min-h-0 flex-1">
+        <ScrollArea type="auto" offsetScrollbars viewportRef={listRef} className="min-h-0 flex-1">
           <Stack gap="xs" pr="xs">
             {providers.map((provider) => (
               <div
                 key={provider.id}
+                data-provider-id={provider.id}
                 draggable={!busy}
                 aria-label={t("providerCatalog.reorder")}
                 onDragStart={() => setDraggedProviderId(provider.id)}

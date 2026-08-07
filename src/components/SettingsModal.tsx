@@ -213,6 +213,21 @@ function isLikelyMacOs() {
   return typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 }
 
+/**
+ * 设置页之上是否还压着别的弹框层。
+ *
+ * Mantine `Modal`（`role="dialog"` + `aria-modal`）与 Radix `Dialog` 都在捕获阶段处理 Escape，
+ * 早于设置页挂在 document 上的冒泡监听；两者都不会 stopPropagation，
+ * 因此设置页必须自己判断「Escape 是否已经被上层弹框接管」，否则会连带整个设置页一起关掉。
+ */
+function hasOverlayAboveSettings(settingsDialog: HTMLElement | null): boolean {
+  const layers = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+  for (const layer of Array.from(layers)) {
+    if (layer !== settingsDialog) return true;
+  }
+  return false;
+}
+
 export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiveTabChange }: Props) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? "general");
   const [searchValue, setSearchValue] = useState("");
@@ -259,7 +274,9 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
   useEffect(() => {
     if (!mounted || closing) return;
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || event.isComposing) return;
+      // 上层还有弹框（供应商维护、SSH 主机维护、插件安装等）时，Escape 归它处理，设置页不参与
+      if (hasOverlayAboveSettings(dialogRef.current)) return;
       event.preventDefault();
       requestClose("escape");
     };
