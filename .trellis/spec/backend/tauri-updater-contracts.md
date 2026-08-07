@@ -113,6 +113,8 @@ with:
 
 - `TAURI_SIGNING_PRIVATE_KEY` is required for releases that should auto-update.
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is optional and required only when the signing key was generated with a password.
+- 手动 `.github/workflows/alpha-release.yml` 是个人测试例外：只生成 Windows Debug MSI，在 Actions 临时配置中关闭 updater artifacts，并且不得读取签名 Secret、生成 `latest.json` 或捆绑 SSH Agent 发布资产。
+- 该个人 Alpha 必须保持 prerelease 且 `latest=false`；它不能作为稳定版或应用内更新源，但运行时仍可联网获取并验证既有稳定版 Agent manifest。
 - The first version that includes updater support still requires manual installation; earlier releases without `latest.json` / `.sig` cannot be consumed by the official updater.
 
 R2-backed releases use one repository variable as the build-time source of truth:
@@ -125,7 +127,7 @@ R2_PUBLIC_BASE_URL=https://downloads.example.com
   -> rendered install-ssh-agent.sh R2_PUBLIC_BASE_URL
 ```
 
-- `R2_PUBLIC_BASE_URL` is required in release workflows and must be an HTTPS origin only: no credentials, path, query, or fragment. A trailing slash is normalized away.
+- `R2_PUBLIC_BASE_URL` is required in signed production/R2 publishing workflows and must be an HTTPS origin only: no credentials, path, query, or fragment. A trailing slash is normalized away.
 - `.github/scripts/r2-release-config.mjs` owns validation and derivation. Workflows must not duplicate an exact production hostname check.
 - `TAURI_CONFIG` overrides only updater endpoints during CI builds. The committed updater public key remains static in `tauri.conf.json` and must never come from an Actions variable.
 - `VITE_R2_PUBLIC_BASE_URL` and `CLI_MANAGER_R2_AGENT_MANIFEST_URL` are compile-time values. Local builds without them retain the committed compatibility origin.
@@ -157,7 +159,8 @@ R2_PUBLIC_BASE_URL=https://downloads.example.com
 | Active terminal count > 0 | Show strong warning with count before install/relaunch. |
 | User confirms install | Call `install()` then `relaunch()` only after confirmation. |
 | User chooses later | Keep downloaded/pending state when safe; do not close resources during active download/install. |
-| `R2_PUBLIC_BASE_URL` is missing | Fail the release before compiling or publishing artifacts. |
+| Signed production/R2 release has no `R2_PUBLIC_BASE_URL` | Fail the release before compiling or publishing artifacts. |
+| Personal unsigned Windows Alpha has no R2/signing secrets | Build only a Debug MSI; publish as non-latest prerelease without updater or Agent assets. |
 | R2 URL is HTTP or contains credentials/path/query/fragment | Fail validation; do not generate `TAURI_CONFIG` or release artifacts. |
 | R2 URL ends with `/` | Normalize it to the origin before deriving endpoint and artifact URLs. |
 | Local non-release build has no R2 variable | Use the committed compatibility origin; keep GitHub fallback. |
@@ -188,9 +191,10 @@ R2_PUBLIC_BASE_URL=https://downloads.example.com
   - `cargo check --manifest-path src-tauri/Cargo.toml` passes after plugin changes.
 - Release checks:
   - `r2-release-config.test.mjs` rejects missing/HTTP/credential/path/query/fragment values and asserts all derived env values.
-  - Both release workflows run the shared configuration step before compilation and use the rendered installer.
-  - GitHub Actions release has `TAURI_SIGNING_PRIVATE_KEY` available.
-  - Published release includes `latest.json` and signature-backed updater artifacts.
+  - Signed production release workflows run the shared configuration step before compilation and use the rendered installer.
+  - Signed GitHub Actions release has `TAURI_SIGNING_PRIVATE_KEY` available.
+  - Signed published release includes `latest.json` and signature-backed updater/SSH Agent artifacts.
+  - 个人 Windows Alpha 只接受 MSI，并拒绝 `latest.json`、`.sig`、SSH Agent 与非 Windows 资产；发布前后稳定 latest tag 必须一致。
 
 ### 7. Wrong vs Correct
 

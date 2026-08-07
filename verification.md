@@ -1,12 +1,14 @@
-# Alpha Release GitHub Actions 静态验证（2026-08-07）
+# Windows 个人 Alpha GitHub Actions 静态验证（2026-08-07）
 
-- `.github/workflows/alpha-release.yml` 仅支持 `workflow_dispatch`，并在准备阶段拒绝从非默认分支创建 Alpha Release。
-- 默认版本由仓库稳定版本递增补丁号后追加 `-alpha.<run_number>.<run_attempt>`；显式目标版本必须是更高的无前导零 `major.minor.patch`。构建仅在 Actions 临时工作区同步 `package.json`、`package-lock.json`、`Cargo.toml`、`Cargo.lock` 与 `tauri.conf.json`，不会提交版本改写。
-- Windows、macOS Apple Silicon 与 Linux 复用正式发布的签名和 SSH Agent 捆绑链；三个桌面构建全部完成且安装包、`latest.json` 与 SSH Agent 资产齐全后，才将草稿发布为 GitHub prerelease。
-- Alpha 工作流的 `R2_PUBLIC_BASE_URL` 优先读取 Repository Variable/Secret；两者未配置时使用仓库已签入的公共下载域名 `https://github.bwm.de5.net`，因此配置 updater 与安装器不依赖正式发布环境变量。
-- 工作流未包含 `aws s3` 或 R2 上传命令，并显式使用 `make_latest: false`、`--latest=false` 及发布前后稳定 latest tag 比对，避免覆盖稳定版 R2/`latest` 或 GitHub `releases/latest`。
-- YAML 解析、四阶段依赖、三平台矩阵、17 个 shell 脚本块与 2 个内嵌 Node 模块通过静态语法检查；UTF-8、冲突标记和高置信密钥模式扫描通过。
-- GitHub Actions Alpha 工作流：**NOT RUN**；未创建实际 tag、draft 或 prerelease，签名密钥、三平台 runner、资产命名和 GitHub Release 发布行为仍由首次手动运行验证。
+- `.github/workflows/alpha-release.yml` 仅支持 `workflow_dispatch`，并拒绝从非默认分支创建 Alpha Release。
+- 工作流收敛为单个 `windows-latest` job：版本准备、依赖安装、Tauri 打包、草稿资产检查和 prerelease 发布在同一 runner 完成，不再启动独立 prepare/publish、macOS、Linux 或 SSH Agent job。
+- 默认版本由仓库稳定版本递增补丁号后追加 `-alpha.<run_number>.<run_attempt>`；显式目标版本必须是更高的无前导零 `major.minor.patch`。版本只在 Actions 临时工作区同步到 npm、Cargo 与 Tauri 五类元数据，不提交版本改写。
+- 临时 Tauri 配置只构建 MSI，设置 `bundle.createUpdaterArtifacts = false`，移除 `resources/ssh-agent/**/*`，并通过 `--debug`、关闭 dev debug info、开启 Cargo incremental 和 `Swatinem/rust-cache@v2` 缩短当前及后续打包时间。
+- Alpha 不读取 `R2_PUBLIC_BASE_URL` 或 `TAURI_SIGNING_PRIVATE_KEY*`，不生成 `latest.json`、`.sig`、内置 SSH Agent bundle、NSIS、macOS 或 Linux 资产。缺少内置 Agent 时，应用沿用既有逻辑联网获取并验证稳定版 manifest。
+- 发布前只接受 Windows `.msi`，显式拒绝 updater/Agent/非 Windows 资产；草稿验证后才发布为 prerelease，并比较发布前后的稳定 latest tag，避免改变 GitHub `releases/latest`。
+- YAML、单 job/Windows-only 结构、4 个 `run` 块与 1 个内嵌 Node 模块通过静态语法检查；未发现 R2 上传、签名 Secret 或跨平台矩阵残留。
+- 早期签名版工作流曾分别因缺少 `R2_PUBLIC_BASE_URL`、私钥 Secret 不是完整 minisign 私钥格式而在打包前失败；用户随后明确选择仅供个人使用的 Windows 无签名安装包。
+- 修订后的 Windows 无签名 Alpha 工作流：**NOT RUN**；本地未安装依赖、未编译、未运行测试或打包，首次新建手动运行仍需验证 Rust 缓存、Debug MSI 资产名与 GitHub draft/prerelease 行为。
 
 ---
 

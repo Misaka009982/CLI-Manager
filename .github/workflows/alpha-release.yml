@@ -1,4 +1,4 @@
-name: Alpha Release
+name: Alpha Release (Windows Unsigned)
 
 on:
   workflow_dispatch:
@@ -11,20 +11,13 @@ on:
 permissions:
   contents: write
 
-env:
-  # Alpha 不上传 R2；未配置正式发布变量时使用仓库现有公共下载域名。
-  R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL || secrets.R2_PUBLIC_BASE_URL || 'https://github.bwm.de5.net' }}
-
 concurrency:
   group: alpha-release
   cancel-in-progress: false
 
 jobs:
-  prepare:
-    runs-on: ubuntu-22.04
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
+  build:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -34,7 +27,17 @@ jobs:
           node-version: lts/*
           cache: npm
 
-      - name: Resolve alpha version
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+          shared-key: windows-unsigned-alpha
+          cache-on-failure: true
+
+      - name: Resolve and stamp alpha version
         id: version
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -46,20 +49,22 @@ jobs:
             exit 1
           }
           node --input-type=module <<'NODE'
-          import { appendFileSync, readFileSync } from "node:fs";
+          import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
           const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
           const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8"));
           const tauriConfig = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
-          const cargoToml = readFileSync("src-tauri/Cargo.toml", "utf8");
-          const cargoLock = readFileSync("src-tauri/Cargo.lock", "utf8");
+          const cargoTomlPath = "src-tauri/Cargo.toml";
+          const cargoLockPath = "src-tauri/Cargo.lock";
+          const cargoToml = readFileSync(cargoTomlPath, "utf8");
+          const cargoLock = readFileSync(cargoLockPath, "utf8");
           const cargoVersion = cargoToml.match(
             /^\[package\]\r?\nname = "cli-manager"\r?\nversion = "([^"]+)"/m,
           )?.[1];
           const cargoLockVersion = cargoLock.match(
             /^\[\[package\]\]\r?\nname = "cli-manager"\r?\nversion = "([^"]+)"/m,
           )?.[1];
-          const versions = [
+          const repositoryVersions = [
             packageJson.version,
             packageLock.version,
             packageLock.packages?.[""]?.version,
@@ -67,15 +72,21 @@ jobs:
             cargoVersion,
             cargoLockVersion,
           ];
-          if (versions.some((value) => value !== versions[0])) {
-            throw new Error(`Desktop version files are out of sync: ${versions.join(", ")}`);
-          }
-          const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-          if (!stableVersionPattern.test(versions[0])) {
-            throw new Error(`Repository version is not a stable semantic version: ${versions[0]}`);
+          if (repositoryVersions.some((value) => value !== repositoryVersions[0])) {
+            throw new Error(
+              `Desktop version files are out of sync: ${repositoryVersions.join(", ")}`,
+            );
           }
 
-          const repositoryParts = versions[0].split(".").map(Number);
+          const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+          const repositoryVersion = repositoryVersions[0];
+          if (!stableVersionPattern.test(repositoryVersion)) {
+            throw new Error(
+              `Repository version is not a stable semantic version: ${repositoryVersion}`,
+            );
+          }
+
+          const repositoryParts = repositoryVersion.split(".").map(Number);
           const requested = process.env.REQUESTED_VERSION?.trim();
           let targetVersion = requested;
           if (!targetVersion) {
@@ -83,13 +94,18 @@ jobs:
             targetVersion = `${major}.${minor}.${patch + 1}`;
           }
           if (!stableVersionPattern.test(targetVersion)) {
-            throw new Error("The requested version must use major.minor.patch format without leading zeros");
+            throw new Error(
+              "The requested version must use major.minor.patch format without leading zeros",
+            );
           }
           const targetParts = targetVersion.split(".").map(Number);
           const firstDifference = targetParts.findIndex(
             (value, index) => value !== repositoryParts[index],
           );
-          if (firstDifference < 0 || targetParts[firstDifference] < repositoryParts[firstDifference]) {
+          if (
+            firstDifference < 0
+            || targetParts[firstDifference] < repositoryParts[firstDifference]
+          ) {
             throw new Error("The alpha target version must be newer than the repository version");
           }
 
@@ -99,277 +115,105 @@ jobs:
             throw new Error("GitHub run identity is unavailable");
           }
           const version = `${targetVersion}-alpha.${runNumber}.${runAttempt}`;
-          appendFileSync(
-            process.env.GITHUB_OUTPUT,
-            `version=${version}\ntag=V${version}\n`,
-            "utf8",
-          );
-          console.log(`Resolved alpha version: ${version}`);
-          NODE
+          const tag = `V${version}`;
 
-  ssh-agent:
-    needs: prepare
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-          cache: npm
-
-      - name: Configure R2 release endpoints
-        run: node .github/scripts/r2-release-config.mjs export-actions-env
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
-
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
-
-      - name: Install dependencies
-        run: |
-          cargo install cargo-zigbuild --locked
-          npm ci
-
-      - name: Test R2 release preparation
-        run: |
-          node .github/scripts/r2-release-config.test.mjs
-          node .github/scripts/prepare-r2-release.test.mjs
-
-      - name: Extract SSH Agent version
-        id: agent_version
-        shell: bash
-        run: |
-          VERSION="$(cargo metadata --no-deps --format-version 1 --manifest-path src-tauri/ssh-agent/Cargo.toml | node -e 'let input=""; process.stdin.on("data", chunk => input += chunk).on("end", () => { const pkg = JSON.parse(input).packages.find(item => item.name === "cli-manager-ssh-agent"); if (!pkg) process.exit(1); process.stdout.write(pkg.version); });')"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Test SSH Agent
-        run: |
-          cargo test --manifest-path src-tauri/ssh-agent/Cargo.toml
-          sh .github/scripts/test-install-ssh-agent.sh
-
-      - name: Build Linux SSH Agent artifacts
-        run: |
-          cargo zigbuild --release --manifest-path src-tauri/ssh-agent/Cargo.toml --target x86_64-unknown-linux-gnu.2.17
-          cargo zigbuild --release --manifest-path src-tauri/ssh-agent/Cargo.toml --target aarch64-unknown-linux-gnu.2.17
-
-      - name: Verify SSH Agent GLIBC baseline
-        shell: bash
-        run: |
-          for binary in \
-            src-tauri/ssh-agent/target/x86_64-unknown-linux-gnu/release/cli-manager-ssh-agent \
-            src-tauri/ssh-agent/target/aarch64-unknown-linux-gnu/release/cli-manager-ssh-agent
-          do
-            MAX_GLIBC="$(readelf --version-info "$binary" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)*' | sed 's/^GLIBC_//' | sort -Vu | tail -1)"
-            test -n "$MAX_GLIBC"
-            test "$(printf '%s\n' 2.17 "$MAX_GLIBC" | sort -V | tail -1)" = "2.17" || {
-              echo "$binary requires GLIBC_$MAX_GLIBC; maximum supported version is GLIBC_2.17" >&2
-              exit 1
-            }
-          done
-
-      - name: Build signed SSH Agent manifest
-        env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          node .github/scripts/build-ssh-agent-release.mjs \
-            "${{ steps.agent_version.outputs.version }}" \
-            "${{ needs.prepare.outputs.tag }}" \
-            dist/ssh-agent \
-            src-tauri/ssh-agent/target/x86_64-unknown-linux-gnu/release/cli-manager-ssh-agent \
-            src-tauri/ssh-agent/target/aarch64-unknown-linux-gnu/release/cli-manager-ssh-agent
-          npx tauri signer sign dist/ssh-agent/ssh-agent-release-manifest.json
-          node .github/scripts/r2-release-config.mjs render-installer \
-            scripts/install-ssh-agent.sh \
-            dist/ssh-agent/install-ssh-agent.sh
-          sh -n dist/ssh-agent/install-ssh-agent.sh
-          grep -Fqx "R2_PUBLIC_BASE_URL=\"$R2_PUBLIC_BASE_URL\"" dist/ssh-agent/install-ssh-agent.sh
-
-      - name: Stage SSH Agent bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: ssh-agent-alpha-release
-          path: dist/ssh-agent/*
-          if-no-files-found: error
-
-  build:
-    needs: [prepare, ssh-agent]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: windows-latest
-            args: ""
-            rust-target: ""
-          - platform: macos-14
-            args: "--target aarch64-apple-darwin"
-            rust-target: aarch64-apple-darwin
-          - platform: ubuntu-22.04
-            args: ""
-            rust-target: ""
-
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-          cache: npm
-
-      - name: Configure R2 release endpoints
-        run: node .github/scripts/r2-release-config.mjs export-actions-env
-
-      - name: Stamp alpha version in build workspace
-        env:
-          ALPHA_VERSION: ${{ needs.prepare.outputs.version }}
-        shell: bash
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from "node:fs";
-
-          const version = process.env.ALPHA_VERSION;
-          if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-alpha\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version ?? "")) {
-            throw new Error("Invalid alpha version");
+          if (!tauriConfig.bundle || !Array.isArray(tauriConfig.bundle.resources)) {
+            throw new Error("Tauri bundle resources are unavailable");
           }
-          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-          const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8"));
-          const tauriConfig = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
           packageJson.version = version;
           packageLock.version = version;
           packageLock.packages[""].version = version;
           tauriConfig.version = version;
+          tauriConfig.bundle.targets = ["msi"];
+          tauriConfig.bundle.createUpdaterArtifacts = false;
+          tauriConfig.bundle.resources = tauriConfig.bundle.resources.filter(
+            (resource) => resource !== "resources/ssh-agent/**/*",
+          );
+
           writeFileSync("package.json", `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
           writeFileSync("package-lock.json", `${JSON.stringify(packageLock, null, 2)}\n`, "utf8");
-          writeFileSync("src-tauri/tauri.conf.json", `${JSON.stringify(tauriConfig, null, 2)}\n`, "utf8");
+          writeFileSync(
+            "src-tauri/tauri.conf.json",
+            `${JSON.stringify(tauriConfig, null, 2)}\n`,
+            "utf8",
+          );
 
           const replacements = [
             {
-              path: "src-tauri/Cargo.toml",
+              path: cargoTomlPath,
+              source: cargoToml,
               pattern: /^(\[package\]\r?\nname = "cli-manager"\r?\n)version = "[^"]+"/m,
             },
             {
-              path: "src-tauri/Cargo.lock",
+              path: cargoLockPath,
+              source: cargoLock,
               pattern: /^(\[\[package\]\]\r?\nname = "cli-manager"\r?\n)version = "[^"]+"/m,
             },
           ];
-          for (const { path, pattern } of replacements) {
-            const source = readFileSync(path, "utf8");
-            const matches = source.match(new RegExp(pattern.source, "gm")) ?? [];
+          for (const item of replacements) {
+            const matches = item.source.match(new RegExp(item.pattern.source, "gm")) ?? [];
             if (matches.length !== 1) {
-              throw new Error(`Expected exactly one desktop package version in ${path}`);
+              throw new Error(`Expected exactly one desktop package version in ${item.path}`);
             }
-            writeFileSync(path, source.replace(pattern, `$1version = "${version}"`), "utf8");
+            writeFileSync(
+              item.path,
+              item.source.replace(item.pattern, `$1version = "${version}"`),
+              "utf8",
+            );
           }
+
+          appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `version=${version}\ntag=${tag}\n`,
+            "utf8",
+          );
+          console.log(`Resolved unsigned Windows alpha version: ${version}`);
           NODE
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust-target }}
-
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --prefer-offline --no-audit --no-fund
 
-      - name: Test Codex app-server proxy
-        if: matrix.platform == 'windows-latest'
-        run: npm run test:codex-proxy:e2e
-
-      - name: Test Tauri dev proxy preparation
-        if: matrix.platform == 'windows-latest'
-        run: npm run test:tauri-dev-proxy
-
-      - name: Download bundled SSH Agent
-        uses: actions/download-artifact@v4
-        with:
-          name: ssh-agent-alpha-release
-          path: src-tauri/resources/ssh-agent
-
-      - name: Verify bundled SSH Agent files
+      - name: Record stable latest release
+        id: stable_latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          for required in \
-            cli-manager-ssh-agent-linux-x86_64 \
-            cli-manager-ssh-agent-linux-aarch64 \
-            ssh-agent-release-manifest.json \
-            ssh-agent-release-manifest.json.sig
-          do
-            test -f "src-tauri/resources/ssh-agent/$required" || exit 1
-          done
+          TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Build alpha draft release
+      - name: Build unsigned Windows alpha draft
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           NODE_OPTIONS: "--max-old-space-size=4096"
+          CARGO_INCREMENTAL: "1"
+          CARGO_PROFILE_DEV_DEBUG: "0"
         with:
-          tagName: ${{ needs.prepare.outputs.tag }}
-          releaseName: "CLI-Manager ${{ needs.prepare.outputs.tag }} (Alpha)"
+          tagName: ${{ steps.version.outputs.tag }}
+          releaseName: "CLI-Manager ${{ steps.version.outputs.tag }} (Windows Unsigned Alpha)"
           releaseBody: |
             > [!WARNING]
-            > 这是自动生成的 Alpha 预发布版本，仅供测试。它可能不稳定，请勿用于关键环境。
+            > 这是供个人测试的 Windows 无签名 Debug Alpha。它未经过发布优化，可能不稳定。
 
             - 来源提交：`${{ github.sha }}`
             - 工作流运行：`${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`
+            - 仅生成 Windows `.msi`，不构建 macOS、Linux 或 NSIS
+            - 不包含 `latest.json` 或 updater 签名资产，不能通过应用内更新安装本 Alpha
+            - 不包含内置 SSH Agent bundle；需要 Agent 时会联网获取并验证稳定版 manifest
             - 不会写入稳定版 R2/`latest` 更新通道
 
-            ## 安装包
-
-            | 平台 | 格式 |
-            |------|------|
-            | Windows | `.msi` |
-            | macOS (Apple Silicon) | `.dmg` |
-            | Linux | `.deb` / `.AppImage` |
+            Windows 首次安装可能触发 SmartScreen 提示，请仅在确认来源提交后继续。
           releaseDraft: true
           prerelease: true
-          includeUpdaterJson: true
-          args: ${{ matrix.args }}
-
-  publish:
-    needs: [prepare, ssh-agent, build]
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download SSH Agent release files
-        uses: actions/download-artifact@v4
-        with:
-          name: ssh-agent-alpha-release
-          path: dist/ssh-agent
-
-      - name: Attach SSH Agent assets to draft
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare.outputs.tag }}
-          draft: true
-          prerelease: true
-          make_latest: false
-          files: |
-            dist/ssh-agent/cli-manager-ssh-agent-linux-x86_64
-            dist/ssh-agent/cli-manager-ssh-agent-linux-aarch64
-            dist/ssh-agent/ssh-agent-release-manifest.json
-            dist/ssh-agent/ssh-agent-release-manifest.json.sig
-            dist/ssh-agent/install-ssh-agent.sh
+          includeUpdaterJson: false
+          args: "--debug"
 
       - name: Verify assets and publish prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ALPHA_TAG: ${{ needs.prepare.outputs.tag }}
+          ALPHA_TAG: ${{ steps.version.outputs.tag }}
+          EXPECTED_STABLE_TAG: ${{ steps.stable_latest.outputs.tag }}
         shell: bash
         run: |
           RELEASE_STATE="$(gh release view "$ALPHA_TAG" --json isDraft,isPrerelease --jq '[.isDraft, .isPrerelease] | @tsv')"
@@ -379,37 +223,34 @@ jobs:
           }
 
           ASSETS="$(gh release view "$ALPHA_TAG" --json assets --jq '.assets[].name')"
-          for required in \
-            latest.json \
-            cli-manager-ssh-agent-linux-x86_64 \
-            cli-manager-ssh-agent-linux-aarch64 \
-            ssh-agent-release-manifest.json \
-            ssh-agent-release-manifest.json.sig \
-            install-ssh-agent.sh
+          printf '%s\n' "$ASSETS" | grep -Eq '\.msi$' || {
+            echo "Missing Windows MSI alpha installer" >&2
+            exit 1
+          }
+          for forbidden_pattern in \
+            '^latest\.json$' \
+            '\.sig$' \
+            '^cli-manager-ssh-agent-' \
+            '^ssh-agent-release-manifest\.json$' \
+            '^install-ssh-agent\.sh$' \
+            '\.(dmg|deb|AppImage)$'
           do
-            printf '%s\n' "$ASSETS" | grep -Fxq "$required" || {
-              echo "Missing required alpha release asset: $required" >&2
+            if printf '%s\n' "$ASSETS" | grep -Eq "$forbidden_pattern"
+            then
+              echo "Windows unsigned alpha contains a forbidden asset matching: $forbidden_pattern" >&2
               exit 1
-            }
-          done
-          for pattern in '\.msi$' '\.dmg$' '\.deb$' '\.AppImage$'
-          do
-            printf '%s\n' "$ASSETS" | grep -Eq "$pattern" || {
-              echo "Missing alpha installer matching: $pattern" >&2
-              exit 1
-            }
+            fi
           done
 
-          STABLE_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)"
           gh release edit "$ALPHA_TAG" --draft=false --prerelease --latest=false
 
           RELEASE_STATE="$(gh release view "$ALPHA_TAG" --json isDraft,isPrerelease --jq '[.isDraft, .isPrerelease] | @tsv')"
           test "$RELEASE_STATE" = $'false\ttrue' || {
-            echo "Alpha release was not published as a prerelease" >&2
+            echo "Windows alpha was not published as a prerelease" >&2
             exit 1
           }
           ACTUAL_STABLE_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)"
-          test "$ACTUAL_STABLE_TAG" = "$STABLE_TAG" || {
-            echo "Publishing alpha changed the stable latest release" >&2
+          test "$ACTUAL_STABLE_TAG" = "$EXPECTED_STABLE_TAG" || {
+            echo "Publishing Windows alpha changed the stable latest release" >&2
             exit 1
           }

@@ -47,7 +47,7 @@ version bump unless the Agent itself changes.
 - [ ] Before `tauri-action` runs, the downloaded desktop bundle requires only both Agent binaries,
   `ssh-agent-release-manifest.json`, and its `.sig`; do not require updater `latest.json` there,
   because Tauri generates it during the later desktop packaging step.
-- [ ] A desktop release still contains `latest.json`, updater signatures, and the bundled Agent
+- [ ] A signed desktop release still contains `latest.json`, updater signatures, and the bundled Agent
   manifest/signature/binaries before it is published.
 
 ## Version Sources to Update
@@ -109,6 +109,17 @@ Before tagging a release that should be installable through the in-app updater:
   Linux Agent binaries before marking it stable.
 - [ ] Remember that existing versions without updater support cannot auto-install the first updater-enabled release; users must install that one manually.
 
+## Windows 个人无签名 Alpha
+
+手动 `.github/workflows/alpha-release.yml` 只用于个人测试和缩短反馈周期，不属于稳定发布或应用内更新通道。
+
+- 只运行一个 `windows-latest` job，并通过 Debug profile 生成 MSI；不构建 NSIS、macOS 或 Linux。
+- 在版本改写前恢复 Rust cache，使缓存键基于仓库稳定 `Cargo.lock`；后续运行可复用依赖和增量产物。
+- 只在 Actions 临时 `tauri.conf.json` 中设置 `bundle.targets = ["msi"]`、`createUpdaterArtifacts = false`，并移除 SSH Agent resource glob；不得修改正式配置的 updater 公钥。
+- 不传入 `TAURI_SIGNING_PRIVATE_KEY*` 或 R2 配置，不生成 `latest.json`、`.sig`、内置 Agent bundle，也不执行 Agent/跨平台测试。
+- Tauri `beforeBuildCommand` 仍执行 `npm run build`；这是个人快速打包，不得以此替代正式发布门禁。
+- Release 必须标记为 prerelease、`latest=false`，文案必须明确 Debug/无签名/Windows-only；发布前后稳定 latest tag 保持一致。
+
 ## Local Unsigned Smoke Build
 
 Use this path only for local packaging/tests when you do not have the updater signing private key on the machine.
@@ -135,7 +146,7 @@ npm run tauri:build:local
   - `src-tauri/target/release/bundle/nsis/`
   - `src-tauri/target/release/bundle/msi/`
 
-- Never use the local unsigned build flow for GitHub releases or any artifact that should be consumed by the in-app updater.
+- Never use the local unsigned build flow for a signed/stable GitHub release or an artifact that should be consumed by the in-app updater. The personal Windows Alpha above is an explicit workflow-only exception and does not use `tauri.local.conf.json`.
 
 ## Acceptance Check
 
