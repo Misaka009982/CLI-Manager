@@ -218,6 +218,8 @@ jobs:
             Windows 首次安装可能触发 SmartScreen 提示，请仅在确认来源提交后继续。
           releaseDraft: true
           prerelease: true
+          includeDebug: true
+          includeRelease: false
           includeUpdaterJson: false
           args: "--debug"
 

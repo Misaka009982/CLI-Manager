@@ -114,6 +114,7 @@ Before tagging a release that should be installable through the in-app updater:
 手动 `.github/workflows/alpha-release.yml` 只用于个人测试和缩短反馈周期，不属于稳定发布或应用内更新通道。
 
 - 只运行一个 `windows-latest` job，并通过 Debug profile 生成 MSI；不构建 NSIS、macOS 或 Linux。
+- `tauri-action` 的 `args: "--debug"` 必须与 `includeDebug: true`、`includeRelease: false` 配套，使发布资产从 `target/debug/bundle` 收集，不能让默认 Release 扫描忽略已生成的 Debug MSI。
 - GitHub prerelease tag 使用 `V<target>-alpha.<run>.<attempt>`；构建时六个应用版本源统一写为 MSI 可接受的 `<target>-<run>`，其中 run number 必须在 `1..65535`，不能把文本型 `alpha` 预发布段写入 MSI 应用版本。
 - 在版本改写前恢复 Rust cache，使缓存键基于仓库稳定 `Cargo.lock`；后续运行可复用依赖和增量产物。
 - 只在 Actions 临时 `tauri.conf.json` 中设置 `bundle.targets = ["msi"]`、`createUpdaterArtifacts = false`，并移除 SSH Agent resource glob；不得修改正式配置的 updater 公钥。
