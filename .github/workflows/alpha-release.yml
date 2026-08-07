@@ -114,16 +114,25 @@ jobs:
           if (!/^\d+$/.test(runNumber ?? "") || !/^\d+$/.test(runAttempt ?? "")) {
             throw new Error("GitHub run identity is unavailable");
           }
-          const version = `${targetVersion}-alpha.${runNumber}.${runAttempt}`;
-          const tag = `V${version}`;
+          const runNumberValue = Number(runNumber);
+          if (
+            !Number.isSafeInteger(runNumberValue)
+            || runNumberValue < 1
+            || runNumberValue > 65535
+          ) {
+            throw new Error("GITHUB_RUN_NUMBER must be between 1 and 65535 for MSI packaging");
+          }
+          const releaseVersion = `${targetVersion}-alpha.${runNumber}.${runAttempt}`;
+          const bundleVersion = `${targetVersion}-${runNumberValue}`;
+          const tag = `V${releaseVersion}`;
 
           if (!tauriConfig.bundle || !Array.isArray(tauriConfig.bundle.resources)) {
             throw new Error("Tauri bundle resources are unavailable");
           }
-          packageJson.version = version;
-          packageLock.version = version;
-          packageLock.packages[""].version = version;
-          tauriConfig.version = version;
+          packageJson.version = bundleVersion;
+          packageLock.version = bundleVersion;
+          packageLock.packages[""].version = bundleVersion;
+          tauriConfig.version = bundleVersion;
           tauriConfig.bundle.targets = ["msi"];
           tauriConfig.bundle.createUpdaterArtifacts = false;
           tauriConfig.bundle.resources = tauriConfig.bundle.resources.filter(
@@ -157,17 +166,19 @@ jobs:
             }
             writeFileSync(
               item.path,
-              item.source.replace(item.pattern, `$1version = "${version}"`),
+              item.source.replace(item.pattern, `$1version = "${bundleVersion}"`),
               "utf8",
             );
           }
 
           appendFileSync(
             process.env.GITHUB_OUTPUT,
-            `version=${version}\ntag=${tag}\n`,
+            `version=${releaseVersion}\nbundle_version=${bundleVersion}\ntag=${tag}\n`,
             "utf8",
           );
-          console.log(`Resolved unsigned Windows alpha version: ${version}`);
+          console.log(
+            `Resolved unsigned Windows alpha release ${releaseVersion}; MSI bundle ${bundleVersion}`,
+          );
           NODE
 
       - name: Install dependencies
@@ -199,6 +210,7 @@ jobs:
             - 来源提交：`${{ github.sha }}`
             - 工作流运行：`${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`
             - 仅生成 Windows `.msi`，不构建 macOS、Linux 或 NSIS
+            - MSI 内部版本：`${{ steps.version.outputs.bundle_version }}`；Alpha 身份以 Release tag 为准
             - 不包含 `latest.json` 或 updater 签名资产，不能通过应用内更新安装本 Alpha
             - 不包含内置 SSH Agent bundle；需要 Agent 时会联网获取并验证稳定版 manifest
             - 不会写入稳定版 R2/`latest` 更新通道
