@@ -40,7 +40,9 @@
 - R6：Windows、macOS、Linux 使用同一提示路由契约；不新增第三方依赖。
 - R7：不修改 xterm 输入转发、PTY daemon 协议、SSH 参数优先级或认证方式 UI。
 - R8：用户没有可用于人工验收的 MFA SSH 主机，交付必须包含不依赖真实服务器的自动化回归测试，模拟 OpenSSH AskPass 的保存密码、MFA、broker 失效和无控制终端路径。
-- R9：只有交互式 SSH PTY 启动显式设置 `CLI_MANAGER_SSH_ASKPASS_TTY_FALLBACK=1`；后台 one-shot 不设置该标志，即使意外继承控制终端也必须快速失败。
+- R9：交互式 SSH PTY 显式设置 `CLI_MANAGER_SSH_ASKPASS_TTY_FALLBACK=1`；后台 one-shot 显式设置 `0`，覆盖父进程可能遗留的 `1`，且 helper 只接受精确值 `1`。
+- R10：broker token 必须有界读取，错误/超长 token 不得消耗 broker；服务端控制的 AskPass prompt 在写入本地终端前必须过滤控制字符、规范化换行并限制显示长度。
+- R11：SSH launch 生成的 AskPass 内部环境变量必须优先于项目/会话环境，Windows 大小写变体也不能覆盖内部值。
 
 ## Scenario Matrix
 
@@ -62,7 +64,8 @@
 - `src-tauri/src/ssh_transport.rs`：交互 launch 显式开启 AskPass 控制终端降级；one-shot 保持关闭。
 - `src-tauri/src/ssh_launch.rs`：确认交互 SSH 进入 PTY；预计不修改。
 - `src-tauri/src/pty/platform/unix.rs`、`src-tauri/src/pty/platform/windows.rs`：确认 SSH 子进程具备控制终端；预计不修改。
-- `src-tauri/src/pty/manager.rs`、`src-tauri/src/daemon/server.rs`：确认 PTY 写入链路；预计不修改。
+- `src-tauri/src/pty/manager.rs`：修改 SSH 本地启动环境合并，保护 AskPass 内部键不被项目/会话环境覆盖。
+- `src-tauri/src/daemon/server.rs`：确认复用 `PtyManager::create_with_launch`，无需修改。
 - `src/hooks/useTerminalInput.ts`、`src/lib/terminalIme.ts`：确认前端输入没有被连接状态或 IME 路径阻断；预计不修改。
 - `src-tauri/src/main.rs`、`src-tauri/src/bin/cli-manager-daemon.rs`、`src-tauri/src/bin/cli-manager-codex-proxy.rs`：AskPass helper 入口调用方；签名不变，确认无需修改。
 - `.trellis/spec/backend/ssh-remote-terminal-contracts.md`：补充 AskPass 未知/多轮提示必须转交控制终端的可执行契约。
@@ -73,6 +76,7 @@
 - GitNexus 已刷新到当前提交，但本机 LadybugDB FTS 扩展不可用，Rust 函数节点名称为空；精确 `impact` 返回 `UNKNOWN`，无法生成可靠符号级风险。
 - 已按分诊指南降级到 SSH 契约文档 + 精确搜索确认调用方。
 - 人工评估：代码触点小，但属于认证和秘密输入边界，风险等级为中等；主要风险是终端回显未恢复、后台 one-shot 意外阻塞、不同会话读取串线。
+- 二次审查确认三个加固点：后台 one-shot 继承父环境、用户环境覆盖内部 AskPass 键、broker/prompt 输入未完全有界。修复继续落在 SSH launch、AskPass 和 PTY 环境边界，不扩散到前端。
 
 ## Acceptance Criteria
 
@@ -86,7 +90,10 @@
 - [x] AC8：AskPass 提示分类、broker 优先级、broker 失败降级、MFA 跳过 broker 均有 Rust 单元测试。
 - [x] AC9：SSH 相关定向 Rust 测试与 `cargo check` 通过。
 - [x] AC10：自动化回归能够证明保存密码只用于密码提示，MFA 必须读取交互输入，且 broker 失败后不会形成无输入者循环。
-- [x] AC11：后台 one-shot 未设置 TTY fallback 标志时，MFA 和 broker 失败路径均不调用控制终端读取并快速失败。
+- [x] AC11：后台 one-shot 显式设置 TTY fallback 为 `0` 时，MFA 和 broker 失败路径均不调用控制终端读取并快速失败。
+- [x] AC12：父进程遗留 `CLI_MANAGER_SSH_ASKPASS_TTY_FALLBACK=1` 时，one-shot launch 的显式 `0` 仍保持非交互。
+- [x] AC13：项目/会话环境无法通过大小写变体覆盖 SSH 内部 AskPass helper、broker token 或 TTY 策略。
+- [x] AC14：错误/超长 broker token 被拒绝且不消耗正确客户端的机会；ANSI/OSC/控制字符 prompt 不会在本地终端执行，显示长度受限。
 
 ## Out of Scope
 

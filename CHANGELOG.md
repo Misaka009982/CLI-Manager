@@ -2,6 +2,10 @@
 
 ## [TEMP]
 
+### SSH MFA 认证
+
+- 修复保存用户名/密码连接启用 Keyboard-interactive/MFA 的 SSH 主机时，AskPass 对 MFA 提示持续失败并循环输出、终端无法输入的问题；保存密码仍只自动填写普通密码提示，MFA/OTP/PIN 等后续挑战改为在所属交互终端隐藏输入。同步加固后台非交互策略、AskPass 内部环境优先级、broker token 长度和服务端 prompt 控制序列过滤。（Refs #195）
+
 ### Windows 兼容修复
 
 - 设置 -> 开发者 -> Windows 兼容修复的说明补充 Codex CLI 在内部终端运行期间光标乱闪的修复；缺少该配置的新安装默认开启，已有明确关闭配置继续保留。
