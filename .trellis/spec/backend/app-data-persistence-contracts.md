@@ -1,5 +1,95 @@
 # App Data Persistence Contracts
 
+## Scenario: Windows portable and configurable data root
+
+### 1. Scope / Trigger
+
+- Trigger: changing `app_paths`, startup data-root selection, data-directory settings IPC, directory migration, Hook/daemon paths, or Windows portable packaging.
+- Goal: every CLI-Manager-owned file that previously lived under `%USERPROFILE%\\.cli-manager` follows one startup-resolved root without affecting `.claude`, `.codex`, WSL, SSH hosts, or project files.
+
+### 2. Signatures
+
+```rust
+app_get_data_paths() -> Result<CliManagerDataPaths, String>
+app_get_data_storage_status() -> Result<DataStorageStatus, String>
+app_inspect_data_dir(target_dir: String) -> Result<DataStorageInspection, String>
+app_prepare_data_dir_switch(
+    target_mode: String,
+    target_dir: Option<String>,
+    migrate: bool,
+) -> Result<String, String>
+```
+
+- `DataStorageStatus`: `supported`, `distribution`, `mode`, `currentDataDir`, `defaultDataDir`, `bootstrapPath`, `lastError`.
+- `DataStorageInspection`: `targetDir`, `exists`, `empty`, `writable`, `sameAsCurrent`.
+- `targetMode`: `custom | default`; `targetDir` is required only for `custom`.
+
+### 3. Contracts
+
+- Distribution priority is `CLI_MANAGER_DISTRIBUTION=aur` -> Windows executable-adjacent `portable.flag` -> `standalone`.
+- Windows defaults:
+  - standalone: `%USERPROFILE%\\.cli-manager`;
+  - portable: `<exe-dir>\\data`.
+- Bootstrap pointers never live inside the redirected data root:
+  - standalone: `%LOCALAPPDATA%\\com.cli-manager.app\\data-root.json`;
+  - portable: `<exe-dir>\\data-root.json`.
+- A custom directory is the data root itself; never append `.cli-manager` or `data`.
+- `app_get_data_paths` keeps its existing response fields and dev/install file-name isolation. All consumers obtain the selected root through `cli_manager_data_dir()`.
+- A prepared switch is pending until the next normal GUI startup. Hook, statusline, and daemon helper entrypoints read only the active root and never execute migration.
+- Automatic migration copies the complete source tree into a target-sibling temporary directory, rejects links/reparse points, and activates it with rename only after the copy succeeds. The source is retained for recovery.
+- Automatic migration is allowed only when the target is empty. Direct use may select an existing non-empty directory but never merges or overwrites it.
+- Windows path canonicalization may produce a `\\?\\` verbatim prefix; normalize it back to a regular drive or UNC path before serializing `dbUrl`, otherwise SQLx treats `?` as the start of query parameters.
+- Hook diagnostics use `app_paths::logs_dir()`. Managed desktop-pet assets are scoped dynamically to `<data-root>/pets`; `$HOME/.codex/pets` remains external and unchanged.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Relative path, `..`, or drive/share root | Reject before writing Bootstrap state. |
+| Target is a file, symlink, or Windows reparse point | Reject explicitly. |
+| Source and target are equal or one contains the other | Reject with `data_storage_target_is_current` / `data_storage_source_target_overlap`. |
+| Target or nearest existing parent is not writable | Reject with `data_storage_target_not_writable`. |
+| `migrate=true` and target is non-empty | Reject with `data_storage_target_not_empty`; do not merge. |
+| Copy or activation fails | Keep the previous `customDataDir`, clear pending state, and persist `lastError`. |
+| Explicit active custom root is unavailable at GUI startup | Stop before logs/SQLite/Store initialization and show a startup error; never silently fall back. |
+| Alive daemon session exists | Reject switch with `data_storage_tasks_active`; never terminate it automatically. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: copying the portable folder with `data/` to another drive resolves the new executable-adjacent data directory and keeps all app state.
+- Good: migrating to an empty custom directory copies `cli-manager.db`, WAL/SHM, Store files, logs, cache, attachments, backups, providers, pets, and unknown future subdirectories.
+- Base: an installed build without Bootstrap configuration still resolves `%USERPROFILE%\\.cli-manager`.
+- Bad: storing the selected root in `settings.json`; that file cannot locate itself before the root is known.
+- Bad: copying directly into the final target or merging a non-empty directory.
+
+### 6. Tests Required
+
+- Rust tests for distribution precedence and portable/standalone default paths.
+- Rust tests for Bootstrap path placement and previous-root retention after pending-switch failure.
+- Rust tests for complete-tree migration, non-empty target rejection, and parent/child overlap rejection.
+- Windows tests must cover verbatim drive/UNC prefix stripping and parsing the resulting absolute path as a SQLite URL.
+- `cargo test --manifest-path src-tauri/Cargo.toml app_paths --lib` and `cargo check` after backend changes.
+- `npx tsc --noEmit` after changing storage IPC/UI types.
+- Portable ZIP inspection must assert `cli-manager.exe`, `cli-manager-codex-proxy.exe`, `portable.flag`, and `resources/` exist under the archive root.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+pub fn cli_manager_data_dir() -> PathBuf {
+    home_dir().join(".cli-manager")
+}
+```
+
+#### Correct
+
+```rust
+pub fn cli_manager_data_dir() -> Result<PathBuf, String> {
+    DATA_ROOT.get_or_init(resolve_active_data_dir).clone()
+}
+```
+
 ## Scenario: Stable user data survives update
 
 ### 1. Scope / Trigger
@@ -12,14 +102,14 @@
 - Backend data path command: `app_get_data_paths() -> Result<CliManagerDataPaths, String>`.
 - Backend startup migration: `migrate_legacy_app_files(app: &AppHandle<R>) -> Result<(), String>`.
 - Backend DB repair command: `db_repair_known_migration_drift(app: AppHandle) -> Result<DbMigrationRepairResult, String>`.
-- Stable data directory: `<home>/.cli-manager`.
+- Default installed data directory: `<home>/.cli-manager`; Windows portable default: `<exe-dir>/data`; an explicit custom root replaces either default.
 - Stable store files: `settings.json`, production `sessions.json`, development `sessions.dev.json`, `sync-config.json`, `external-session-sync.json`.
 - Stable SQLite DB: `cli-manager.db`.
 - History index cache: production `history-cache`, development `history-cache-dev`.
 
 ### 3. Contracts
 
-- All durable CLI-Manager user data must resolve under `.cli-manager`, not versioned or identifier-dependent Tauri data folders.
+- All durable CLI-Manager user data must resolve under the startup-selected data root, not versioned or identifier-dependent Tauri data folders.
 - `app_get_data_paths().sessionsStorePath` must use `sessions.dev.json` under Tauri `cfg(dev)` and `sessions.json` otherwise. Other stores remain shared unless another contract explicitly isolates them.
 - History index caches must use `history-cache-dev` under Tauri `cfg(dev)` and `history-cache` otherwise, so installed and development apps can run concurrently without competing over catalog activation/index runs.
 - Legacy store migration continues to migrate `sessions.json` as production user data. It must not copy production or legacy sessions into `sessions.dev.json`.

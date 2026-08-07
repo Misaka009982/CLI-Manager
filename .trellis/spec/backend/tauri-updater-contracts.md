@@ -2,6 +2,70 @@
 
 > Executable contracts for CLI-Manager's Tauri 2 auto-update pipeline across React, Tauri config/capabilities, GitHub Actions release artifacts, and installer restart UX.
 
+## Scenario: Portable build checks updates without installing
+
+### 1. Scope / Trigger
+
+- Trigger: changing distribution detection, updater store branching, About-page update actions, Windows portable packaging, or release asset publishing.
+
+### 2. Signatures
+
+```ts
+type AppDistribution = "standalone" | "portable" | "aur";
+```
+
+```rust
+get_app_version() -> AppVersion // distribution = standalone | portable | aur
+```
+
+- Packaging entry: `scripts/package-portable.ps1 -Version <semver> -SourceDir <release> -OutputDir <dir>`.
+
+### 3. Contracts
+
+- Portable builds still call the signed Tauri updater `check()` API and may show version/date/release notes.
+- Portable builds never call `Update.download()`, `Update.install()`, or `relaunch()` from the updater flow. Their primary action opens the matching GitHub Release page for manual ZIP replacement.
+- Standalone and AUR behavior stays unchanged: standalone downloads/installs/relaunches; AUR skips updater operations and opens the AUR package page.
+- The Windows x64 ZIP contains one `CLI-Manager/` root with `cli-manager.exe`, `cli-manager-codex-proxy.exe`, `portable.flag`, and `resources/`. It must not contain an installer or a user `data-root.json`.
+- The portable ZIP is uploaded to the same draft GitHub Release but is not referenced from `latest.json`; Tauri installer selection must continue using signed installer artifacts only.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Portable update is available | Show “Download Portable Build” and open the version Release page. |
+| Portable check fails | Show the normal signed-manifest error and keep the Release fallback. |
+| Portable action is invoked through `downloadUpdate()` defensively | Return `false`; do not download an installer. |
+| Required executable/resources missing during packaging | Fail the PowerShell script and release job. |
+| Portable artifact missing from the draft release | Fail release asset verification before publishing. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: portable V1.3.5 detects V1.3.6, displays notes, and opens the V1.3.6 Release without starting MSI/NSIS.
+- Base: standalone continues the existing signed download/install/relaunch flow.
+- Bad: treating portable as standalone after version detection and calling the installer.
+- Bad: placing `data-root.json` in the ZIP, which would overwrite a user's portable custom-root pointer on upgrade.
+
+### 6. Tests Required
+
+- Type-check updater distribution branches with `npx tsc --noEmit`.
+- Run the portable packaging script against a release directory and inspect ZIP entries.
+- Release workflow verification must require `CLI-Manager-V<version>-Windows-x64-portable.zip` before publishing.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+if (distribution !== "aur") await update.download();
+```
+
+#### Correct
+
+```ts
+if (distribution !== "standalone") return false;
+await update.download();
+```
+
 ---
 
 ## Scenario: Official Tauri updater release and install flow

@@ -52,7 +52,6 @@
         "scope": {
           "allow": [
             "$APPLOCALDATA/backgrounds/**",
-            "$HOME/.cli-manager/pets/**",
             "$HOME/.codex/pets/**"
           ],
           "deny": []
