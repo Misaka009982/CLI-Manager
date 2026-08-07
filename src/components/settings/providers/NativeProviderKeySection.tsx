@@ -10,7 +10,7 @@ import {
   Text,
   Tooltip,
 } from "@mantine/core";
-import { ChevronDown, ChevronUp, Eye, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, KeyRound, Pencil, Plus, Trash2, Zap } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { useAppConfirm } from "@/components/ui/useAppConfirm";
 import { NativeProviderKeyFormModal } from "./NativeProviderKeyFormModal";
@@ -149,9 +149,9 @@ export function NativeProviderKeySection({
                 <Stack gap={2} miw={0} className="min-w-0 flex-1">
                   <Group gap="xs" wrap="wrap">
                     <Text size="sm" fw={600} truncate>{key.label}</Text>
-                    {key.isActive && <Badge size="xs" color="cliPrimary">{t("providerCatalog.active")}</Badge>}
+                    {key.isActive && <Badge size="xs" color="cliPrimary">{t("providerCatalog.keyActiveInEffect")}</Badge>}
                     <Badge size="xs" variant="light" color={key.enabled ? "green" : "gray"}>
-                      {t(key.enabled ? "providerCatalog.enabled" : "providerCatalog.disabled")}
+                      {t(key.enabled ? "providerCatalog.keyCandidate" : "providerCatalog.keyArchived")}
                     </Badge>
                   </Group>
                   <Text size="xs" c="dimmed" ff="monospace" truncate>{key.maskedApiKey}</Text>
@@ -204,14 +204,14 @@ export function NativeProviderKeySection({
                       disabled={Boolean(action)}
                       onClick={() => void handleReveal(key).catch(() => undefined)}
                     >
-                      <Eye size={15} />
+                      <KeyRound size={15} />
                     </ActionIcon>
                   </Tooltip>
                   {!key.isActive && (
                     <Button
-                      size="compact-xs"
-                      variant="light"
+                      size="compact-sm"
                       color="cliPrimary"
+                      leftSection={<Zap size={15} />}
                       loading={action === "activate-key"}
                       disabled={Boolean(action) || !key.enabled}
                       onClick={() => void onActivate(key.id).catch(() => undefined)}
@@ -219,21 +219,30 @@ export function NativeProviderKeySection({
                       {t("providerCatalog.activate")}
                     </Button>
                   )}
-                  <Tooltip label={key.isActive
-                    ? t("providerCatalog.errors.activeKeyCannotDisable")
-                    : t(key.enabled ? "providerCatalog.disable" : "providerCatalog.enable")}
-                  >
-                    <span className="inline-flex">
-                      <Switch
-                        size="sm"
-                        color="cliPrimary"
-                        checked={key.enabled}
-                        disabled={Boolean(action) || key.isActive}
-                        aria-label={key.enabled ? t("providerCatalog.disable") : t("providerCatalog.enable")}
-                        onChange={(event) => void onSetEnabled(key.id, event.currentTarget.checked).catch(() => undefined)}
-                      />
-                    </span>
-                  </Tooltip>
+                  <Group gap={4} wrap="nowrap">
+                    <Text size="xs" c="dimmed">{t("providerCatalog.keyCandidate")}</Text>
+                    <Tooltip label={key.isActive
+                      ? t("providerCatalog.errors.activeKeyCannotDisable")
+                      : t(key.enabled ? "providerCatalog.disable" : "providerCatalog.enable")}
+                    >
+                      <span className="inline-flex">
+                        <Switch
+                          size="sm"
+                          color="cliPrimary"
+                          checked={key.isActive ? true : key.enabled}
+                          readOnly={key.isActive}
+                          disabled={!key.isActive && Boolean(action)}
+                          aria-disabled={key.isActive || Boolean(action)}
+                          aria-label={key.enabled ? t("providerCatalog.disable") : t("providerCatalog.enable")}
+                          className={key.isActive ? "cursor-not-allowed" : undefined}
+                          onChange={(event) => {
+                            if (key.isActive || action) return;
+                            void onSetEnabled(key.id, event.currentTarget.checked).catch(() => undefined);
+                          }}
+                        />
+                      </span>
+                    </Tooltip>
+                  </Group>
                   <Tooltip label={t(key.isActive ? "providerCatalog.replaceKey" : "providerCatalog.deleteKey")}>
                     <ActionIcon
                       variant="subtle"

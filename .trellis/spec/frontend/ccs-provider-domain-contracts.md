@@ -242,3 +242,28 @@ generic configuration textarea.
 - Provider-card enable switches control whether the provider may participate
   in global/project/Worktree resolution. Current or referenced providers may
   not be disabled, and their stable backend errors require localized feedback.
+
+## Provider key visual clarity contract (2026-08-07)
+
+- `enabled` means "in the candidate pool, allowed to be activated." Render it
+  as **Candidate** (候选), never as "Enabled" (已启用) which collides with
+  "in effect." Multiple keys may be candidates simultaneously.
+- `isActive` means "the one key actually materialized into config files."
+  Exactly one key per provider per app type. Render it as **Current · In effect**
+  (当前密钥·生效中).
+- The enable/disable Switch controls candidate-pool membership ONLY. It
+  MUST sit alongside a visible "Candidate" (候选) text label so users never
+  misread it as an in-effect toggle. The active key's Switch uses `readOnly`
+  (not `disabled`) to preserve the checked visual; `disabled` on Mantine
+  Switch greys the track even when `checked=true`, accidentally conveying
+  "stopped."
+- The reveal action uses the `KeyRound` icon (not `Eye`) because `Eye` reads
+  as a visibility/on-off toggle — a false affordance adjacent to the Switch.
+- The **Activate** button is the primary action on a non-active key row. It
+  uses a filled `color="cliPrimary"` button with a `Zap` icon, visually
+  dominant over the candidate-pool Switch. For the current provider
+  (`isCurrent`), activation silently applies the global configuration
+  (no confirmation modal); failure toasts an error without rolling back the
+  activation that the backend already committed.
+- A key that is `!enabled && !isActive` is **Archived** (已封存). Its row
+  should be visually de-emphasized and the Activate button disabled.
