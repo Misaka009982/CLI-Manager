@@ -666,3 +666,36 @@ Claude、Codex、Pi、Grok 的非强制配置目录解析在已选目录失效�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 79: 补齐 Tab CLI 工具图标并新增 Kimi
+
+**Date**: 2026-08-07
+**Task**: 补齐 Tab CLI 工具图标并新增 Kimi
+**Branch**: `master`
+
+### Summary
+
+OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 上不显示图标——Tab 只用 VendorIcon，这些工具 descriptor 的 vendor 为 null。改为厂商图标 -> CLI 工具图标 -> 无 的回退链，新增 cliToolIcon prop 贯穿 SortableTab/SortableWorkspanTab/DragOverlayTab。同时新增 Kimi CLI 工具（命令 kimi，vendor kimi，LobeHub Kimi 彩色图标），暂不接入历史解析。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d6036889` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
