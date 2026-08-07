@@ -221,7 +221,6 @@ jobs:
           includeDebug: true
           includeRelease: false
           includeUpdaterJson: false
-          args: "--debug"
 
       - name: Verify assets and publish prerelease
         env:

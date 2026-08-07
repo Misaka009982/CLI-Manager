@@ -11,8 +11,9 @@
 - Windows 无签名 Alpha 首次实际运行进入 Tauri `beforeBuildCommand` 后发现 `DesktopPetApp.tsx` 的未使用 setter（TS6133）与 `desktopPetBubble.ts` 的 placement 字面量拓宽（TS2322）；后续运行又由 Windows Rust 编译发现 `SetWindowRgn` 的 `windows-sys` 模块路径错误。三处编译错误均已做行为不变的最小修复。
 - 后续运行已完成 `npm run build` 和 Rust Debug 编译，在 6 分 44 秒后生成 `cli-manager.exe`；随后 MSI bundler 拒绝文本型 `-alpha.<run>.<attempt>` 应用版本。工作流已分离 Release tag 与 MSI 数字预发布版本，并加入编译前范围校验。
 - 用户提供的最新运行在 5 分 43 秒内再次完成前端与 Rust Debug 编译，并由 WiX 成功生成 `target/debug/bundle/msi/CLI-Manager_1.3.5-6_x64_en-US.msi`；`tauri-action` 随后仍按默认值只搜索 `target/release/bundle`，因此错误报告 `No artifacts were found`。
-- 工作流现已显式设置 `includeDebug: true` 与 `includeRelease: false`，使 Action 只上传实际生成的 Debug MSI；该修复后的工作流：**NOT RUN**。
-- 本地未安装依赖、未编译、未运行测试或打包；下一次新建手动运行仍需确认 Debug MSI 上传、GitHub draft/prerelease 行为及稳定 latest 不变。
+- 为修复 Debug MSI 未被收集的问题，工作流加入了 `includeDebug: true` 与 `includeRelease: false`；用户提供的下一次运行显示 `tauri-action` 已自动追加 `--debug`，又与原有 `args: "--debug"` 合并成 `build --debug --debug`，因此在编译前被 CLI 拒绝。
+- 工作流现已删除手写 `args: "--debug"`，只由 `includeDebug` 选择 Debug 构建，同时继续禁用 Release 资产扫描；该修复后的工作流：**NOT RUN**。
+- 本地未安装依赖、未编译、未运行测试或打包；下一次新建手动运行仍需确认命令只有一个 `--debug`、Debug MSI 上传、GitHub draft/prerelease 行为及稳定 latest 不变。
 
 ---
 
