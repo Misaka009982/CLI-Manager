@@ -633,3 +633,36 @@ Claude、Codex、Pi、Grok 的非强制配置目录解析在已选目录失效�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 78: 支持 Windows 便携版与自定义数据目录
+
+**Date**: 2026-08-07
+**Task**: 支持 Windows 便携版与自定义数据目录
+**Branch**: `master`
+
+### Summary
+
+实现 Windows 便携版、自定义数据根目录、迁移重启和便携更新分流，并修复 Windows verbatim 路径导致 SQLite URL 启动失败。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eafe5da3` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
