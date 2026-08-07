@@ -126,8 +126,11 @@ export function NativeProviderCommonConfigSection({ appType, state }: NativeProv
           </Alert>
         )}
         {localError && <Text id={localErrorId} size="xs" c="red" role="alert">{localError}</Text>}
-        <Collapse expanded={opened}>
-          <Stack gap="xs" id={`provider-common-config-editor-${appType}`}>
+        {/* keepMounted={false} 必需：默认的 keepMounted 走 React <Activity mode="hidden">，
+            折叠时只销毁 effect 而保留 state/ref，Monaco 实例被 dispose 后 ref 仍在，
+            展开时会对已销毁实例调用 setModel 并抛 InstantiationService has been disposed。 */}
+        <Collapse expanded={opened} keepMounted={false} id={`provider-common-config-editor-${appType}`}>
+          <Stack gap="xs">
             <div aria-describedby={describedBy}>
               <NativeProviderCodeEditor
                 format={format === "json" ? "json" : "toml"}
