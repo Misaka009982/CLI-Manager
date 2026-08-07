@@ -40,6 +40,11 @@
 
 - 修复项目的 `cli_tool` 从一种 CLI 切换为另一种（例如 codex 改为 opencode）后，已启动会话的 Tab 厂商图标仍停留在原始工具的问题。Tab 图标现在优先按照项目当前配置的 CLI 工具解析，不再仅依赖会话启动时的命令行推断。
 
+### Tab CLI 工具图标补齐与新增 Kimi
+
+- 修复 OpenCode、Pi、Amp、Aider、Crush、Cline、Goose 等没有厂商归属的 CLI 工具在 Tab 上不显示图标的问题；Tab 图标回退链调整为厂商图标 -> CLI 工具图标 -> 无图标，普通 Tab、Workspan Tab 与拖拽预览使用同一套回退。
+- 新增 Kimi CLI 工具支持：命令为 `kimi`，使用 LobeHub Kimi 彩色图标，`vendor` 为 `kimi`（沿用现有厂商图标）；暂不接入历史记录解析。
+
 ## [V1.3.4] - 2026-08-05
 
 ### WSL 文件浏览器稳定性
