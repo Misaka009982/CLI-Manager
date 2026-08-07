@@ -1653,7 +1653,7 @@ fn validated_window_size(bounds: DesktopPetWindowBounds) -> Result<(i32, i32), S
 
 #[cfg(target_os = "windows")]
 fn clear_window_hit_region<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Result<(), String> {
-    use windows_sys::Win32::UI::WindowsAndMessaging::SetWindowRgn;
+    use windows_sys::Win32::Graphics::Gdi::SetWindowRgn;
 
     let hwnd = window
         .hwnd()
@@ -1680,9 +1680,8 @@ fn apply_window_hit_regions<R: Runtime>(
     regions: &[ValidatedHitRegion],
 ) -> Result<bool, String> {
     use windows_sys::Win32::Graphics::Gdi::{
-        CombineRgn, CreateRectRgn, DeleteObject, RGN_OR,
+        CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::SetWindowRgn;
 
     let first = regions
         .first()
