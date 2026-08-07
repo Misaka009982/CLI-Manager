@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 76
-- **Last Active**: 2026-08-06
+- **Total Sessions**: 77
+- **Last Active**: 2026-08-07
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~602 | Active |
+| `journal-2.md` | ~635 | Active |
 | `journal-1.md` | ~2014 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 77 | 2026-08-07 | 修复 Tab 图标在项目 CLI 工具变更后不刷新 | `9bf48abf` | `master` |
 | 76 | 2026-08-06 | 修复 Codex 光标隐藏未生效 | `4a605543` | `master` |
 | 75 | 2026-08-06 | 新增 Codex 运行时光标隐藏开关 | `66e71e22` | `master` |
 | 74 | 2026-08-06 | 修复远程连接设置页面响应式布局 | `89c84ce2` | `master` |

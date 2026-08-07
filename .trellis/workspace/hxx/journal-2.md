@@ -600,3 +600,36 @@ Claude、Codex、Pi、Grok 的非强制配置目录解析在已选目录失效�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 77: 修复 Tab 图标在项目 CLI 工具变更后不刷新
+
+**Date**: 2026-08-07
+**Task**: 修复 Tab 图标在项目 CLI 工具变更后不刷新
+**Branch**: `master`
+
+### Summary
+
+项目 cli_tool 从 codex 改为 opencode 后，已启动会话的 Tab 图标不更新——因 inferSessionVendor 只读 session.startupCmd，不参考 project.cli_tool。改为 project 优先 + session 兜底，与 buildTerminalTabHoverInfo 已有模式一致。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9bf48abf` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
