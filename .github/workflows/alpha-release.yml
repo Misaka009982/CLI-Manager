@@ -12,7 +12,8 @@ permissions:
   contents: write
 
 env:
-  R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL || secrets.R2_PUBLIC_BASE_URL }}
+  # Alpha 不上传 R2；未配置正式发布变量时使用仓库现有公共下载域名。
+  R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL || secrets.R2_PUBLIC_BASE_URL || 'https://github.bwm.de5.net' }}
 
 concurrency:
   group: alpha-release
