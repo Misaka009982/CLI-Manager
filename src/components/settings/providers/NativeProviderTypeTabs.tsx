@@ -1,6 +1,6 @@
 import { Box, Button, Group } from "@mantine/core";
-import { Code2, Terminal, Wrench } from "lucide-react";
 import { useRef } from "react";
+import { CliToolIcon } from "../../CliToolIcon";
 import type { NativeProviderAppType } from "./nativeProviderTypes";
 
 interface NativeProviderTypeTabsProps {
@@ -8,11 +8,12 @@ interface NativeProviderTypeTabsProps {
   labels: Record<NativeProviderAppType, string>;
   onChange: (value: NativeProviderAppType) => boolean | void | Promise<boolean | void>;
 }
-const ICONS = {
-  claude: Terminal,
-  codex: Code2,
-  grokbuild: Wrench,
-} satisfies Record<NativeProviderAppType, typeof Terminal>;
+
+const ICON_KEYS = {
+  claude: "claude-code",
+  codex: "codex",
+  grokbuild: "grok",
+} as const satisfies Record<NativeProviderAppType, "claude-code" | "codex" | "grok">;
 
 export function NativeProviderTypeTabs({ value, labels, onChange }: NativeProviderTypeTabsProps) {
   const values: NativeProviderAppType[] = ["claude", "codex", "grokbuild"];
@@ -39,7 +40,6 @@ export function NativeProviderTypeTabs({ value, labels, onChange }: NativeProvid
     >
       <Group gap={4} wrap="wrap">
         {values.map((item) => {
-          const Icon = ICONS[item];
           const active = item === value;
           return (
             <Button
@@ -53,7 +53,7 @@ export function NativeProviderTypeTabs({ value, labels, onChange }: NativeProvid
               variant={active ? "light" : "subtle"}
               color={active ? "cliPrimary" : "gray"}
               size="compact-sm"
-              leftSection={<Icon size={15} />}
+              leftSection={<CliToolIcon icon={ICON_KEYS[item]} size={15} className={active ? "" : "opacity-50"} />}
               onClick={() => activateTab(item)}
               onKeyDown={(event) => {
                 const currentIndex = values.indexOf(item);
