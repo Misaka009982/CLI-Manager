@@ -1360,28 +1360,20 @@ function getRestoredAgentTerminalMetadata(
   return resolveAgentTerminalMetadata(session, project);
 }
 
+// 恢复不复用持久化快照：快照 ID 是一次性的（关闭会 release、启动会 GC），
+// 且无法反映用户在两次会话之间改动的项目/Worktree 覆盖或全局供应商。
+// 一律先 release 旧快照，再按当前覆盖状态重新解析。
 async function prepareProviderLaunchSnapshot(
   project: Project | null,
   startupCmd: string | null | undefined,
   worktreeId?: string,
   persistedSnapshot?: NativeProviderLaunchSnapshot | null,
 ): Promise<ProviderLaunchSnapshotResponse | null> {
+  if (persistedSnapshot) releaseProviderSnapshot(persistedSnapshot);
   const appType = project ? getProviderSwitchAppType(project) : null;
   if (!project || !appType) return null;
-  const persistedSnapshotIsCurrent = persistedSnapshot?.appType === appType && (
-    appType === "codex"
-      ? (
-      !persistedSnapshot.generatedHome
-      && Array.isArray(persistedSnapshot.configOverrides)
-      && persistedSnapshot.configOverrides.length > 0
-      )
-      : appType === "grokbuild"
-        ? !persistedSnapshot.generatedHome && Boolean(persistedSnapshot.grokModel?.trim())
-        : true
-  );
-  if (persistedSnapshotIsCurrent) return persistedSnapshot;
-  if (persistedSnapshot) releaseProviderSnapshot(persistedSnapshot);
   if (!startupCmd?.trim()) return null;
+  // 跟随全局时后端返回 null：全局 apply 已写入真实 Home，启动无需任何供应商参数。
   return invoke<ProviderLaunchSnapshotResponse | null>("provider_scope_prepare", {
     input: {
       appType,
@@ -1837,24 +1829,16 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const os = await getOsPlatform();
     let resumeProject = project;
     const recordedProviderId = lockedSession.remoteHandoff.providerId?.trim() || null;
-    let providerSnapshot: ProviderLaunchSnapshotResponse | null = lockedSession.providerSnapshot ?? null;
-    if (
-      providerSnapshot?.appType === "codex"
-      && (
-        providerSnapshot.generatedHome
-        || !Array.isArray(providerSnapshot.configOverrides)
-        || providerSnapshot.configOverrides.length === 0
-      )
-    ) {
-      releaseProviderSnapshot(providerSnapshot);
-      providerSnapshot = null;
-    }
+    // 与 restoreSessions 一致：不复用持久化快照（可能已 release/GC，也不反映当前覆盖状态），
+    // 一律 release 后按当前 scope 重新解析；recordedProviderId 非空时作为显式恢复。
+    releaseProviderSnapshot(lockedSession.providerSnapshot);
+    let providerSnapshot: ProviderLaunchSnapshotResponse | null = null;
     let providerConfigs = {
       claudeProvider: null as TerminalClaudeProviderLaunchConfig | null,
       codexProvider: null as TerminalCodexProviderLaunchConfig | null,
       grokProvider: null as TerminalGrokProviderLaunchConfig | null,
     };
-    if (!sshHandoff && !providerSnapshot) {
+    if (!sshHandoff) {
       providerSnapshot = await invoke<ProviderLaunchSnapshotResponse | null>(
         "provider_scope_prepare",
         {
@@ -1935,7 +1919,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       remotePath: launch.remotePath ?? lockedSession.remotePath,
       connectionState: sshHandoff ? "connecting" : lockedSession.connectionState,
       disconnectReason: undefined,
-      providerSnapshot: launch.providerSnapshot ?? lockedSession.providerSnapshot,
+      // 不回退到旧快照：旧 snapshotId 可能已被 release/GC，且不反映当前覆盖状态。
+      providerSnapshot: launch.providerSnapshot ?? undefined,
       remoteHandoff: undefined,
       initialTerminalOutput: undefined,
       deferStartupUntilInitialOutput: false,
@@ -3312,7 +3297,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         remotePath: launch.remotePath ?? ps.remotePath,
         connectionState: (launch.environmentType ?? ps.environmentType) === "ssh" ? "connecting" : undefined,
         disconnectReason: undefined,
-        providerSnapshot: launch.providerSnapshot ?? ps.providerSnapshot,
+        // 不回退到旧快照：恢复已按当前覆盖状态重新解析，跟随全局时应为 undefined。
+        providerSnapshot: launch.providerSnapshot ?? undefined,
         // 保留 cliSessionId：hook 上报会用它绑定实时统计；下次落盘也需要它继续 resume。
         cliSessionId: ps.cliSessionId,
         remoteHistoryConsumerId: ps.remoteHistoryConsumerId,

@@ -305,72 +305,75 @@ async fn current_provider_id(app_type: String) -> Result<String, String> {
     .ok_or_else(|| "provider_current_not_set".to_string())
 }
 
-async fn resolve_selection(input: ScopeResolveInput) -> Result<ResolvedSelection, String> {
-    let app_type = normalize_type(&input.app_type)?;
+/// 只解析显式 / Worktree / project 覆盖，不回落到全局 current。
+/// 无覆盖时返回 `None`，调用方据此判定"跟随全局"——全局 apply 已把供应商物化到
+/// 真实 Home，启动不需要任何隔离快照或命令参数。
+async fn scope_override(
+    app_type: &str,
+    input: &ScopeResolveInput,
+) -> Result<Option<(String, &'static str)>, String> {
     if let Some(provider_id) = input
         .provider_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return Ok(ResolvedSelection {
-            provider: load_provider(app_type.clone(), provider_id.to_string(), None).await?,
-            source: "explicit",
-        });
+        return Ok(Some((provider_id.to_string(), "explicit")));
     }
 
-    let mut selected_id = None;
-    let mut selected_source = "global";
-    if let Some(project_id) = input
+    let Some(project_id) = input
         .project_id
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(mut connection) = open_app_database().await? else {
+        return Ok(None);
+    };
+
+    if let Some(worktree_id) = input
+        .worktree_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
     {
-        if let Some(mut connection) = open_app_database().await? {
-            if let Some(worktree_id) = input
-                .worktree_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-            {
-                let worktree = sqlx::query_scalar::<_, String>(
-                    "SELECT provider_overrides FROM worktrees
-                     WHERE id = ?1 AND project_id = ?2 AND status = 'active'",
-                )
-                .bind(worktree_id)
-                .bind(project_id)
-                .fetch_optional(&mut connection)
-                .await
-                .map_err(|_| "provider_scope_database_error".to_string())?;
-                if let Some(provider_id) = parse_provider_reference(worktree.as_deref(), &app_type)?
-                {
-                    selected_id = Some(provider_id);
-                    selected_source = "worktree";
-                }
-            }
-            if selected_id.is_none() {
-                let project = read_scope_override(
-                    &mut connection,
-                    "projects".to_string(),
-                    project_id.to_string(),
-                )
-                .await?;
-                if let Some(provider_id) = parse_provider_reference(project.as_deref(), &app_type)?
-                {
-                    selected_id = Some(provider_id);
-                    selected_source = "project";
-                }
-            }
+        let worktree = sqlx::query_scalar::<_, String>(
+            "SELECT provider_overrides FROM worktrees
+             WHERE id = ?1 AND project_id = ?2 AND status = 'active'",
+        )
+        .bind(worktree_id)
+        .bind(project_id)
+        .fetch_optional(&mut connection)
+        .await
+        .map_err(|_| "provider_scope_database_error".to_string())?;
+        if let Some(provider_id) = parse_provider_reference(worktree.as_deref(), app_type)? {
+            return Ok(Some((provider_id, "worktree")));
         }
     }
-    let provider_id = match selected_id {
-        Some(provider_id) => provider_id,
-        None => current_provider_id(app_type.clone()).await?,
+
+    let project = read_scope_override(
+        &mut connection,
+        "projects".to_string(),
+        project_id.to_string(),
+    )
+    .await?;
+    if let Some(provider_id) = parse_provider_reference(project.as_deref(), app_type)? {
+        return Ok(Some((provider_id, "project")));
+    }
+    Ok(None)
+}
+
+async fn resolve_selection(input: ScopeResolveInput) -> Result<ResolvedSelection, String> {
+    let app_type = normalize_type(&input.app_type)?;
+    let (provider_id, source) = match scope_override(&app_type, &input).await? {
+        Some(selection) => selection,
+        None => (current_provider_id(app_type.clone()).await?, "global"),
     };
     Ok(ResolvedSelection {
         provider: load_provider(app_type, provider_id, None).await?,
-        source: selected_source,
+        source,
     })
 }
 
@@ -636,10 +639,6 @@ fn codex_config_overrides(provider_id: &str, effective: &Value) -> Result<Vec<St
     Ok(overrides)
 }
 
-fn codex_global_passthrough(app_type: &str, source: &str) -> bool {
-    app_type == "codex" && source == "global"
-}
-
 fn write_snapshot_bundle(
     root: &Path,
     provider: &NativeProvider,
@@ -732,22 +731,26 @@ pub(crate) async fn prepare(
         worktree_id: input.worktree_id,
         provider_id: input.provider_id,
     };
-    let selection = resolve_selection(resolve_input).await?;
-    if codex_global_passthrough(&selection.provider.app_type, selection.source) {
+    let app_type = normalize_type(&resolve_input.app_type)?;
+    // 跟随全局：全局 apply 已把供应商写入真实 Home 的 live 配置，启动不需要隔离快照。
+    // 这里必须在解析全局 current 之前短路，否则从未 apply 过全局供应商的用户
+    // （import 后 is_current 恒为 0）会被 `provider_current_not_set` 阻断启动。
+    let Some((provider_id, source)) = scope_override(&app_type, &resolve_input).await? else {
         return Ok(None);
-    }
-    let effective = effective_settings(selection.provider.clone()).await?;
+    };
+    let provider = load_provider(app_type, provider_id, None).await?;
+    let effective = effective_settings(provider.clone()).await?;
     let snapshot_id = Uuid::new_v4().to_string();
-    let root = generated_root(&selection.provider.app_type, &snapshot_id)?;
+    let root = generated_root(&provider.app_type, &snapshot_id)?;
     fs::create_dir_all(&root).map_err(|_| "provider_snapshot_write_failed".to_string())?;
     let (claude_settings_path, generated_home, grok_model, config_overrides) =
-        write_snapshot_bundle_or_cleanup(&root, &selection.provider, &effective, &snapshot_id)?;
+        write_snapshot_bundle_or_cleanup(&root, &provider, &effective, &snapshot_id)?;
 
     Ok(Some(ProviderLaunchSnapshot {
-        app_type: selection.provider.app_type,
-        provider_id: selection.provider.id,
-        provider_name: selection.provider.name,
-        source: selection.source.to_string(),
+        app_type: provider.app_type,
+        provider_id: provider.id,
+        provider_name: provider.name,
+        source: source.to_string(),
         snapshot_id,
         claude_settings_path,
         generated_home,
@@ -965,11 +968,43 @@ mod tests {
         assert_eq!(SNAPSHOT_APP_TYPES, ["claude", "codex", "grokbuild"]);
     }
 
+    // 无项目/Worktree/显式 ID 时必须在查全局 current 之前返回 None：
+    // 跟随全局的启动不生成快照，也不会被 provider_current_not_set 阻断。
     #[test]
-    fn codex_global_source_uses_real_home() {
-        assert!(codex_global_passthrough("codex", "global"));
-        assert!(!codex_global_passthrough("codex", "project"));
-        assert!(!codex_global_passthrough("claude", "global"));
+    fn missing_scope_ids_resolve_to_global_passthrough_for_every_app_type() {
+        for app_type in SNAPSHOT_APP_TYPES {
+            let input = ScopeResolveInput {
+                app_type: app_type.to_string(),
+                project_id: None,
+                worktree_id: Some("   ".to_string()),
+                provider_id: Some("".to_string()),
+            };
+            let selection =
+                tauri::async_runtime::block_on(scope_override(app_type, &input)).unwrap();
+            assert!(
+                selection.is_none(),
+                "{app_type} without any override must be global passthrough"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_provider_id_wins_over_global_for_every_app_type() {
+        for app_type in SNAPSHOT_APP_TYPES {
+            let input = ScopeResolveInput {
+                app_type: app_type.to_string(),
+                project_id: None,
+                worktree_id: None,
+                provider_id: Some("  provider-1  ".to_string()),
+            };
+            let selection =
+                tauri::async_runtime::block_on(scope_override(app_type, &input)).unwrap();
+            assert_eq!(
+                selection,
+                Some(("provider-1".to_string(), "explicit")),
+                "{app_type} explicit provider id must not fall back to global"
+            );
+        }
     }
 
     #[test]

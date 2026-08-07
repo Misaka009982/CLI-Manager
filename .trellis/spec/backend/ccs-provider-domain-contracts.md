@@ -617,7 +617,11 @@ startup command: grok --model <validated-model> ...
 
 ### 3. Contracts
 
-- Every Grok provider scope keeps the resolved real Home and returns a
+- Global Grok resolution returns `null` like every other app type: global apply
+  already wrote the provider into the real Home `config.toml`, so launch must
+  not inject `GROK_MODELS_BASE_URL` / `XAI_API_KEY` / `--model`.
+- Every scoped (project / Worktree / explicit) Grok provider keeps the resolved
+  real Home and returns a
   releasable snapshot containing a secret key file plus manifest-validated
   Base URL/model metadata. It must not create a generated Grok Home or set
   `GROK_HOME` in child-process overrides.
@@ -644,8 +648,9 @@ startup command: grok --model <validated-model> ...
 
 - Good: two Worktree terminals select different Grok providers; each receives
   its own endpoint/key/model while both read the same real Hook/MCP/history.
-- Base: a global provider uses the same process override mechanism and leaves
-  the already materialized real Home intact.
+- Base: a global provider launch returns `null` from `provider_scope_prepare`;
+  the terminal uses only the live `config.toml` already written by global apply,
+  with no snapshot, env overrides, or `--model` flag.
 - Bad: point `GROK_HOME` at a snapshot containing only `config.toml`; this
   hides Hook, MCP, sessions, skills and realtime history consumers.
 
@@ -674,6 +679,100 @@ provider scope -> generated/grokbuild/<snapshot>/grok/config.toml
 provider scope -> manifest(base URL/model) + protected key file
   -> real GROK_HOME unchanged
   -> GROK_MODELS_BASE_URL + XAI_API_KEY + grok --model <model>
+```
+
+## Scenario: Global provider passthrough and restore re-resolution (2026-08-07)
+
+### 1. Scope / Trigger
+
+- Trigger: launching, restoring, or resuming any local Claude / Codex / Grok
+  terminal whose project has no Worktree, project, or explicit provider
+  override — i.e. the project follows the native global provider.
+- Generated snapshots exist to isolate an *override*. A follow-global launch has
+  nothing to isolate: global apply already wrote the provider into the real Home.
+
+### 2. Signatures
+
+```text
+scope_override(appType, input) -> Option<(providerId, "explicit"|"worktree"|"project")>
+prepare(input) -> None when scope_override is None
+resolve(input) -> ResolvedProvider  // still falls back to global current for UI probing
+```
+
+### 3. Contracts
+
+- `prepare()` must call `scope_override()` and return `None` before resolving the
+  global current provider. Resolving global current first is a defect: an
+  imported-but-never-applied catalog has `is_current = 0` for every row, so
+  `current_provider_id()` returns `provider_current_not_set` and blocks terminal
+  creation for a project that needs no snapshot at all.
+- Passthrough is uniform across `claude`, `codex` and `grokbuild`. No app type
+  may special-case itself back into snapshot generation for a global source.
+- `provider_scope_resolve` keeps the full Worktree > project > global fallback so
+  the switch modal can still display `source: "global"` plus the current global
+  provider name. Only `prepare()` short-circuits.
+- Session restore never reuses a persisted snapshot. Snapshot IDs are
+  single-launch: they are released on close and garbage-collected on startup, and
+  they do not reflect override or global-current changes made between sessions.
+  Restore releases the persisted snapshot and re-resolves from current state.
+- Restore writeback must not fall back to the persisted snapshot
+  (`launch.providerSnapshot ?? persisted` is wrong). A follow-global restore
+  writes `undefined`, so a released snapshot ID is never persisted again.
+- Daemon attach is exempt: the process is still alive and must not be hot
+  switched, so it keeps its existing snapshot reference.
+- A global apply targets one Home identity. A project launched under a different
+  environment (local Home applied, launched through WSL, or the reverse) does not
+  receive the provider; the user re-applies under that Home. Launch must not
+  fabricate a snapshot to bridge the gap.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| No Worktree/project/explicit override | `prepare` returns `null`; command stays bare (`claude`, `codex`, `grok`) |
+| No project ID at all (ad-hoc terminal) | `scope_override` returns `None`; passthrough |
+| App database unavailable | `scope_override` returns `None`; passthrough rather than a hard launch failure |
+| Explicit provider ID present | `"explicit"`; snapshot is built even when it equals the global current |
+| Catalog imported but never applied globally | passthrough; no `provider_current_not_set` on launch |
+| Persisted snapshot present at restore | released, then re-resolved from current scope |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a project follows global; `claude` launches bare and reads the live
+  `~/.claude/settings.json` written by global apply, keeping hooks, permissions
+  and statusline.
+- Base: the same project later gains a project override; the next launch appends
+  `--settings <generated>` again with no other behavior change.
+- Bad: appending `--settings <generated>/<uuid>/claude/settings.json` for a
+  follow-global project. This makes the "global" switch a per-launch override,
+  contradicts the Scope and Home contract, and strands the user when the
+  snapshot is garbage-collected before a restore.
+
+### 6. Tests Required
+
+- Assert `scope_override` returns `None` for every snapshot app type when no
+  explicit/Worktree/project ID is supplied, including blank-string IDs.
+- Assert an explicit provider ID resolves to `"explicit"` for every app type and
+  never falls through to global.
+- Type-check the restore/resume writeback so a released snapshot cannot be
+  reassigned to the recreated session.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+prepare -> resolve_selection -> current_provider_id()
+  -> global provider -> snapshot -> claude --settings <generated>
+  (and provider_current_not_set when nothing was ever applied)
+```
+
+#### Correct
+
+```text
+prepare -> scope_override -> None -> Ok(None)
+  -> bare `claude` -> live Home settings.json from global apply
+restore -> release persisted snapshot -> re-resolve current scope
 ```
 
 ## Scenario: Recover history written by legacy Grok snapshots (2026-08-06)
