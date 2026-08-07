@@ -1498,7 +1498,7 @@ function PaneTabBar({
               isActive={session.id === activeSessionId}
               isEditing={editingSessionId === session.id}
               notification={tabNotifications[session.id] ?? "none"}
-              vendor={inferSessionVendor(session)}
+              vendor={inferVendor(projectById.get(session.projectId!)?.cli_tool) ?? inferSessionVendor(session)}
               worktree={session.worktreeId ? worktreeById.get(session.worktreeId) ?? null : null}
               worktreeMenuContent={session.worktreeId && worktreeById.get(session.worktreeId) && session.projectId && projectById.get(session.projectId) ? (closeMenu) => {
                 const project = projectById.get(session.projectId!);
@@ -2707,7 +2707,7 @@ export function TerminalTabs({
       singleSession,
       title: workspan.customTitle ?? singleSession?.title ?? t("terminal.workspan.title", { count: memberSessions.length }),
       notification: getWorkspanNotification(sessionIds, tabNotifications),
-      vendor: singleSession ? inferSessionVendor(singleSession) : null,
+      vendor: singleSession ? (inferVendor(projectById.get(singleSession.projectId!)?.cli_tool) ?? inferSessionVendor(singleSession)) : null,
     };
   }), [sessions, t, tabNotifications, visibleWorkspanLayouts]);
   const workspanTabSignature = workspanTabModels
