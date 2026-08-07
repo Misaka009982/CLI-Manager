@@ -378,7 +378,6 @@ export default function DesktopPetApp() {
   const [targetMode, setTargetMode] = useState<"open" | "platforms" | "handoff">("open");
   const [selectedPlatform, setSelectedPlatform] = useState<CcConnectPlatform | null>(null);
   const [menuGeometry, setMenuGeometry] = useState<DesktopPetMenuWindowGeometry | null>(null);
-  const [menuLayoutRevision, setMenuLayoutRevision] = useState(0);
   const [previewSize, setPreviewSize] = useState<number | null>(null);
   const [documentVisible, setDocumentVisible] = useState(() => !document.hidden);
   const visibleStatusColors = visibleDesktopPetStatusColors(snapshot.statusCounts);
@@ -1081,7 +1080,6 @@ export default function DesktopPetApp() {
   }, [
     config.settings.showActionMenu,
     maxVisibleSecondaryItems,
-    menuLayoutRevision,
     menuOpen,
     petScale,
     secondaryContentHeight,

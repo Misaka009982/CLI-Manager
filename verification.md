@@ -8,7 +8,8 @@
 - 发布前只接受 Windows `.msi`，显式拒绝 updater/Agent/非 Windows 资产；草稿验证后才发布为 prerelease，并比较发布前后的稳定 latest tag，避免改变 GitHub `releases/latest`。
 - YAML、单 job/Windows-only 结构、4 个 `run` 块与 1 个内嵌 Node 模块通过静态语法检查；未发现 R2 上传、签名 Secret 或跨平台矩阵残留。
 - 早期签名版工作流曾分别因缺少 `R2_PUBLIC_BASE_URL`、私钥 Secret 不是完整 minisign 私钥格式而在打包前失败；用户随后明确选择仅供个人使用的 Windows 无签名安装包。
-- 修订后的 Windows 无签名 Alpha 工作流：**NOT RUN**；本地未安装依赖、未编译、未运行测试或打包，首次新建手动运行仍需验证 Rust 缓存、Debug MSI 资产名与 GitHub draft/prerelease 行为。
+- Windows 无签名 Alpha 已实际运行并进入 Tauri `beforeBuildCommand`，确认单 Windows runner、无 R2/签名 Secret 路径生效；`npm run build` 随后发现 `DesktopPetApp.tsx` 的未使用 setter（TS6133）与 `desktopPetBubble.ts` 的 placement 字面量拓宽（TS2322）。
+- 两处 TypeScript 编译错误已做行为不变的最小修复；修复后的工作流：**NOT RUN**。本地未安装依赖、未编译、未运行测试或打包，下一次新建手动运行仍需确认完整 `npm run build`、Rust 缓存、Debug MSI 资产名与 GitHub draft/prerelease 行为。
 
 ---
 

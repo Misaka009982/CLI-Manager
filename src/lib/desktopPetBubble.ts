@@ -363,8 +363,11 @@ export function calculateDesktopPetBubbleGeometry(
       visibleScore: Math.min(width, availableRight) * height,
       tieOrder: placementTieOrder("right", inwardPlacement),
     },
-  ].filter((candidate) => candidate.width >= 1 && candidate.height >= 1);
-  const selected = choosePlacement(candidates.length > 0 ? candidates : [{
+  ];
+  const visibleCandidates = candidates.filter(
+    (candidate) => candidate.width >= 1 && candidate.height >= 1
+  );
+  const selected = choosePlacement(visibleCandidates.length > 0 ? visibleCandidates : [{
     placement: "above",
     width: Math.max(1, Math.min(width, workArea.width)),
     height: Math.max(1, Math.min(height, workArea.height)),
