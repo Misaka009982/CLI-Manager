@@ -485,7 +485,17 @@ fn spawn_daemon_process() -> Result<(), String> {
     {
         use std::os::unix::process::CommandExt;
         // 独立进程组：app 收到的 SIGINT/SIGTERM 组信号不波及 daemon（契约）。
-        command.process_group(0);
+        // Keep the daemon in an independent session so GUI exit signals do not
+        // reach it. A separate process group alone is not sufficient on macOS.
+        unsafe {
+            command.pre_exec(|| {
+                if nix::libc::setsid() == -1 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
     }
     command
         .spawn()

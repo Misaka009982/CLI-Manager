@@ -1,18 +1,18 @@
 # CCS 路由迁移实施进度
 
-> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P1-06 已完成，当前指针为 P1-07。
+> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P1-07 已完成，当前指针为 P1-08。
 
 ## 0. 当前指针
 
 | 字段 | 值 |
 | --- | --- |
 | Task | 08-08-ccs-routing-migration |
-| task.json 状态 | in_progress（P0、P1-01 至 P1-06 已完成，当前指针为 P1-07） |
+| task.json 状态 | in_progress（P0、P1-01 至 P1-07 已完成，当前指针为 P1-08） |
 | Changelog Target | [TEMP] |
 | 当前阶段 | P1：本地路由 |
-| 当前 Case | P1-07 |
-| 审批状态 | 已批准；P1-06 完成，按 Case 顺序切换至 P1-07 指针 |
-| 最后更新时间 | 2026-08-09 02:50 |
+| 当前 Case | P1-08 |
+| 审批状态 | 已批准；P1-07 实现与自动化质量门禁完成，按 Case 顺序切换至 P1-08 指针 |
+| 最后更新时间 | 2026-08-09 03:08 |
 | 最后操作机器 | DESKTOP-Q49I074 |
 | 分支 | feat/native-provider-management |
 | 工作目录 | F:/github/CLI-Manager |
@@ -76,12 +76,12 @@
 | 阶段 | 范围 | Case 数 | 当前状态 |
 | --- | --- | ---: | --- |
 | P0 | 影响分析、Schema、协议、Fixture 基线 | 4 | completed |
-| P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | P1-07 in_progress |
+| P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | P1-08 in_progress |
 | P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | pending |
 | P3 | 全局出站代理 | 5 | pending |
 | P4 | 整流器与 Bedrock 优化 | 6 | pending |
 | P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | pending |
-| 合计 |  | 43 | 10 个 Case 完成；P1-07 等待续做 |
+| 合计 |  | 43 | 11 个 Case 完成；P1-08 等待续做 |
 
 ## 4. P0：影响分析、Schema、协议与 Fixture 基线
 
@@ -102,8 +102,8 @@
 | P1-04 | 完成 Windows local CLI Home takeover/off/restore | P1-01、P1-03 | provider/home.rs、global.rs、native writer、Windows resolver | Claude/Codex/Grok；最小化、托盘、重启、显式关闭；非 owned 字段保留 | journal compensation 恢复 direct；partial 时 daemon 继续运行 | completed | 2026-08-09 02:20；routing takeover 仅允许 local:host，校验 current provider/ready/active key 与 daemon running/actualPort；复用 global writer 的 stage/backup/replace/verify/journal，通过可选 LocalRoute projection 写入 loopback endpoint 与 `CLI_MANAGER_ROUTED` sentinel，成功后保存 `(appType, HomeIdentity)` takeover；关闭时先恢复 direct，再删除 takeover。补齐 Claude/Codex/Grok projection、takeover persistence 和 DB 写失败 direct/route 补偿；未实现 WSL、HTTP、UI。定向 global 21、routing 4；全 Rust lib 930 passed/1 ignored、cargo check、fmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1/R2：复核 provider->projection->writer->takeover DB 数据流、secret sentinel、non-owned 字段、失败补偿、local/WSL/SSH/unsupported/no-key/daemon stopped/多会话场景；无发现，连续两轮零未解决发现。GitNexus `GlobalPreviewInput` upstream impact 为 HIGH（5 依赖、Provider/Commands/路由 3 模块），保持 Direct 默认分支不变并记录风险。下一步仅执行 P1-05 |
 | P1-05 | 完成 WSL mirrored localhost 主动探测与 WSL projection | P1-03、P1-04 | WSL runner、UNC writer、distro identity、endpoint discovery | 目标 distro 探测 127.0.0.1；不可达/超时/多 distro 差异不写 Live | 删除 takeover intent，恢复 WSL direct；不改系统网络 | completed | 2026-08-09 02:30；允许 local/WSL Home，WSL enable 使用 bounded `wsl.exe -d <distro> --exec sh -lc` TCP probe（nc -> bash `/dev/tcp` -> curl/wget），成功后写 `wsl_mirrored` + `127.0.0.1` projection；probe 失败/工具缺失不写 Live；disable 不重复探测并保留旧 endpoint 用于补偿；未实现 NAT gateway、HTTP、UI。定向 routing 5、global 21；全 Rust lib 931 passed/1 ignored、cargo check、fmt、TypeScript、diff check 通过；staged GitNexus detect_changes 为 low、无受影响流程；未运行 tauri dev/build。R1：发现并修复 disable 路径错误重复 WSL probe；复验 targeted tests，0 findings。R2：复核 WSL mirrored 信任边界、distro 参数、超时、不可达/工具缺失/多 distro/SSH/local/daemon stopped/失败补偿及 P1-06/NAT/HTTP/UI 范围，0 findings；连续两轮零未解决发现。提交主题：feat(routing): add WSL mirrored takeover；下一步仅执行 P1-06 |
 | P1-06 | 完成 WSL NAT exact host-gateway 校验 | P1-05 | route/CIDR/gateway/local-IP parser、gateway validator、WSL writer | gateway 属于目标网络且可达；拒绝猜测地址、wildcard、firewall 自动修改、portproxy | 拒绝 takeover，保留原 Live | completed | 2026-08-09 02:50；新增 bounded WSL `ip -4 route show default`/`ip -4 addr show dev` 解析、CIDR 包含校验、Windows `GetAdaptersAddresses` 精确 unicast 校验和 `routing_wsl_gateway` listener；mirrored 失败后才 fallback NAT，gateway probe 失败恢复旧 listener，不修改 firewall/portproxy/.wslconfig；扩展 LocalRoute projection 允许经后端校验的 WSL gateway endpoint，未实现 HTTP/UI。定向 routing 7、daemon routing 8、global 22；全 Rust lib 934 passed/1 ignored、cargo check、fmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1：发现并修复 GetAdaptersAddresses 缓冲区对齐、WSL listener/rebind 与 projection 失败回滚缺口；定向测试复验后 R1b 0 findings。R2：复核 CIDR/device/gateway 信任边界、LAN/wildcard、工具缺失/超时、多 distro、local/WSL/SSH、旧 daemon、secret、firewall/portproxy 和 P1-07/macOS/HTTP/UI 范围，0 findings；R1b/R2 连续两轮零未解决发现。GitNexus upstream impact 未返回 HIGH/CRITICAL；下一步仅执行 P1-07 |
-| P1-07 | 完成 macOS local loopback、原子 replace、Keychain 和 daemon detach | P1-03、P1-04 | macOS path/keychain adapter、daemon detach/shutdown、Home writer | 真实 macOS runner：bind、投影、恢复、GUI 退出、重启复用端口 | 恢复 direct local Live，停止 route daemon | in_progress | P1-06 已完成，下一步实现；不以 Windows 单测替代 macOS 验收 |
-| P1-08 | 将现有 writer 扩展为 Direct/LocalRoute 唯一投影器并提供补偿 | P1-04、P1-07 | provider/global.rs、apply/recover、owned/non-owned merge | Claude 单文件、Codex 双文件、Grok model entry；外部 drift 阻止覆盖 | journal 恢复旧 direct snapshot | pending | 禁止复制第二套 writer |
+| P1-07 | 完成 macOS local loopback、原子 replace、Keychain 和 daemon detach | P1-03、P1-04 | macOS path/keychain adapter、daemon detach/shutdown、Home writer | 真实 macOS runner：bind、投影、恢复、GUI 退出、重启复用端口 | 恢复 direct local Live，停止 route daemon | completed | 2026-08-09 03:08；Unix daemon spawn 改为 `setsid` 独立 session；现有 macOS Keychain adapter、同目录 stage + rename + verify 已确认；新增 macOS cfg 原子 replace focused test。Windows 定向 3、全 Rust 934 passed/1 ignored、cargo check、fmt、TypeScript、diff check 通过；R1/R2 连续零发现；本环境无 macOS runner，真实 bind/projection/restore/GUI exit/重启验收明确留给 P5-02，不以 Windows 结果替代；独立提交主题见执行日志 |
+| P1-08 | 将现有 writer 扩展为 Direct/LocalRoute 唯一投影器并提供补偿 | P1-04、P1-07 | provider/global.rs、apply/recover、owned/non-owned merge | Claude 单文件、Codex 双文件、Grok model entry；外部 drift 阻止覆盖 | journal 恢复旧 direct snapshot | in_progress | 禁止复制第二套 writer |
 | P1-09 | 完成 Claude/Codex/Grok provider-specific endpoint/auth/model sentinel | P1-08 | Claude writer、Codex auth.json/config.toml、provider/grok.rs | route on/off 对照；保留 Hook/MCP/permissions/projects/statusline；OAuth/SSH/Gemini blocked | 恢复当前 provider direct projection | pending | 不替换 GROK_HOME |
 | P1-10 | 让 route runtime 驻留 daemon，处理 capability、busy、idle、GUI exit | P0-04、P1-08 | daemon/server.rs、client.rs、discovery.rs、lib.rs、exit cleanup | daemon crash/restart、GUI 真退出、route active/inactive、旧 daemon | active 时只断 GUI；inactive 执行现有安全 shutdown | pending | route 不依赖 WebView 生命周期 |
 | P1-11 | 完成三应用 HTTP path、provider adapter、JSON/SSE 转发 | P0-03、P1-10 | route server、adapter、reqwest、request/response DTO | /v1/messages、/v1/responses、/v1/chat/completions、/grokbuild/v1；未知 path 404/405 | 未覆盖格式不接管，route off 走 direct | pending | 不支持任意 URL forwarding/CONNECT |
@@ -187,6 +187,8 @@
 | 2026-08-09 02:20 | DESKTOP-Q49I074 | P1-04 | in_progress -> completed | `src-tauri/src/provider/global.rs`、`src-tauri/src/provider/routing.rs`、`src-tauri/src/commands/routing.rs`、progress | 定向 global 21、routing 4；全 Rust lib 930 passed、1 ignored；cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build | R1/R2：writer 复用、三应用 projection、local Home 边界、DB/Live 补偿和场景矩阵；连续两轮零未解决发现 | feat(routing): add local home takeover | P1-05 |
 | 2026-08-09 02:30 | DESKTOP-Q49I074 | P1-05 | in_progress -> completed | `src-tauri/src/provider/routing.rs`、`src-tauri/src/commands/routing.rs`、progress | 定向 routing 5、global 21；全 Rust lib 931 passed、1 ignored；cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build | R1：修复 disable 路径重复 WSL probe 后复验；R2：复核 mirrored probe、UNC projection、错误脱敏、跨 distro/平台/SSH/daemon 状态和 P1-06 边界；连续两轮零未解决发现 | feat(routing): add WSL mirrored takeover | P1-06 |
 | 2026-08-09 02:50 | DESKTOP-Q49I074 | P1-06 | in_progress -> completed | `src-tauri/Cargo.toml`、`src-tauri/src/provider/routing.rs`、`src-tauri/src/daemon/routing.rs`、`src-tauri/src/provider/global.rs`、`src-tauri/src/commands/routing.rs`、progress | 定向 routing 7、daemon routing 8、global 22；全 Rust lib 934 passed、1 ignored；cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build | R1/R1b：修复 API buffer 对齐、listener rollback、gateway projection contract 后复验；R2：复核 P1-06 安全边界和 Case 顺序；R1b/R2 连续两轮零未解决发现 | feat(routing): add WSL NAT gateway validation | P1-07 |
+
+| 2026-08-09 03:08 | DESKTOP-Q49I074 | P1-07 | in_progress -> completed | `src-tauri/src/daemon/client.rs`、`src-tauri/src/provider/global.rs`、progress | daemon client 定向 1、writer 原子替换定向 1、stage path 定向 1；全 Rust lib 934 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；未以 Windows 测试替代 macOS runner | R1：复核 session detach、atomic rename、Keychain adapter、secret/数据损坏边界，0 findings；R2：复核 P1-07/P1-08/P1-10 边界、平台/退出/重启/WSL/Hook 场景，0 findings；连续两轮零未解决发现 | feat(routing): detach daemon session for macOS | P1-08 |
 
 ## 12. 执行授权
 

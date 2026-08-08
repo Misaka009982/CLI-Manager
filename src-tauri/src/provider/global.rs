@@ -2396,6 +2396,25 @@ wire_api = "responses"
         assert!(!stage.exists());
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_local_stage_replace_keeps_atomic_same_directory_contract() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("settings.json");
+        let stage = directory.path().join(".settings.json.route.stage");
+        fs::write(&stage, br#"{"route":"local"}"#).unwrap();
+
+        assert_eq!(stage.parent(), target.parent());
+        replace_live_from_stage(
+            target.to_string_lossy().as_ref(),
+            stage.to_string_lossy().as_ref(),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), br#"{"route":"local"}"#);
+        assert!(!stage.exists());
+    }
+
     #[test]
     fn compensation_restores_existing_and_removes_created_targets() {
         let directory = tempfile::tempdir().unwrap();
