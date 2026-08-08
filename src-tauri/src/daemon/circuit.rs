@@ -141,6 +141,18 @@ impl CircuitRegistry {
         }
     }
 
+    pub(crate) fn release(&self, permit: CircuitPermit) {
+        if !permit.probe {
+            return;
+        }
+        let Ok(mut entries) = self.entries.lock() else {
+            return;
+        };
+        if let Some(entry) = entries.get_mut(&permit.key) {
+            entry.probe_in_flight = false;
+        }
+    }
+
     pub(crate) fn reset(&self, app_type: &str, provider_id: &str) {
         let Ok(mut entries) = self.entries.lock() else {
             return;
@@ -260,5 +272,22 @@ mod tests {
             .snapshots()
             .into_iter()
             .all(|snapshot| snapshot.status == "closed"));
+    }
+
+    #[test]
+    fn neutral_release_clears_half_open_probe_without_counting_failure() {
+        let registry = CircuitRegistry::default();
+        let policy = CircuitPolicy {
+            timeout: Duration::ZERO,
+            ..policy()
+        };
+        for _ in 0..2 {
+            let permit = registry.acquire("claude", "provider-a", policy).unwrap();
+            registry.record_failure(permit, policy);
+        }
+        let probe = registry.acquire("claude", "provider-a", policy).unwrap();
+        registry.release(probe);
+        assert!(registry.acquire("claude", "provider-a", policy).is_ok());
+        assert_eq!(registry.snapshots()[0].status, "halfOpen");
     }
 }

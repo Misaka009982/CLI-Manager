@@ -1,18 +1,18 @@
 # CCS 路由迁移实施进度
 
-> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P2-03 已完成，当前指针为 P2-04。
+> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P2-04 已完成，当前指针为 P2-05。
 
 ## 0. 当前指针
 
 | 字段 | 值 |
 | --- | --- |
 | Task | 08-08-ccs-routing-migration |
-| task.json 状态 | in_progress（P0、P1-01 至 P2-03 已完成，当前指针为 P2-04） |
+| task.json 状态 | in_progress（P0、P1-01 至 P2-04 已完成，当前指针为 P2-05） |
 | Changelog Target | [TEMP] |
 | 当前阶段 | P2：自动故障转移 |
-| 当前 Case | P2-04 |
-| 审批状态 | 已批准；P2-03 完成，按 Case 顺序切换至 P2-04 指针 |
-| 最后更新时间 | 2026-08-09 08:10 |
+| 当前 Case | P2-05 |
+| 审批状态 | 已批准；P2-04 完成，按 Case 顺序切换至 P2-05 指针 |
+| 最后更新时间 | 2026-08-09 09:40 |
 | 最后操作机器 | DESKTOP-Q49I074 |
 | 分支 | feat/native-provider-management |
 | 工作目录 | F:/github/CLI-Manager |
@@ -77,11 +77,11 @@
 | --- | --- | ---: | --- |
 | P0 | 影响分析、Schema、协议、Fixture 基线 | 4 | completed |
 | P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | completed |
-| P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | P2-04 in_progress |
+| P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | P2-05 in_progress |
 | P3 | 全局出站代理 | 5 | pending |
 | P4 | 整流器与 Bedrock 优化 | 6 | pending |
 | P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | pending |
-| 合计 |  | 43 | 22 个 Case 完成；P2-04 等待实现 |
+| 合计 |  | 43 | 23 个 Case 完成；P2-05 等待实现 |
 
 ## 4. P0：影响分析、Schema、协议与 Fixture 基线
 
@@ -119,8 +119,8 @@
 | P2-01 | 复用 native provider queue，建立每 app 独立 failover settings | P1-15 | provider repository、routing.app、queue UI | enabled/ready/同 app/API-key provider 才可入队；sort_index 顺序；重复幂等；current 移除 | 关闭 failover，保留 queue/current | completed | 新增 failover repository 与 per-app `routing.app.<app>.v1` 配置读取/校验/保存；复用 `in_failover_queue`、`sort_index`、current 与 ready API-key 判定，重复/未知/不可用 provider 拒绝，空队列启用自动加入 current，开启要求同 app takeover，关闭保留 queue/current；新增四个配置/queue commands 与 reset command 壳，未实现 classifier、retry budget、circuit runtime、HTTP 或 hot takeover。新增 queue UI，仅编辑 enabled、maxRetries 和 provider 入队；三 app state/loading 按 app 隔离，zh-CN/en-US 齐全。定向 failover 2；全 Rust 954 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1：发现并修复多 app 并发 refresh 共享单一 state 导致面板串显示，并修正 takeover 错误码；复验后 0 findings。R2：复核 per-app persistence、ready/API-key/app 边界、sort order、duplicate/current removal、enable rollback、disable preservation、queue UI、i18n/a11y、P2-02/P2-03/P2-06 范围，0 findings；连续两轮零未解决发现。GitNexus staged detect_changes 待提交前复核。独立提交主题：feat(routing): add failover queue settings；下一步仅执行 P2-02 |
 | P2-02 | 实现错误分类、maxRetries、timeouts 和 retry budget | P2-01、P1-11 | classifier、attempt loop、SSE commit tracker | maxAttempts=maxRetries+1；网络/TLS/timeout/5xx/401/403/429；能力错误给 rectifier 一次 | 单 provider 返回 sanitized error | completed | route HTTP 读取 per-app failover config；failover 开启时对 network/TLS/timeout/5xx 执行 `maxRetries+1` provider attempt，401/403/429 保持 key-level pool，400/405/406/413/414/415/422/501 与其他客户端错误不重试；非流式使用配置总超时，流式守卫首字节/idle 超时；最终只返回稳定脱敏错误码，未实现 provider queue handoff、circuit、rectifier 或提交后切换。新增 classifier、attempt budget、timed body focused tests。全 Rust 956 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1 发现并修复 failover 关闭仍消耗 maxRetries 的回归；R1b 复核 disabled/enabled attempt budget、错误分类、key/provider 分层、原始 body 重算与超时边界，0 findings。R2 复核 PRD/design 的 maxAttempts、能力错误、secret/脱敏、stream commit/P2-03/P2-04/P2-05 边界和现有 P1-11 回归，0 findings；连续两轮零未解决发现。GitNexus route_http symbols impact 未解析（UNKNOWN），未返回 HIGH/CRITICAL；独立提交主题：feat(routing): add retry budget and timeout classification；下一步仅执行 P2-03 |
 | P2-03 | 实现 Closed/Open/HalfOpen circuit 和单 probe | P2-02 | daemon memory state、metrics、status DTO | 连续失败、错误率最小样本、等待时间、单 probe、恢复阈值、断开释放 permit | 清 daemon runtime state，保留 config | completed | 新增 daemon 内存 `CircuitRegistry`，按 `(app, provider)` 实现 Closed/Open/HalfOpen、连续失败/最小样本错误率阈值、Open timeout、HalfOpen 单 probe、成功恢复阈值、neutral client/key/capability 结果；HTTP attempt 在 failover enabled 时 acquire/record，reload 复用 registry，stop/restart 清空；RoutingStatus 增加脱敏 circuit states，reset frame 清指定 provider 或 app 全部 circuit，不改 queue/current；Tauri get/reset 合并真实 daemon 状态。新增 circuit 3、server reset 1、protocol 1 focused；全 Rust 959 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1 发现并修复 reset 删除 entry 导致状态缺失，并补 app type 边界校验；R1b 复核并发单 probe、错误率/连续失败、reload/restart、reset/状态脱敏、P2-02/P2-04/P2-05 范围，0 findings。R2 复核 PRD/design circuit persistence、neutral release、status DTO、旧 daemon serde、stop/start lifecycle、三平台/WSL/Worktree/Hook 与 UI 后续边界，0 findings；连续两轮零未解决发现。GitNexus 相关 daemon symbols 均 UNKNOWN/LOW，未返回 HIGH/CRITICAL；独立提交主题：feat(routing): add daemon circuit breaker；下一步仅执行 P2-04 |
-| P2-04 | 实现 stream commit boundary 与 projection hot switch 事务 | P1-08、P2-02、P2-03 | forwarder、projection coordinator、daemon reload | 普通 SSE 首个可解析事件、Responses output/error；keepalive 不提交；并发不乱序 | 恢复旧 current/Live/target | pending | 不拼接第二 provider 响应 |
-| P2-05 | 串联多 key exhaustion 到 provider failover，并重新计算 mapping | P2-01 至 P2-04、P1-12、P1-13 | key pool、provider queue、model mapper、request log | A:k1/k2 401/429 后才到 B；A targetA/B targetB；key failure 不重复计 provider failure | active-key-only + 单 provider | pending | A-03 核心验收 |
+| P2-04 | 实现 stream commit boundary 与 projection hot switch 事务 | P1-08、P2-02、P2-03 | forwarder、projection coordinator、daemon reload | 普通 SSE 首个可解析事件、Responses output/error；keepalive 不提交；并发不乱序 | 恢复旧 current/Live/target | completed | 新增 per-stream `StreamCommitTracker`：普通 SSE 首个可解析 JSON 事件提交，Responses 仅 output/error 语义事件提交，keepalive/created 不提交；非流式完整 body 后提交；客户端断开/流错误 neutral release，禁止提交后拼接。新增 active Home route-aware `apply_hot_switch`：先逐 Home LocalRoute projection，后以同一 SQLite transaction 更新 provider current 与 journal；失败按逆序恢复旧 Live/target，并标记失败 journal；同 provider 也重新投影 active Home。定向 route 14、circuit 4、global writer 25；全 Rust 963 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1 发现并修复首事件前断开遗留 HalfOpen probe；R1b 复核 SSE 分帧/Responses semantic type、neutral Drop、non-stream body commit、same-provider reapply、projection compensation、current/journal transaction；R2 复核 keepalive/created、commit 后 error、旧 current/Live/target 恢复、并发 hot switch、P2-05 provider/key failover 边界，连续两轮零未解决发现；GitNexus 相关 symbols 未返回 HIGH/CRITICAL；独立提交主题：feat(routing): add stream commit boundary and hot switch transaction；下一步仅执行 P2-05 |
+| P2-05 | 串联多 key exhaustion 到 provider failover，并重新计算 mapping | P2-01 至 P2-04、P1-12、P1-13 | key pool、provider queue、model mapper、request log | A:k1/k2 401/429 后才到 B；A targetA/B targetB；key failure 不重复计 provider failure | active-key-only + 单 provider | in_progress | A-03 核心验收 |
 | P2-06 | 完成 failover UI、queue view、circuit reset 和降级状态 | P2-01、P2-03 | routing failover section、status polling、i18n/aria | 保存/重置表单分离；reset circuit 不清 queue；无 takeover/unsupported 显示原因 | 隐藏 controls，保留已存配置 | pending | 不展示 secret |
 | P2-07 | 完成 failover 专项回归和 rollback rehearsal | P2-05、P2-06 | fixtures、fake upstream、daemon recovery | 三应用、JSON/SSE、三平台、crash/reload、回切、client disconnect；Rust/Node focused tests | 关闭 per-app failover，单 provider 服务 | pending | 通过后进入 P3 |
 
@@ -207,6 +207,7 @@
 | 2026-08-09 06:20 | DESKTOP-Q49I074 | P2-01 | in_progress -> completed；P2-02 pending -> in_progress | `src-tauri/src/provider/repository/failover.rs`、`src-tauri/src/provider/routing.rs`、`src-tauri/src/commands/routing.rs`、`src-tauri/src/lib.rs`、failover UI/hook/types/i18n、progress | failover 2 focused；Rust 954 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；GitNexus staged detect_changes 待提交前复核 | R1 发现并修复三 app state 串显示与 takeover 错误码；R2 复核 per-app queue/config、ready/key/app 边界、启停补偿、UI 与后续 Case 范围；修复后连续两轮零未解决发现 | feat(routing): add failover queue settings | P2-02 |
 | 2026-08-09 07:10 | DESKTOP-Q49I074 | P2-02 | in_progress -> completed；P2-03 pending -> in_progress | `src-tauri/src/daemon/route_http.rs`、`src-tauri/src/provider/routing.rs`、progress | route_http 11 focused；Rust 956 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；GitNexus staged detect_changes 待提交前复核 | R1 发现并修复 failover disabled 仍消耗 maxRetries；R1b/R2 复核 retry budget、classifier、timeout、key/provider 边界、commit/P2-03/P2-04 范围；修复后连续两轮零未解决发现 | feat(routing): add retry budget and timeout classification | P2-03 |
 | 2026-08-09 08:10 | DESKTOP-Q49I074 | P2-03 | in_progress -> completed；P2-04 pending -> in_progress | `src-tauri/src/daemon/circuit.rs`、daemon protocol/server/routing、`route_http.rs`、routing commands/provider state、native provider types、progress | circuit 3 focused、server reset 1、protocol 1；Rust 959 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build | R1 发现并修复 reset 删除 entry 导致状态缺失，并补 app type 边界校验；R1b/R2 复核并发单 probe、错误率/连续失败、reload/restart、reset/状态脱敏及后续 Case 边界，连续两轮零未解决发现；GitNexus 相关 symbols 未返回 HIGH/CRITICAL | feat(routing): add daemon circuit breaker | P2-04 |
+| 2026-08-09 09:40 | DESKTOP-Q49I074 | P2-04 | in_progress -> completed；P2-05 pending -> in_progress | `src-tauri/src/daemon/route_http.rs`、`src-tauri/src/daemon/circuit.rs`、`src-tauri/src/provider/global.rs`、`src-tauri/src/commands/provider.rs`、progress | route 14 focused、circuit 4、global writer 25；Rust 963 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；GitNexus impact/detect_changes 待提交前复核 | R1 发现并修复 stream Drop 未释放 HalfOpen probe；R1b 复核提交 boundary、Responses semantic event、neutral release、hot switch projection compensation 与 current/journal transaction；R2 复核同 provider reapply、并发顺序、旧状态恢复、P2-05 边界，连续两轮零未解决发现 | feat(routing): add stream commit boundary and hot switch transaction | P2-05 |
 
 ## 12. 执行授权
 

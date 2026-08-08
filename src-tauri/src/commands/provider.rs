@@ -1,7 +1,7 @@
 use crate::provider::environment::{self, EnvironmentInspectInput, EnvironmentReport};
 use crate::provider::global::{
     self, GlobalApplyInput, GlobalApplyResult, GlobalCurrent, GlobalCurrentInput, GlobalPreview,
-    GlobalPreviewInput, RecoveryReport,
+    GlobalPreviewInput, LocalRouteProjection, RecoveryReport,
 };
 use crate::provider::home::{self, HomeSelectInput, ProviderHomeState};
 use crate::provider::import::{
@@ -14,6 +14,7 @@ use crate::provider::repository::{
     ProviderDetail, ProviderDocumentUpdateInput, ProviderKeyCreateInput, ProviderKeySummary,
     ProviderKeyUpdateInput, ProviderUpdateInput,
 };
+use crate::provider::routing;
 use crate::provider::scope::{
     self, ProviderLaunchSnapshot, ResolvedProvider, ScopePrepareInput, ScopeResolveInput,
 };
@@ -21,6 +22,25 @@ use std::future::Future;
 
 fn block_on<T>(future: impl Future<Output = Result<T, String>>) -> Result<T, String> {
     tauri::async_runtime::block_on(future)
+}
+
+fn hot_switch_target(
+    item: &routing::RoutingTakeoverItem,
+) -> Result<global::HotSwitchTarget, String> {
+    let host = if item.advertised_host.contains(':') && !item.advertised_host.starts_with('[') {
+        format!("[{}]", item.advertised_host)
+    } else {
+        item.advertised_host.clone()
+    };
+    Ok(global::HotSwitchTarget {
+        home_identity: global::HomeIdentityInput {
+            environment_kind: item.home_identity.environment_kind.clone(),
+            environment_id: Some(item.home_identity.environment_id.clone()),
+        },
+        projection: LocalRouteProjection {
+            endpoint: format!("http://{host}:{}", item.applied_port),
+        },
+    })
 }
 
 #[tauri::command]
@@ -228,6 +248,46 @@ pub fn provider_global_current(input: GlobalCurrentInput) -> Result<GlobalCurren
 
 #[tauri::command]
 pub fn provider_global_apply(input: GlobalApplyInput) -> Result<GlobalApplyResult, String> {
+    if input.projection.is_none() {
+        if let Ok(app_type) = repository::normalize_app_type(&input.app_type) {
+            if let Ok(persisted) = block_on(routing::load_persisted_state()) {
+                let targets = persisted
+                    .takeovers
+                    .iter()
+                    .filter(|item| item.app_type == app_type)
+                    .map(hot_switch_target)
+                    .collect::<Result<Vec<_>, _>>()?;
+                if !targets.is_empty() {
+                    if let Ok(previous_provider_id) =
+                        block_on(routing::current_provider_id(&app_type))
+                    {
+                        let results = block_on(global::apply_hot_switch(
+                            &app_type,
+                            &previous_provider_id,
+                            &input.provider_id,
+                            &targets,
+                        ))?;
+                        let expected_environment_id = input
+                            .home_identity
+                            .environment_id
+                            .as_deref()
+                            .unwrap_or_default();
+                        return results
+                            .iter()
+                            .find(|result| {
+                                result.home_identity.environment_kind
+                                    == input.home_identity.environment_kind
+                                    && result.home_identity.environment_id
+                                        == expected_environment_id
+                            })
+                            .cloned()
+                            .or_else(|| results.into_iter().next())
+                            .ok_or_else(|| "routing_hot_switch_result_missing".to_string());
+                    }
+                }
+            }
+        }
+    }
     block_on(global::apply(input))
 }
 

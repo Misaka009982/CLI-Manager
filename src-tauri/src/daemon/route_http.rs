@@ -76,9 +76,104 @@ enum BodyTimeoutMode {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamCommitKind {
+    GenericSse,
+    ResponsesSse,
+}
+
+#[derive(Debug)]
+struct StreamCommitTracker {
+    kind: StreamCommitKind,
+    buffer: String,
+    committed: bool,
+}
+
+impl StreamCommitTracker {
+    fn new(kind: StreamCommitKind) -> Self {
+        Self {
+            kind,
+            buffer: String::new(),
+            committed: false,
+        }
+    }
+
+    fn observe(&mut self, chunk: &Bytes) -> bool {
+        if self.committed {
+            return true;
+        }
+        self.buffer.push_str(&String::from_utf8_lossy(chunk));
+        while let Some(end) = self.buffer.find("\n\n") {
+            let event = self.buffer[..end].to_string();
+            self.buffer.drain(..end + 2);
+            if self.event_commits(&event) {
+                self.committed = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn event_commits(&self, event: &str) -> bool {
+        let mut event_name = None;
+        let mut data = String::new();
+        for line in event.lines() {
+            let line = line.trim_end_matches('\r');
+            if line.starts_with(':') {
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("event:") {
+                event_name = Some(value.trim());
+            } else if let Some(value) = line.strip_prefix("data:") {
+                if !data.is_empty() {
+                    data.push('\n');
+                }
+                data.push_str(value.trim_start());
+            }
+        }
+        if data.is_empty() {
+            return false;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) else {
+            return false;
+        };
+        let semantic_type = value
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .or(event_name)
+            .unwrap_or_default();
+        match self.kind {
+            StreamCommitKind::GenericSse => true,
+            StreamCommitKind::ResponsesSse => {
+                semantic_type == "error"
+                    || semantic_type == "response.failed"
+                    || semantic_type.starts_with("response.output")
+            }
+        }
+    }
+}
+
+struct CircuitCommit {
+    state: Arc<RouteState>,
+    permit: Option<CircuitPermit>,
+    policy: CircuitPolicy,
+}
+
 struct TimedBodyState<S> {
     stream: Pin<Box<S>>,
     mode: BodyTimeoutMode,
+    tracker: Option<StreamCommitTracker>,
+    circuit: Option<CircuitCommit>,
+}
+
+impl<S> Drop for TimedBodyState<S> {
+    fn drop(&mut self) {
+        if let Some(circuit) = self.circuit.take() {
+            if let Some(permit) = circuit.permit {
+                circuit.state.circuits.release(permit);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -486,11 +581,43 @@ async fn forward_request(
         used_keys.insert(next_key.id.clone());
         selected_key = next_key;
     };
-    if classify_upstream_status(response.status()) == UpstreamErrorClass::Success {
-        record_circuit_success(&state, &mut circuit_permit, circuit_policy);
-    }
     let status = response.status();
     let headers = response.headers().clone();
+    if !streaming {
+        let body = match tokio::time::timeout(
+            Duration::from_secs(failover_config.non_streaming_timeout),
+            response.bytes(),
+        )
+        .await
+        {
+            Ok(Ok(body)) => body,
+            Ok(Err(_)) => {
+                record_circuit_failure(&state, &mut circuit_permit, circuit_policy);
+                return Err((StatusCode::BAD_GATEWAY, "routing_upstream_body_failed"));
+            }
+            Err(_) => {
+                record_circuit_failure(&state, &mut circuit_permit, circuit_policy);
+                return Err((StatusCode::GATEWAY_TIMEOUT, "routing_upstream_timeout"));
+            }
+        };
+        if classify_upstream_status(status) == UpstreamErrorClass::Success {
+            record_circuit_success(&state, &mut circuit_permit, circuit_policy);
+        } else if let Some(permit) = circuit_permit.take() {
+            state.circuits.release(permit);
+        }
+        let body = Full::new(body).map_err(|error| match error {}).boxed();
+        let mut builder = Response::builder().status(status);
+        for (name, value) in headers {
+            let Some(name) = name else { continue };
+            if is_hop_by_hop(name.as_str()) {
+                continue;
+            }
+            builder = builder.header(name, value);
+        }
+        return builder
+            .body(body)
+            .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_response_build_failed"));
+    }
     let timeout_mode = if streaming {
         BodyTimeoutMode::Streaming {
             first_byte: Duration::from_secs(failover_config.streaming_first_byte_timeout),
@@ -502,7 +629,21 @@ async fn forward_request(
             deadline: Instant::now() + Duration::from_secs(failover_config.non_streaming_timeout),
         }
     };
-    let stream = timed_body_stream(response.bytes_stream(), timeout_mode);
+    let commit_kind = if matches!(route, RouteKind::CodexResponses) {
+        StreamCommitKind::ResponsesSse
+    } else {
+        StreamCommitKind::GenericSse
+    };
+    let stream = timed_body_stream(
+        response.bytes_stream(),
+        timeout_mode,
+        Some(StreamCommitTracker::new(commit_kind)),
+        circuit_permit.take().map(|permit| CircuitCommit {
+            state: Arc::clone(&state),
+            permit: Some(permit),
+            policy: circuit_policy,
+        }),
+    );
     let body = BodyExt::boxed(StreamBody::new(stream));
     let mut builder = Response::builder().status(status);
     for (name, value) in headers {
@@ -784,6 +925,8 @@ fn max_attempts(max_retries: u32) -> u32 {
 fn timed_body_stream<S>(
     stream: S,
     mode: BodyTimeoutMode,
+    tracker: Option<StreamCommitTracker>,
+    circuit: Option<CircuitCommit>,
 ) -> impl Stream<Item = Result<Frame<Bytes>, BoxError>>
 where
     S: Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
@@ -792,6 +935,8 @@ where
         Some(TimedBodyState {
             stream: Box::pin(stream),
             mode,
+            tracker,
+            circuit,
         }),
         |state| async move {
             let mut state = state?;
@@ -820,22 +965,55 @@ where
                     {
                         *received_first |= !chunk.is_empty();
                     }
+                    if state
+                        .tracker
+                        .as_mut()
+                        .is_some_and(|tracker| tracker.observe(&chunk))
+                    {
+                        if let Some(circuit) = state.circuit.as_mut() {
+                            if let Some(permit) = circuit.permit.take() {
+                                circuit
+                                    .state
+                                    .circuits
+                                    .record_success(permit, circuit.policy);
+                            }
+                        }
+                    }
                     Some((
                         Ok::<Frame<Bytes>, BoxError>(Frame::data(chunk)),
                         Some(state),
                     ))
                 }
                 Ok(Some(Err(error))) => {
+                    if let Some(circuit) = state.circuit.take() {
+                        if let Some(permit) = circuit.permit {
+                            circuit.state.circuits.release(permit);
+                        }
+                    }
                     Some((Err::<Frame<Bytes>, BoxError>(Box::new(error)), None))
                 }
-                Ok(None) => None,
-                Err(_) => Some((
-                    Err::<Frame<Bytes>, BoxError>(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "routing_upstream_stream_timeout",
-                    ))),
-                    None,
-                )),
+                Ok(None) => {
+                    if let Some(circuit) = state.circuit.take() {
+                        if let Some(permit) = circuit.permit {
+                            circuit.state.circuits.release(permit);
+                        }
+                    }
+                    None
+                }
+                Err(_) => {
+                    if let Some(circuit) = state.circuit.take() {
+                        if let Some(permit) = circuit.permit {
+                            circuit.state.circuits.release(permit);
+                        }
+                    }
+                    Some((
+                        Err::<Frame<Bytes>, BoxError>(Box::new(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "routing_upstream_stream_timeout",
+                        ))),
+                        None,
+                    ))
+                }
             }
         },
     )
@@ -1154,6 +1332,35 @@ mod tests {
             .unwrap_err(),
             "provider_model_mapping_duplicate_source"
         );
+    }
+
+    #[test]
+    fn generic_sse_commits_on_first_parseable_event_and_ignores_keepalive() {
+        let mut tracker = StreamCommitTracker::new(StreamCommitKind::GenericSse);
+        assert!(!tracker.observe(&Bytes::from_static(b": ping\n\n")));
+        assert!(!tracker.observe(&Bytes::from_static(b"data: {")));
+        assert!(tracker.observe(&Bytes::from_static(b"\"type\":\"message_start\"}\n\n")));
+        assert!(tracker.observe(&Bytes::from_static(b"data: {\"later\":true}\n\n")));
+    }
+
+    #[test]
+    fn responses_sse_waits_for_output_or_error_event() {
+        let mut tracker = StreamCommitTracker::new(StreamCommitKind::ResponsesSse);
+        assert!(!tracker.observe(&Bytes::from_static(b": keepalive\n\n")));
+        assert!(!tracker.observe(&Bytes::from_static(
+            b"data: {\"type\":\"response.created\"}\n\n"
+        )));
+        assert!(tracker.observe(&Bytes::from_static(
+            b"data: {\"type\":\"response.output_text.delta\"}\n\n"
+        )));
+    }
+
+    #[test]
+    fn responses_sse_error_is_a_commit_boundary() {
+        let mut tracker = StreamCommitTracker::new(StreamCommitKind::ResponsesSse);
+        assert!(tracker.observe(&Bytes::from_static(
+            b"event: error\ndata: {\"message\":\"upstream failed\"}\n\n"
+        )));
     }
 
     #[test]

@@ -1664,6 +1664,13 @@ pub(crate) async fn current(input: GlobalCurrentInput) -> Result<GlobalCurrent, 
 }
 
 pub(crate) async fn apply(input: GlobalApplyInput) -> Result<GlobalApplyResult, String> {
+    apply_internal(input, true).await
+}
+
+async fn apply_internal(
+    input: GlobalApplyInput,
+    commit_provider_current: bool,
+) -> Result<GlobalApplyResult, String> {
     let preview_fingerprint = input.preview_fingerprint.trim();
     if preview_fingerprint.is_empty() {
         return Err("provider_preview_fingerprint_required".to_string());
@@ -1802,7 +1809,12 @@ pub(crate) async fn apply(input: GlobalApplyInput) -> Result<GlobalApplyResult, 
             "provider_recovery_required".to_string()
         });
     }
-    if commit_current(&plan, &journal_id).await.is_err() {
+    let commit_result = if commit_provider_current {
+        commit_current(&plan, &journal_id).await
+    } else {
+        Ok(())
+    };
+    if commit_result.is_err() {
         let restore = restore_targets(&plan, &changed_paths);
         cleanup_stage_files(&journal_targets);
         let _ = update_journal(
@@ -1838,6 +1850,197 @@ pub(crate) async fn apply(input: GlobalApplyInput) -> Result<GlobalApplyResult, 
         changed_targets: changed_paths,
         verified_fingerprints: verified,
     })
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct HotSwitchTarget {
+    pub home_identity: HomeIdentityInput,
+    pub projection: LocalRouteProjection,
+}
+
+pub(crate) async fn apply_hot_switch(
+    app_type: &str,
+    previous_provider_id: &str,
+    next_provider_id: &str,
+    targets: &[HotSwitchTarget],
+) -> Result<Vec<GlobalApplyResult>, String> {
+    let app_type = normalize_type(app_type)?;
+    if previous_provider_id.trim().is_empty() || next_provider_id.trim().is_empty() {
+        return Err("routing_provider_required".to_string());
+    }
+    if targets.is_empty() {
+        return Err("routing_hot_switch_targets_empty".to_string());
+    }
+    let mut identities = HashSet::with_capacity(targets.len());
+    for target in targets {
+        let identity = format!(
+            "{}:{}",
+            target.home_identity.environment_kind,
+            target
+                .home_identity
+                .environment_id
+                .as_deref()
+                .unwrap_or_default()
+        );
+        if !identities.insert(identity) {
+            return Err("routing_hot_switch_duplicate_home".to_string());
+        }
+    }
+    let _app_lock = acquire_apply_lock(&app_type, "__routing_hot_switch__")?;
+    let mut applied = Vec::with_capacity(targets.len());
+    for target in targets {
+        let preview_input = GlobalPreviewInput {
+            app_type: app_type.clone(),
+            provider_id: next_provider_id.to_string(),
+            home_identity: target.home_identity.clone(),
+            projection: Some(target.projection.clone()),
+        };
+        let preview = match preview(preview_input).await {
+            Ok(preview) => preview,
+            Err(_) => {
+                let rollback =
+                    rollback_hot_switch(&app_type, previous_provider_id, targets, applied.len())
+                        .await?;
+                complete_hot_switch_rollback(&app_type, previous_provider_id, &applied, &rollback)
+                    .await?;
+                return Err("routing_hot_switch_failed".to_string());
+            }
+        };
+        let result = apply_internal(
+            GlobalApplyInput {
+                app_type: app_type.clone(),
+                provider_id: next_provider_id.to_string(),
+                home_identity: target.home_identity.clone(),
+                preview_fingerprint: preview.fingerprint,
+                projection: Some(target.projection.clone()),
+            },
+            false,
+        )
+        .await;
+        match result {
+            Ok(result) => applied.push(result),
+            Err(_) => {
+                let rollback =
+                    rollback_hot_switch(&app_type, previous_provider_id, targets, applied.len())
+                        .await?;
+                complete_hot_switch_rollback(&app_type, previous_provider_id, &applied, &rollback)
+                    .await?;
+                return Err("routing_hot_switch_failed".to_string());
+            }
+        }
+    }
+    let journal_ids = applied
+        .iter()
+        .map(|result| result.journal_id.clone())
+        .collect::<Vec<_>>();
+    if commit_provider_current(&app_type, next_provider_id, &journal_ids)
+        .await
+        .is_err()
+    {
+        let rollback =
+            rollback_hot_switch(&app_type, previous_provider_id, targets, applied.len()).await?;
+        complete_hot_switch_rollback(&app_type, previous_provider_id, &applied, &rollback).await?;
+        return Err("routing_hot_switch_failed".to_string());
+    }
+    Ok(applied)
+}
+
+async fn rollback_hot_switch(
+    app_type: &str,
+    previous_provider_id: &str,
+    targets: &[HotSwitchTarget],
+    applied_count: usize,
+) -> Result<Vec<GlobalApplyResult>, String> {
+    let mut rollback_results = Vec::with_capacity(applied_count);
+    for target in targets[..applied_count].iter().rev() {
+        let preview_input = GlobalPreviewInput {
+            app_type: app_type.to_string(),
+            provider_id: previous_provider_id.to_string(),
+            home_identity: target.home_identity.clone(),
+            projection: Some(target.projection.clone()),
+        };
+        let preview = preview(preview_input).await?;
+        let result = apply_internal(
+            GlobalApplyInput {
+                app_type: app_type.to_string(),
+                provider_id: previous_provider_id.to_string(),
+                home_identity: target.home_identity.clone(),
+                preview_fingerprint: preview.fingerprint,
+                projection: Some(target.projection.clone()),
+            },
+            false,
+        )
+        .await?;
+        rollback_results.push(result);
+    }
+    Ok(rollback_results)
+}
+
+async fn commit_provider_current(
+    app_type: &str,
+    provider_id: &str,
+    journal_ids: &[String],
+) -> Result<(), String> {
+    let mut connection = crate::provider::database::open_connection().await?;
+    let mut transaction = connection
+        .begin()
+        .await
+        .map_err(|_| "provider_database_error".to_string())?;
+    sqlx::query("UPDATE providers SET is_current = 0 WHERE app_type = ?1")
+        .bind(app_type)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| "provider_database_error".to_string())?;
+    let result = sqlx::query(
+        "UPDATE providers SET is_current = 1
+         WHERE id = ?1 AND app_type = ?2",
+    )
+    .bind(provider_id)
+    .bind(app_type)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|_| "provider_database_error".to_string())?;
+    if result.rows_affected() != 1 {
+        return Err("provider_not_found".to_string());
+    }
+    for journal_id in journal_ids {
+        sqlx::query(
+            "UPDATE provider_apply_journal
+             SET state = 'committed', finished_at = ?1, error_code = NULL
+             WHERE id = ?2",
+        )
+        .bind(crate::provider::repository::unix_timestamp_millis())
+        .bind(journal_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| "provider_journal_write_failed".to_string())?;
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|_| "provider_database_error".to_string())
+}
+
+async fn complete_hot_switch_rollback(
+    app_type: &str,
+    previous_provider_id: &str,
+    applied: &[GlobalApplyResult],
+    rollback: &[GlobalApplyResult],
+) -> Result<(), String> {
+    let rollback_ids = rollback
+        .iter()
+        .map(|result| result.journal_id.clone())
+        .collect::<Vec<_>>();
+    commit_provider_current(app_type, previous_provider_id, &rollback_ids).await?;
+    for result in applied {
+        update_journal(
+            &result.journal_id,
+            "failed",
+            Some("routing_hot_switch_failed"),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
