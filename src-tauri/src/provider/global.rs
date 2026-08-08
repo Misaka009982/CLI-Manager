@@ -53,6 +53,8 @@ pub(crate) struct GlobalPreviewInput {
     pub app_type: String,
     pub provider_id: String,
     pub home_identity: HomeIdentityInput,
+    #[serde(default)]
+    pub projection: Option<LocalRouteProjection>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -62,6 +64,14 @@ pub(crate) struct GlobalApplyInput {
     pub provider_id: String,
     pub home_identity: HomeIdentityInput,
     pub preview_fingerprint: String,
+    #[serde(default)]
+    pub projection: Option<LocalRouteProjection>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LocalRouteProjection {
+    pub endpoint: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -937,13 +947,118 @@ async fn build_plan(input: &GlobalPreviewInput) -> Result<ProviderPlan, String> 
             owned_fields,
         });
     }
-    Ok(ProviderPlan {
+    let mut plan = ProviderPlan {
         app_type,
         provider_id: source.id,
         provider_name: source.name,
         home,
         targets,
-    })
+    };
+    if let Some(projection) = input.projection.as_ref() {
+        apply_local_route_projection(&mut plan, projection)?;
+    }
+    Ok(plan)
+}
+
+const ROUTED_CREDENTIAL_SENTINEL: &str = "CLI_MANAGER_ROUTED";
+
+fn route_endpoint_with_suffix(endpoint: &str, suffix: &str) -> Result<String, String> {
+    let endpoint = endpoint.trim().trim_end_matches('/');
+    let port = endpoint
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+        .filter(|port| *port >= 1_024)
+        .ok_or_else(|| "routing_endpoint_invalid".to_string())?;
+    let host = endpoint
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or_default();
+    if !(host == "http://127.0.0.1" || host == "http://localhost" || host == "http://[::1]") {
+        return Err("routing_endpoint_invalid".to_string());
+    }
+    Ok(format!("{host}:{port}{suffix}"))
+}
+
+fn apply_local_route_projection(
+    plan: &mut ProviderPlan,
+    projection: &LocalRouteProjection,
+) -> Result<(), String> {
+    let endpoint = route_endpoint_with_suffix(&projection.endpoint, "")?;
+    let codex_endpoint = route_endpoint_with_suffix(&projection.endpoint, "/v1")?;
+    for target in &mut plan.targets {
+        target.desired = match target.target.as_str() {
+            "claude.settings" => {
+                let mut root = parse_json_object(Some(&target.desired))?;
+                let mut env = root
+                    .remove("env")
+                    .unwrap_or_else(|| Value::Object(Map::new()))
+                    .as_object()
+                    .cloned()
+                    .ok_or_else(|| "provider_config_invalid".to_string())?;
+                env.insert(
+                    "ANTHROPIC_BASE_URL".to_string(),
+                    Value::String(endpoint.clone()),
+                );
+                env.insert(
+                    "ANTHROPIC_API_KEY".to_string(),
+                    Value::String(ROUTED_CREDENTIAL_SENTINEL.to_string()),
+                );
+                env.remove("ANTHROPIC_AUTH_TOKEN");
+                root.insert("env".to_string(), Value::Object(env));
+                json_bytes(root)?
+            }
+            "codex.auth" => {
+                let mut root = parse_json_object(Some(&target.desired))?;
+                for key in CODEX_OWNED_AUTH_KEYS {
+                    root.remove(key);
+                }
+                root.insert(
+                    "OPENAI_API_KEY".to_string(),
+                    Value::String(ROUTED_CREDENTIAL_SENTINEL.to_string()),
+                );
+                json_bytes(root)?
+            }
+            "codex.config" => {
+                let mut document = toml_document(Some(&target.desired))?;
+                let provider_name = document
+                    .get("model_provider")
+                    .and_then(Item::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or(CODEX_DEFAULT_PROVIDER_NAME)
+                    .to_string();
+                ensure_codex_provider_mapping(
+                    &mut document,
+                    &provider_name,
+                    Some(&codex_endpoint),
+                )?;
+                document.to_string().into_bytes()
+            }
+            "grokbuild.config" => {
+                let mut document = toml_document(Some(&target.desired))?;
+                let profile = document
+                    .get("models")
+                    .and_then(Item::as_table)
+                    .and_then(|models| models.get("default"))
+                    .and_then(Item::as_str)
+                    .unwrap_or("proxy")
+                    .to_string();
+                let model = document
+                    .get_mut("model")
+                    .and_then(Item::as_table_mut)
+                    .ok_or_else(|| "provider_config_invalid".to_string())?;
+                let selected = model
+                    .entry(&profile)
+                    .or_insert(toml_edit::table())
+                    .as_table_mut()
+                    .ok_or_else(|| "provider_config_invalid".to_string())?;
+                selected.insert("base_url", toml_edit::value(endpoint.clone()));
+                selected.insert("api_key", toml_edit::value(ROUTED_CREDENTIAL_SENTINEL));
+                document.to_string().into_bytes()
+            }
+            _ => return Err("provider_invalid_app_type".to_string()),
+        };
+    }
+    Ok(())
 }
 
 fn plan_preview(plan: &ProviderPlan) -> GlobalPreview {
@@ -1443,6 +1558,7 @@ pub(crate) async fn current(input: GlobalCurrentInput) -> Result<GlobalCurrent, 
             app_type: app_type.clone(),
             provider_id: candidate.id.clone(),
             home_identity: input.home_identity.clone(),
+            projection: None,
         })
         .await
         else {
@@ -1529,6 +1645,7 @@ pub(crate) async fn apply(input: GlobalApplyInput) -> Result<GlobalApplyResult, 
         app_type: input.app_type.clone(),
         provider_id: input.provider_id.clone(),
         home_identity: input.home_identity.clone(),
+        projection: input.projection.clone(),
     };
     let plan = build_plan(&preview_input).await?;
     let _lock = acquire_apply_lock(&plan.app_type, &plan.home.identity.identity)?;
@@ -1918,6 +2035,7 @@ pub(crate) async fn recover_pending() -> Result<RecoveryReport, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::home::DerivedCliTargets;
     use serde_json::json;
 
     #[test]
@@ -1973,6 +2091,62 @@ mod tests {
         let value: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["env"]["ANTHROPIC_API_KEY"], "new-secret");
         assert!(value["env"]["ANTHROPIC_AUTH_TOKEN"].is_null());
+    }
+
+    #[test]
+    fn local_route_projection_replaces_claude_endpoint_and_credential() {
+        let mut plan = ProviderPlan {
+            app_type: "claude".to_string(),
+            provider_id: "provider".to_string(),
+            provider_name: "Provider".to_string(),
+            home: ProviderHomeState {
+                identity: HomeIdentity {
+                    environment_kind: "local".to_string(),
+                    environment_id: "host".to_string(),
+                    identity: "local:host".to_string(),
+                },
+                mode: "auto".to_string(),
+                home_path: "C:\\Users\\test".to_string(),
+                source: "detected".to_string(),
+                targets: DerivedCliTargets {
+                    home_path: String::new(),
+                    claude_config_dir: String::new(),
+                    claude_history_root: String::new(),
+                    codex_config_dir: String::new(),
+                    codex_history_root: String::new(),
+                    grok_config_dir: String::new(),
+                    grok_history_root: String::new(),
+                },
+            },
+            targets: vec![PlannedTarget {
+                target: "claude.settings".to_string(),
+                path: "settings.json".to_string(),
+                before: None,
+                desired: br#"{"env":{"ANTHROPIC_AUTH_TOKEN":"secret"},"hooks":{}}"#.to_vec(),
+                owned_fields: Vec::new(),
+            }],
+        };
+        apply_local_route_projection(
+            &mut plan,
+            &LocalRouteProjection {
+                endpoint: "http://127.0.0.1:15721".to_string(),
+            },
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&plan.targets[0].desired).unwrap();
+        assert_eq!(value["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:15721");
+        assert_eq!(
+            value["env"]["ANTHROPIC_API_KEY"],
+            ROUTED_CREDENTIAL_SENTINEL
+        );
+        assert!(value["env"].get("ANTHROPIC_AUTH_TOKEN").is_none());
+        assert!(value["hooks"].is_object());
+    }
+
+    #[test]
+    fn local_route_projection_rejects_non_loopback_endpoint() {
+        let result = route_endpoint_with_suffix("http://0.0.0.0:15721", "");
+        assert_eq!(result.unwrap_err(), "routing_endpoint_invalid");
     }
 
     #[test]

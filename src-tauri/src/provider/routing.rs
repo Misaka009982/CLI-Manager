@@ -120,6 +120,19 @@ pub(crate) async fn ensure_current_provider_ready(app_type: &str) -> Result<(), 
     Ok(())
 }
 
+pub(crate) async fn current_provider_id(app_type: &str) -> Result<String, String> {
+    let app_type = normalize_routing_app_type(app_type)?;
+    let mut connection = database::open_connection().await?;
+    sqlx::query_scalar::<_, String>(
+        "SELECT id FROM providers WHERE app_type = ?1 AND is_current = 1 LIMIT 1",
+    )
+    .bind(app_type)
+    .fetch_optional(&mut connection)
+    .await
+    .map_err(|_| "routing_provider_read_failed".to_string())?
+    .ok_or_else(|| "routing_provider_not_ready".to_string())
+}
+
 pub(crate) fn takeover_key(
     app_type: &str,
     home_identity: &HomeIdentity,
@@ -214,6 +227,40 @@ async fn load_takeovers(
         }
     }
     Ok(document.items)
+}
+
+pub(crate) async fn save_takeovers(items: &[RoutingTakeoverItem]) -> Result<(), String> {
+    let mut keys = HashSet::with_capacity(items.len());
+    for item in items {
+        let normalized_app_type = normalize_routing_app_type(&item.app_type)?;
+        if normalized_app_type != item.app_type {
+            return Err("routing_app_type_invalid".to_string());
+        }
+        let key = takeover_key(&item.app_type, &item.home_identity)?;
+        if !keys.insert(key)
+            || !matches!(item.endpoint_mode.as_str(), "loopback")
+            || item.advertised_host.trim().is_empty()
+            || !is_safe_advertised_host(&item.endpoint_mode, &item.advertised_host)
+            || item.applied_port < MIN_PORT
+        {
+            return Err("routing_takeover_invalid".to_string());
+        }
+    }
+    let document = RoutingTakeoversDocument {
+        schema_version: 1,
+        items: items.to_vec(),
+    };
+    let mut connection = database::open_connection().await?;
+    let result = sqlx::query("UPDATE settings SET value = ?1 WHERE key = ?2")
+        .bind(serialize_json(&document, TAKEOVERS_SETTINGS_KEY)?)
+        .bind(TAKEOVERS_SETTINGS_KEY)
+        .execute(&mut connection)
+        .await
+        .map_err(|_| "routing_settings_write_failed:routing.takeovers.v1".to_string())?;
+    if result.rows_affected() != 1 {
+        return Err("routing_settings_missing:routing.takeovers.v1".to_string());
+    }
+    Ok(())
 }
 
 fn is_safe_advertised_host(endpoint_mode: &str, host: &str) -> bool {

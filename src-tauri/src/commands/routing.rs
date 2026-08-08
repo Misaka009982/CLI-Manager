@@ -3,6 +3,9 @@ use crate::daemon::protocol::{
     ensure_local_routing_capability, routing_control_id, ClientFrame, DaemonFrame, RoutingError,
     RoutingEvent, RoutingStatus,
 };
+use crate::provider::global::{
+    self, GlobalApplyInput, GlobalPreviewInput, HomeIdentityInput, LocalRouteProjection,
+};
 use crate::provider::home::{self, HomeSelectInput};
 use crate::provider::repository::normalize_app_type;
 use crate::provider::routing::{self, RoutingPersistedState, TakeoverKey};
@@ -151,6 +154,18 @@ fn routing_status(event: RoutingEvent) -> Result<RoutingStatus, RoutingError> {
     event
         .status
         .ok_or_else(|| command_error("routing_daemon_response_invalid", "restart_daemon"))
+}
+
+fn local_route_endpoint(address: &str, port: u16) -> Result<String, RoutingError> {
+    let host = match address.trim() {
+        "127.0.0.1" | "localhost" => address.trim().to_string(),
+        "::1" => "[::1]".to_string(),
+        _ => return Err(command_error("routing_listen_address_invalid", "fix_input")),
+    };
+    if port < 1_024 {
+        return Err(command_error("routing_port_invalid", "fix_input"));
+    }
+    Ok(format!("http://{host}:{port}"))
 }
 
 fn block_on<T>(future: impl Future<Output = Result<T, String>>) -> Result<T, RoutingError> {
@@ -305,8 +320,94 @@ pub fn routing_set_takeover(
         .ok_or_else(RoutingError::service_unavailable)?;
     ensure_local_routing_capability(&client.info().features)?;
 
-    // P1-01 only establishes the command boundary. A takeover item is a
-    // committed Live projection, so it must not be written before the writer
-    // and listener transaction exists in later P1 cases.
-    Err(RoutingError::service_unavailable())
+    if input.home_identity.environment_kind != "local" {
+        return Err(command_error(
+            "routing_home_environment_unsupported",
+            "use_windows_local_home",
+        ));
+    }
+    let persisted = block_on(routing::load_persisted_state())?;
+    let current_provider_id = block_on(routing::current_provider_id(&app_type))?;
+    let existing = persisted
+        .takeovers
+        .iter()
+        .find(|item| item.app_type == app_type && item.home_identity == home.identity)
+        .cloned();
+    if !input.enabled && existing.is_none() {
+        return state(Some(client));
+    }
+
+    let status = routing_status(request_control(
+        Some(client.clone()),
+        ClientFrame::RoutingStatus {
+            id: client.next_request_id(),
+        },
+    )?)?;
+    if input.enabled && status.status != "running" {
+        return Err(RoutingError::service_unavailable());
+    }
+    let actual_port = status
+        .actual_port
+        .ok_or_else(|| RoutingError::service_unavailable())?;
+    let endpoint = local_route_endpoint(&persisted.service.listen_address, actual_port)?;
+    let identity_input = HomeIdentityInput {
+        environment_kind: home.identity.environment_kind.clone(),
+        environment_id: Some(home.identity.environment_id.clone()),
+    };
+    let projection = LocalRouteProjection {
+        endpoint: endpoint.clone(),
+    };
+    let preview_input = GlobalPreviewInput {
+        app_type: app_type.clone(),
+        provider_id: current_provider_id.clone(),
+        home_identity: identity_input.clone(),
+        projection: input.enabled.then(|| projection.clone()),
+    };
+    let preview = block_on(global::preview(preview_input))?;
+    let apply_input = GlobalApplyInput {
+        app_type: app_type.clone(),
+        provider_id: current_provider_id.clone(),
+        home_identity: identity_input,
+        preview_fingerprint: preview.fingerprint,
+        projection: input.enabled.then_some(projection.clone()),
+    };
+    block_on(global::apply(apply_input))?;
+
+    let mut takeovers = persisted.takeovers;
+    takeovers.retain(|item| !(item.app_type == app_type && item.home_identity == home.identity));
+    if input.enabled {
+        takeovers.push(routing::RoutingTakeoverItem {
+            app_type: app_type.clone(),
+            home_identity: home.identity.clone(),
+            endpoint_mode: "loopback".to_string(),
+            advertised_host: persisted.service.listen_address,
+            applied_port: actual_port,
+        });
+    }
+    if let Err(error) = block_on(routing::save_takeovers(&takeovers)) {
+        let rollback_projection = (!input.enabled).then_some(projection);
+        let rollback_preview = GlobalPreviewInput {
+            app_type: app_type.clone(),
+            provider_id: current_provider_id.clone(),
+            home_identity: HomeIdentityInput {
+                environment_kind: home.identity.environment_kind.clone(),
+                environment_id: Some(home.identity.environment_id.clone()),
+            },
+            projection: rollback_projection.clone(),
+        };
+        if let Ok(preview) = block_on(global::preview(rollback_preview)) {
+            let _ = block_on(global::apply(GlobalApplyInput {
+                app_type,
+                provider_id: current_provider_id,
+                home_identity: HomeIdentityInput {
+                    environment_kind: home.identity.environment_kind,
+                    environment_id: Some(home.identity.environment_id),
+                },
+                preview_fingerprint: preview.fingerprint,
+                projection: rollback_projection,
+            }));
+        }
+        return Err(error);
+    }
+    state(Some(client))
 }
