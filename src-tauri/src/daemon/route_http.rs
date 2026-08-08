@@ -44,6 +44,13 @@ struct ProviderSnapshot {
     claude_api_format: Option<String>,
     pool_id: String,
     selected_key: KeyCandidate,
+    model_mappings: Vec<ModelMapping>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModelMapping {
+    source: String,
+    target: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -259,15 +266,28 @@ async fn forward_request(
         .await
         .map_err(|_| (StatusCode::PAYLOAD_TOO_LARGE, "routing_body_too_large"))?
         .to_bytes();
-    let snapshot = load_provider_snapshot(route, &state)
-        .await
-        .map_err(|error| {
+    let request_json = serde_json::from_slice::<serde_json::Value>(&body)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "routing_request_json_invalid"))?;
+    if !request_json.is_object() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "routing_request_body_must_be_object",
+        ));
+    }
+    let snapshot = match load_provider_snapshot(route, &state).await {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
             log::warn!("routing provider snapshot unavailable: {error}");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "routing_provider_unavailable",
-            )
-        })?;
+            return Err(if error.starts_with("provider_model_mapping_") {
+                (StatusCode::BAD_REQUEST, "routing_model_mapping_invalid")
+            } else {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "routing_provider_unavailable",
+                )
+            });
+        }
+    };
     let url = upstream_url(&snapshot.base_url, route, &request_path)
         .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_provider_endpoint_invalid"))?;
     let client = reqwest::Client::builder()
@@ -289,9 +309,11 @@ async fn forward_request(
                 format!("Bearer {}", selected_key.api_key),
             );
         }
+        let attempt_body = apply_model_mapping(&request_json, &snapshot.model_mappings)
+            .map_err(|_| (StatusCode::BAD_REQUEST, "routing_model_mapping_invalid"))?;
         let response = upstream
             .header(REQ_CONTENT_TYPE.as_str(), "application/json")
-            .body(body.clone())
+            .body(attempt_body)
             .send()
             .await
             .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_request_failed"))?;
@@ -414,6 +436,43 @@ async fn load_provider_snapshot(
         });
     }
     let pool_id = format!("{app_type}:{provider_id}");
+    let model_mappings = if app_type == "claude" {
+        let config = detail
+            .claude_config
+            .as_ref()
+            .ok_or_else(|| "provider_config_invalid".to_string())?;
+        let fallback = |value: &str, fallback: &str| {
+            if value.trim().is_empty() {
+                fallback.to_string()
+            } else {
+                value.trim().to_string()
+            }
+        };
+        let opus = fallback(&config.default_opus_model, &config.model);
+        let sonnet = fallback(&config.default_sonnet_model, &config.model);
+        let haiku = fallback(&config.default_haiku_model, &sonnet);
+        let fable = fallback(&config.default_fable_model, &opus);
+        vec![
+            ModelMapping {
+                source: "sonnet".to_string(),
+                target: sonnet,
+            },
+            ModelMapping {
+                source: "opus".to_string(),
+                target: opus.clone(),
+            },
+            ModelMapping {
+                source: "haiku".to_string(),
+                target: haiku,
+            },
+            ModelMapping {
+                source: "fable".to_string(),
+                target: fable,
+            },
+        ]
+    } else {
+        parse_model_mappings(app_type, &detail.settings_config)?
+    };
     let selected_key = state.select_key(&pool_id, candidates)?;
     let base_url = detail
         .card
@@ -430,7 +489,73 @@ async fn load_provider_snapshot(
         claude_api_format: detail.claude_config.map(|config| config.api_format),
         pool_id,
         selected_key,
+        model_mappings,
     })
+}
+
+fn parse_model_mappings(
+    app_type: &str,
+    settings_config: &str,
+) -> Result<Vec<ModelMapping>, String> {
+    if app_type == "claude" {
+        return Ok(Vec::new());
+    }
+    let settings = serde_json::from_str::<serde_json::Value>(settings_config)
+        .map_err(|_| "provider_config_invalid".to_string())?;
+    let Some(mappings) = settings
+        .get("advanced")
+        .and_then(|advanced| advanced.get("modelMappings"))
+    else {
+        return Ok(Vec::new());
+    };
+    let mappings = mappings
+        .as_array()
+        .ok_or_else(|| "provider_model_mapping_invalid".to_string())?;
+    let mut result = Vec::with_capacity(mappings.len());
+    let mut sources = HashSet::new();
+    for mapping in mappings {
+        let source = mapping
+            .get("source")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "provider_model_mapping_source_required".to_string())?;
+        let target = mapping
+            .get("target")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "provider_model_mapping_target_required".to_string())?;
+        if !sources.insert(source.to_string()) {
+            return Err("provider_model_mapping_duplicate_source".to_string());
+        }
+        result.push(ModelMapping {
+            source: source.to_string(),
+            target: target.to_string(),
+        });
+    }
+    Ok(result)
+}
+
+fn apply_model_mapping(
+    request: &serde_json::Value,
+    mappings: &[ModelMapping],
+) -> Result<Vec<u8>, String> {
+    let mut request = request.clone();
+    let Some(object) = request.as_object_mut() else {
+        return Err("routing_request_body_must_be_object".to_string());
+    };
+    let Some(model) = object.get("model").and_then(serde_json::Value::as_str) else {
+        return serde_json::to_vec(&request)
+            .map_err(|_| "routing_request_serialize_failed".to_string());
+    };
+    if let Some(mapping) = mappings.iter().find(|mapping| mapping.source == model) {
+        object.insert(
+            "model".to_string(),
+            serde_json::Value::String(mapping.target.clone()),
+        );
+    }
+    serde_json::to_vec(&request).map_err(|_| "routing_request_serialize_failed".to_string())
 }
 
 fn upstream_url(base_url: &str, route: RouteKind, request_path: &str) -> Result<String, ()> {
@@ -688,6 +813,48 @@ mod tests {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("retry-after", HeaderValue::from_static("999"));
         assert_eq!(retry_cooldown(429, &headers), KEY_COOLDOWN_MAX);
+    }
+
+    #[test]
+    fn model_mapping_is_trimmed_exact_and_finally_pinned() {
+        let mappings = parse_model_mappings(
+            "codex",
+            r#"{"advanced":{"modelMappings":[{"source":" a ","target":" b "}]}}"#,
+        )
+        .unwrap();
+        let body = apply_model_mapping(
+            &serde_json::json!({"model":"a","messages":[],"override":{"model":"c"}}),
+            &mappings,
+        )
+        .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["model"], "b");
+        assert_eq!(body["override"]["model"], "c");
+        let unchanged = apply_model_mapping(&serde_json::json!({"model":"A"}), &mappings).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&unchanged).unwrap()["model"],
+            "A"
+        );
+    }
+
+    #[test]
+    fn model_mapping_rejects_empty_and_duplicate_sources() {
+        assert_eq!(
+            parse_model_mappings(
+                "grokbuild",
+                r#"{"advanced":{"modelMappings":[{"source":" ","target":"b"}]}}"#,
+            )
+            .unwrap_err(),
+            "provider_model_mapping_source_required"
+        );
+        assert_eq!(
+            parse_model_mappings(
+                "grokbuild",
+                r#"{"advanced":{"modelMappings":[{"source":"a","target":"b"},{"source":"a","target":"c"}]}}"#,
+            )
+            .unwrap_err(),
+            "provider_model_mapping_duplicate_source"
+        );
     }
 
     #[test]
