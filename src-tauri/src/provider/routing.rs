@@ -156,6 +156,37 @@ pub(crate) struct RoutingGlobalProxyInput {
     pub clear_password: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutingGlobalProxyTestInput {
+    pub url: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutingProxyScanCandidate {
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutingGlobalProxyTestResult {
+    pub endpoint: String,
+}
+
+const GLOBAL_PROXY_SCAN_PORTS: [u16; 8] =
+    [7_890, 7_891, 1_080, 8_080, 8_888, 3_128, 10_808, 10_809];
+const GLOBAL_PROXY_SCAN_TIMEOUT: Duration = Duration::from_millis(250);
+const GLOBAL_PROXY_TEST_TIMEOUT: Duration = Duration::from_secs(10);
+const GLOBAL_PROXY_TEST_ENDPOINTS: [&str; 3] = [
+    "https://httpbin.org/get",
+    "https://www.google.com/generate_204",
+    "https://api.anthropic.com/",
+];
+
 fn failover_settings_key(app_type: &str) -> String {
     format!("{FAILOVER_SETTINGS_PREFIX}{app_type}.v1")
 }
@@ -281,6 +312,48 @@ fn normalize_global_proxy_username(raw: Option<String>) -> Option<String> {
     })
 }
 
+fn global_proxy_matches_endpoint(
+    host: &str,
+    port: u16,
+    advertised_host: &str,
+    advertised_port: u16,
+) -> bool {
+    fn loopback_alias(value: &str) -> bool {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "localhost" | "127.0.0.1" | "::1"
+        )
+    }
+
+    port == advertised_port
+        && ((loopback_alias(host) && loopback_alias(advertised_host))
+            || host.eq_ignore_ascii_case(advertised_host))
+}
+
+pub(crate) async fn validate_global_proxy_not_self_loop(
+    raw_url: Option<&str>,
+) -> Result<(), String> {
+    let Some(url) = normalize_global_proxy_url(raw_url)? else {
+        return Ok(());
+    };
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "routing_proxy_url_invalid".to_string())?;
+    let Some(port) = parsed.port() else {
+        return Ok(());
+    };
+    let host = parsed.host_str().unwrap_or_default();
+    let persisted = load_persisted_state().await?;
+    let service_matches = persisted.service.actual_port.is_some_and(|actual_port| {
+        global_proxy_matches_endpoint(host, port, &persisted.service.listen_address, actual_port)
+    });
+    let takeover_matches = persisted.takeovers.iter().any(|takeover| {
+        global_proxy_matches_endpoint(host, port, &takeover.advertised_host, takeover.applied_port)
+    });
+    if service_matches || takeover_matches {
+        return Err("routing_proxy_self_loop".to_string());
+    }
+    Ok(())
+}
+
 fn read_global_proxy_password() -> Result<Option<String>, String> {
     crate::credential_store::get(GLOBAL_PROXY_CREDENTIAL_ACCOUNT)
         .map_err(|_| "routing_proxy_credential_read_failed".to_string())
@@ -332,6 +405,7 @@ pub(crate) async fn save_global_proxy(
         return Err("routing_proxy_password_input_conflict".to_string());
     }
     let url = normalize_global_proxy_url(input.url.as_deref())?;
+    validate_global_proxy_not_self_loop(input.url.as_deref()).await?;
     let username = normalize_global_proxy_username(input.username);
     let mut connection = database::open_connection().await?;
     let previous = load_global_proxy_stored(&mut connection).await?;
@@ -379,6 +453,62 @@ pub(crate) async fn save_global_proxy(
     };
     drop(previous);
     Ok(global_proxy_state(next, has_password))
+}
+
+pub(crate) fn scan_global_proxy() -> Result<Vec<RoutingProxyScanCandidate>, String> {
+    let mut candidates = Vec::new();
+    for port in GLOBAL_PROXY_SCAN_PORTS {
+        let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        if std::net::TcpStream::connect_timeout(&address, GLOBAL_PROXY_SCAN_TIMEOUT).is_ok() {
+            candidates.push(RoutingProxyScanCandidate {
+                host: "127.0.0.1".to_string(),
+                port,
+            });
+        }
+    }
+    Ok(candidates)
+}
+
+pub(crate) async fn test_global_proxy(
+    input: RoutingGlobalProxyTestInput,
+) -> Result<RoutingGlobalProxyTestResult, String> {
+    let mut connection = database::open_connection().await?;
+    let stored = load_global_proxy_stored(&mut connection).await?;
+    let url = normalize_global_proxy_url(input.url.as_deref().or(stored.url.as_deref()))?
+        .ok_or_else(|| "routing_proxy_url_required".to_string())?;
+    drop(connection);
+    validate_global_proxy_not_self_loop(Some(&url)).await?;
+    let username = normalize_global_proxy_username(input.username).or(stored.username);
+    let password = if input
+        .password
+        .as_deref()
+        .is_some_and(|password| !password.is_empty())
+    {
+        input.password
+    } else {
+        read_global_proxy_password()?
+    };
+    let mut proxy =
+        reqwest::Proxy::all(&url).map_err(|_| "routing_proxy_url_invalid".to_string())?;
+    if let (Some(username), Some(password)) = (username, password) {
+        proxy = proxy.basic_auth(&username, &password);
+    }
+    let client = reqwest::Client::builder()
+        .proxy(proxy)
+        .timeout(GLOBAL_PROXY_TEST_TIMEOUT)
+        .build()
+        .map_err(|_| "routing_proxy_test_client_failed".to_string())?;
+    for endpoint in GLOBAL_PROXY_TEST_ENDPOINTS {
+        if let Ok(response) = client.get(endpoint).send().await {
+            if response.status().as_u16() == 407 {
+                continue;
+            }
+            return Ok(RoutingGlobalProxyTestResult {
+                endpoint: endpoint.to_string(),
+            });
+        }
+    }
+    Err("routing_proxy_test_failed".to_string())
 }
 
 pub(crate) async fn load_failover_state(app_type: &str) -> Result<RoutingFailoverState, String> {
@@ -1111,6 +1241,46 @@ mod tests {
         assert_eq!(value["hasPassword"], true);
         assert!(value.get("password").is_none());
         assert!(value.get("passwordCredentialAccount").is_none());
+    }
+
+    #[test]
+    fn global_proxy_self_loop_matches_loopback_aliases_only_at_the_same_port() {
+        assert!(global_proxy_matches_endpoint(
+            "localhost",
+            15721,
+            "127.0.0.1",
+            15721
+        ));
+        assert!(global_proxy_matches_endpoint(
+            "::1",
+            15721,
+            "localhost",
+            15721
+        ));
+        assert!(!global_proxy_matches_endpoint(
+            "localhost",
+            15722,
+            "127.0.0.1",
+            15721
+        ));
+        assert!(!global_proxy_matches_endpoint(
+            "127.0.0.1",
+            15721,
+            "172.20.0.1",
+            15721
+        ));
+    }
+
+    #[test]
+    fn global_proxy_scan_ports_are_fixed_and_unique() {
+        let mut ports = GLOBAL_PROXY_SCAN_PORTS.to_vec();
+        ports.sort_unstable();
+        ports.dedup();
+        assert_eq!(ports.len(), GLOBAL_PROXY_SCAN_PORTS.len());
+        assert_eq!(
+            GLOBAL_PROXY_SCAN_PORTS,
+            [7_890, 7_891, 1_080, 8_080, 8_888, 3_128, 10_808, 10_809]
+        );
     }
 
     #[test]

@@ -1,18 +1,18 @@
 # CCS 路由迁移实施进度
 
-> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P3-01 已完成，当前指针为 P3-02。
+> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P3-02 已完成，当前指针为 P3-03。
 
 ## 0. 当前指针
 
 | 字段 | 值 |
 | --- | --- |
 | Task | 08-08-ccs-routing-migration |
-| task.json 状态 | in_progress（P0、P1-01 至 P3-01 已完成，当前指针为 P3-02） |
+| task.json 状态 | in_progress（P0、P1-01 至 P3-02 已完成，当前指针为 P3-03） |
 | Changelog Target | [TEMP] |
 | 当前阶段 | P3：全局出站代理 |
-| 当前 Case | P3-02 |
-| 审批状态 | 已批准；P3-01 完成，按 Case 顺序切换至 P3-02 指针 |
-| 最后更新时间 | 2026-08-09 12:20 |
+| 当前 Case | P3-03 |
+| 审批状态 | 已批准；P3-02 完成，按 Case 顺序切换至 P3-03 指针 |
+| 最后更新时间 | 2026-08-09 13:00 |
 | 最后操作机器 | DESKTOP-Q49I074 |
 | 分支 | feat/native-provider-management |
 | 工作目录 | F:/github/CLI-Manager |
@@ -78,10 +78,10 @@
 | P0 | 影响分析、Schema、协议、Fixture 基线 | 4 | completed |
 | P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | completed |
 | P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | completed |
-| P3 | 全局出站代理 | 5 | P3-02 in_progress |
+| P3 | 全局出站代理 | 5 | P3-03 in_progress |
 | P4 | 整流器与 Bedrock 优化 | 6 | pending |
 | P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | pending |
-| 合计 |  | 43 | 27 个 Case 完成；P3-02 等待实现 |
+| 合计 |  | 43 | 28 个 Case 完成；P3-03 等待实现 |
 
 ## 4. P0：影响分析、Schema、协议与 Fixture 基线
 
@@ -129,8 +129,8 @@
 | ID | 目标 | 前置依赖 | 实现触点 | 验收命令/场景 | 回滚点 | 状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P3-01 | 保存代理配置和 credential reference，禁止密码进入 DB/DTO/log | P0-02、P1-10 | provider DB、credential store、proxy commands | 编辑保留密码、显式清空删除、失败保留旧 generation、DTO 只返回 hasPassword | 恢复旧 DB/credential/client | completed | 新增 `routing_get_global_proxy`/`routing_set_global_proxy`；DB 仅保存 normalized URL、username 与固定 opaque `passwordCredentialAccount`，普通 DTO 只返回 `hasPassword`；空 password 保留旧 credential，`clearPassword` 才删除；credential 先写、DB 失败按旧值补偿，补偿失败返回 `routing_global_proxy_recovery_required`；支持 http/https/socks5/socks5h、显式 host/port、拒绝 URL 内嵌 credentials；不提前创建/切换 shared client，未实现 scan/test/self-loop（P3-02）。新增 global proxy 2、provider::routing 12；全 Rust 970 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1 发现并修正 socks5h normalization 断言；R1b 发现并移除 P3-01 对 URL path 的越界拒绝断言；R2 复核 credential compensation、空 password 保留/显式清除、DTO/序列化脱敏、command registration、稳定错误码，连续两轮零未解决发现；GitNexus `run` LOW，复用但未修改的 `load_setting` 为 HIGH，未返回 HIGH/CRITICAL 修改风险；独立提交主题：feat(routing): persist global proxy credentials；下一步仅执行 P3-02 |
-| P3-02 | 支持四类 scheme、校验、扫描、测试和自环防护 | P3-01 | URL parser、scan/test commands、sanitized errors | HTTP/HTTPS/SOCKS5/SOCKS5H；常见 localhost 端口；10s test；拒绝 route endpoint 自环 | 不保存无效配置，不替换 client | in_progress | 扫描只证明端口可连，不宣称协议已验证 |
-| P3-03 | 切换共享 reqwest client 并覆盖列出的 HTTP 触点 | P3-02 | models、model_pricing、command_suggestion、desktop_pet、ssh supply chain、WebDAV、notification、route upstream | 新请求使用新 generation；旧请求完成后释放；重启恢复；local route 遵循代理 | 原子切回旧 client | pending | 不扩展到 updater/WebView |
+| P3-02 | 支持四类 scheme、校验、扫描、测试和自环防护 | P3-01 | URL parser、scan/test commands、sanitized errors | HTTP/HTTPS/SOCKS5/SOCKS5H；常见 localhost 端口；10s test；拒绝 route endpoint 自环 | 不保存无效配置，不替换 client | completed | 新增 `routing_scan_global_proxy`、`routing_test_global_proxy`；扫描固定 8 个 localhost 端口且仅报告 TCP 可达，不宣称协议已验证；测试使用约 10s 超时、代理 407 不视为成功；保存与测试均拒绝 service/takeover endpoint 同端口自环，支持 localhost/127.0.0.1/::1 别名；不保存扫描候选、不替换 client。定向 global_proxy 4；全 Rust 972 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1 复核扫描/测试无保存路径、命令 DTO 无密码面、固定端口与 407 边界，0 findings；R2 复核四类 scheme 复用既有 parser、自环 loopback 别名/端口精确匹配、bounded test、command registration，0 findings；连续两轮零未解决发现；GitNexus 既有 symbol upstream 未返回 HIGH/CRITICAL；独立提交主题：feat(routing): add proxy validation and diagnostics；下一步仅执行 P3-03 |
+| P3-03 | 切换共享 reqwest client 并覆盖列出的 HTTP 触点 | P3-02 | models、model_pricing、command_suggestion、desktop_pet、ssh supply chain、WebDAV、notification、route upstream | 新请求使用新 generation；旧请求完成后释放；重启恢复；local route 遵循代理 | 原子切回旧 client | in_progress | 不扩展到 updater/WebView |
 | P3-04 | 固化 CC Connect/SSH/updater/WebView 排除及热更新并发语义 | P3-03 | cc_connect、SSH integration、updater boundary、bypass policy | 显式代理优先；route 自环绕过/拒绝；并发请求不读半配置 | 撤销 cutover，保留 bypass 规则 | pending | 排除范围要有 UI/文档说明 |
 | P3-05 | 完成全局代理 UI、i18n 和专项验收 | P3-01 至 P3-04 | routing global proxy accordion、i18n、aria/toast | zh-CN/en-US、键盘、密码留空/清空、代理失败 sanitized 状态 | 隐藏 UI，恢复默认 client | pending | 通过后进入 P4 |
 
@@ -212,6 +212,7 @@
 | 2026-08-09 11:20 | DESKTOP-Q49I074 | P2-06 | in_progress -> completed；P2-07 pending -> in_progress | `src/components/settings/providers/NativeProviderFailoverSection.tsx`、`src/lib/i18n.ts`、progress | focused routing 32、provider 143；Rust 965 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；GitNexus staged detect_changes 待提交前复核 | R1 发现并修复轮询覆盖未保存草稿，以及不可用 daemon 锁死已启用配置关闭的问题；R2 复核 reset circuit 不写 queue/current、无空 circuit 行、无 secret、zh-CN/en-US 和 disabled 边界；R3 复核同 app takeover、旧 daemon、状态轮询清理、配置校验、P2-07 边界，连续两轮零未解决发现；GitNexus 相关 symbols UNKNOWN，未返回 HIGH/CRITICAL | feat(routing): complete failover status UI | P2-07 |
 | 2026-08-09 11:50 | DESKTOP-Q49I074 | P2-07 | in_progress -> completed；P3-01 pending -> in_progress | `src-tauri/src/daemon/route_http.rs`、`src-tauri/src/daemon/circuit.rs`、progress | route_http 17、circuit 6、routing 32；Rust 968 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；GitNexus staged detect_changes low/0 affected | R1/R2 复核三 app、JSON/SSE、cooldown/restart、circuit reset、既有平台/WSL/port/compensation/disconnect tests，连续两轮零未解决发现 | test(routing): add failover regression rehearsal | P3-01 |
 | 2026-08-09 12:20 | DESKTOP-Q49I074 | P3-01 | in_progress -> completed；P3-02 pending -> in_progress | `src-tauri/src/provider/routing.rs`、`src-tauri/src/commands/routing.rs`、`src-tauri/src/lib.rs`、progress | global proxy 2、provider::routing 12；Rust 970 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；GitNexus `run` LOW；复用但未修改的 `load_setting` upstream HIGH | R1 修正 socks5h normalization 断言；R1b 移除 P3-01 对 URL path 的越界拒绝断言；R2 复核 credential compensation、空 password 保留/显式清除、DTO/序列化脱敏、command registration、稳定错误码，连续两轮零未解决发现 | feat(routing): persist global proxy credentials | P3-02 |
+| 2026-08-09 13:00 | DESKTOP-Q49I074 | P3-02 | in_progress -> completed；P3-03 pending -> in_progress | `src-tauri/src/provider/routing.rs`、`src-tauri/src/commands/routing.rs`、`src-tauri/src/lib.rs`、progress | global_proxy 4；Rust 972 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build | R1/R2 连续两轮零未解决发现；无 HIGH/CRITICAL 修改风险 | feat(routing): add proxy validation and diagnostics | P3-03 |
 
 ## 12. 执行授权
 

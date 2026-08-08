@@ -10,7 +10,8 @@ use crate::provider::home::{self, HomeSelectInput};
 use crate::provider::repository::normalize_app_type;
 use crate::provider::routing::{
     self, RoutingFailoverConfig, RoutingFailoverState, RoutingGlobalProxyInput,
-    RoutingGlobalProxyState, RoutingPersistedState, TakeoverKey,
+    RoutingGlobalProxyState, RoutingGlobalProxyTestInput, RoutingGlobalProxyTestResult,
+    RoutingPersistedState, RoutingProxyScanCandidate, TakeoverKey,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -409,6 +410,18 @@ pub fn routing_set_global_proxy(
     input: RoutingGlobalProxyInput,
 ) -> Result<RoutingGlobalProxyState, RoutingError> {
     block_on(routing::save_global_proxy(input))
+}
+
+#[tauri::command]
+pub fn routing_scan_global_proxy() -> Result<Vec<RoutingProxyScanCandidate>, RoutingError> {
+    routing::scan_global_proxy().map_err(map_persistence_error)
+}
+
+#[tauri::command]
+pub fn routing_test_global_proxy(
+    input: RoutingGlobalProxyTestInput,
+) -> Result<RoutingGlobalProxyTestResult, RoutingError> {
+    block_on(routing::test_global_proxy(input))
 }
 
 #[tauri::command]
