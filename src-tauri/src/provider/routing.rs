@@ -137,6 +137,14 @@ struct RoutingGlobalProxyStored {
     password_credential_account: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RoutingGlobalProxyRuntimeConfig {
+    pub url: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub credential_ref: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RoutingGlobalProxyState {
@@ -275,6 +283,19 @@ async fn load_global_proxy_stored(
 ) -> Result<RoutingGlobalProxyStored, String> {
     let raw = load_setting(connection, GLOBAL_PROXY_SETTINGS_KEY).await?;
     parse_global_proxy_stored(&raw)
+}
+
+pub(crate) async fn load_global_proxy_runtime_config(
+) -> Result<RoutingGlobalProxyRuntimeConfig, String> {
+    let mut connection = database::open_connection().await?;
+    let config = load_global_proxy_stored(&mut connection).await?;
+    let password = read_global_proxy_password()?;
+    Ok(RoutingGlobalProxyRuntimeConfig {
+        url: config.url,
+        username: config.username,
+        password,
+        credential_ref: Some(config.password_credential_account),
+    })
 }
 
 fn global_proxy_state(
@@ -443,6 +464,18 @@ pub(crate) async fn save_global_proxy(
             if restore_result.is_err() {
                 return Err("routing_global_proxy_recovery_required".to_string());
             }
+        }
+        return Err(error);
+    }
+    if let Err(error) = super::network_client::reload_from_persisted().await {
+        let database_restore = write_global_proxy_stored(&mut connection, &previous).await;
+        let credential_restore = if changed_password {
+            write_global_proxy_password(previous_password.as_deref())
+        } else {
+            Ok(())
+        };
+        if database_restore.is_err() || credential_restore.is_err() {
+            return Err("routing_global_proxy_recovery_required".to_string());
         }
         return Err(error);
     }

@@ -1,4 +1,4 @@
-use crate::provider::repository;
+use crate::provider::{network_client, repository};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -68,7 +68,7 @@ pub(crate) async fn fetch(input: FetchModelsInput) -> Result<FetchModelsResult, 
                 .map_err(|_| "provider_models_invalid_key".to_string())?,
         );
     }
-    let client = reqwest::Client::builder()
+    let client = network_client::configure_builder(reqwest::Client::builder())?
         .default_headers(headers)
         .timeout(Duration::from_secs(15))
         .build()

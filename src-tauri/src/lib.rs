@@ -843,6 +843,11 @@ pub fn run() {
             if let Err(err) = tauri::async_runtime::block_on(provider::initialize()) {
                 log::warn!("provider database initialization skipped: {err}");
             } else {
+                if let Err(err) = tauri::async_runtime::block_on(
+                    provider::network_client::reload_from_persisted(),
+                ) {
+                    log::warn!("global proxy client initialization skipped: {err}");
+                }
                 if let Err(err) = tauri::async_runtime::block_on(provider::initialize_cache()) {
                     log::warn!("provider Home cache initialization skipped: {err}");
                 }

@@ -38,18 +38,8 @@ impl DispatcherHandle {
                     return;
                 }
             };
-            let client = match build_client() {
-                Ok(client) => client,
-                Err(err) => {
-                    warn!(
-                        "third-party notification http client init failed: {}",
-                        err.code
-                    );
-                    return;
-                }
-            };
             while let Ok(job) = receiver.recv() {
-                runtime.block_on(process_job(label, client.clone(), job));
+                runtime.block_on(process_job(label, job));
             }
         });
         Self { sender }
@@ -74,7 +64,7 @@ pub async fn test_send(target: ThirdPartyTarget) -> Result<TestSendResult, Strin
     Ok(send_one(client, target, message).await)
 }
 
-async fn process_job(label: &'static str, client: Client, job: HookNotificationJob) {
+async fn process_job(label: &'static str, job: HookNotificationJob) {
     let Some(message) = message_from_job(job) else {
         return;
     };
@@ -92,6 +82,17 @@ async fn process_job(label: &'static str, client: Client, job: HookNotificationJ
     if targets.is_empty() {
         return;
     }
+
+    let client = match build_client() {
+        Ok(client) => client,
+        Err(err) => {
+            warn!(
+                "third-party notification http client init failed: {}",
+                err.code
+            );
+            return;
+        }
+    };
 
     let mut set = JoinSet::new();
     let mut iter = targets.into_iter();

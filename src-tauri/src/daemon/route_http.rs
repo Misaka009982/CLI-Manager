@@ -473,7 +473,12 @@ async fn forward_request(
                 )
             }
         })?;
-    let mut client_builder = reqwest::Client::builder();
+    crate::provider::network_client::current_client_from_persisted()
+        .await
+        .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_client_failed"))?;
+    let mut client_builder =
+        crate::provider::network_client::configure_builder(reqwest::Client::builder())
+            .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_client_failed"))?;
     if !streaming {
         client_builder =
             client_builder.timeout(Duration::from_secs(failover_config.non_streaming_timeout));

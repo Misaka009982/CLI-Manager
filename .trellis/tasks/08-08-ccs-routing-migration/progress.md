@@ -1,18 +1,18 @@
 # CCS 路由迁移实施进度
 
-> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P3-02 已完成，当前指针为 P3-03。
+> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P3-03 已完成，当前指针为 P3-04。
 
 ## 0. 当前指针
 
 | 字段 | 值 |
 | --- | --- |
 | Task | 08-08-ccs-routing-migration |
-| task.json 状态 | in_progress（P0、P1-01 至 P3-02 已完成，当前指针为 P3-03） |
+| task.json 状态 | in_progress（P0、P1-01 至 P3-03 已完成，当前指针为 P3-04） |
 | Changelog Target | [TEMP] |
 | 当前阶段 | P3：全局出站代理 |
-| 当前 Case | P3-03 |
-| 审批状态 | 已批准；P3-02 完成，按 Case 顺序切换至 P3-03 指针 |
-| 最后更新时间 | 2026-08-09 13:00 |
+| 当前 Case | P3-04 |
+| 审批状态 | 已批准；P3-03 完成，按 Case 顺序切换至 P3-04 指针 |
+| 最后更新时间 | 2026-08-09 14:00 |
 | 最后操作机器 | DESKTOP-Q49I074 |
 | 分支 | feat/native-provider-management |
 | 工作目录 | F:/github/CLI-Manager |
@@ -78,10 +78,10 @@
 | P0 | 影响分析、Schema、协议、Fixture 基线 | 4 | completed |
 | P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | completed |
 | P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | completed |
-| P3 | 全局出站代理 | 5 | P3-03 in_progress |
+| P3 | 全局出站代理 | 5 | P3-04 in_progress |
 | P4 | 整流器与 Bedrock 优化 | 6 | pending |
 | P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | pending |
-| 合计 |  | 43 | 28 个 Case 完成；P3-03 等待实现 |
+| 合计 |  | 43 | 29 个 Case 完成；P3-04 等待实现 |
 
 ## 4. P0：影响分析、Schema、协议与 Fixture 基线
 
@@ -130,7 +130,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P3-01 | 保存代理配置和 credential reference，禁止密码进入 DB/DTO/log | P0-02、P1-10 | provider DB、credential store、proxy commands | 编辑保留密码、显式清空删除、失败保留旧 generation、DTO 只返回 hasPassword | 恢复旧 DB/credential/client | completed | 新增 `routing_get_global_proxy`/`routing_set_global_proxy`；DB 仅保存 normalized URL、username 与固定 opaque `passwordCredentialAccount`，普通 DTO 只返回 `hasPassword`；空 password 保留旧 credential，`clearPassword` 才删除；credential 先写、DB 失败按旧值补偿，补偿失败返回 `routing_global_proxy_recovery_required`；支持 http/https/socks5/socks5h、显式 host/port、拒绝 URL 内嵌 credentials；不提前创建/切换 shared client，未实现 scan/test/self-loop（P3-02）。新增 global proxy 2、provider::routing 12；全 Rust 970 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1 发现并修正 socks5h normalization 断言；R1b 发现并移除 P3-01 对 URL path 的越界拒绝断言；R2 复核 credential compensation、空 password 保留/显式清除、DTO/序列化脱敏、command registration、稳定错误码，连续两轮零未解决发现；GitNexus `run` LOW，复用但未修改的 `load_setting` 为 HIGH，未返回 HIGH/CRITICAL 修改风险；独立提交主题：feat(routing): persist global proxy credentials；下一步仅执行 P3-02 |
 | P3-02 | 支持四类 scheme、校验、扫描、测试和自环防护 | P3-01 | URL parser、scan/test commands、sanitized errors | HTTP/HTTPS/SOCKS5/SOCKS5H；常见 localhost 端口；10s test；拒绝 route endpoint 自环 | 不保存无效配置，不替换 client | completed | 新增 `routing_scan_global_proxy`、`routing_test_global_proxy`；扫描固定 8 个 localhost 端口且仅报告 TCP 可达，不宣称协议已验证；测试使用约 10s 超时、代理 407 不视为成功；保存与测试均拒绝 service/takeover endpoint 同端口自环，支持 localhost/127.0.0.1/::1 别名；不保存扫描候选、不替换 client。定向 global_proxy 4；全 Rust 972 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1 复核扫描/测试无保存路径、命令 DTO 无密码面、固定端口与 407 边界，0 findings；R2 复核四类 scheme 复用既有 parser、自环 loopback 别名/端口精确匹配、bounded test、command registration，0 findings；连续两轮零未解决发现；GitNexus 既有 symbol upstream 未返回 HIGH/CRITICAL；独立提交主题：feat(routing): add proxy validation and diagnostics；下一步仅执行 P3-03 |
-| P3-03 | 切换共享 reqwest client 并覆盖列出的 HTTP 触点 | P3-02 | models、model_pricing、command_suggestion、desktop_pet、ssh supply chain、WebDAV、notification、route upstream | 新请求使用新 generation；旧请求完成后释放；重启恢复；local route 遵循代理 | 原子切回旧 client | in_progress | 不扩展到 updater/WebView |
+| P3-03 | 切换共享 reqwest client 并覆盖列出的 HTTP 触点 | P3-02 | models、model_pricing、command_suggestion、desktop_pet、ssh supply chain、WebDAV、notification、route upstream | 新请求使用新 generation；旧请求完成后释放；重启恢复；local route 遵循代理 | 原子切回旧 client | completed | 新增最小 `provider/network_client.rs`：RwLock 保存 normalized proxy、opaque credential ref、runtime credential、generation 与 reqwest Client；启动及 `save_global_proxy` 成功后加载/重建并原子切换 generation，失败补偿 DB/credential；普通 client 与特殊 timeout/redirect builder 统一经过 configurator。已覆盖 provider model discovery、model pricing、command suggestion、desktop pet、SSH agent supply-chain、WebDAV、third-party notification、route upstream；notification 每 job 取新 client，suggestion/WebDAV 不再持有旧静态 client，route daemon 首次 route request 从持久化配置恢复；CC Connect、SSH transport、Tauri updater、WebView 保持例外。未新增 UI/端口/listener/HTTP forwarder 逻辑。定向 network 2、notification 7、WebDAV 1、route 17、SSH supply 10、pricing 9；全 Rust 974 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1 发现并修复 WebDAV client 获取失败时的直连回退风险；R1 修复后零发现；R2 复核纳入触点、generation、credential surface、例外边界，0 findings；连续两轮零未解决发现；GitNexus 既有目标多数因索引缺失返回 UNKNOWN，`lib.rs:run` LOW；拟变更 sync API 的 CRITICAL blast radius 已识别并规避，未改 sync API；独立提交主题：feat(routing): switch HTTP touchpoints to shared proxy client；下一步仅执行 P3-04 |
 | P3-04 | 固化 CC Connect/SSH/updater/WebView 排除及热更新并发语义 | P3-03 | cc_connect、SSH integration、updater boundary、bypass policy | 显式代理优先；route 自环绕过/拒绝；并发请求不读半配置 | 撤销 cutover，保留 bypass 规则 | pending | 排除范围要有 UI/文档说明 |
 | P3-05 | 完成全局代理 UI、i18n 和专项验收 | P3-01 至 P3-04 | routing global proxy accordion、i18n、aria/toast | zh-CN/en-US、键盘、密码留空/清空、代理失败 sanitized 状态 | 隐藏 UI，恢复默认 client | pending | 通过后进入 P4 |
 
@@ -213,6 +213,7 @@
 | 2026-08-09 11:50 | DESKTOP-Q49I074 | P2-07 | in_progress -> completed；P3-01 pending -> in_progress | `src-tauri/src/daemon/route_http.rs`、`src-tauri/src/daemon/circuit.rs`、progress | route_http 17、circuit 6、routing 32；Rust 968 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；GitNexus staged detect_changes low/0 affected | R1/R2 复核三 app、JSON/SSE、cooldown/restart、circuit reset、既有平台/WSL/port/compensation/disconnect tests，连续两轮零未解决发现 | test(routing): add failover regression rehearsal | P3-01 |
 | 2026-08-09 12:20 | DESKTOP-Q49I074 | P3-01 | in_progress -> completed；P3-02 pending -> in_progress | `src-tauri/src/provider/routing.rs`、`src-tauri/src/commands/routing.rs`、`src-tauri/src/lib.rs`、progress | global proxy 2、provider::routing 12；Rust 970 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；GitNexus `run` LOW；复用但未修改的 `load_setting` upstream HIGH | R1 修正 socks5h normalization 断言；R1b 移除 P3-01 对 URL path 的越界拒绝断言；R2 复核 credential compensation、空 password 保留/显式清除、DTO/序列化脱敏、command registration、稳定错误码，连续两轮零未解决发现 | feat(routing): persist global proxy credentials | P3-02 |
 | 2026-08-09 13:00 | DESKTOP-Q49I074 | P3-02 | in_progress -> completed；P3-03 pending -> in_progress | `src-tauri/src/provider/routing.rs`、`src-tauri/src/commands/routing.rs`、`src-tauri/src/lib.rs`、progress | global_proxy 4；Rust 972 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build | R1/R2 连续两轮零未解决发现；无 HIGH/CRITICAL 修改风险 | feat(routing): add proxy validation and diagnostics | P3-03 |
+| 2026-08-09 14:00 | DESKTOP-Q49I074 | P3-03 | in_progress -> completed；P3-04 pending -> in_progress | `src-tauri/src/provider/network_client.rs`、`src-tauri/src/provider/routing.rs`、`src-tauri/src/provider/models.rs`、`src-tauri/src/commands/model_pricing.rs`、`src-tauri/src/commands/command_suggestion.rs`、`src-tauri/src/commands/desktop_pet.rs`、`src-tauri/src/ssh_agent_supply_chain.rs`、`src-tauri/src/third_party_notification`、`src-tauri/src/webdav/mod.rs`、`src-tauri/src/daemon/route_http.rs`、`src-tauri/src/lib.rs`、progress | network 2、notification 7、WebDAV 1、route 17、SSH supply 10、pricing 9；Rust 974 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build | R1 修复 WebDAV 直连回退并重新计数为 0；R2 0；连续两轮零未解决发现；`sync` API CRITICAL blast radius 已识别并规避；实际修改目标无 HIGH/CRITICAL | feat(routing): switch HTTP touchpoints to shared proxy client | P3-04 |
 
 ## 12. 执行授权
 
