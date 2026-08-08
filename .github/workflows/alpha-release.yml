@@ -133,7 +133,7 @@ jobs:
           packageLock.version = bundleVersion;
           packageLock.packages[""].version = bundleVersion;
           tauriConfig.version = bundleVersion;
-          tauriConfig.bundle.targets = ["msi"];
+          tauriConfig.bundle.targets = ["msi", "nsis"];
           tauriConfig.bundle.createUpdaterArtifacts = false;
           tauriConfig.bundle.resources = tauriConfig.bundle.resources.filter(
             (resource) => resource !== "resources/ssh-agent/**/*",
@@ -177,7 +177,7 @@ jobs:
             "utf8",
           );
           console.log(
-            `Resolved unsigned Windows alpha release ${releaseVersion}; MSI bundle ${bundleVersion}`,
+            `Resolved unsigned Windows alpha release ${releaseVersion}; bundle ${bundleVersion}`,
           );
           NODE
 
@@ -193,7 +193,7 @@ jobs:
           TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Build unsigned Windows alpha draft
+      - name: Build unsigned Windows Release and Debug alpha
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -205,12 +205,14 @@ jobs:
           releaseName: "CLI-Manager ${{ steps.version.outputs.tag }} (Windows Unsigned Alpha)"
           releaseBody: |
             > [!WARNING]
-            > 这是供个人测试的 Windows 无签名 Debug Alpha。它未经过发布优化，可能不稳定。
+            > 这是供个人测试的 Windows 无签名 Alpha。它可能不稳定，不属于正式更新通道。
 
             - 来源提交：`${{ github.sha }}`
             - 工作流运行：`${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`
-            - 仅生成 Windows `.msi`，不构建 macOS、Linux 或 NSIS
-            - MSI 内部版本：`${{ steps.version.outputs.bundle_version }}`；Alpha 身份以 Release tag 为准
+            - 同一次运行生成 Release 和 Debug 两种构建，各提供 `.msi` 与 NSIS `.exe` 安装包
+            - Debug 安装包文件名带 `-debug`，用于验证和诊断
+            - Debug 验证通过后可直接安装同次运行中不带 `-debug` 的 Release 安装包，无需重新打包
+            - 安装包内部版本：`${{ steps.version.outputs.bundle_version }}`；Alpha 身份以 Release tag 为准
             - 不包含 `latest.json` 或 updater 签名资产，不能通过应用内更新安装本 Alpha
             - 不包含内置 SSH Agent bundle；需要 Agent 时会联网获取并验证稳定版 manifest
             - 不会写入稳定版 R2/`latest` 更新通道
@@ -219,7 +221,7 @@ jobs:
           releaseDraft: true
           prerelease: true
           includeDebug: true
-          includeRelease: false
+          includeRelease: true
           includeUpdaterJson: false
 
       - name: Verify assets and publish prerelease
@@ -236,8 +238,24 @@ jobs:
           }
 
           ASSETS="$(gh release view "$ALPHA_TAG" --json assets --jq '.assets[].name')"
-          printf '%s\n' "$ASSETS" | grep -Eq '\.msi$' || {
-            echo "Missing Windows MSI alpha installer" >&2
+          RELEASE_MSI="$(printf '%s\n' "$ASSETS" | grep -E '\.msi$' | grep -Ev -- '-debug\.msi$' || true)"
+          DEBUG_MSI="$(printf '%s\n' "$ASSETS" | grep -E -- '-debug\.msi$' || true)"
+          RELEASE_EXE="$(printf '%s\n' "$ASSETS" | grep -E -- '-setup\.exe$' || true)"
+          DEBUG_EXE="$(printf '%s\n' "$ASSETS" | grep -E -- '-setup-debug\.exe$' || true)"
+          test -n "$RELEASE_MSI" || {
+            echo "Missing Windows Release MSI alpha installer" >&2
+            exit 1
+          }
+          test -n "$DEBUG_MSI" || {
+            echo "Missing Windows Debug MSI alpha installer" >&2
+            exit 1
+          }
+          test -n "$RELEASE_EXE" || {
+            echo "Missing Windows Release NSIS alpha installer" >&2
+            exit 1
+          }
+          test -n "$DEBUG_EXE" || {
+            echo "Missing Windows Debug NSIS alpha installer" >&2
             exit 1
           }
           for forbidden_pattern in \

@@ -113,14 +113,14 @@ Before tagging a release that should be installable through the in-app updater:
 
 手动 `.github/workflows/alpha-release.yml` 只用于个人测试和缩短反馈周期，不属于稳定发布或应用内更新通道。
 
-- 只运行一个 `windows-latest` job，并通过 Debug profile 生成 MSI；不构建 NSIS、macOS 或 Linux。
-- `tauri-action` 通过 `includeDebug: true`、`includeRelease: false` 自动选择 Debug 构建并从 `target/debug/bundle` 收集资产；不得再通过 `args` 手动传入 `--debug`，否则 Action 会生成重复参数。
-- GitHub prerelease tag 使用 `V<target>-alpha.<run>.<attempt>`；构建时六个应用版本源统一写为 MSI 可接受的 `<target>-<run>`，其中 run number 必须在 `1..65535`，不能把文本型 `alpha` 预发布段写入 MSI 应用版本。
+- 只运行一个 `windows-latest` job，同一次运行依次生成 Release 与 Debug profile；每种 profile 都提供 WiX `.msi` 和 NSIS `.exe` 安装包，不构建 macOS 或 Linux。
+- `tauri-action` 同时使用 `includeRelease: true` 与 `includeDebug: true`，从 `target/release/bundle` 和 `target/debug/bundle` 收集资产；Action 会为 Debug 资产自动添加 `-debug` 文件名后缀。不得通过 `args` 手动传入 `--debug`，否则只会干扰 Action 自己的 profile 调度。
+- GitHub prerelease tag 使用 `V<target>-alpha.<run>.<attempt>`；构建时六个应用版本源统一写为安装器可接受的 `<target>-<run>`，其中 run number 必须在 `1..65535`，不能把文本型 `alpha` 预发布段写入 MSI 应用版本。
 - 在版本改写前恢复 Rust cache，使缓存键基于仓库稳定 `Cargo.lock`；后续运行可复用依赖和增量产物。
-- 只在 Actions 临时 `tauri.conf.json` 中设置 `bundle.targets = ["msi"]`、`createUpdaterArtifacts = false`，并移除 SSH Agent resource glob；不得修改正式配置的 updater 公钥。
+- 只在 Actions 临时 `tauri.conf.json` 中设置 `bundle.targets = ["msi", "nsis"]`、`createUpdaterArtifacts = false`，并移除 SSH Agent resource glob；不得修改正式配置的 updater 公钥。
 - 不传入 `TAURI_SIGNING_PRIVATE_KEY*` 或 R2 配置，不生成 `latest.json`、`.sig`、内置 Agent bundle，也不执行 Agent/跨平台测试。
-- Tauri `beforeBuildCommand` 仍执行 `npm run build`；这是个人快速打包，不得以此替代正式发布门禁。
-- Release 必须标记为 prerelease、`latest=false`，文案必须明确 Debug/无签名/Windows-only；发布前后稳定 latest tag 保持一致。
+- Tauri `beforeBuildCommand` 会分别为两个 profile 执行 `npm run build`；工作流耗时高于仅构建 Debug，但 Debug 验证通过后可以直接安装同次运行的不带 `-debug` Release 安装包，无需重新打包。
+- 发布前必须同时找到 Release/Debug 的 `.msi` 与 `.exe`。Release 仍须标记为 prerelease、`latest=false`，文案必须明确无签名、Windows-only 且不属于正式更新通道；发布前后稳定 latest tag 保持一致。
 
 ## Local Unsigned Smoke Build
 

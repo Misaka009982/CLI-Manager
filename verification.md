@@ -1,19 +1,19 @@
 # Windows 个人 Alpha GitHub Actions 静态验证（2026-08-07）
 
 - `.github/workflows/alpha-release.yml` 仅支持 `workflow_dispatch`，并拒绝从非默认分支创建 Alpha Release。
-- 工作流收敛为单个 `windows-latest` job：版本准备、依赖安装、Tauri 打包、草稿资产检查和 prerelease 发布在同一 runner 完成，不再启动独立 prepare/publish、macOS、Linux 或 SSH Agent job。
+- 工作流收敛为单个 `windows-latest` job：版本准备、依赖安装、Tauri Release/Debug 双 profile 打包、草稿资产检查和 prerelease 发布在同一 runner 完成，不再启动独立 prepare/publish、macOS、Linux 或 SSH Agent job。
 - 默认目标版本由仓库稳定版本递增补丁号；GitHub prerelease tag 追加 `-alpha.<run_number>.<run_attempt>`，而 npm、Cargo 与 Tauri 的构建临时版本统一使用 MSI 可接受的 `<target>-<run_number>`。run number 在耗时构建前校验为 `1..65535`，显式目标版本仍必须是更高的无前导零 `major.minor.patch`，所有版本改写都不提交。
-- 临时 Tauri 配置只构建 MSI，设置 `bundle.createUpdaterArtifacts = false`，移除 `resources/ssh-agent/**/*`，并通过 `--debug`、关闭 dev debug info、开启 Cargo incremental 和 `Swatinem/rust-cache@v2` 缩短当前及后续打包时间。
-- Alpha 不读取 `R2_PUBLIC_BASE_URL` 或 `TAURI_SIGNING_PRIVATE_KEY*`，不生成 `latest.json`、`.sig`、内置 SSH Agent bundle、NSIS、macOS 或 Linux 资产。缺少内置 Agent 时，应用沿用既有逻辑联网获取并验证稳定版 manifest。
-- 发布前只接受 Windows `.msi`，显式拒绝 updater/Agent/非 Windows 资产；草稿验证后才发布为 prerelease，并比较发布前后的稳定 latest tag，避免改变 GitHub `releases/latest`。
+- 临时 Tauri 配置同时构建 WiX MSI 与 NSIS EXE，设置 `bundle.createUpdaterArtifacts = false`，移除 `resources/ssh-agent/**/*`；`tauri-action` 依次构建 Release 和 Debug，Debug 关闭 dev debug info，Rust cache 与 incremental 设置继续缩短后续打包时间。
+- Alpha 不读取 `R2_PUBLIC_BASE_URL` 或 `TAURI_SIGNING_PRIVATE_KEY*`，不生成 `latest.json`、`.sig`、内置 SSH Agent bundle、macOS 或 Linux 资产。缺少内置 Agent 时，应用沿用既有逻辑联网获取并验证稳定版 manifest。
+- 发布前必须同时找到 Release MSI、Debug MSI、Release NSIS EXE、Debug NSIS EXE；Debug 资产由 `tauri-action` 自动添加 `-debug` 后缀。四类资产齐全后才发布为 prerelease，并比较发布前后的稳定 latest tag，避免改变 GitHub `releases/latest`。
 - YAML、单 job/Windows-only 结构、4 个 `run` 块与 1 个内嵌 Node 模块通过静态语法检查；未发现 R2 上传、签名 Secret 或跨平台矩阵残留。
 - 早期签名版工作流曾分别因缺少 `R2_PUBLIC_BASE_URL`、私钥 Secret 不是完整 minisign 私钥格式而在打包前失败；用户随后明确选择仅供个人使用的 Windows 无签名安装包。
 - Windows 无签名 Alpha 首次实际运行进入 Tauri `beforeBuildCommand` 后发现 `DesktopPetApp.tsx` 的未使用 setter（TS6133）与 `desktopPetBubble.ts` 的 placement 字面量拓宽（TS2322）；后续运行又由 Windows Rust 编译发现 `SetWindowRgn` 的 `windows-sys` 模块路径错误。三处编译错误均已做行为不变的最小修复。
 - 后续运行已完成 `npm run build` 和 Rust Debug 编译，在 6 分 44 秒后生成 `cli-manager.exe`；随后 MSI bundler 拒绝文本型 `-alpha.<run>.<attempt>` 应用版本。工作流已分离 Release tag 与 MSI 数字预发布版本，并加入编译前范围校验。
 - 用户提供的最新运行在 5 分 43 秒内再次完成前端与 Rust Debug 编译，并由 WiX 成功生成 `target/debug/bundle/msi/CLI-Manager_1.3.5-6_x64_en-US.msi`；`tauri-action` 随后仍按默认值只搜索 `target/release/bundle`，因此错误报告 `No artifacts were found`。
 - 为修复 Debug MSI 未被收集的问题，工作流加入了 `includeDebug: true` 与 `includeRelease: false`；用户提供的下一次运行显示 `tauri-action` 已自动追加 `--debug`，又与原有 `args: "--debug"` 合并成 `build --debug --debug`，因此在编译前被 CLI 拒绝。
-- 工作流现已删除手写 `args: "--debug"`，只由 `includeDebug` 选择 Debug 构建，同时继续禁用 Release 资产扫描；该修复后的工作流：**NOT RUN**。
-- 本地未安装依赖、未编译、未运行测试或打包；下一次新建手动运行仍需确认命令只有一个 `--debug`、Debug MSI 上传、GitHub draft/prerelease 行为及稳定 latest 不变。
+- 工作流现改为由 `tauri-action` 同时使用 `includeRelease: true` 与 `includeDebug: true`，依次从 `target/release/bundle` 和 `target/debug/bundle` 收集 MSI/NSIS；不传手写 `--debug`。Debug 验证通过后可直接使用同次运行的不带 `-debug` Release 安装包，无需再次打包；两种 profile 仍都是无签名 Alpha prerelease：**NOT RUN**。
+- 本地未安装依赖、未编译、未运行测试或打包；下一次新建手动运行仍需确认 Release/Debug 两种 profile 各上传 `.msi` 与 `.exe`、GitHub draft/prerelease 行为及稳定 latest 不变。
 
 ---
 
