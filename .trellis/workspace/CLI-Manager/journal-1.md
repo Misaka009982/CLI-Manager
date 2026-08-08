@@ -1353,3 +1353,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 41: 修复实时统计会话时长
+
+**Date**: 2026-08-08
+**Task**: 修复实时统计会话时长
+**Branch**: `master`
+
+### Summary
+
+修复 Codex rollout 文件创建时间与修改时间相同导致侧边栏实时统计会话时长显示无效的问题；历史解析优先使用 transcript 首尾事件时间，保留文件元数据兜底，并补充 Rust 回归测试、CHANGELOG 与功能清单。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a6292046` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
