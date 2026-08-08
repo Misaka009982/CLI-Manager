@@ -178,7 +178,7 @@ PTY daemon control socket ── RoutingSupervisor
 }
 ```
 
-只 seed `claude`、`codex`、`grokbuild`，默认值以 PRD 的 CCS v3.19.2 表为准。
+只 seed `claude`、`codex`、`grokbuild`，默认值以 PRD 的 CCS v3.19.2 表为准：Claude 使用 `6/90/180/600/8/3/90/0.7/15`，Codex 与 Grok Build 使用 `3/60/120/600/4/2/60/0.6/10`（字段顺序同上），不 seed Gemini。
 
 ### 3.5 Rectifier、optimizer 与 global proxy
 

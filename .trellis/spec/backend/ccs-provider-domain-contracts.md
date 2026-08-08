@@ -50,7 +50,16 @@ provider command or permit the frontend to open SQLite directly.
   Home/import/repair/apply-journal tables. `settings` is seeded with empty
   `common_config_claude`, `common_config_codex`, and
   `common_config_grokbuild` documents.
-- Before applying a schema to an existing version-0 database, the WAL is
+- Schema version 2 is additive: it keeps every version-1 provider/key/Home/
+  import/repair/apply-journal table unchanged, seeds versioned
+  `routing.service.v1`, `routing.takeovers.v1`, three `routing.app.<app>.v1`,
+  `routing.rectifier.v1`, `routing.optimizer.v1`, and
+  `routing.global_proxy.v1` settings with `INSERT OR IGNORE`, and creates the
+  sanitized `routing_request_logs` table plus created-time/app-time indexes.
+- Every schema step runs in one SQLite transaction: create/verify schema,
+  seed settings, record the SHA-384 checksum, set `PRAGMA user_version`, then
+  commit. A failed step must leave the previous version and rows intact.
+- Before applying any newer schema to an existing non-empty database, the WAL is
   checkpointed and the database is copied to
   `.cli-manager/backups/providers/providers.db.backup-<unix-ms>-<pid>.db`.
 - Provider-domain initialization failure is logged as a warning and does not
@@ -66,29 +75,36 @@ provider command or permit the frontend to open SQLite directly.
 | Existing DB needs schema initialization | checkpoint, backup, apply schema, record checksum, then set version |
 | Backup or schema initialization fails | `provider_db_backup_failed` / `provider_db_schema_failed`; preserve the main app startup |
 | Required domain table is absent after initialization | `provider_db_table_missing`; do not expose the incomplete store |
+| Routing log column/index is absent or malformed | `provider_db_column_missing` / `provider_db_index_missing` / `provider_db_index_invalid`; keep the prior schema version |
 | Two current providers share one app type | partial unique-index violation; later command layer maps it to a stable provider error |
 | Two active keys share one provider/type | partial unique-index violation; later command layer maps it to `provider_key_active_conflict` |
 
 ### 5. Good / Base / Bad Cases
 
-- Good: a fresh data root creates `providers.db`, seeds the three common
-  documents, and leaves the historical `cli-manager.db` migration checksum
-  unchanged.
-- Base: an existing version-0 provider DB is backed up before schema creation;
-  reopening a version-1 DB is idempotent and creates no second backup.
+- Good: a fresh data root creates schema v2, seeds the three common documents
+  and eight routing settings, and leaves the historical `cli-manager.db`
+  migration checksum unchanged.
+- Base: an existing version-1 provider DB is checkpointed/backed up, upgraded
+  without changing provider/key rows or an existing routing setting, and
+  reopening version 2 is idempotent without a second backup.
+- Base: a future-version DB is rejected before backup or mutation.
 - Bad: putting the CCS-compatible tables into `cli-manager.db` or making
   startup fail because an optional provider DB cannot be opened.
 
 ### 6. Tests Required
 
-- Assert WAL, foreign keys, schema version/checksum, required table presence,
-  and the three common-config seed rows on a fresh database.
+- Assert WAL, foreign keys, both schema checksums, required table/index shape,
+  the three common-config rows, and all routing defaults on a fresh database.
 - Assert the same provider ID can exist for Claude and Codex, while a
   duplicate composite identity fails.
 - Assert the composite key foreign key, cascade deletion, current-provider
   uniqueness, and active-key uniqueness.
 - Assert a version-0 database is checkpointed/backed up and preserves its
-  pre-existing marker; assert version-1 reopen is idempotent.
+  pre-existing marker.
+- Assert version 1 -> 2 preserves provider/key/settings rows, produces one v1
+  backup, rejects future versions without mutation, and rolls back both backup
+  failure and malformed-routing-schema failure before `user_version` changes.
+- Assert version-2 reopen is idempotent.
 - Keep the historical v25/v26 migration checksum/registration tests passing.
 
 ### 7. Wrong vs Correct
@@ -107,8 +123,8 @@ invalidate existing SQLx migration checksums.
 ```text
 legacy cli-manager.db migration unchanged
   -> open .cli-manager/providers.db with WAL/foreign keys/busy timeout
-  -> checkpoint + backup before first schema write
-  -> create independent provider-domain schema
+  -> checkpoint + backup before each required schema upgrade
+  -> transactionally apply and verify independent provider-domain migrations
   -> warn and continue if this optional store cannot initialize
 ```
 
