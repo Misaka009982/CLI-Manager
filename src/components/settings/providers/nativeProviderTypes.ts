@@ -269,6 +269,45 @@ export interface NativeProviderEnvironmentInspectInput {
   };
 }
 
+export interface NativeProviderFailoverConfig {
+  schemaVersion: number;
+  autoFailoverEnabled: boolean;
+  maxRetries: number;
+  streamingFirstByteTimeout: number;
+  streamingIdleTimeout: number;
+  nonStreamingTimeout: number;
+  circuitFailureThreshold: number;
+  circuitSuccessThreshold: number;
+  circuitTimeoutSeconds: number;
+  circuitErrorRateThreshold: number;
+  circuitMinRequests: number;
+}
+
+export interface NativeProviderFailoverProvider {
+  id: string;
+  name: string;
+  sortIndex: number;
+  isCurrent: boolean;
+  enabled: boolean;
+  ready: boolean;
+  inFailoverQueue: boolean;
+  keyCount: number;
+  activeKeyPresent: boolean;
+}
+
+export interface NativeProviderFailoverCircuit {
+  status: string;
+  consecutiveFailures: number;
+  successfulProbes: number;
+}
+
+export interface NativeProviderFailoverState {
+  appType: NativeProviderAppType;
+  config: NativeProviderFailoverConfig;
+  providers: NativeProviderFailoverProvider[];
+  circuit: NativeProviderFailoverCircuit;
+}
+
 export interface NativeProviderCliStatus {
   name: string;
   executable: string | null;

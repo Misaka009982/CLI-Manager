@@ -1,6 +1,8 @@
 use crate::provider::database;
 use crate::provider::home::HomeIdentity;
-use crate::provider::repository::{meta_enabled, normalize_app_type, parse_meta};
+use crate::provider::repository::{
+    list_failover_providers, meta_enabled, normalize_app_type, parse_meta, set_failover_queue,
+};
 use crate::{shell_resolver, wsl};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqliteConnection};
@@ -19,6 +21,7 @@ use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
 
 pub(crate) const SERVICE_SETTINGS_KEY: &str = "routing.service.v1";
 pub(crate) const TAKEOVERS_SETTINGS_KEY: &str = "routing.takeovers.v1";
+const FAILOVER_SETTINGS_PREFIX: &str = "routing.app.";
 #[allow(dead_code)]
 pub(crate) const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1";
 #[allow(dead_code)]
@@ -71,6 +74,196 @@ pub(crate) struct TakeoverKey {
 pub(crate) struct RoutingPersistedState {
     pub service: RoutingServiceConfig,
     pub takeovers: Vec<RoutingTakeoverItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutingFailoverConfig {
+    pub schema_version: u32,
+    pub auto_failover_enabled: bool,
+    pub max_retries: u32,
+    pub streaming_first_byte_timeout: u64,
+    pub streaming_idle_timeout: u64,
+    pub non_streaming_timeout: u64,
+    pub circuit_failure_threshold: u32,
+    pub circuit_success_threshold: u32,
+    pub circuit_timeout_seconds: u64,
+    pub circuit_error_rate_threshold: f64,
+    pub circuit_min_requests: u32,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutingFailoverProvider {
+    pub id: String,
+    pub name: String,
+    pub sort_index: i64,
+    pub is_current: bool,
+    pub enabled: bool,
+    pub ready: bool,
+    pub in_failover_queue: bool,
+    pub key_count: i64,
+    pub active_key_present: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutingCircuitState {
+    pub status: String,
+    pub consecutive_failures: u32,
+    pub successful_probes: u32,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutingFailoverState {
+    pub app_type: String,
+    pub config: RoutingFailoverConfig,
+    pub providers: Vec<RoutingFailoverProvider>,
+    pub circuit: RoutingCircuitState,
+}
+
+fn failover_settings_key(app_type: &str) -> String {
+    format!("{FAILOVER_SETTINGS_PREFIX}{app_type}.v1")
+}
+
+fn default_circuit_state() -> RoutingCircuitState {
+    RoutingCircuitState {
+        status: "closed".to_string(),
+        consecutive_failures: 0,
+        successful_probes: 0,
+    }
+}
+
+fn validate_failover_config(config: &RoutingFailoverConfig) -> Result<(), String> {
+    if config.schema_version != 1
+        || config.max_retries > 32
+        || config.streaming_first_byte_timeout == 0
+        || config.streaming_idle_timeout == 0
+        || config.non_streaming_timeout == 0
+        || config.circuit_failure_threshold == 0
+        || config.circuit_success_threshold == 0
+        || config.circuit_timeout_seconds == 0
+        || !(0.0..=1.0).contains(&config.circuit_error_rate_threshold)
+        || config.circuit_min_requests == 0
+    {
+        return Err("routing_failover_config_invalid".to_string());
+    }
+    Ok(())
+}
+
+async fn load_failover_config(
+    connection: &mut SqliteConnection,
+    app_type: &str,
+) -> Result<RoutingFailoverConfig, String> {
+    let key = failover_settings_key(app_type);
+    let raw = load_setting(connection, &key).await?;
+    let config = serde_json::from_str::<RoutingFailoverConfig>(&raw)
+        .map_err(|_| format!("routing_settings_invalid:{key}"))?;
+    validate_failover_config(&config)?;
+    Ok(config)
+}
+
+pub(crate) async fn save_failover_config(
+    app_type: &str,
+    config: &RoutingFailoverConfig,
+) -> Result<(), String> {
+    let app_type = normalize_routing_app_type(app_type)?;
+    validate_failover_config(config)?;
+    let key = failover_settings_key(&app_type);
+    let mut connection = database::open_connection().await?;
+    let result = sqlx::query("UPDATE settings SET value = ?1 WHERE key = ?2")
+        .bind(serialize_json(config, &key)?)
+        .bind(&key)
+        .execute(&mut connection)
+        .await
+        .map_err(|_| "routing_failover_config_write_failed".to_string())?;
+    if result.rows_affected() != 1 {
+        return Err(format!("routing_settings_missing:{key}"));
+    }
+    Ok(())
+}
+
+pub(crate) async fn load_failover_state(app_type: &str) -> Result<RoutingFailoverState, String> {
+    let app_type = normalize_routing_app_type(app_type)?;
+    let mut connection = database::open_connection().await?;
+    let config = load_failover_config(&mut connection, &app_type).await?;
+    drop(connection);
+    let providers = list_failover_providers(&app_type)
+        .await?
+        .into_iter()
+        .map(|provider| RoutingFailoverProvider {
+            id: provider.card.id,
+            name: provider.card.name,
+            sort_index: provider.card.sort_index,
+            is_current: provider.card.is_current,
+            enabled: provider.card.enabled,
+            ready: provider.ready,
+            in_failover_queue: provider.in_failover_queue,
+            key_count: provider.card.key_count,
+            active_key_present: provider.card.active_key_label.is_some(),
+        })
+        .collect();
+    Ok(RoutingFailoverState {
+        app_type,
+        config,
+        providers,
+        circuit: default_circuit_state(),
+    })
+}
+
+pub(crate) async fn set_failover_enabled(
+    app_type: &str,
+    enabled: bool,
+) -> Result<RoutingFailoverState, String> {
+    let app_type = normalize_routing_app_type(app_type)?;
+    let mut connection = database::open_connection().await?;
+    let mut config = load_failover_config(&mut connection, &app_type).await?;
+    drop(connection);
+    let previous = load_failover_state(&app_type).await?;
+    let previous_ids: Vec<String> = previous
+        .providers
+        .iter()
+        .filter(|provider| provider.in_failover_queue)
+        .map(|provider| provider.id.clone())
+        .collect();
+
+    if enabled {
+        let persisted = load_persisted_state().await?;
+        if !persisted
+            .takeovers
+            .iter()
+            .any(|takeover| takeover.app_type == app_type)
+        {
+            return Err("routing_failover_requires_takeover".to_string());
+        }
+        ensure_current_provider_ready(&app_type).await?;
+        if previous_ids.is_empty() {
+            let current_id = current_provider_id(&app_type).await?;
+            set_failover_queue(&app_type, std::slice::from_ref(&current_id)).await?;
+        }
+    }
+    config.auto_failover_enabled = enabled;
+    if let Err(error) = save_failover_config(&app_type, &config).await {
+        if enabled && previous_ids.is_empty() {
+            let _ = set_failover_queue(&app_type, &previous_ids).await;
+        }
+        return Err(error);
+    }
+    load_failover_state(&app_type).await
+}
+
+pub(crate) async fn set_failover_queue_and_load(
+    app_type: &str,
+    provider_ids: &[String],
+) -> Result<RoutingFailoverState, String> {
+    let app_type = normalize_routing_app_type(app_type)?;
+    let current = load_failover_state(&app_type).await?;
+    if current.config.auto_failover_enabled && provider_ids.is_empty() {
+        return Err("routing_failover_queue_empty".to_string());
+    }
+    set_failover_queue(&app_type, provider_ids).await?;
+    load_failover_state(&app_type).await
 }
 
 pub(crate) async fn load_persisted_state() -> Result<RoutingPersistedState, String> {
@@ -587,6 +780,44 @@ mod tests {
         assert_eq!(
             validate_service_config(&wildcard).unwrap_err(),
             "routing_listen_address_invalid"
+        );
+    }
+
+    fn failover_config() -> RoutingFailoverConfig {
+        RoutingFailoverConfig {
+            schema_version: 1,
+            auto_failover_enabled: false,
+            max_retries: 3,
+            streaming_first_byte_timeout: 60,
+            streaming_idle_timeout: 120,
+            non_streaming_timeout: 600,
+            circuit_failure_threshold: 4,
+            circuit_success_threshold: 2,
+            circuit_timeout_seconds: 60,
+            circuit_error_rate_threshold: 0.6,
+            circuit_min_requests: 10,
+        }
+    }
+
+    #[test]
+    fn failover_config_accepts_seeded_ranges() {
+        assert!(validate_failover_config(&failover_config()).is_ok());
+    }
+
+    #[test]
+    fn failover_config_rejects_invalid_ranges() {
+        let mut invalid = failover_config();
+        invalid.circuit_error_rate_threshold = 1.1;
+        assert_eq!(
+            validate_failover_config(&invalid).unwrap_err(),
+            "routing_failover_config_invalid"
+        );
+
+        invalid = failover_config();
+        invalid.max_retries = 33;
+        assert_eq!(
+            validate_failover_config(&invalid).unwrap_err(),
+            "routing_failover_config_invalid"
         );
     }
 

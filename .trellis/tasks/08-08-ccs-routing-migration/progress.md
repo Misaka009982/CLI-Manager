@@ -1,18 +1,18 @@
 # CCS 路由迁移实施进度
 
-> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P1-15 已完成，当前指针为 P2-01。
+> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P2-01 已完成，当前指针为 P2-02。
 
 ## 0. 当前指针
 
 | 字段 | 值 |
 | --- | --- |
 | Task | 08-08-ccs-routing-migration |
-| task.json 状态 | in_progress（P0、P1-01 至 P1-15 已完成，当前指针为 P2-01） |
+| task.json 状态 | in_progress（P0、P1-01 至 P2-01 已完成，当前指针为 P2-02） |
 | Changelog Target | [TEMP] |
 | 当前阶段 | P2：自动故障转移 |
-| 当前 Case | P2-01 |
-| 审批状态 | 已批准；P1-15 完成，按 Case 顺序切换至 P2-01 指针 |
-| 最后更新时间 | 2026-08-09 04:40 |
+| 当前 Case | P2-02 |
+| 审批状态 | 已批准；P2-01 完成，按 Case 顺序切换至 P2-02 指针 |
+| 最后更新时间 | 2026-08-09 06:20 |
 | 最后操作机器 | DESKTOP-Q49I074 |
 | 分支 | feat/native-provider-management |
 | 工作目录 | F:/github/CLI-Manager |
@@ -77,11 +77,11 @@
 | --- | --- | ---: | --- |
 | P0 | 影响分析、Schema、协议、Fixture 基线 | 4 | completed |
 | P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | completed |
-| P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | P2-01 in_progress |
+| P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | P2-02 in_progress |
 | P3 | 全局出站代理 | 5 | pending |
 | P4 | 整流器与 Bedrock 优化 | 6 | pending |
 | P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | pending |
-| 合计 |  | 43 | 19 个 Case 完成；P2-01 等待实现 |
+| 合计 |  | 43 | 20 个 Case 完成；P2-02 等待实现 |
 
 ## 4. P0：影响分析、Schema、协议与 Fixture 基线
 
@@ -116,7 +116,7 @@
 
 | ID | 目标 | 前置依赖 | 实现触点 | 验收命令/场景 | 回滚点 | 状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| P2-01 | 复用 native provider queue，建立每 app 独立 failover settings | P1-15 | provider repository、routing.app、queue UI | enabled/ready/同 app/API-key provider 才可入队；sort_index 顺序；重复幂等；current 移除 | 关闭 failover，保留 queue/current | in_progress | 当前唯一 Case；不建第二套 provider queue |
+| P2-01 | 复用 native provider queue，建立每 app 独立 failover settings | P1-15 | provider repository、routing.app、queue UI | enabled/ready/同 app/API-key provider 才可入队；sort_index 顺序；重复幂等；current 移除 | 关闭 failover，保留 queue/current | completed | 新增 failover repository 与 per-app `routing.app.<app>.v1` 配置读取/校验/保存；复用 `in_failover_queue`、`sort_index`、current 与 ready API-key 判定，重复/未知/不可用 provider 拒绝，空队列启用自动加入 current，开启要求同 app takeover，关闭保留 queue/current；新增四个配置/queue commands 与 reset command 壳，未实现 classifier、retry budget、circuit runtime、HTTP 或 hot takeover。新增 queue UI，仅编辑 enabled、maxRetries 和 provider 入队；三 app state/loading 按 app 隔离，zh-CN/en-US 齐全。定向 failover 2；全 Rust 954 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1：发现并修复多 app 并发 refresh 共享单一 state 导致面板串显示，并修正 takeover 错误码；复验后 0 findings。R2：复核 per-app persistence、ready/API-key/app 边界、sort order、duplicate/current removal、enable rollback、disable preservation、queue UI、i18n/a11y、P2-02/P2-03/P2-06 范围，0 findings；连续两轮零未解决发现。GitNexus staged detect_changes 待提交前复核。独立提交主题：feat(routing): add failover queue settings；下一步仅执行 P2-02 |
 | P2-02 | 实现错误分类、maxRetries、timeouts 和 retry budget | P2-01、P1-11 | classifier、attempt loop、SSE commit tracker | maxAttempts=maxRetries+1；网络/TLS/timeout/5xx/401/403/429；能力错误给 rectifier 一次 | 单 provider 返回 sanitized error | pending | 已提交响应绝不切 provider |
 | P2-03 | 实现 Closed/Open/HalfOpen circuit 和单 probe | P2-02 | daemon memory state、metrics、status DTO | 连续失败、错误率最小样本、等待时间、单 probe、恢复阈值、断开释放 permit | 清 daemon runtime state，保留 config | pending | reload 不重置；restart 从 Closed |
 | P2-04 | 实现 stream commit boundary 与 projection hot switch 事务 | P1-08、P2-02、P2-03 | forwarder、projection coordinator、daemon reload | 普通 SSE 首个可解析事件、Responses output/error；keepalive 不提交；并发不乱序 | 恢复旧 current/Live/target | pending | 不拼接第二 provider 响应 |
@@ -204,6 +204,7 @@
 
 | 2026-08-09 05:25 | DESKTOP-Q49I074 | P1-14 | in_progress -> completed | `src/components/settings/pages/NativeProviderSettingsPage.tsx`、`src/components/settings/providers/NativeProviderRoutingSection.tsx`、`src/components/settings/providers/useNativeProviderRouting.ts`、`src/components/settings/providers/nativeProviderTypes.ts`、`src/lib/i18n.ts`、progress | TypeScript；Rust 947 passed/1 ignored；cargo check、rustfmt、diff check；未运行 tauri dev/build | R1：复核 surface 分支、HomeIdentity、persisted/live、secret/route-off，修复 environment identity 匹配；R2：复核四 accordion、catalog/home 回归、zh-CN/en-US、P1-15 边界，0 findings；连续两轮零未解决发现；GitNexus staged detect_changes HIGH 为预期 8 个 settings 流程 | feat(routing): add routing settings surface | P1-15 |
 | 2026-08-09 04:40 | DESKTOP-Q49I074 | P1-15 | in_progress -> completed；P2-01 pending -> in_progress | `src/components/sidebar/SidebarFooter.tsx`、`src/lib/i18n.ts`、progress | TypeScript；Rust 952 passed/1 ignored；cargo check、rustfmt、diff check；未运行 tauri dev/build；GitNexus staged detect_changes 待提交前复核 | R1/R2：各自复核数据流、信任边界、三平台/WSL/Worktree/Hook、i18n/a11y 和回归，连续两轮 0 findings | feat(routing): add sidebar routing quick control | P2-01 |
+| 2026-08-09 06:20 | DESKTOP-Q49I074 | P2-01 | in_progress -> completed；P2-02 pending -> in_progress | `src-tauri/src/provider/repository/failover.rs`、`src-tauri/src/provider/routing.rs`、`src-tauri/src/commands/routing.rs`、`src-tauri/src/lib.rs`、failover UI/hook/types/i18n、progress | failover 2 focused；Rust 954 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；GitNexus staged detect_changes 待提交前复核 | R1 发现并修复三 app state 串显示与 takeover 错误码；R2 复核 per-app queue/config、ready/key/app 边界、启停补偿、UI 与后续 Case 范围；修复后连续两轮零未解决发现 | feat(routing): add failover queue settings | P2-02 |
 
 ## 12. 执行授权
 

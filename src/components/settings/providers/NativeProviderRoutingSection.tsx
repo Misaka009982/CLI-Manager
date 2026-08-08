@@ -3,6 +3,7 @@ import { RefreshCw, Route, Server } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import type { NativeProviderAppType, NativeProviderHomeIdentity } from "./nativeProviderTypes";
 import type { UseNativeProviderRoutingResult } from "./useNativeProviderRouting";
+import { NativeProviderFailoverSection } from "./NativeProviderFailoverSection";
 
 interface NativeProviderRoutingSectionProps {
   appType: NativeProviderAppType;
@@ -125,6 +126,7 @@ export function NativeProviderRoutingSection({
           </Accordion.Panel>
         </Accordion.Item>
       </Accordion>
+      <NativeProviderFailoverSection appType={appType} state={state} />
     </Stack>
   );
 }

@@ -2,6 +2,7 @@ mod catalog;
 mod common;
 mod documents;
 mod dto;
+mod failover;
 mod keys;
 mod support;
 
@@ -19,6 +20,7 @@ pub(crate) use dto::{
     ProviderDocumentUpdateInput, ProviderKeyCreateInput, ProviderKeySummary,
     ProviderKeyUpdateInput, ProviderUpdateInput,
 };
+pub(crate) use failover::{list_failover_providers, set_failover_queue};
 pub(crate) use keys::{
     activate_key, create_key, delete_key, list_keys, reorder_keys, reveal_key, set_key_enabled,
     update_key,

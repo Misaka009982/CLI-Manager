@@ -8,7 +8,9 @@ use crate::provider::global::{
 };
 use crate::provider::home::{self, HomeSelectInput};
 use crate::provider::repository::normalize_app_type;
-use crate::provider::routing::{self, RoutingPersistedState, TakeoverKey};
+use crate::provider::routing::{
+    self, RoutingFailoverConfig, RoutingFailoverState, RoutingPersistedState, TakeoverKey,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -30,6 +32,20 @@ pub struct RoutingTakeoverInput {
     pub app_type: String,
     pub home_identity: crate::provider::home::HomeIdentity,
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingFailoverQueueInput {
+    pub app_type: String,
+    pub provider_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingFailoverConfigInput {
+    pub app_type: String,
+    pub config: RoutingFailoverConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -286,6 +302,48 @@ pub fn routing_get_state(
     daemon_bridge: State<'_, DaemonBridge>,
 ) -> Result<RoutingState, RoutingError> {
     state(daemon_bridge.get())
+}
+
+#[tauri::command]
+pub fn routing_get_failover_queue(app_type: String) -> Result<RoutingFailoverState, RoutingError> {
+    block_on(routing::load_failover_state(&app_type))
+}
+
+#[tauri::command]
+pub fn routing_set_failover_enabled(
+    app_type: String,
+    enabled: bool,
+) -> Result<RoutingFailoverState, RoutingError> {
+    block_on(routing::set_failover_enabled(&app_type, enabled))
+}
+
+#[tauri::command]
+pub fn routing_set_failover_queue(
+    input: RoutingFailoverQueueInput,
+) -> Result<RoutingFailoverState, RoutingError> {
+    block_on(routing::set_failover_queue_and_load(
+        &input.app_type,
+        &input.provider_ids,
+    ))
+}
+
+#[tauri::command]
+pub fn routing_update_failover_config(
+    input: RoutingFailoverConfigInput,
+) -> Result<RoutingFailoverState, RoutingError> {
+    block_on(async move {
+        let current = routing::load_failover_state(&input.app_type).await?;
+        if input.config.auto_failover_enabled != current.config.auto_failover_enabled {
+            return Err("routing_failover_toggle_required".to_string());
+        }
+        routing::save_failover_config(&input.app_type, &input.config).await?;
+        routing::load_failover_state(&input.app_type).await
+    })
+}
+
+#[tauri::command]
+pub fn routing_reset_circuit(app_type: String) -> Result<RoutingFailoverState, RoutingError> {
+    block_on(routing::load_failover_state(&app_type))
 }
 
 #[tauri::command]
