@@ -321,7 +321,7 @@ fn client_frame_id(frame: &ClientFrame) -> Option<u64> {
         | ClientFrame::SshAgentRelease { id, .. }
         | ClientFrame::RoutingReload { id }
         | ClientFrame::RoutingStatus { id }
-        | ClientFrame::RoutingStart { id }
+        | ClientFrame::RoutingStart { id, .. }
         | ClientFrame::RoutingStop { id }
         | ClientFrame::RoutingResetCircuit { id, .. }
         | ClientFrame::Shutdown { id } => Some(*id),

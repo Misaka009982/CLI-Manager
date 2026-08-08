@@ -1,7 +1,7 @@
 use crate::daemon::client::{DaemonBridge, DaemonClient};
 use crate::daemon::protocol::{
     ensure_local_routing_capability, routing_control_id, ClientFrame, DaemonFrame, RoutingError,
-    RoutingEvent,
+    RoutingEvent, RoutingStatus,
 };
 use crate::provider::home::{self, HomeSelectInput};
 use crate::provider::repository::normalize_app_type;
@@ -35,6 +35,8 @@ pub struct RoutingDaemonState {
     pub connected: bool,
     pub capability_supported: bool,
     pub error: Option<RoutingError>,
+    pub preferred_port: Option<u16>,
+    pub actual_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,6 +81,8 @@ fn daemon_state(client: Option<Arc<DaemonClient>>) -> RoutingDaemonState {
             connected: false,
             capability_supported: false,
             error: Some(RoutingError::service_unavailable()),
+            preferred_port: None,
+            actual_port: None,
         };
     };
     if let Err(error) = ensure_local_routing_capability(&client.info().features) {
@@ -87,6 +91,8 @@ fn daemon_state(client: Option<Arc<DaemonClient>>) -> RoutingDaemonState {
             connected: true,
             capability_supported: false,
             error: Some(error),
+            preferred_port: None,
+            actual_port: None,
         };
     }
 
@@ -98,6 +104,8 @@ fn daemon_state(client: Option<Arc<DaemonClient>>) -> RoutingDaemonState {
             connected: true,
             capability_supported: true,
             error: Some(RoutingError::service_unavailable()),
+            preferred_port: None,
+            actual_port: None,
         },
         Ok(_) => RoutingDaemonState {
             status: "unknown".to_string(),
@@ -107,6 +115,8 @@ fn daemon_state(client: Option<Arc<DaemonClient>>) -> RoutingDaemonState {
                 "routing_daemon_response_invalid",
                 "restart_daemon",
             )),
+            preferred_port: None,
+            actual_port: None,
         },
     }
 }
@@ -122,7 +132,15 @@ fn routing_event_state(event: RoutingEvent) -> RoutingDaemonState {
         connected: true,
         capability_supported: true,
         error: event.error,
+        preferred_port: event.status.as_ref().map(|status| status.preferred_port),
+        actual_port: event.status.and_then(|status| status.actual_port),
     }
+}
+
+fn routing_status(event: RoutingEvent) -> Result<RoutingStatus, RoutingError> {
+    event
+        .status
+        .ok_or_else(|| command_error("routing_daemon_response_invalid", "restart_daemon"))
 }
 
 fn block_on<T>(future: impl Future<Output = Result<T, String>>) -> Result<T, RoutingError> {
@@ -189,13 +207,37 @@ pub fn routing_set_service_enabled(
         .ok_or_else(RoutingError::service_unavailable)?;
     let id = client_ref.next_request_id();
     let frame = if enabled {
-        ClientFrame::RoutingStart { id }
+        ClientFrame::RoutingStart {
+            id,
+            listen_address: Some(persisted.service.listen_address.clone()),
+            preferred_port: Some(persisted.service.preferred_port),
+            last_actual_port: persisted.service.actual_port,
+        }
     } else {
         ClientFrame::RoutingStop { id }
     };
-    let _ = request_control(client.clone(), frame)?;
+    let event = request_control(client.clone(), frame)?;
+    let previous_service = persisted.service.clone();
+    if enabled {
+        let status = routing_status(event)?;
+        persisted.service.actual_port = status.actual_port;
+    }
     persisted.service.service_enabled = enabled;
-    block_on(routing::save_service_config(&persisted.service))?;
+    if let Err(error) = block_on(routing::save_service_config(&persisted.service)) {
+        let rollback_id = client_ref.next_request_id();
+        let rollback_frame = if enabled {
+            ClientFrame::RoutingStop { id: rollback_id }
+        } else {
+            ClientFrame::RoutingStart {
+                id: rollback_id,
+                listen_address: Some(previous_service.listen_address),
+                preferred_port: Some(previous_service.preferred_port),
+                last_actual_port: previous_service.actual_port,
+            }
+        };
+        let _ = request_control(client, rollback_frame);
+        return Err(error);
+    }
     Ok(RoutingState {
         persisted,
         daemon: daemon_state(client),

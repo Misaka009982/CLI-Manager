@@ -8,10 +8,11 @@ use super::discovery::{remove_daemon_info, write_daemon_info_exclusive, DaemonIn
 use super::protocol::{
     decode_binary_terminal_frame, decode_client_frame, encode_binary_terminal_frame, encode_frame,
     routing_control_id, supported_features, ClientFrame, DaemonFrame, ProcessTraits, ProtocolError,
-    ReplayEntry, RoutingError, RoutingEvent, SessionMeta, SessionStatusInfo,
+    ReplayEntry, RoutingError, RoutingEvent, RoutingStatus, SessionMeta, SessionStatusInfo,
     BINARY_KIND_CHECKPOINT, BINARY_KIND_INPUT, BINARY_KIND_OUTPUT, BINARY_KIND_REPLAY,
     BINARY_KIND_REPLAY_RESET, BINARY_PROTOCOL_VERSION, CONTROL_PROTOCOL_VERSION, MAX_FRAME_BYTES,
 };
+use super::routing::{RoutingRuntime, FALLBACK_PORT_START};
 use super::ssh_agent_bridge::SshAgentBridgeManager;
 use crate::claude_hook::{remote_hook_payload_from_spool, spawn_hook_listener, HookPayloadSink};
 use crate::commands::cc_connect::handoff_notification::RemoteHandoffNotifier;
@@ -693,6 +694,7 @@ pub struct DaemonHost {
     hook_gap_cache: Mutex<VecDeque<(String, u64)>>,
     hook_sink: Mutex<Option<HookPayloadSink>>,
     ssh_agent_bridges: SshAgentBridgeManager,
+    routing: Mutex<RoutingRuntime>,
     spool_dir: PathBuf,
 }
 
@@ -715,6 +717,7 @@ impl DaemonHost {
             hook_gap_cache: Mutex::new(VecDeque::new()),
             hook_sink: Mutex::new(None),
             ssh_agent_bridges: SshAgentBridgeManager::default(),
+            routing: Mutex::new(RoutingRuntime::new()),
             spool_dir,
         }
     }
@@ -751,6 +754,62 @@ impl DaemonHost {
         if let Some(host_id) = host_id {
             self.ssh_agent_bridges.release(&host_id, session_id);
         }
+    }
+
+    fn routing_status(&self) -> RoutingStatus {
+        self.routing
+            .lock()
+            .map(|runtime| {
+                let snapshot = runtime.snapshot();
+                RoutingStatus {
+                    status: snapshot.status,
+                    preferred_port: snapshot.preferred_port,
+                    actual_port: snapshot.actual_port,
+                }
+            })
+            .unwrap_or(RoutingStatus {
+                status: "unknown".to_string(),
+                preferred_port: FALLBACK_PORT_START,
+                actual_port: None,
+            })
+    }
+
+    fn routing_start(
+        &self,
+        listen_address: &str,
+        preferred_port: u16,
+        last_actual_port: Option<u16>,
+    ) -> Result<RoutingStatus, String> {
+        let mut runtime = self
+            .routing
+            .lock()
+            .map_err(|_| "routing_runtime_unavailable".to_string())?;
+        let snapshot = runtime.start(listen_address, preferred_port, last_actual_port)?;
+        Ok(RoutingStatus {
+            status: snapshot.status,
+            preferred_port: snapshot.preferred_port,
+            actual_port: snapshot.actual_port,
+        })
+    }
+
+    fn routing_stop(&self) -> Result<RoutingStatus, String> {
+        let mut runtime = self
+            .routing
+            .lock()
+            .map_err(|_| "routing_runtime_unavailable".to_string())?;
+        let snapshot = runtime.stop();
+        Ok(RoutingStatus {
+            status: snapshot.status,
+            preferred_port: snapshot.preferred_port,
+            actual_port: snapshot.actual_port,
+        })
+    }
+
+    fn routing_is_running(&self) -> bool {
+        self.routing
+            .lock()
+            .map(|runtime| runtime.is_running())
+            .unwrap_or(false)
     }
 
     pub(crate) fn accept_remote_hook_event(&self, value: serde_json::Value) {
@@ -1507,7 +1566,9 @@ impl DaemonServer {
         let server = Arc::clone(self);
         std::thread::spawn(move || loop {
             std::thread::sleep(IDLE_CHECK_INTERVAL);
-            let busy = server.host.client_count() > 0 || server.host.alive_session_count() > 0;
+            let busy = server.host.client_count() > 0
+                || server.host.alive_session_count() > 0
+                || server.host.routing_is_running();
             let Ok(mut idle_since) = server.host.last_idle_since.lock() else {
                 continue;
             };
@@ -2102,11 +2163,37 @@ impl DaemonServer {
                     .release_consumer(&host_id, &consumer_id);
                 DaemonFrame::Ok { id }
             }
-            ClientFrame::RoutingReload { id }
-            | ClientFrame::RoutingStatus { id }
-            | ClientFrame::RoutingStart { id }
-            | ClientFrame::RoutingStop { id }
-            | ClientFrame::RoutingResetCircuit { id, .. } => DaemonFrame::RoutingEvent {
+            ClientFrame::RoutingReload { id } | ClientFrame::RoutingStatus { id } => {
+                DaemonFrame::RoutingEvent {
+                    event: RoutingEvent::status(id, self.host.routing_status()),
+                }
+            }
+            ClientFrame::RoutingStart {
+                id,
+                listen_address,
+                preferred_port,
+                last_actual_port,
+            } => match self.host.routing_start(
+                listen_address.as_deref().unwrap_or("127.0.0.1"),
+                preferred_port.unwrap_or(FALLBACK_PORT_START),
+                last_actual_port,
+            ) {
+                Ok(status) => DaemonFrame::RoutingEvent {
+                    event: RoutingEvent::status(id, status),
+                },
+                Err(error) => DaemonFrame::RoutingEvent {
+                    event: RoutingEvent::error(id, RoutingError::runtime_failure(&error)),
+                },
+            },
+            ClientFrame::RoutingStop { id } => match self.host.routing_stop() {
+                Ok(status) => DaemonFrame::RoutingEvent {
+                    event: RoutingEvent::status(id, status),
+                },
+                Err(error) => DaemonFrame::RoutingEvent {
+                    event: RoutingEvent::error(id, RoutingError::runtime_failure(&error)),
+                },
+            },
+            ClientFrame::RoutingResetCircuit { id, .. } => DaemonFrame::RoutingEvent {
                 event: RoutingEvent::error(id, RoutingError::service_unavailable()),
             },
             ClientFrame::Shutdown { id } => {
@@ -2535,10 +2622,15 @@ mod tests {
 
         client
             .send(Message::Text(
-                encode_frame(&ClientFrame::RoutingStart { id: 7 })
-                    .trim_end()
-                    .to_string()
-                    .into(),
+                encode_frame(&ClientFrame::RoutingStart {
+                    id: 7,
+                    listen_address: None,
+                    preferred_port: None,
+                    last_actual_port: None,
+                })
+                .trim_end()
+                .to_string()
+                .into(),
             ))
             .unwrap();
         let Message::Text(text) = client.read().unwrap() else {
@@ -2598,6 +2690,44 @@ mod tests {
         assert_eq!(event.request_id, Some(9));
         assert_eq!(event.error.unwrap().code, ROUTING_ERROR_SERVICE_UNAVAILABLE);
         assert!(!encoded.contains("must-not-be-returned"));
+    }
+
+    #[test]
+    fn routing_start_binds_and_stop_keeps_actual_port() {
+        let probe = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let preferred_port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let server = DaemonServer {
+            host: Arc::new(DaemonHost::new()),
+            next_client_id: AtomicU64::new(1),
+            token: String::new(),
+            version: String::new(),
+            info_path: PathBuf::new(),
+        };
+
+        let start = server.handle_frame(
+            0,
+            ClientFrame::RoutingStart {
+                id: 10,
+                listen_address: Some("127.0.0.1".to_string()),
+                preferred_port: Some(preferred_port),
+                last_actual_port: None,
+            },
+        );
+        let DaemonFrame::RoutingEvent { event } = start else {
+            panic!("expected routing status");
+        };
+        let status = event.status.expect("running status");
+        assert_eq!(status.status, "running");
+        assert_eq!(status.actual_port, Some(preferred_port));
+
+        let stop = server.handle_frame(0, ClientFrame::RoutingStop { id: 11 });
+        let DaemonFrame::RoutingEvent { event } = stop else {
+            panic!("expected routing status");
+        };
+        let status = event.status.expect("stopped status");
+        assert_eq!(status.status, "stopped");
+        assert_eq!(status.actual_port, Some(preferred_port));
     }
 
     #[test]

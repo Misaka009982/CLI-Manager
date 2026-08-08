@@ -148,6 +148,12 @@ pub enum ClientFrame {
     },
     RoutingStart {
         id: u64,
+        #[serde(default)]
+        listen_address: Option<String>,
+        #[serde(default)]
+        preferred_port: Option<u16>,
+        #[serde(default)]
+        last_actual_port: Option<u16>,
     },
     RoutingStop {
         id: u64,
@@ -167,7 +173,7 @@ pub fn routing_control_id(frame: &ClientFrame) -> Option<u64> {
     match frame {
         ClientFrame::RoutingReload { id }
         | ClientFrame::RoutingStatus { id }
-        | ClientFrame::RoutingStart { id }
+        | ClientFrame::RoutingStart { id, .. }
         | ClientFrame::RoutingStop { id }
         | ClientFrame::RoutingResetCircuit { id, .. } => Some(*id),
         _ => None,
@@ -223,6 +229,24 @@ impl RoutingError {
             hint: "retry_or_restart_daemon".to_string(),
         }
     }
+
+    pub fn runtime_failure(code: &str) -> Self {
+        let code = match code {
+            "routing_listen_address_invalid"
+            | "routing_port_invalid"
+            | "routing_port_range_exhausted" => code,
+            _ => ROUTING_ERROR_SERVICE_UNAVAILABLE,
+        };
+        Self {
+            code: code.to_string(),
+            params: BTreeMap::new(),
+            hint: if code == "routing_port_range_exhausted" {
+                "choose_another_port".to_string()
+            } else {
+                "fix_input".to_string()
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -233,6 +257,17 @@ pub struct RoutingEvent {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<RoutingError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<RoutingStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingStatus {
+    pub status: String,
+    pub preferred_port: u16,
+    #[serde(default)]
+    pub actual_port: Option<u16>,
 }
 
 impl RoutingEvent {
@@ -241,6 +276,16 @@ impl RoutingEvent {
             request_id: Some(request_id),
             kind: "error".to_string(),
             error: Some(error),
+            status: None,
+        }
+    }
+
+    pub fn status(request_id: u64, status: RoutingStatus) -> Self {
+        Self {
+            request_id: Some(request_id),
+            kind: status.status.clone(),
+            error: None,
+            status: Some(status),
         }
     }
 }
