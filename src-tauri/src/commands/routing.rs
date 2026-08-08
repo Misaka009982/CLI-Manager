@@ -11,7 +11,7 @@ use crate::provider::repository::normalize_app_type;
 use crate::provider::routing::{
     self, RoutingFailoverConfig, RoutingFailoverState, RoutingGlobalProxyInput,
     RoutingGlobalProxyState, RoutingGlobalProxyTestInput, RoutingGlobalProxyTestResult,
-    RoutingPersistedState, RoutingProxyScanCandidate, TakeoverKey,
+    RoutingPersistedState, RoutingProxyScanCandidate, RoutingRectifierConfig, TakeoverKey,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -422,6 +422,21 @@ pub fn routing_test_global_proxy(
     input: RoutingGlobalProxyTestInput,
 ) -> Result<RoutingGlobalProxyTestResult, RoutingError> {
     block_on(routing::test_global_proxy(input))
+}
+
+#[tauri::command]
+pub fn routing_get_rectifier_config() -> Result<RoutingRectifierConfig, RoutingError> {
+    block_on(routing::load_rectifier_config())
+}
+
+#[tauri::command]
+pub fn routing_set_rectifier_config(
+    config: RoutingRectifierConfig,
+) -> Result<RoutingRectifierConfig, RoutingError> {
+    block_on(async move {
+        routing::save_rectifier_config(&config).await?;
+        routing::load_rectifier_config().await
+    })
 }
 
 #[tauri::command]

@@ -440,6 +440,25 @@ async fn forward_request(
             "routing_request_body_must_be_object",
         ));
     }
+    let rectifier_config = crate::provider::routing::load_rectifier_config()
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "routing_rectifier_config_unavailable",
+            )
+        })?;
+    let request_context = (
+        rectifier_config,
+        crate::provider::routing::RoutingRetryContext::default(),
+    );
+    let _rectifier_rule_available = [
+        crate::provider::routing::RoutingRectifierRule::ThinkingSignature,
+        crate::provider::routing::RoutingRectifierRule::ThinkingBudget,
+        crate::provider::routing::RoutingRectifierRule::MediaFallback,
+    ]
+    .into_iter()
+    .any(|rule| request_context.1.can_retry(&request_context.0, rule));
     let failover_config =
         crate::provider::routing::load_failover_config_for_daemon(route_app_type(route))
             .await

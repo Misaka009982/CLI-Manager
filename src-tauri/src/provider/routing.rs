@@ -21,6 +21,7 @@ use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
 
 pub(crate) const SERVICE_SETTINGS_KEY: &str = "routing.service.v1";
 pub(crate) const TAKEOVERS_SETTINGS_KEY: &str = "routing.takeovers.v1";
+pub(crate) const RECTIFIER_SETTINGS_KEY: &str = "routing.rectifier.v1";
 const FAILOVER_SETTINGS_PREFIX: &str = "routing.app.";
 #[allow(dead_code)]
 pub(crate) const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1";
@@ -125,6 +126,63 @@ pub(crate) struct RoutingFailoverState {
     pub circuits: Vec<RoutingCircuitState>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutingRectifierConfig {
+    pub schema_version: u32,
+    pub enabled: bool,
+    pub request_thinking_signature: bool,
+    pub request_thinking_budget: bool,
+    pub request_media_fallback: bool,
+    pub request_media_heuristic: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RoutingRectifierRule {
+    ThinkingSignature,
+    ThinkingBudget,
+    MediaFallback,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RoutingRetryContext {
+    thinking_signature_used: bool,
+    thinking_budget_used: bool,
+    media_fallback_used: bool,
+}
+
+impl RoutingRetryContext {
+    pub(crate) fn can_retry(
+        &self,
+        config: &RoutingRectifierConfig,
+        rule: RoutingRectifierRule,
+    ) -> bool {
+        if !config.enabled {
+            return false;
+        }
+        match rule {
+            RoutingRectifierRule::ThinkingSignature => {
+                config.request_thinking_signature && !self.thinking_signature_used
+            }
+            RoutingRectifierRule::ThinkingBudget => {
+                config.request_thinking_budget && !self.thinking_budget_used
+            }
+            RoutingRectifierRule::MediaFallback => {
+                config.request_media_fallback && !self.media_fallback_used
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn mark_used(&mut self, rule: RoutingRectifierRule) {
+        match rule {
+            RoutingRectifierRule::ThinkingSignature => self.thinking_signature_used = true,
+            RoutingRectifierRule::ThinkingBudget => self.thinking_budget_used = true,
+            RoutingRectifierRule::MediaFallback => self.media_fallback_used = true,
+        }
+    }
+}
+
 pub(crate) const GLOBAL_PROXY_SETTINGS_KEY: &str = "routing.global_proxy.v1";
 const GLOBAL_PROXY_CREDENTIAL_ACCOUNT: &str = "routing-global-proxy-password";
 
@@ -222,6 +280,37 @@ fn validate_failover_config(config: &RoutingFailoverConfig) -> Result<(), String
         || config.circuit_min_requests == 0
     {
         return Err("routing_failover_config_invalid".to_string());
+    }
+    Ok(())
+}
+
+fn validate_rectifier_config(config: &RoutingRectifierConfig) -> Result<(), String> {
+    if config.schema_version != 1 {
+        return Err("routing_rectifier_config_invalid".to_string());
+    }
+    Ok(())
+}
+
+pub(crate) async fn load_rectifier_config() -> Result<RoutingRectifierConfig, String> {
+    let mut connection = database::open_connection().await?;
+    let raw = load_setting(&mut connection, RECTIFIER_SETTINGS_KEY).await?;
+    let config = serde_json::from_str::<RoutingRectifierConfig>(&raw)
+        .map_err(|_| format!("routing_settings_invalid:{RECTIFIER_SETTINGS_KEY}"))?;
+    validate_rectifier_config(&config)?;
+    Ok(config)
+}
+
+pub(crate) async fn save_rectifier_config(config: &RoutingRectifierConfig) -> Result<(), String> {
+    validate_rectifier_config(config)?;
+    let mut connection = database::open_connection().await?;
+    let result = sqlx::query("UPDATE settings SET value = ?1 WHERE key = ?2")
+        .bind(serialize_json(config, RECTIFIER_SETTINGS_KEY)?)
+        .bind(RECTIFIER_SETTINGS_KEY)
+        .execute(&mut connection)
+        .await
+        .map_err(|_| "routing_rectifier_config_write_failed".to_string())?;
+    if result.rows_affected() != 1 {
+        return Err(format!("routing_settings_missing:{RECTIFIER_SETTINGS_KEY}"));
     }
     Ok(())
 }
@@ -1330,6 +1419,47 @@ mod tests {
             circuit_error_rate_threshold: 0.6,
             circuit_min_requests: 10,
         }
+    }
+
+    fn rectifier_config() -> RoutingRectifierConfig {
+        RoutingRectifierConfig {
+            schema_version: 1,
+            enabled: true,
+            request_thinking_signature: true,
+            request_thinking_budget: true,
+            request_media_fallback: true,
+            request_media_heuristic: true,
+        }
+    }
+
+    #[test]
+    fn rectifier_config_requires_schema_one() {
+        assert!(validate_rectifier_config(&rectifier_config()).is_ok());
+        let mut invalid = rectifier_config();
+        invalid.schema_version = 2;
+        assert_eq!(
+            validate_rectifier_config(&invalid).unwrap_err(),
+            "routing_rectifier_config_invalid"
+        );
+    }
+
+    #[test]
+    fn retry_context_allows_each_enabled_rule_once_and_respects_master_switch() {
+        let config = rectifier_config();
+        let mut context = RoutingRetryContext::default();
+        for rule in [
+            RoutingRectifierRule::ThinkingSignature,
+            RoutingRectifierRule::ThinkingBudget,
+            RoutingRectifierRule::MediaFallback,
+        ] {
+            assert!(context.can_retry(&config, rule));
+            context.mark_used(rule);
+            assert!(!context.can_retry(&config, rule));
+        }
+
+        let mut disabled = config.clone();
+        disabled.enabled = false;
+        assert!(!context.can_retry(&disabled, RoutingRectifierRule::ThinkingSignature));
     }
 
     #[test]
