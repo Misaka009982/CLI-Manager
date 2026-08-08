@@ -109,6 +109,7 @@ pub(crate) struct RoutingFailoverProvider {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RoutingCircuitState {
+    pub provider_id: String,
     pub status: String,
     pub consecutive_failures: u32,
     pub successful_probes: u32,
@@ -121,6 +122,7 @@ pub(crate) struct RoutingFailoverState {
     pub config: RoutingFailoverConfig,
     pub providers: Vec<RoutingFailoverProvider>,
     pub circuit: RoutingCircuitState,
+    pub circuits: Vec<RoutingCircuitState>,
 }
 
 fn failover_settings_key(app_type: &str) -> String {
@@ -129,6 +131,7 @@ fn failover_settings_key(app_type: &str) -> String {
 
 fn default_circuit_state() -> RoutingCircuitState {
     RoutingCircuitState {
+        provider_id: String::new(),
         status: "closed".to_string(),
         consecutive_failures: 0,
         successful_probes: 0,
@@ -217,6 +220,7 @@ pub(crate) async fn load_failover_state(app_type: &str) -> Result<RoutingFailove
         config,
         providers,
         circuit: default_circuit_state(),
+        circuits: Vec::new(),
     })
 }
 
@@ -701,7 +705,7 @@ fn is_safe_advertised_host(endpoint_mode: &str, host: &str) -> bool {
     }
 }
 
-fn normalize_routing_app_type(app_type: &str) -> Result<String, String> {
+pub(crate) fn normalize_routing_app_type(app_type: &str) -> Result<String, String> {
     normalize_app_type(app_type).map_err(|_| "routing_app_type_invalid".to_string())
 }
 

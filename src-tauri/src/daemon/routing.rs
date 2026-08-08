@@ -98,7 +98,8 @@ impl RoutingRuntime {
             last_actual_port,
             previous,
         )?;
-        let http_server = RouteHttpServer::start(&lease.cloned_listeners()?)?;
+        let state = self.http_server.as_ref().map(RouteHttpServer::shared_state);
+        let http_server = RouteHttpServer::start_with_state(&lease.cloned_listeners()?, state)?;
         drop(self.http_server.take());
         self.listen_addresses = normalized_addresses;
         self.preferred_port = preferred_port;
@@ -112,6 +113,19 @@ impl RoutingRuntime {
         drop(self.http_server.take());
         self.lease = None;
         self.snapshot()
+    }
+
+    pub(crate) fn circuit_snapshots(&self) -> Vec<super::circuit::CircuitSnapshot> {
+        self.http_server
+            .as_ref()
+            .map(RouteHttpServer::circuit_snapshots)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn reset_circuit(&self, app_type: &str, provider_id: &str) {
+        if let Some(server) = self.http_server.as_ref() {
+            server.reset_circuit(app_type, provider_id);
+        }
     }
 }
 

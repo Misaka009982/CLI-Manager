@@ -273,6 +273,16 @@ pub struct RoutingEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct RoutingCircuitStatus {
+    pub app_type: String,
+    pub provider_id: String,
+    pub status: String,
+    pub consecutive_failures: u32,
+    pub successful_probes: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct RoutingStatus {
     pub status: String,
     #[serde(default)]
@@ -280,6 +290,8 @@ pub struct RoutingStatus {
     pub preferred_port: u16,
     #[serde(default)]
     pub actual_port: Option<u16>,
+    #[serde(default)]
+    pub circuit_states: Vec<RoutingCircuitStatus>,
 }
 
 impl RoutingEvent {

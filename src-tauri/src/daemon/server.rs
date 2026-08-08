@@ -8,9 +8,10 @@ use super::discovery::{remove_daemon_info, write_daemon_info_exclusive, DaemonIn
 use super::protocol::{
     decode_binary_terminal_frame, decode_client_frame, encode_binary_terminal_frame, encode_frame,
     routing_control_id, supported_features, ClientFrame, DaemonFrame, ProcessTraits, ProtocolError,
-    ReplayEntry, RoutingError, RoutingEvent, RoutingStatus, SessionMeta, SessionStatusInfo,
-    BINARY_KIND_CHECKPOINT, BINARY_KIND_INPUT, BINARY_KIND_OUTPUT, BINARY_KIND_REPLAY,
-    BINARY_KIND_REPLAY_RESET, BINARY_PROTOCOL_VERSION, CONTROL_PROTOCOL_VERSION, MAX_FRAME_BYTES,
+    ReplayEntry, RoutingCircuitStatus, RoutingError, RoutingEvent, RoutingStatus, SessionMeta,
+    SessionStatusInfo, BINARY_KIND_CHECKPOINT, BINARY_KIND_INPUT, BINARY_KIND_OUTPUT,
+    BINARY_KIND_REPLAY, BINARY_KIND_REPLAY_RESET, BINARY_PROTOCOL_VERSION,
+    CONTROL_PROTOCOL_VERSION, MAX_FRAME_BYTES,
 };
 use super::routing::{PortAllocator, RoutingRuntime, FALLBACK_PORT_START};
 use super::ssh_agent_bridge::SshAgentBridgeManager;
@@ -761,11 +762,23 @@ impl DaemonHost {
             .lock()
             .map(|runtime| {
                 let snapshot = runtime.snapshot();
+                let circuit_states = runtime
+                    .circuit_snapshots()
+                    .into_iter()
+                    .map(|circuit| RoutingCircuitStatus {
+                        app_type: circuit.app_type,
+                        provider_id: circuit.provider_id,
+                        status: circuit.status,
+                        consecutive_failures: circuit.consecutive_failures,
+                        successful_probes: circuit.successful_probes,
+                    })
+                    .collect();
                 RoutingStatus {
                     status: snapshot.status,
                     listener_addresses: snapshot.listen_addresses,
                     preferred_port: snapshot.preferred_port,
                     actual_port: snapshot.actual_port,
+                    circuit_states,
                 }
             })
             .unwrap_or(RoutingStatus {
@@ -773,6 +786,7 @@ impl DaemonHost {
                 listener_addresses: Vec::new(),
                 preferred_port: FALLBACK_PORT_START,
                 actual_port: None,
+                circuit_states: Vec::new(),
             })
     }
 
@@ -786,13 +800,9 @@ impl DaemonHost {
             .routing
             .lock()
             .map_err(|_| "routing_runtime_unavailable".to_string())?;
-        let snapshot = runtime.start(listen_addresses, preferred_port, last_actual_port)?;
-        Ok(RoutingStatus {
-            status: snapshot.status,
-            listener_addresses: snapshot.listen_addresses,
-            preferred_port: snapshot.preferred_port,
-            actual_port: snapshot.actual_port,
-        })
+        runtime.start(listen_addresses, preferred_port, last_actual_port)?;
+        drop(runtime);
+        Ok(self.routing_status())
     }
 
     fn routing_reload(
@@ -810,17 +820,13 @@ impl DaemonHost {
             .routing
             .lock()
             .map_err(|_| "routing_runtime_unavailable".to_string())?;
-        let snapshot = if runtime.is_running() {
-            runtime.rebind(&normalized_addresses, preferred_port, last_actual_port)?
+        if runtime.is_running() {
+            runtime.rebind(&normalized_addresses, preferred_port, last_actual_port)?;
         } else {
-            runtime.snapshot()
-        };
-        Ok(RoutingStatus {
-            status: snapshot.status,
-            listener_addresses: snapshot.listen_addresses,
-            preferred_port: snapshot.preferred_port,
-            actual_port: snapshot.actual_port,
-        })
+            runtime.snapshot();
+        }
+        drop(runtime);
+        Ok(self.routing_status())
     }
 
     fn routing_stop(&self) -> Result<RoutingStatus, String> {
@@ -828,13 +834,24 @@ impl DaemonHost {
             .routing
             .lock()
             .map_err(|_| "routing_runtime_unavailable".to_string())?;
-        let snapshot = runtime.stop();
-        Ok(RoutingStatus {
-            status: snapshot.status,
-            listener_addresses: snapshot.listen_addresses,
-            preferred_port: snapshot.preferred_port,
-            actual_port: snapshot.actual_port,
-        })
+        runtime.stop();
+        drop(runtime);
+        Ok(self.routing_status())
+    }
+
+    fn routing_reset_circuit(
+        &self,
+        app_type: &str,
+        provider_id: &str,
+    ) -> Result<RoutingStatus, String> {
+        let app_type = crate::provider::routing::normalize_routing_app_type(app_type)?;
+        let runtime = self
+            .routing
+            .lock()
+            .map_err(|_| "routing_runtime_unavailable".to_string())?;
+        runtime.reset_circuit(&app_type, provider_id);
+        drop(runtime);
+        Ok(self.routing_status())
     }
 
     fn routing_is_running(&self) -> bool {
@@ -2261,8 +2278,17 @@ impl DaemonServer {
                     event: RoutingEvent::error(id, RoutingError::runtime_failure(&error)),
                 },
             },
-            ClientFrame::RoutingResetCircuit { id, .. } => DaemonFrame::RoutingEvent {
-                event: RoutingEvent::error(id, RoutingError::service_unavailable()),
+            ClientFrame::RoutingResetCircuit {
+                id,
+                app_type,
+                provider_id,
+            } => match self.host.routing_reset_circuit(&app_type, &provider_id) {
+                Ok(status) => DaemonFrame::RoutingEvent {
+                    event: RoutingEvent::status(id, status),
+                },
+                Err(error) => DaemonFrame::RoutingEvent {
+                    event: RoutingEvent::error(id, RoutingError::runtime_failure(&error)),
+                },
             },
             ClientFrame::Shutdown { id } => {
                 if self.host.alive_session_count() > 0 || self.host.routing_is_running() {
@@ -2451,9 +2477,7 @@ fn maybe_activate_app_for_hook(payload: &crate::claude_hook::ClaudeHookPayload) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::protocol::{
-        decode_daemon_frame, ROUTING_ERROR_PROTOCOL_UNSUPPORTED, ROUTING_ERROR_SERVICE_UNAVAILABLE,
-    };
+    use crate::daemon::protocol::{decode_daemon_frame, ROUTING_ERROR_PROTOCOL_UNSUPPORTED};
     use tungstenite::client::IntoClientRequest;
 
     #[test]
@@ -2739,7 +2763,7 @@ mod tests {
     }
 
     #[test]
-    fn routing_control_returns_sanitized_unavailable_error_until_runtime_exists() {
+    fn routing_reset_circuit_before_runtime_returns_closed_status() {
         let server = DaemonServer {
             host: Arc::new(DaemonHost::new()),
             next_client_id: AtomicU64::new(1),
@@ -2760,7 +2784,8 @@ mod tests {
             panic!("expected routing event");
         };
         assert_eq!(event.request_id, Some(9));
-        assert_eq!(event.error.unwrap().code, ROUTING_ERROR_SERVICE_UNAVAILABLE);
+        assert_eq!(event.error, None);
+        assert_eq!(event.status.unwrap().status, "stopped");
         assert!(!encoded.contains("must-not-be-returned"));
     }
 

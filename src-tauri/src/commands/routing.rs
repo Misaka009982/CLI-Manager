@@ -1,7 +1,7 @@
 use crate::daemon::client::{DaemonBridge, DaemonClient};
 use crate::daemon::protocol::{
-    ensure_local_routing_capability, routing_control_id, ClientFrame, DaemonFrame, RoutingError,
-    RoutingEvent, RoutingStatus,
+    ensure_local_routing_capability, routing_control_id, ClientFrame, DaemonFrame,
+    RoutingCircuitStatus, RoutingError, RoutingEvent, RoutingStatus,
 };
 use crate::provider::global::{
     self, GlobalApplyInput, GlobalPreviewInput, HomeIdentityInput, LocalRouteProjection,
@@ -297,6 +297,59 @@ fn request_control(
     }
 }
 
+fn merge_daemon_circuits(
+    mut state: RoutingFailoverState,
+    client: Option<Arc<DaemonClient>>,
+    app_type: &str,
+) -> RoutingFailoverState {
+    let Some(client) = client else {
+        return state;
+    };
+    let Ok(event) = request_control(
+        Some(client.clone()),
+        ClientFrame::RoutingStatus {
+            id: client.next_request_id(),
+        },
+    ) else {
+        return state;
+    };
+    let Ok(status) = routing_status(event) else {
+        return state;
+    };
+    state.circuits = status
+        .circuit_states
+        .into_iter()
+        .filter(|circuit| circuit.app_type == app_type)
+        .map(circuit_state_from_daemon)
+        .collect();
+    if let Some(current_id) = state
+        .providers
+        .iter()
+        .find(|provider| provider.is_current)
+        .map(|provider| provider.id.as_str())
+    {
+        if let Some(current) = state
+            .circuits
+            .iter()
+            .find(|circuit| circuit.provider_id == current_id)
+        {
+            state.circuit = current.clone();
+        }
+    }
+    state
+}
+
+fn circuit_state_from_daemon(
+    circuit: RoutingCircuitStatus,
+) -> crate::provider::routing::RoutingCircuitState {
+    crate::provider::routing::RoutingCircuitState {
+        provider_id: circuit.provider_id,
+        status: circuit.status,
+        consecutive_failures: circuit.consecutive_failures,
+        successful_probes: circuit.successful_probes,
+    }
+}
+
 #[tauri::command]
 pub fn routing_get_state(
     daemon_bridge: State<'_, DaemonBridge>,
@@ -305,8 +358,12 @@ pub fn routing_get_state(
 }
 
 #[tauri::command]
-pub fn routing_get_failover_queue(app_type: String) -> Result<RoutingFailoverState, RoutingError> {
-    block_on(routing::load_failover_state(&app_type))
+pub fn routing_get_failover_queue(
+    daemon_bridge: State<'_, DaemonBridge>,
+    app_type: String,
+) -> Result<RoutingFailoverState, RoutingError> {
+    let state = block_on(routing::load_failover_state(&app_type))?;
+    Ok(merge_daemon_circuits(state, daemon_bridge.get(), &app_type))
 }
 
 #[tauri::command]
@@ -342,8 +399,25 @@ pub fn routing_update_failover_config(
 }
 
 #[tauri::command]
-pub fn routing_reset_circuit(app_type: String) -> Result<RoutingFailoverState, RoutingError> {
-    block_on(routing::load_failover_state(&app_type))
+pub fn routing_reset_circuit(
+    daemon_bridge: State<'_, DaemonBridge>,
+    app_type: String,
+) -> Result<RoutingFailoverState, RoutingError> {
+    let state = block_on(routing::load_failover_state(&app_type))?;
+    let app_type = state.app_type.clone();
+    let client = daemon_bridge
+        .get()
+        .ok_or_else(RoutingError::service_unavailable)?;
+    let event = request_control(
+        Some(client.clone()),
+        ClientFrame::RoutingResetCircuit {
+            id: client.next_request_id(),
+            app_type: app_type.clone(),
+            provider_id: String::new(),
+        },
+    )?;
+    let _ = routing_status(event)?;
+    Ok(merge_daemon_circuits(state, Some(client), &app_type))
 }
 
 #[tauri::command]

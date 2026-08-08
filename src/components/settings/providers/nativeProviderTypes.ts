@@ -296,6 +296,7 @@ export interface NativeProviderFailoverProvider {
 }
 
 export interface NativeProviderFailoverCircuit {
+  providerId: string;
   status: string;
   consecutiveFailures: number;
   successfulProbes: number;
@@ -306,6 +307,7 @@ export interface NativeProviderFailoverState {
   config: NativeProviderFailoverConfig;
   providers: NativeProviderFailoverProvider[];
   circuit: NativeProviderFailoverCircuit;
+  circuits: NativeProviderFailoverCircuit[];
 }
 
 export interface NativeProviderCliStatus {

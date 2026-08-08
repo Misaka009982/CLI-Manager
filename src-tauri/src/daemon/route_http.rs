@@ -1,3 +1,4 @@
+use super::circuit::{CircuitPermit, CircuitPolicy, CircuitRegistry, CircuitSnapshot};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use http_body_util::{BodyExt, Full, Limited, StreamBody};
@@ -39,6 +40,7 @@ enum RouteKind {
 #[derive(Debug, Clone)]
 struct ProviderSnapshot {
     app_type: &'static str,
+    provider_id: String,
     base_url: String,
     claude_api_key_field: Option<String>,
     claude_api_format: Option<String>,
@@ -100,8 +102,9 @@ struct KeyPool {
 }
 
 #[derive(Debug, Default)]
-struct RouteState {
+pub(crate) struct RouteState {
     pools: Mutex<HashMap<String, KeyPool>>,
+    circuits: CircuitRegistry,
 }
 
 impl RouteState {
@@ -176,15 +179,23 @@ impl KeyPool {
 pub(crate) struct RouteHttpServer {
     stop: Arc<AtomicBool>,
     workers: Vec<JoinHandle<()>>,
+    state: Arc<RouteState>,
 }
 
 impl RouteHttpServer {
     pub(crate) fn start(listeners: &[TcpListener]) -> Result<Self, String> {
+        Self::start_with_state(listeners, None)
+    }
+
+    pub(crate) fn start_with_state(
+        listeners: &[TcpListener],
+        existing_state: Option<Arc<RouteState>>,
+    ) -> Result<Self, String> {
         if listeners.is_empty() {
             return Err("routing_listener_missing".to_string());
         }
         let stop = Arc::new(AtomicBool::new(false));
-        let state = Arc::new(RouteState::default());
+        let state = existing_state.unwrap_or_default();
         let mut workers = Vec::with_capacity(listeners.len());
         for source in listeners {
             let listener = match source.try_clone() {
@@ -226,7 +237,23 @@ impl RouteHttpServer {
                 }
             }
         }
-        Ok(Self { stop, workers })
+        Ok(Self {
+            stop,
+            workers,
+            state,
+        })
+    }
+
+    pub(crate) fn circuit_snapshots(&self) -> Vec<CircuitSnapshot> {
+        self.state.circuits.snapshots()
+    }
+
+    pub(crate) fn shared_state(&self) -> Arc<RouteState> {
+        Arc::clone(&self.state)
+    }
+
+    pub(crate) fn reset_circuit(&self, app_type: &str, provider_id: &str) {
+        self.state.circuits.reset(app_type, provider_id);
     }
 }
 
@@ -333,6 +360,28 @@ async fn forward_request(
             });
         }
     };
+    let circuit_policy = CircuitPolicy {
+        failure_threshold: failover_config.circuit_failure_threshold,
+        success_threshold: failover_config.circuit_success_threshold,
+        timeout: Duration::from_secs(failover_config.circuit_timeout_seconds),
+        error_rate_threshold: failover_config.circuit_error_rate_threshold,
+        min_requests: failover_config.circuit_min_requests,
+    };
+    let mut circuit_permit = if failover_config.auto_failover_enabled {
+        Some(
+            state
+                .circuits
+                .acquire(route_app_type(route), &snapshot.provider_id, circuit_policy)
+                .map_err(|_| {
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "routing_provider_circuit_open",
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
     let url = upstream_url(&snapshot.base_url, route, &request_path)
         .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_provider_endpoint_invalid"))?;
     let mut client_builder = reqwest::Client::builder();
@@ -406,9 +455,11 @@ async fn forward_request(
                 continue;
             }
             Err(UpstreamSendFailure::Timeout) => {
+                record_circuit_failure(&state, &mut circuit_permit, circuit_policy);
                 return Err((StatusCode::GATEWAY_TIMEOUT, "routing_upstream_timeout"));
             }
             Err(UpstreamSendFailure::Request) => {
+                record_circuit_failure(&state, &mut circuit_permit, circuit_policy);
                 return Err((StatusCode::BAD_GATEWAY, "routing_upstream_request_failed"));
             }
         };
@@ -417,6 +468,7 @@ async fn forward_request(
                 provider_attempt = provider_attempt.saturating_add(1);
                 continue;
             }
+            record_circuit_failure(&state, &mut circuit_permit, circuit_policy);
             return Err((StatusCode::BAD_GATEWAY, "routing_upstream_provider_failed"));
         }
         if !is_key_retryable(response.status()) {
@@ -434,6 +486,9 @@ async fn forward_request(
         used_keys.insert(next_key.id.clone());
         selected_key = next_key;
     };
+    if classify_upstream_status(response.status()) == UpstreamErrorClass::Success {
+        record_circuit_success(&state, &mut circuit_permit, circuit_policy);
+    }
     let status = response.status();
     let headers = response.headers().clone();
     let timeout_mode = if streaming {
@@ -590,6 +645,7 @@ async fn load_provider_snapshot(
         .ok_or_else(|| "routing_provider_endpoint_missing".to_string())?;
     Ok(ProviderSnapshot {
         app_type,
+        provider_id: detail.card.id,
         base_url,
         claude_api_key_field: detail
             .claude_config
@@ -698,6 +754,26 @@ fn classify_upstream_status(status: StatusCode) -> UpstreamErrorClass {
         500..=599 => UpstreamErrorClass::Provider,
         _ if status.is_success() => UpstreamErrorClass::Success,
         _ => UpstreamErrorClass::Client,
+    }
+}
+
+fn record_circuit_success(
+    state: &RouteState,
+    permit: &mut Option<CircuitPermit>,
+    policy: CircuitPolicy,
+) {
+    if let Some(permit) = permit.take() {
+        state.circuits.record_success(permit, policy);
+    }
+}
+
+fn record_circuit_failure(
+    state: &RouteState,
+    permit: &mut Option<CircuitPermit>,
+    policy: CircuitPolicy,
+) {
+    if let Some(permit) = permit.take() {
+        state.circuits.record_failure(permit, policy);
     }
 }
 
