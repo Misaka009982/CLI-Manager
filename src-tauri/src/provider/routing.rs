@@ -143,6 +143,7 @@ pub(crate) struct RoutingGlobalProxyRuntimeConfig {
     pub username: Option<String>,
     pub password: Option<String>,
     pub credential_ref: Option<String>,
+    pub bypass_system_proxy: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -289,12 +290,19 @@ pub(crate) async fn load_global_proxy_runtime_config(
 ) -> Result<RoutingGlobalProxyRuntimeConfig, String> {
     let mut connection = database::open_connection().await?;
     let config = load_global_proxy_stored(&mut connection).await?;
-    let password = read_global_proxy_password()?;
+    let password = if config.url.is_some() {
+        read_global_proxy_password()?
+    } else {
+        None
+    };
+    drop(connection);
+    let persisted = load_persisted_state().await?;
     Ok(RoutingGlobalProxyRuntimeConfig {
         url: config.url,
         username: config.username,
         password,
         credential_ref: Some(config.password_credential_account),
+        bypass_system_proxy: system_proxy_should_bypass(&persisted),
     })
 }
 
@@ -340,10 +348,8 @@ fn global_proxy_matches_endpoint(
     advertised_port: u16,
 ) -> bool {
     fn loopback_alias(value: &str) -> bool {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "localhost" | "127.0.0.1" | "::1"
-        )
+        let value = value.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+        matches!(value.as_str(), "localhost" | "127.0.0.1" | "::1")
     }
 
     port == advertised_port
@@ -351,28 +357,72 @@ fn global_proxy_matches_endpoint(
             || host.eq_ignore_ascii_case(advertised_host))
 }
 
-pub(crate) async fn validate_global_proxy_not_self_loop(
+const SYSTEM_PROXY_ENV_VARS: [&str; 6] = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+];
+
+fn proxy_endpoint(raw_url: &str) -> Option<(String, u16)> {
+    let url = reqwest::Url::parse(raw_url.trim()).ok()?;
+    let host = url.host_str()?.to_string();
+    let port = url.port().or_else(|| match url.scheme() {
+        "http" => Some(80),
+        "https" => Some(443),
+        "socks5" | "socks5h" => Some(1080),
+        _ => None,
+    })?;
+    Some((host, port))
+}
+
+fn proxy_matches_persisted_state(raw_url: Option<&str>, persisted: &RoutingPersistedState) -> bool {
+    let Some(raw_url) = raw_url else {
+        return false;
+    };
+    let Some((host, port)) = proxy_endpoint(raw_url) else {
+        return false;
+    };
+    persisted.service.actual_port.is_some_and(|actual_port| {
+        global_proxy_matches_endpoint(&host, port, &persisted.service.listen_address, actual_port)
+    }) || persisted.takeovers.iter().any(|takeover| {
+        global_proxy_matches_endpoint(
+            &host,
+            port,
+            &takeover.advertised_host,
+            takeover.applied_port,
+        )
+    })
+}
+
+fn system_proxy_should_bypass(persisted: &RoutingPersistedState) -> bool {
+    SYSTEM_PROXY_ENV_VARS.iter().any(|name| {
+        std::env::var(name)
+            .ok()
+            .is_some_and(|value| proxy_matches_persisted_state(Some(&value), persisted))
+    })
+}
+
+fn validate_global_proxy_for_state(
     raw_url: Option<&str>,
+    persisted: &RoutingPersistedState,
 ) -> Result<(), String> {
     let Some(url) = normalize_global_proxy_url(raw_url)? else {
         return Ok(());
     };
-    let parsed = reqwest::Url::parse(&url).map_err(|_| "routing_proxy_url_invalid".to_string())?;
-    let Some(port) = parsed.port() else {
-        return Ok(());
-    };
-    let host = parsed.host_str().unwrap_or_default();
-    let persisted = load_persisted_state().await?;
-    let service_matches = persisted.service.actual_port.is_some_and(|actual_port| {
-        global_proxy_matches_endpoint(host, port, &persisted.service.listen_address, actual_port)
-    });
-    let takeover_matches = persisted.takeovers.iter().any(|takeover| {
-        global_proxy_matches_endpoint(host, port, &takeover.advertised_host, takeover.applied_port)
-    });
-    if service_matches || takeover_matches {
+    if proxy_matches_persisted_state(Some(&url), persisted) {
         return Err("routing_proxy_self_loop".to_string());
     }
     Ok(())
+}
+
+pub(crate) async fn validate_global_proxy_not_self_loop(
+    raw_url: Option<&str>,
+) -> Result<(), String> {
+    let persisted = load_persisted_state().await?;
+    validate_global_proxy_for_state(raw_url, &persisted)
 }
 
 fn read_global_proxy_password() -> Result<Option<String>, String> {
@@ -694,6 +744,14 @@ pub(crate) async fn apply_hot_switch_for_active_homes(
 pub(crate) async fn save_service_config(config: &RoutingServiceConfig) -> Result<(), String> {
     validate_service_config(config)?;
     let mut connection = database::open_connection().await?;
+    let previous_raw = load_setting(&mut connection, SERVICE_SETTINGS_KEY).await?;
+    let takeovers = load_takeovers(&mut connection).await?;
+    let global_proxy = load_global_proxy_stored(&mut connection).await?;
+    let candidate = RoutingPersistedState {
+        service: config.clone(),
+        takeovers,
+    };
+    validate_global_proxy_for_state(global_proxy.url.as_deref(), &candidate)?;
     let result = sqlx::query("UPDATE settings SET value = ?1 WHERE key = ?2")
         .bind(serialize_json(config, SERVICE_SETTINGS_KEY)?)
         .bind(SERVICE_SETTINGS_KEY)
@@ -702,6 +760,16 @@ pub(crate) async fn save_service_config(config: &RoutingServiceConfig) -> Result
         .map_err(|_| "routing_settings_write_failed:routing.service.v1".to_string())?;
     if result.rows_affected() != 1 {
         return Err("routing_settings_missing:routing.service.v1".to_string());
+    }
+    drop(connection);
+    if let Err(error) = super::network_client::reload_from_persisted().await {
+        if restore_setting(SERVICE_SETTINGS_KEY, &previous_raw)
+            .await
+            .is_err()
+        {
+            return Err("routing_global_proxy_recovery_required".to_string());
+        }
+        return Err(error);
     }
     Ok(())
 }
@@ -1083,6 +1151,14 @@ pub(crate) async fn save_takeovers(items: &[RoutingTakeoverItem]) -> Result<(), 
         items: items.to_vec(),
     };
     let mut connection = database::open_connection().await?;
+    let previous_raw = load_setting(&mut connection, TAKEOVERS_SETTINGS_KEY).await?;
+    let service = load_service_config(&mut connection).await?;
+    let global_proxy = load_global_proxy_stored(&mut connection).await?;
+    let candidate = RoutingPersistedState {
+        service,
+        takeovers: items.to_vec(),
+    };
+    validate_global_proxy_for_state(global_proxy.url.as_deref(), &candidate)?;
     let result = sqlx::query("UPDATE settings SET value = ?1 WHERE key = ?2")
         .bind(serialize_json(&document, TAKEOVERS_SETTINGS_KEY)?)
         .bind(TAKEOVERS_SETTINGS_KEY)
@@ -1091,6 +1167,16 @@ pub(crate) async fn save_takeovers(items: &[RoutingTakeoverItem]) -> Result<(), 
         .map_err(|_| "routing_settings_write_failed:routing.takeovers.v1".to_string())?;
     if result.rows_affected() != 1 {
         return Err("routing_settings_missing:routing.takeovers.v1".to_string());
+    }
+    drop(connection);
+    if let Err(error) = super::network_client::reload_from_persisted().await {
+        if restore_setting(TAKEOVERS_SETTINGS_KEY, &previous_raw)
+            .await
+            .is_err()
+        {
+            return Err("routing_global_proxy_recovery_required".to_string());
+        }
+        return Err(error);
     }
     Ok(())
 }
@@ -1122,6 +1208,20 @@ async fn load_setting(connection: &mut SqliteConnection, key: &str) -> Result<St
         .await
         .map_err(|_| format!("routing_settings_read_failed:{key}"))?
         .ok_or_else(|| format!("routing_settings_missing:{key}"))
+}
+
+async fn restore_setting(key: &str, value: &str) -> Result<(), String> {
+    let mut connection = database::open_connection().await?;
+    let result = sqlx::query("UPDATE settings SET value = ?1 WHERE key = ?2")
+        .bind(value)
+        .bind(key)
+        .execute(&mut connection)
+        .await
+        .map_err(|_| format!("routing_settings_restore_failed:{key}"))?;
+    if result.rows_affected() != 1 {
+        return Err(format!("routing_settings_restore_missing:{key}"));
+    }
+    Ok(())
 }
 
 fn serialize_json<T: Serialize>(value: &T, key: &str) -> Result<String, String> {
@@ -1187,6 +1287,21 @@ mod tests {
             environment_kind: "local".to_string(),
             environment_id: "host".to_string(),
             identity: "local:host".to_string(),
+        }
+    }
+
+    fn persisted_state() -> RoutingPersistedState {
+        let mut service = service();
+        service.actual_port = Some(15_721);
+        RoutingPersistedState {
+            service,
+            takeovers: vec![RoutingTakeoverItem {
+                app_type: "codex".to_string(),
+                home_identity: home(),
+                endpoint_mode: "loopback".to_string(),
+                advertised_host: "127.0.0.1".to_string(),
+                applied_port: 15_722,
+            }],
         }
     }
 
@@ -1302,6 +1417,48 @@ mod tests {
             "172.20.0.1",
             15721
         ));
+    }
+
+    #[test]
+    fn proxy_endpoint_uses_scheme_defaults_for_system_proxy_values() {
+        assert_eq!(
+            proxy_endpoint("http://localhost"),
+            Some(("localhost".to_string(), 80))
+        );
+        assert_eq!(
+            proxy_endpoint("socks5h://127.0.0.1"),
+            Some(("127.0.0.1".to_string(), 1080))
+        );
+    }
+
+    #[test]
+    fn proxy_state_matches_service_and_takeover_endpoints() {
+        let persisted = persisted_state();
+        assert!(proxy_matches_persisted_state(
+            Some("http://localhost:15721"),
+            &persisted
+        ));
+        assert!(proxy_matches_persisted_state(
+            Some("http://[::1]:15722"),
+            &persisted
+        ));
+        assert!(!proxy_matches_persisted_state(
+            Some("http://127.0.0.1:15723"),
+            &persisted
+        ));
+    }
+
+    #[test]
+    fn explicit_proxy_is_rejected_when_route_state_would_self_loop() {
+        let persisted = persisted_state();
+        assert_eq!(
+            validate_global_proxy_for_state(Some("http://localhost:15722"), &persisted)
+                .unwrap_err(),
+            "routing_proxy_self_loop"
+        );
+        assert!(
+            validate_global_proxy_for_state(Some("http://proxy.example:8080"), &persisted).is_ok()
+        );
     }
 
     #[test]

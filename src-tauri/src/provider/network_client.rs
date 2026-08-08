@@ -11,6 +11,7 @@ pub(crate) struct NetworkConfig {
     pub credential_ref: Option<String>,
     pub username: Option<String>,
     pub password: Option<String>,
+    pub bypass_system_proxy: bool,
     pub generation: u64,
 }
 
@@ -31,13 +32,18 @@ fn default_config() -> NetworkConfig {
         credential_ref: None,
         username: None,
         password: None,
+        bypass_system_proxy: false,
         generation: 0,
     }
 }
 
 fn configure(builder: ClientBuilder, config: &NetworkConfig) -> Result<ClientBuilder, String> {
     let Some(proxy_url) = config.normalized_proxy.as_deref() else {
-        return Ok(builder);
+        return Ok(if config.bypass_system_proxy {
+            builder.no_proxy()
+        } else {
+            builder
+        });
     };
     let mut proxy = Proxy::all(proxy_url).map_err(|_| "routing_proxy_url_invalid".to_string())?;
     if let (Some(username), Some(password)) = (&config.username, &config.password) {
@@ -112,6 +118,7 @@ fn from_routing_config(config: RoutingGlobalProxyRuntimeConfig) -> NetworkConfig
         credential_ref: config.credential_ref,
         username: config.username,
         password: config.password,
+        bypass_system_proxy: config.bypass_system_proxy,
         generation: 0,
     }
 }
@@ -143,6 +150,7 @@ mod tests {
     fn default_client_config_is_direct_and_generation_zero() {
         let config = default_config();
         assert_eq!(config.normalized_proxy, None);
+        assert!(!config.bypass_system_proxy);
         assert_eq!(config.generation, 0);
         assert!(configure(Client::builder(), &config).is_ok());
     }
@@ -156,5 +164,25 @@ mod tests {
         assert_eq!(config.credential_ref, None);
         assert_eq!(config.username, None);
         assert_eq!(config.password, None);
+    }
+
+    #[test]
+    fn system_proxy_bypass_is_ignored_when_explicit_proxy_is_configured() {
+        let config = NetworkConfig {
+            normalized_proxy: Some("http://proxy.example:8080".to_string()),
+            credential_ref: None,
+            username: None,
+            password: None,
+            bypass_system_proxy: true,
+            generation: 0,
+        };
+        assert!(configure(Client::builder(), &config).is_ok());
+    }
+
+    #[test]
+    fn system_proxy_bypass_can_be_applied_without_explicit_proxy() {
+        let mut config = default_config();
+        config.bypass_system_proxy = true;
+        assert!(configure(Client::builder(), &config).is_ok());
     }
 }
