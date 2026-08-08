@@ -1,6 +1,8 @@
 use std::io;
 use std::net::TcpListener;
 
+use super::route_http::RouteHttpServer;
+
 pub(crate) const FALLBACK_PORT_START: u16 = 15_721;
 pub(crate) const FALLBACK_PORT_END: u16 = 15_799;
 pub(crate) const MIN_PORT: u16 = 1_024;
@@ -19,6 +21,7 @@ struct BoundListener {
 
 pub(crate) struct RoutingRuntime {
     lease: Option<RoutingListenerLease>,
+    http_server: Option<RouteHttpServer>,
     listen_addresses: Vec<String>,
     preferred_port: u16,
     actual_port: Option<u16>,
@@ -36,6 +39,7 @@ impl RoutingRuntime {
     pub(crate) fn new() -> Self {
         Self {
             lease: None,
+            http_server: None,
             listen_addresses: Vec::new(),
             preferred_port: FALLBACK_PORT_START,
             actual_port: None,
@@ -69,10 +73,12 @@ impl RoutingRuntime {
             return Ok(self.snapshot());
         }
         let lease = PortAllocator::bind(listen_addresses, preferred_port, last_actual_port)?;
+        let http_server = RouteHttpServer::start(&lease.cloned_listeners()?)?;
         self.listen_addresses = normalize_listener_addresses(listen_addresses)?;
         self.preferred_port = preferred_port;
         self.actual_port = Some(lease.actual_port);
         self.lease = Some(lease);
+        self.http_server = Some(http_server);
         Ok(self.snapshot())
     }
 
@@ -92,16 +98,34 @@ impl RoutingRuntime {
             last_actual_port,
             previous,
         )?;
+        let http_server = RouteHttpServer::start(&lease.cloned_listeners()?)?;
+        drop(self.http_server.take());
         self.listen_addresses = normalized_addresses;
         self.preferred_port = preferred_port;
         self.actual_port = Some(lease.actual_port);
         self.lease = Some(lease);
+        self.http_server = Some(http_server);
         Ok(self.snapshot())
     }
 
     pub(crate) fn stop(&mut self) -> RoutingRuntimeSnapshot {
+        drop(self.http_server.take());
         self.lease = None;
         self.snapshot()
+    }
+}
+
+impl RoutingListenerLease {
+    fn cloned_listeners(&self) -> Result<Vec<TcpListener>, String> {
+        self.listeners
+            .iter()
+            .map(|bound| {
+                bound
+                    .listener
+                    .try_clone()
+                    .map_err(|_| "routing_listener_clone_failed".to_string())
+            })
+            .collect()
     }
 }
 

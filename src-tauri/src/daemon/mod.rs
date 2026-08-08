@@ -8,6 +8,7 @@
 pub mod client;
 pub mod discovery;
 pub mod protocol;
+mod route_http;
 mod routing;
 pub mod server;
 mod ssh_agent_bridge;
