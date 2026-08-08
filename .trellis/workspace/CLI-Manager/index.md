@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 39
-- **Last Active**: 2026-08-06
+- **Total Sessions**: 40
+- **Last Active**: 2026-08-08
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1322 | Active |
+| `journal-1.md` | ~1355 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 40 | 2026-08-08 | 修复持续输出时终端右键清屏 | `d1a7c244` | `master` |
 | 39 | 2026-08-06 | 彻底修复多会话终端输出卡死 | `e46052c2` | `master` |
 | 38 | 2026-08-06 | 统一终端侧边栏标题与缓存命中率 | `fb89406a` | `master` |
 | 37 | 2026-08-05 | 修复项目切换丢失文件预览与 Tab 卡死 | `f5544d3b` | `master` |

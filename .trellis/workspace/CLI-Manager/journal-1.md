@@ -1320,3 +1320,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 40: 修复持续输出时终端右键清屏
+
+**Date**: 2026-08-08
+**Task**: 修复持续输出时终端右键清屏
+**Branch**: `master`
+
+### Summary
+
+修复 tail -f 等前台持续命令忽略 Ctrl+L 导致右键清屏无效：先经 xterm 解析路径清除当前视口，再保留 Ctrl+L 供 Shell/TUI 重绘；新增回归测试、组件规范与 TEMP 更新日志。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d1a7c244` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
