@@ -1,18 +1,18 @@
 # CCS 路由迁移实施进度
 
-> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P1-08 已完成，当前指针为 P1-09。
+> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P1-09 已完成，当前指针为 P1-10。
 
 ## 0. 当前指针
 
 | 字段 | 值 |
 | --- | --- |
 | Task | 08-08-ccs-routing-migration |
-| task.json 状态 | in_progress（P0、P1-01 至 P1-08 已完成，当前指针为 P1-09） |
+| task.json 状态 | in_progress（P0、P1-01 至 P1-09 已完成，当前指针为 P1-10） |
 | Changelog Target | [TEMP] |
 | 当前阶段 | P1：本地路由 |
-| 当前 Case | P1-09 |
-| 审批状态 | 已批准；P1-08 完成，按 Case 顺序切换至 P1-09 指针 |
-| 最后更新时间 | 2026-08-09 03:25 |
+| 当前 Case | P1-10 |
+| 审批状态 | 已批准；P1-09 完成，按 Case 顺序切换至 P1-10 指针 |
+| 最后更新时间 | 2026-08-09 03:18 |
 | 最后操作机器 | DESKTOP-Q49I074 |
 | 分支 | feat/native-provider-management |
 | 工作目录 | F:/github/CLI-Manager |
@@ -76,12 +76,12 @@
 | 阶段 | 范围 | Case 数 | 当前状态 |
 | --- | --- | ---: | --- |
 | P0 | 影响分析、Schema、协议、Fixture 基线 | 4 | completed |
-| P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | P1-09 in_progress |
+| P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | P1-10 in_progress |
 | P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | pending |
 | P3 | 全局出站代理 | 5 | pending |
 | P4 | 整流器与 Bedrock 优化 | 6 | pending |
 | P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | pending |
-| 合计 |  | 43 | 12 个 Case 完成；P1-09 等待续做 |
+| 合计 |  | 43 | 13 个 Case 完成；P1-10 等待续做 |
 
 ## 4. P0：影响分析、Schema、协议与 Fixture 基线
 
@@ -104,8 +104,8 @@
 | P1-06 | 完成 WSL NAT exact host-gateway 校验 | P1-05 | route/CIDR/gateway/local-IP parser、gateway validator、WSL writer | gateway 属于目标网络且可达；拒绝猜测地址、wildcard、firewall 自动修改、portproxy | 拒绝 takeover，保留原 Live | completed | 2026-08-09 02:50；新增 bounded WSL `ip -4 route show default`/`ip -4 addr show dev` 解析、CIDR 包含校验、Windows `GetAdaptersAddresses` 精确 unicast 校验和 `routing_wsl_gateway` listener；mirrored 失败后才 fallback NAT，gateway probe 失败恢复旧 listener，不修改 firewall/portproxy/.wslconfig；扩展 LocalRoute projection 允许经后端校验的 WSL gateway endpoint，未实现 HTTP/UI。定向 routing 7、daemon routing 8、global 22；全 Rust lib 934 passed/1 ignored、cargo check、fmt、TypeScript、diff check 通过；未运行 tauri dev/build。R1：发现并修复 GetAdaptersAddresses 缓冲区对齐、WSL listener/rebind 与 projection 失败回滚缺口；定向测试复验后 R1b 0 findings。R2：复核 CIDR/device/gateway 信任边界、LAN/wildcard、工具缺失/超时、多 distro、local/WSL/SSH、旧 daemon、secret、firewall/portproxy 和 P1-07/macOS/HTTP/UI 范围，0 findings；R1b/R2 连续两轮零未解决发现。GitNexus upstream impact 未返回 HIGH/CRITICAL；下一步仅执行 P1-07 |
 | P1-07 | 完成 macOS local loopback、原子 replace、Keychain 和 daemon detach | P1-03、P1-04 | macOS path/keychain adapter、daemon detach/shutdown、Home writer | 真实 macOS runner：bind、投影、恢复、GUI 退出、重启复用端口 | 恢复 direct local Live，停止 route daemon | completed | 2026-08-09 03:08；Unix daemon spawn 改为 `setsid` 独立 session；现有 macOS Keychain adapter、同目录 stage + rename + verify 已确认；新增 macOS cfg 原子 replace focused test。Windows 定向 3、全 Rust 934 passed/1 ignored、cargo check、fmt、TypeScript、diff check 通过；R1/R2 连续零发现；本环境无 macOS runner，真实 bind/projection/restore/GUI exit/重启验收明确留给 P5-02，不以 Windows 结果替代；独立提交主题见执行日志 |
 | P1-08 | 将现有 writer 扩展为 Direct/LocalRoute 唯一投影器并提供补偿 | P1-04、P1-07 | provider/global.rs、apply/recover、owned/non-owned merge | Claude 单文件、Codex 双文件、Grok model entry；外部 drift 阻止覆盖 | journal 恢复旧 direct snapshot | completed | 2026-08-09 03:25；新增内部 `ProjectionMode::Direct | LocalRoute`，外部 Global preview/apply DTO 与 command 签名保持不变；Direct 与 LocalRoute 均经同一 build plan、stage、backup、replace、verify、journal/recovery 链路，新增显式模式 focused test。定向 global 4、全 Rust 935 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build；R1/R2 连续两轮零未解决发现；独立提交主题见执行日志 |
-| P1-09 | 完成 Claude/Codex/Grok provider-specific endpoint/auth/model sentinel | P1-08 | Claude writer、Codex auth.json/config.toml、provider/grok.rs | route on/off 对照；保留 Hook/MCP/permissions/projects/statusline；OAuth/SSH/Gemini blocked | 恢复当前 provider direct projection | in_progress | 不替换 GROK_HOME |
-| P1-10 | 让 route runtime 驻留 daemon，处理 capability、busy、idle、GUI exit | P0-04、P1-08 | daemon/server.rs、client.rs、discovery.rs、lib.rs、exit cleanup | daemon crash/restart、GUI 真退出、route active/inactive、旧 daemon | active 时只断 GUI；inactive 执行现有安全 shutdown | pending | route 不依赖 WebView 生命周期 |
+| P1-09 | 完成 Claude/Codex/Grok provider-specific endpoint/auth/model sentinel | P1-08 | Claude writer、Codex auth.json/config.toml、provider/grok.rs | route on/off 对照；保留 Hook/MCP/permissions/projects/statusline；OAuth/SSH/Gemini blocked | 恢复当前 provider direct projection | completed | 2026-08-09 03:18；补齐 Claude route、Codex auth/config 双文件、Grok selected model entry 的 endpoint/auth/model sentinel 回归；验证 Codex `/v1`、Grok profile、Hook/MCP 等 non-owned 字段保留，未替换 GROK_HOME。定向 provider-specific 3、全 Rust 937 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build；R1/R2 连续两轮零未解决发现；独立提交主题见执行日志 |
+| P1-10 | 让 route runtime 驻留 daemon，处理 capability、busy、idle、GUI exit | P0-04、P1-08 | daemon/server.rs、client.rs、discovery.rs、lib.rs、exit cleanup | daemon crash/restart、GUI 真退出、route active/inactive、旧 daemon | active 时只断 GUI；inactive 执行现有安全 shutdown | in_progress | route 不依赖 WebView 生命周期 |
 | P1-11 | 完成三应用 HTTP path、provider adapter、JSON/SSE 转发 | P0-03、P1-10 | route server、adapter、reqwest、request/response DTO | /v1/messages、/v1/responses、/v1/chat/completions、/grokbuild/v1；未知 path 404/405 | 未覆盖格式不接管，route off 走 direct | pending | 不支持任意 URL forwarding/CONNECT |
 | P1-12 | 完成 route-only enabled key pool、cursor、cooldown 和 reload generation | P1-01、P1-11 | provider key loader、route snapshot、forward attempt | sort_index 轮询；active-first；401/403/429 未提交前换 key；耗尽后 provider failure | 关闭 pool，恢复 active-key-only；不改 is_active | pending | A-03；direct/scope/Live 不受影响 |
 | P1-13 | 完成模型映射 route-only 语义、每 attempt 重算和最终 model pin | P0-03、P1-11 | advanced.modelMappings、normalize/save、forward loop、model resolver | off 不重写；a->b outbound；重复/大小写/Body Override/A-B provider mapping | 禁用 mapper，保留配置和 direct behavior | pending | requested_model/upstream_model 都进脱敏日志 |
@@ -191,6 +191,8 @@
 | 2026-08-09 03:08 | DESKTOP-Q49I074 | P1-07 | in_progress -> completed | `src-tauri/src/daemon/client.rs`、`src-tauri/src/provider/global.rs`、progress | daemon client 定向 1、writer 原子替换定向 1、stage path 定向 1；全 Rust lib 934 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；未以 Windows 测试替代 macOS runner | R1：复核 session detach、atomic rename、Keychain adapter、secret/数据损坏边界，0 findings；R2：复核 P1-07/P1-08/P1-10 边界、平台/退出/重启/WSL/Hook 场景，0 findings；连续两轮零未解决发现 | feat(routing): detach daemon session for macOS | P1-08 |
 
 | 2026-08-09 03:25 | DESKTOP-Q49I074 | P1-08 | in_progress -> completed | `src-tauri/src/provider/global.rs`、progress | 定向 global 4；全 Rust lib 935 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build | R1：模式转换、Direct 默认兼容、LocalRoute endpoint/sentinel、统一 stage/journal/recovery，0 findings；R2：PRD/design、三应用/多文件补偿、drift、跨平台/SSH/Workspan/Hook、无第二 writer，0 findings；连续两轮零未解决发现 | feat(routing): add explicit projection modes | P1-09 |
+
+| 2026-08-09 03:18 | DESKTOP-Q49I074 | P1-09 | in_progress -> completed | `src-tauri/src/provider/global.rs`、src-tauri/src/provider/grok.rs 测试覆盖、progress | provider-specific route 3、全 Rust lib 937 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build | R1：三应用 endpoint/auth/model sentinel、Codex `/v1`、Grok profile、secret/non-owned 字段，0 findings；R2：route on/off、Hook/MCP/permissions/projects/statusline、OAuth/SSH/Gemini、三平台与 P1-10 边界，0 findings；连续两轮零未解决发现 | feat(routing): cover provider-specific route projections | P1-10 |
 
 ## 12. 执行授权
 

@@ -2171,6 +2171,102 @@ mod tests {
     }
 
     #[test]
+    fn local_route_projection_updates_codex_auth_and_config_without_losing_unowned_data() {
+        let mut plan = ProviderPlan {
+            app_type: "codex".to_string(),
+            provider_id: "provider".to_string(),
+            provider_name: "Provider".to_string(),
+            home: matching_home(),
+            targets: vec![
+                PlannedTarget {
+                    target: "codex.auth".to_string(),
+                    path: "auth.json".to_string(),
+                    before: None,
+                    desired: br#"{"OPENAI_API_KEY":"direct","account_id":"keep"}"#.to_vec(),
+                    owned_fields: Vec::new(),
+                },
+                PlannedTarget {
+                    target: "codex.config".to_string(),
+                    path: "config.toml".to_string(),
+                    before: None,
+                    desired: br#"model = "gpt-5"
+model_provider = "cli_manager"
+
+[model_providers.cli_manager]
+name = "Provider"
+base_url = "https://provider.test/v1"
+
+[mcp_servers.demo]
+command = "demo"
+"#
+                    .to_vec(),
+                    owned_fields: Vec::new(),
+                },
+            ],
+        };
+
+        apply_local_route_projection(
+            &mut plan,
+            &LocalRouteProjection {
+                endpoint: "http://127.0.0.1:15721".to_string(),
+            },
+        )
+        .unwrap();
+
+        let auth: Value = serde_json::from_slice(&plan.targets[0].desired).unwrap();
+        assert_eq!(auth["OPENAI_API_KEY"], ROUTED_CREDENTIAL_SENTINEL);
+        assert_eq!(auth["account_id"], "keep");
+
+        let config = String::from_utf8(plan.targets[1].desired.clone()).unwrap();
+        assert!(config.contains("model = \"gpt-5\""));
+        assert!(config.contains("base_url = \"http://127.0.0.1:15721/v1\""));
+        assert!(config.contains("[mcp_servers.demo]"));
+    }
+
+    #[test]
+    fn local_route_projection_updates_grok_selected_model_only() {
+        let mut plan = ProviderPlan {
+            app_type: "grokbuild".to_string(),
+            provider_id: "provider".to_string(),
+            provider_name: "Provider".to_string(),
+            home: matching_home(),
+            targets: vec![PlannedTarget {
+                target: "grokbuild.config".to_string(),
+                path: "config.toml".to_string(),
+                before: None,
+                desired: br#"[models]
+default = "proxy"
+
+[model.proxy]
+model = "grok-test"
+base_url = "https://provider.test"
+api_key = "direct"
+
+[mcp_servers.demo]
+command = "demo"
+"#
+                .to_vec(),
+                owned_fields: Vec::new(),
+            }],
+        };
+
+        apply_local_route_projection(
+            &mut plan,
+            &LocalRouteProjection {
+                endpoint: "http://127.0.0.1:15721".to_string(),
+            },
+        )
+        .unwrap();
+
+        let config = String::from_utf8(plan.targets[0].desired.clone()).unwrap();
+        assert!(config.contains("model = \"grok-test\""));
+        assert!(config.contains("base_url = \"http://127.0.0.1:15721\""));
+        assert!(config.contains("api_key = \"CLI_MANAGER_ROUTED\""));
+        assert!(config.contains("[mcp_servers.demo]"));
+        assert!(!config.contains("api_key = \"direct\""));
+    }
+
+    #[test]
     fn global_writer_has_explicit_direct_and_local_route_modes() {
         let projection = LocalRouteProjection {
             endpoint: "http://127.0.0.1:15721".to_string(),
