@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 41
+- **Total Sessions**: 42
 - **Last Active**: 2026-08-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1388 | Active |
+| `journal-1.md` | ~1421 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 42 | 2026-08-08 | 补充实时统计历史缓存失效 | `7d688765` | `master` |
 | 41 | 2026-08-08 | 修复实时统计会话时长 | `a6292046` | `master` |
 | 40 | 2026-08-08 | 修复持续输出时终端右键清屏 | `d1a7c244` | `master` |
 | 39 | 2026-08-06 | 彻底修复多会话终端输出卡死 | `e46052c2` | `master` |

@@ -1386,3 +1386,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 42: 补充实时统计历史缓存失效
+
+**Date**: 2026-08-08
+**Task**: 补充实时统计历史缓存失效
+**Branch**: `master`
+
+### Summary
+
+升级历史索引缓存版本，确保已存在的 Codex 会话不会继续复用旧的 0～1ms 时长计算结果，而是自动按 transcript 时间重新解析。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7d688765` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
