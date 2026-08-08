@@ -20,7 +20,7 @@ pub(crate) struct HomeSelectInput {
     pub home_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HomeIdentity {
     pub environment_kind: String,

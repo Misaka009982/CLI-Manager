@@ -1,21 +1,21 @@
 # CCS 路由迁移实施进度
 
-> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0 已完成；当前仅将指针切换到 P1-01，按用户要求暂停实现，等待另一设备继续。
+> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0 已完成；P1-01 已完成，当前仅将指针切换到 P1-02，尚未进入 P1-02 实现。
 
 ## 0. 当前指针
 
 | 字段 | 值 |
 | --- | --- |
 | Task | 08-08-ccs-routing-migration |
-| task.json 状态 | in_progress（P0 已完成，P1-01 指针已切换但尚未实现） |
+| task.json 状态 | in_progress（P0、P1-01 已完成，当前指针为 P1-02） |
 | Changelog Target | [TEMP] |
-| 当前阶段 | P1：本地路由（暂停，未开始生产实现） |
-| 当前 Case | P1-01 |
-| 审批状态 | 已批准；P0 完成，按用户要求暂停，等待另一设备继续 P1-01 |
-| 最后更新时间 | 2026-08-08 23:54 |
+| 当前阶段 | P1：本地路由 |
+| 当前 Case | P1-02 |
+| 审批状态 | 已批准；P1-01 完成，按 Case 顺序切换至 P1-02 指针，尚未开始 P1-02 实现 |
+| 最后更新时间 | 2026-08-09 01:17 |
 | 最后操作机器 | DESKTOP-Q49I074 |
 | 分支 | feat/native-provider-management |
-| 工作目录 | D:/github/CLI-Manager |
+| 工作目录 | F:/github/CLI-Manager |
 
 ## 1. 执行规则
 
@@ -76,12 +76,12 @@
 | 阶段 | 范围 | Case 数 | 当前状态 |
 | --- | --- | ---: | --- |
 | P0 | 影响分析、Schema、协议、Fixture 基线 | 4 | completed |
-| P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | P1-01 in_progress（仅指针，尚未实现） |
+| P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | P1-02 in_progress（仅切换指针，尚未实现） |
 | P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | pending |
 | P3 | 全局出站代理 | 5 | pending |
 | P4 | 整流器与 Bedrock 优化 | 6 | pending |
 | P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | pending |
-| 合计 |  | 43 | 4 个 Case 完成；P1-01 等待续做 |
+| 合计 |  | 43 | 5 个 Case 完成；P1-02 等待续做 |
 
 ## 4. P0：影响分析、Schema、协议与 Fixture 基线
 
@@ -96,8 +96,8 @@
 
 | ID | 目标 | 前置依赖 | 实现触点 | 验收命令/场景 | 回滚点 | 状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| P1-01 | 建立 routing domain、持久化读取和 Tauri commands，区分持久化开关与真实 daemon 状态 | P0-02、P0-04 | provider repository/DTO、commands/provider.rs 或 routing command module、前端 invoke 类型 | 启停、无 current、无 active key、unsupported app、旧 daemon；错误时不写半成品 | routing 读取失败降级 route inactive，不影响 direct | in_progress | 仅切换跨机器执行指针；用户要求 P0 提交后暂停，尚未修改任何 P1 代码。续做前先读 task/spec 并对拟修改 symbol 运行 GitNexus upstream impact |
-| P1-02 | 实现 preferredPort/actualPort、真实 bind 和端口回退 | P0-02、P0-04 | daemon listener、route settings、status DTO | 上次 actual -> preferred -> 15721-15799 升序去重；首选占用、范围耗尽、重启复用 | bind/projection 失败保留旧 listener、旧 actual 和旧 Live | pending | 合法用户端口 1024-65535，不增加范围起止 UI |
+| P1-01 | 建立 routing domain、持久化读取和 Tauri commands，区分持久化开关与真实 daemon 状态 | P0-02、P0-04 | provider/routing.rs、commands/routing.rs、commands/mod.rs、provider/mod.rs、lib.rs、HomeIdentity DTO | 版本化 service/takeovers 读取；启停、无 current、无 active key、unsupported app、旧 daemon；错误时不写半成品 | routing 读取失败降级 route inactive，不影响 direct | completed | 2026-08-09 01:17；实现最小持久化 domain、quick controls、daemon capability/status 查询及四个 commands；未实现 listener、端口分配、Live takeover、HTTP、UI。定向 routing 4、daemon protocol 12、database 9；全 Rust lib 918 passed/1 ignored；cargo check、fmt、TypeScript、diff check 通过。R1：复核 DB->command->daemon 数据流、schema/error/secret/旧 daemon 门禁、无半写入，0 findings。R2：复核 PRD/design 边界、三平台/WSL/退出/Workspan/Hook 场景（本 Case 无 UI/Live 触点均确认由后续 Case 负责）、跨层回归与安全 host 校验，0 findings；连续两轮零发现。GitNexus staged detect_changes 返回 high，原因是预期的 `run` command registry 触及 8 个启动流程；`run` upstream impact 为 LOW，未发现额外文件/流程。连续两轮零发现。独立提交主题：feat(routing): add routing domain commands；下一步仅切换 P1-02 指针 |
+| P1-02 | 实现 preferredPort/actualPort、真实 bind 和端口回退 | P0-02、P0-04 | daemon listener、route settings、status DTO | 上次 actual -> preferred -> 15721-15799 升序去重；首选占用、范围耗尽、重启复用 | bind/projection 失败保留旧 listener、旧 actual 和旧 Live | in_progress | 仅执行指针；尚未实现。合法用户端口 1024-65535，不增加范围起止 UI |
 | P1-03 | 实现 listener lease、安全地址校验和运行中原子换端口 | P1-02 | listener bind/lease、projection coordinator、status | 拒绝 0.0.0.0、::、LAN wildcard；完整 listener set 预绑定与失败回滚 | 释放新 lease，恢复旧 listener/endpoint/Live | pending | 不允许出现部分 Home 指向旧端口 |
 | P1-04 | 完成 Windows local CLI Home takeover/off/restore | P1-01、P1-03 | provider/home.rs、global.rs、native writer、Windows resolver | Claude/Codex/Grok；最小化、托盘、重启、显式关闭；非 owned 字段保留 | journal compensation 恢复 direct；partial 时 daemon 继续运行 | pending | 要求 active API key 和 ready provider |
 | P1-05 | 完成 WSL mirrored localhost 主动探测与 WSL projection | P1-03、P1-04 | WSL runner、UNC writer、distro identity、endpoint discovery | 目标 distro 探测 127.0.0.1；不可达/超时/多 distro 差异不写 Live | 删除 takeover intent，恢复 WSL direct；不改系统网络 | pending | mirrored 成功优先于 NAT |
@@ -181,6 +181,7 @@
 | 2026-08-08 23:03 | DESKTOP-Q49I074 | P0-03 | in_progress -> completed | `src-tauri/tests/routing_fixtures.rs`、5 个 routing fixture、P0-03 research/progress | 5 focused tests、123 provider tests、`cargo check`、Rustfmt、diff 与 secret/scope 检查通过 | R1/R2 findings 修复；R3/R4 连续零发现 | test(routing): add protocol fixture baseline | P0-04 |
 | 2026-08-08 23:03 | DESKTOP-Q49I074 | P0-04 | pending -> in_progress | 尚未修改 daemon/command 生产代码 | 待执行 daemon protocol capability 与错误 DTO 影响分析 | Review 待完成 | 待完成 | P0-04 |
 | 2026-08-08 23:54 | DESKTOP-Q49I074 | P0-04 | in_progress -> completed | daemon protocol/server/client/discovery、terminal legacy relay、design、backend contract、P0-04 research/progress | 914 Rust lib tests（1 ignored）、TypeScript、cargo check、Rustfmt、diff check 通过；focused tests 见 research | R1/R2 findings 修复；R3/R4 连续零发现；GitNexus CRITICAL 风险已记录 | feat(routing): add daemon protocol baseline | P1-01（仅切换指针后暂停） |
+| 2026-08-09 01:17 | DESKTOP-Q49I074 | P1-01 | in_progress -> completed | `src-tauri/src/provider/routing.rs`、`src-tauri/src/commands/routing.rs`、HomeIdentity DTO、module/command 注册、progress | routing 4、daemon protocol 12、provider database 9；全 Rust lib 918 passed、1 ignored；cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build；staged detect_changes high 由预期 run 注册影响 8 个启动流程，run upstream impact LOW | R1/R2：数据流、错误/secret/旧 daemon 门禁、PRD/design 范围、三平台/WSL/生命周期场景复核；连续两轮零未解决发现 | feat(routing): add routing domain commands | P1-02（仅切换指针，未开始实现） |
 
 ## 12. 执行授权
 

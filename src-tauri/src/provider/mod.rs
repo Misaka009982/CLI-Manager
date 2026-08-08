@@ -7,6 +7,7 @@ pub(crate) mod import;
 mod migration;
 pub(crate) mod models;
 pub(crate) mod repository;
+pub(crate) mod routing;
 pub(crate) mod runtime;
 pub(crate) mod scope;
 

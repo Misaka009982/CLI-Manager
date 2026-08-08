@@ -19,6 +19,7 @@ pub mod hook_settings;
 pub mod logging;
 pub mod model_pricing;
 pub mod provider;
+pub mod routing;
 pub mod shell;
 pub mod ssh;
 pub mod ssh_config;
