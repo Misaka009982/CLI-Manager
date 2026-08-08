@@ -2265,8 +2265,11 @@ impl DaemonServer {
                 event: RoutingEvent::error(id, RoutingError::service_unavailable()),
             },
             ClientFrame::Shutdown { id } => {
-                if self.host.alive_session_count() > 0 {
-                    return err_frame(id, "sessions active");
+                if self.host.alive_session_count() > 0 || self.host.routing_is_running() {
+                    log::info!(
+                        "daemon shutdown retained (alive sessions or active routing runtime)"
+                    );
+                    return DaemonFrame::Ok { id };
                 }
                 log::info!("daemon shutdown requested (no alive sessions)");
                 let info_path = self.info_path.clone();
@@ -2798,6 +2801,39 @@ mod tests {
         let status = event.status.expect("stopped status");
         assert_eq!(status.status, "stopped");
         assert_eq!(status.actual_port, Some(preferred_port));
+    }
+
+    #[test]
+    fn shutdown_retains_daemon_while_routing_runtime_is_active() {
+        let probe = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let preferred_port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let server = DaemonServer {
+            host: Arc::new(DaemonHost::new()),
+            next_client_id: AtomicU64::new(1),
+            token: String::new(),
+            version: String::new(),
+            info_path: PathBuf::new(),
+        };
+
+        let start = server.handle_frame(
+            0,
+            ClientFrame::RoutingStart {
+                id: 20,
+                listen_address: Some("127.0.0.1".to_string()),
+                preferred_port: Some(preferred_port),
+                last_actual_port: None,
+                listener_addresses: Vec::new(),
+            },
+        );
+        assert!(matches!(start, DaemonFrame::RoutingEvent { .. }));
+
+        let shutdown = server.handle_frame(0, ClientFrame::Shutdown { id: 21 });
+        assert!(matches!(shutdown, DaemonFrame::Ok { id: 21 }));
+        assert!(server.host.routing_is_running());
+
+        let stop = server.handle_frame(0, ClientFrame::RoutingStop { id: 22 });
+        assert!(matches!(stop, DaemonFrame::RoutingEvent { .. }));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::daemon::client::{DaemonBridge, DaemonClient};
 use crate::daemon::protocol::{
-    routing_control_id, ClientFrame, SessionMeta, FEATURE_WS_BINARY_OUTPUT,
+    routing_control_id, ClientFrame, DaemonFrame, SessionMeta, FEATURE_WS_BINARY_OUTPUT,
     ROUTING_ERROR_PROTOCOL_UNSUPPORTED,
 };
 use crate::provider::scope::{self, ProviderLaunchConfig};
@@ -255,6 +255,22 @@ pub async fn pty_daemon_shutdown_if_idle(
     let Some(client) = daemon_bridge.get() else {
         return Ok(false);
     };
+
+    let status_id = client.next_request_id();
+    if let Ok(DaemonFrame::RoutingEvent { event }) =
+        client.request(status_id, &ClientFrame::RoutingStatus { id: status_id })
+    {
+        if event
+            .status
+            .as_ref()
+            .is_some_and(|status| status.status == "running")
+        {
+            // Route runtime is daemon-owned; GUI exit must detach instead of
+            // asking the daemon to terminate. The daemon also guards this at
+            // the Shutdown frame boundary to close the status-check race.
+            return Ok(false);
+        }
+    }
     client.shutdown_if_idle()?;
     Ok(true)
 }
