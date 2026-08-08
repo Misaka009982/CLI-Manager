@@ -164,6 +164,14 @@ async fn load_failover_config(
     Ok(config)
 }
 
+pub(crate) async fn load_failover_config_for_daemon(
+    app_type: &str,
+) -> Result<RoutingFailoverConfig, String> {
+    let app_type = normalize_routing_app_type(app_type)?;
+    let mut connection = database::open_connection().await?;
+    load_failover_config(&mut connection, &app_type).await
+}
+
 pub(crate) async fn save_failover_config(
     app_type: &str,
     config: &RoutingFailoverConfig,

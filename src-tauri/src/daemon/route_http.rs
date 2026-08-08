@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use http_body_util::{BodyExt, Full, Limited, StreamBody};
 use hyper::body::{Frame, Incoming};
 use hyper::header::{HeaderName, HeaderValue, ALLOW, CONTENT_TYPE, HOST};
@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::error::Error;
 use std::net::TcpListener;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -21,7 +22,6 @@ use std::time::{Duration, Instant};
 
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
-const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(120);
 const KEY_COOLDOWN_DEFAULT: Duration = Duration::from_secs(30);
 const KEY_COOLDOWN_MAX: Duration = Duration::from_secs(60);
 
@@ -45,6 +45,38 @@ struct ProviderSnapshot {
     pool_id: String,
     selected_key: KeyCandidate,
     model_mappings: Vec<ModelMapping>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpstreamErrorClass {
+    Success,
+    Key,
+    Provider,
+    Capability,
+    Client,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpstreamSendFailure {
+    Timeout,
+    Request,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BodyTimeoutMode {
+    Streaming {
+        first_byte: Duration,
+        idle: Duration,
+        received_first: bool,
+    },
+    NonStreaming {
+        deadline: Instant,
+    },
+}
+
+struct TimedBodyState<S> {
+    stream: Pin<Box<S>>,
+    mode: BodyTimeoutMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -274,6 +306,19 @@ async fn forward_request(
             "routing_request_body_must_be_object",
         ));
     }
+    let failover_config =
+        crate::provider::routing::load_failover_config_for_daemon(route_app_type(route))
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "routing_failover_config_unavailable",
+                )
+            })?;
+    let streaming = request_json
+        .get("stream")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let snapshot = match load_provider_snapshot(route, &state).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -290,12 +335,22 @@ async fn forward_request(
     };
     let url = upstream_url(&snapshot.base_url, route, &request_path)
         .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_provider_endpoint_invalid"))?;
-    let client = reqwest::Client::builder()
-        .timeout(UPSTREAM_TIMEOUT)
+    let mut client_builder = reqwest::Client::builder();
+    if !streaming {
+        client_builder =
+            client_builder.timeout(Duration::from_secs(failover_config.non_streaming_timeout));
+    }
+    let client = client_builder
         .build()
         .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_client_failed"))?;
     let mut used_keys = HashSet::from([snapshot.selected_key.id.clone()]);
     let mut selected_key = snapshot.selected_key.clone();
+    let mut provider_attempt: u32 = 0;
+    let max_attempts = if failover_config.auto_failover_enabled {
+        max_attempts(failover_config.max_retries)
+    } else {
+        1
+    };
     let response = loop {
         let mut upstream = client.post(&url);
         for (name, value) in &headers {
@@ -311,12 +366,59 @@ async fn forward_request(
         }
         let attempt_body = apply_model_mapping(&request_json, &snapshot.model_mappings)
             .map_err(|_| (StatusCode::BAD_REQUEST, "routing_model_mapping_invalid"))?;
-        let response = upstream
-            .header(REQ_CONTENT_TYPE.as_str(), "application/json")
-            .body(attempt_body)
-            .send()
+        let send_result = if streaming {
+            match tokio::time::timeout(
+                Duration::from_secs(failover_config.streaming_first_byte_timeout),
+                upstream
+                    .header(REQ_CONTENT_TYPE.as_str(), "application/json")
+                    .body(attempt_body)
+                    .send(),
+            )
             .await
-            .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_request_failed"))?;
+            {
+                Ok(result) => result.map_err(|error| {
+                    if error.is_timeout() {
+                        UpstreamSendFailure::Timeout
+                    } else {
+                        UpstreamSendFailure::Request
+                    }
+                }),
+                Err(_) => Err(UpstreamSendFailure::Timeout),
+            }
+        } else {
+            upstream
+                .header(REQ_CONTENT_TYPE.as_str(), "application/json")
+                .body(attempt_body)
+                .send()
+                .await
+                .map_err(|error| {
+                    if error.is_timeout() {
+                        UpstreamSendFailure::Timeout
+                    } else {
+                        UpstreamSendFailure::Request
+                    }
+                })
+        };
+        let response = match send_result {
+            Ok(response) => response,
+            Err(_failure) if provider_attempt.saturating_add(1) < max_attempts => {
+                provider_attempt = provider_attempt.saturating_add(1);
+                continue;
+            }
+            Err(UpstreamSendFailure::Timeout) => {
+                return Err((StatusCode::GATEWAY_TIMEOUT, "routing_upstream_timeout"));
+            }
+            Err(UpstreamSendFailure::Request) => {
+                return Err((StatusCode::BAD_GATEWAY, "routing_upstream_request_failed"));
+            }
+        };
+        if classify_upstream_status(response.status()) == UpstreamErrorClass::Provider {
+            if provider_attempt.saturating_add(1) < max_attempts {
+                provider_attempt = provider_attempt.saturating_add(1);
+                continue;
+            }
+            return Err((StatusCode::BAD_GATEWAY, "routing_upstream_provider_failed"));
+        }
         if !is_key_retryable(response.status()) {
             break response;
         }
@@ -334,11 +436,18 @@ async fn forward_request(
     };
     let status = response.status();
     let headers = response.headers().clone();
-    let stream = response.bytes_stream().map(|chunk| {
-        chunk
-            .map(Frame::data)
-            .map_err(|error| -> BoxError { Box::new(error) })
-    });
+    let timeout_mode = if streaming {
+        BodyTimeoutMode::Streaming {
+            first_byte: Duration::from_secs(failover_config.streaming_first_byte_timeout),
+            idle: Duration::from_secs(failover_config.streaming_idle_timeout),
+            received_first: false,
+        }
+    } else {
+        BodyTimeoutMode::NonStreaming {
+            deadline: Instant::now() + Duration::from_secs(failover_config.non_streaming_timeout),
+        }
+    };
+    let stream = timed_body_stream(response.bytes_stream(), timeout_mode);
     let body = BodyExt::boxed(StreamBody::new(stream));
     let mut builder = Response::builder().status(status);
     for (name, value) in headers {
@@ -581,8 +690,83 @@ fn upstream_url(base_url: &str, route: RouteKind, request_path: &str) -> Result<
     Ok(url.to_string())
 }
 
+fn classify_upstream_status(status: StatusCode) -> UpstreamErrorClass {
+    match status.as_u16() {
+        401 | 403 | 429 => UpstreamErrorClass::Key,
+        400 | 405 | 406 | 413 | 414 | 415 | 422 | 501 => UpstreamErrorClass::Capability,
+        400..=499 => UpstreamErrorClass::Client,
+        500..=599 => UpstreamErrorClass::Provider,
+        _ if status.is_success() => UpstreamErrorClass::Success,
+        _ => UpstreamErrorClass::Client,
+    }
+}
+
+fn max_attempts(max_retries: u32) -> u32 {
+    max_retries.saturating_add(1)
+}
+
+fn timed_body_stream<S>(
+    stream: S,
+    mode: BodyTimeoutMode,
+) -> impl Stream<Item = Result<Frame<Bytes>, BoxError>>
+where
+    S: Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
+{
+    futures_util::stream::unfold(
+        Some(TimedBodyState {
+            stream: Box::pin(stream),
+            mode,
+        }),
+        |state| async move {
+            let mut state = state?;
+            let timeout = match state.mode {
+                BodyTimeoutMode::Streaming {
+                    first_byte,
+                    idle,
+                    received_first,
+                } => {
+                    if received_first {
+                        idle
+                    } else {
+                        first_byte
+                    }
+                }
+                BodyTimeoutMode::NonStreaming { deadline } => {
+                    deadline.saturating_duration_since(Instant::now())
+                }
+            };
+            match tokio::time::timeout(timeout, state.stream.next()).await {
+                Ok(Some(Ok(chunk))) => {
+                    if let BodyTimeoutMode::Streaming {
+                        ref mut received_first,
+                        ..
+                    } = state.mode
+                    {
+                        *received_first |= !chunk.is_empty();
+                    }
+                    Some((
+                        Ok::<Frame<Bytes>, BoxError>(Frame::data(chunk)),
+                        Some(state),
+                    ))
+                }
+                Ok(Some(Err(error))) => {
+                    Some((Err::<Frame<Bytes>, BoxError>(Box::new(error)), None))
+                }
+                Ok(None) => None,
+                Err(_) => Some((
+                    Err::<Frame<Bytes>, BoxError>(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "routing_upstream_stream_timeout",
+                    ))),
+                    None,
+                )),
+            }
+        },
+    )
+}
+
 fn is_key_retryable(status: reqwest::StatusCode) -> bool {
-    matches!(status.as_u16(), 401 | 403 | 429)
+    classify_upstream_status(status) == UpstreamErrorClass::Key
 }
 
 fn retry_cooldown(status: u16, headers: &reqwest::header::HeaderMap) -> Duration {
@@ -695,6 +879,45 @@ mod tests {
             classify_route(&Method::POST, "/v1/anything"),
             Err((StatusCode::NOT_FOUND, "routing_path_not_found"))
         );
+    }
+
+    #[test]
+    fn upstream_error_classifier_separates_key_provider_and_capability_failures() {
+        assert_eq!(
+            classify_upstream_status(StatusCode::UNAUTHORIZED),
+            UpstreamErrorClass::Key
+        );
+        assert_eq!(
+            classify_upstream_status(StatusCode::TOO_MANY_REQUESTS),
+            UpstreamErrorClass::Key
+        );
+        assert_eq!(
+            classify_upstream_status(StatusCode::BAD_GATEWAY),
+            UpstreamErrorClass::Provider
+        );
+        assert_eq!(
+            classify_upstream_status(StatusCode::UNPROCESSABLE_ENTITY),
+            UpstreamErrorClass::Capability
+        );
+        assert_eq!(
+            classify_upstream_status(StatusCode::BAD_REQUEST),
+            UpstreamErrorClass::Capability
+        );
+        assert_eq!(
+            classify_upstream_status(StatusCode::NOT_FOUND),
+            UpstreamErrorClass::Client
+        );
+        assert_eq!(
+            classify_upstream_status(StatusCode::OK),
+            UpstreamErrorClass::Success
+        );
+    }
+
+    #[test]
+    fn max_attempts_is_initial_attempt_plus_retry_budget() {
+        assert_eq!(max_attempts(0), 1);
+        assert_eq!(max_attempts(3), 4);
+        assert_eq!(max_attempts(u32::MAX), u32::MAX);
     }
 
     #[test]
