@@ -45,7 +45,7 @@ struct ProviderSnapshot {
     claude_api_key_field: Option<String>,
     claude_api_format: Option<String>,
     pool_id: String,
-    selected_key: KeyCandidate,
+    key_candidates: Vec<KeyCandidate>,
     model_mappings: Vec<ModelMapping>,
 }
 
@@ -62,6 +62,12 @@ enum UpstreamErrorClass {
 enum UpstreamSendFailure {
     Timeout,
     Request,
+}
+
+enum ProviderAttemptOutcome {
+    Response(reqwest::Response),
+    Failure(StatusCode, &'static str),
+    KeyExhausted,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -157,6 +163,12 @@ struct CircuitCommit {
     state: Arc<RouteState>,
     permit: Option<CircuitPermit>,
     policy: CircuitPolicy,
+    hot_switch: Option<HotSwitchCommit>,
+}
+
+struct HotSwitchCommit {
+    app_type: &'static str,
+    provider_id: String,
 }
 
 struct TimedBodyState<S> {
@@ -441,20 +453,6 @@ async fn forward_request(
         .get("stream")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let snapshot = match load_provider_snapshot(route, &state).await {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            log::warn!("routing provider snapshot unavailable: {error}");
-            return Err(if error.starts_with("provider_model_mapping_") {
-                (StatusCode::BAD_REQUEST, "routing_model_mapping_invalid")
-            } else {
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "routing_provider_unavailable",
-                )
-            });
-        }
-    };
     let circuit_policy = CircuitPolicy {
         failure_threshold: failover_config.circuit_failure_threshold,
         success_threshold: failover_config.circuit_success_threshold,
@@ -462,23 +460,19 @@ async fn forward_request(
         error_rate_threshold: failover_config.circuit_error_rate_threshold,
         min_requests: failover_config.circuit_min_requests,
     };
-    let mut circuit_permit = if failover_config.auto_failover_enabled {
-        Some(
-            state
-                .circuits
-                .acquire(route_app_type(route), &snapshot.provider_id, circuit_policy)
-                .map_err(|_| {
-                    (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "routing_provider_circuit_open",
-                    )
-                })?,
-        )
-    } else {
-        None
-    };
-    let url = upstream_url(&snapshot.base_url, route, &request_path)
-        .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_provider_endpoint_invalid"))?;
+    let snapshots = load_provider_snapshots(route, failover_config.auto_failover_enabled)
+        .await
+        .map_err(|error| {
+            log::warn!("routing provider snapshot unavailable: {error}");
+            if error.starts_with("provider_model_mapping_") {
+                (StatusCode::BAD_REQUEST, "routing_model_mapping_invalid")
+            } else {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "routing_provider_unavailable",
+                )
+            }
+        })?;
     let mut client_builder = reqwest::Client::builder();
     if !streaming {
         client_builder =
@@ -487,99 +481,183 @@ async fn forward_request(
     let client = client_builder
         .build()
         .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_client_failed"))?;
-    let mut used_keys = HashSet::from([snapshot.selected_key.id.clone()]);
-    let mut selected_key = snapshot.selected_key.clone();
-    let mut provider_attempt: u32 = 0;
-    let max_attempts = if failover_config.auto_failover_enabled {
-        max_attempts(failover_config.max_retries)
+    let max_provider_attempts = if failover_config.auto_failover_enabled {
+        max_attempts(failover_config.max_retries) as usize
     } else {
         1
     };
-    let response = loop {
-        let mut upstream = client.post(&url);
-        for (name, value) in &headers {
-            upstream = upstream.header(name, value);
+    let mut provider_index = 0usize;
+    let mut terminal_failure = None;
+    let selected = loop {
+        if provider_index >= snapshots.len() || provider_index >= max_provider_attempts {
+            break None;
         }
-        if use_claude_api_key_header(&snapshot) {
-            upstream = upstream.header("x-api-key", selected_key.api_key.clone());
+        let snapshot = snapshots[provider_index].clone();
+        let mut circuit_permit = if failover_config.auto_failover_enabled {
+            match state.circuits.acquire(
+                route_app_type(route),
+                &snapshot.provider_id,
+                circuit_policy,
+            ) {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    provider_index = provider_index.saturating_add(1);
+                    continue;
+                }
+            }
         } else {
-            upstream = upstream.header(
-                AUTHORIZATION.as_str(),
-                format!("Bearer {}", selected_key.api_key),
-            );
-        }
-        let attempt_body = apply_model_mapping(&request_json, &snapshot.model_mappings)
-            .map_err(|_| (StatusCode::BAD_REQUEST, "routing_model_mapping_invalid"))?;
-        let send_result = if streaming {
-            match tokio::time::timeout(
-                Duration::from_secs(failover_config.streaming_first_byte_timeout),
+            None
+        };
+        let url = match upstream_url(&snapshot.base_url, route, &request_path) {
+            Ok(url) => url,
+            Err(_) => {
+                if let Some(permit) = circuit_permit.take() {
+                    state.circuits.release(permit);
+                }
+                terminal_failure =
+                    Some((StatusCode::BAD_GATEWAY, "routing_provider_endpoint_invalid"));
+                provider_index = provider_index.saturating_add(1);
+                continue;
+            }
+        };
+        let mut selected_key =
+            match state.select_key(&snapshot.pool_id, snapshot.key_candidates.clone()) {
+                Ok(key) => key,
+                Err(_) => {
+                    if !failover_config.auto_failover_enabled {
+                        return Err((
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "routing_provider_unavailable",
+                        ));
+                    }
+                    if let Some(permit) = circuit_permit.take() {
+                        state.circuits.release(permit);
+                    }
+                    terminal_failure =
+                        Some((StatusCode::BAD_GATEWAY, "routing_provider_key_exhausted"));
+                    provider_index = provider_index.saturating_add(1);
+                    continue;
+                }
+            };
+        let mut used_keys = HashSet::from([selected_key.id.clone()]);
+        let outcome = loop {
+            let mut upstream = client.post(&url);
+            for (name, value) in &headers {
+                upstream = upstream.header(name, value);
+            }
+            if use_claude_api_key_header(&snapshot) {
+                upstream = upstream.header("x-api-key", selected_key.api_key.clone());
+            } else {
+                upstream = upstream.header(
+                    AUTHORIZATION.as_str(),
+                    format!("Bearer {}", selected_key.api_key),
+                );
+            }
+            let attempt_body = apply_model_mapping(&request_json, &snapshot.model_mappings)
+                .map_err(|_| (StatusCode::BAD_REQUEST, "routing_model_mapping_invalid"))?;
+            let send_result = if streaming {
+                match tokio::time::timeout(
+                    Duration::from_secs(failover_config.streaming_first_byte_timeout),
+                    upstream
+                        .header(REQ_CONTENT_TYPE.as_str(), "application/json")
+                        .body(attempt_body)
+                        .send(),
+                )
+                .await
+                {
+                    Ok(result) => result.map_err(|error| {
+                        if error.is_timeout() {
+                            UpstreamSendFailure::Timeout
+                        } else {
+                            UpstreamSendFailure::Request
+                        }
+                    }),
+                    Err(_) => Err(UpstreamSendFailure::Timeout),
+                }
+            } else {
                 upstream
                     .header(REQ_CONTENT_TYPE.as_str(), "application/json")
                     .body(attempt_body)
-                    .send(),
-            )
-            .await
-            {
-                Ok(result) => result.map_err(|error| {
-                    if error.is_timeout() {
-                        UpstreamSendFailure::Timeout
-                    } else {
-                        UpstreamSendFailure::Request
-                    }
-                }),
-                Err(_) => Err(UpstreamSendFailure::Timeout),
+                    .send()
+                    .await
+                    .map_err(|error| {
+                        if error.is_timeout() {
+                            UpstreamSendFailure::Timeout
+                        } else {
+                            UpstreamSendFailure::Request
+                        }
+                    })
+            };
+            let response = match send_result {
+                Ok(response) => response,
+                Err(UpstreamSendFailure::Timeout) => {
+                    break ProviderAttemptOutcome::Failure(
+                        StatusCode::GATEWAY_TIMEOUT,
+                        "routing_upstream_timeout",
+                    )
+                }
+                Err(UpstreamSendFailure::Request) => {
+                    break ProviderAttemptOutcome::Failure(
+                        StatusCode::BAD_GATEWAY,
+                        "routing_upstream_request_failed",
+                    )
+                }
+            };
+            if classify_upstream_status(response.status()) == UpstreamErrorClass::Provider {
+                break ProviderAttemptOutcome::Failure(
+                    StatusCode::BAD_GATEWAY,
+                    "routing_upstream_provider_failed",
+                );
             }
-        } else {
-            upstream
-                .header(REQ_CONTENT_TYPE.as_str(), "application/json")
-                .body(attempt_body)
-                .send()
-                .await
-                .map_err(|error| {
-                    if error.is_timeout() {
-                        UpstreamSendFailure::Timeout
-                    } else {
-                        UpstreamSendFailure::Request
-                    }
-                })
+            if !is_key_retryable(response.status()) {
+                break ProviderAttemptOutcome::Response(response);
+            }
+            state.mark_cooldown(
+                &snapshot.pool_id,
+                &selected_key.id,
+                response.status().as_u16(),
+                response.headers(),
+            );
+            let Some(next_key) = state.next_key(&snapshot.pool_id, &used_keys) else {
+                break if failover_config.auto_failover_enabled {
+                    ProviderAttemptOutcome::KeyExhausted
+                } else {
+                    ProviderAttemptOutcome::Response(response)
+                };
+            };
+            used_keys.insert(next_key.id.clone());
+            selected_key = next_key;
         };
-        let response = match send_result {
-            Ok(response) => response,
-            Err(_failure) if provider_attempt.saturating_add(1) < max_attempts => {
-                provider_attempt = provider_attempt.saturating_add(1);
-                continue;
+        match outcome {
+            ProviderAttemptOutcome::Response(response) => {
+                break Some((
+                    response,
+                    circuit_permit,
+                    provider_index,
+                    snapshot.provider_id,
+                ));
             }
-            Err(UpstreamSendFailure::Timeout) => {
+            ProviderAttemptOutcome::Failure(status, message) => {
                 record_circuit_failure(&state, &mut circuit_permit, circuit_policy);
-                return Err((StatusCode::GATEWAY_TIMEOUT, "routing_upstream_timeout"));
+                terminal_failure = Some((status, message));
             }
-            Err(UpstreamSendFailure::Request) => {
-                record_circuit_failure(&state, &mut circuit_permit, circuit_policy);
-                return Err((StatusCode::BAD_GATEWAY, "routing_upstream_request_failed"));
+            ProviderAttemptOutcome::KeyExhausted => {
+                if let Some(permit) = circuit_permit.take() {
+                    state.circuits.release(permit);
+                }
+                terminal_failure =
+                    Some((StatusCode::BAD_GATEWAY, "routing_provider_key_exhausted"));
             }
-        };
-        if classify_upstream_status(response.status()) == UpstreamErrorClass::Provider {
-            if provider_attempt.saturating_add(1) < max_attempts {
-                provider_attempt = provider_attempt.saturating_add(1);
-                continue;
-            }
-            record_circuit_failure(&state, &mut circuit_permit, circuit_policy);
-            return Err((StatusCode::BAD_GATEWAY, "routing_upstream_provider_failed"));
         }
-        if !is_key_retryable(response.status()) {
-            break response;
-        }
-        state.mark_cooldown(
-            &snapshot.pool_id,
-            &selected_key.id,
-            response.status().as_u16(),
-            response.headers(),
-        );
-        let Some(next_key) = state.next_key(&snapshot.pool_id, &used_keys) else {
-            break response;
-        };
-        used_keys.insert(next_key.id.clone());
-        selected_key = next_key;
+        provider_index = provider_index.saturating_add(1);
+    };
+    let Some((response, mut circuit_permit, selected_provider_index, selected_provider_id)) =
+        selected
+    else {
+        return Err(terminal_failure.unwrap_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "routing_provider_circuit_open",
+        )));
     };
     let status = response.status();
     let headers = response.headers().clone();
@@ -600,6 +678,18 @@ async fn forward_request(
                 return Err((StatusCode::GATEWAY_TIMEOUT, "routing_upstream_timeout"));
             }
         };
+        if selected_provider_index > 0
+            && classify_upstream_status(status) == UpstreamErrorClass::Success
+        {
+            if let Err(error) = crate::provider::routing::apply_hot_switch_for_active_homes(
+                route_app_type(route),
+                &selected_provider_id,
+            )
+            .await
+            {
+                log::warn!("routing hot switch failed: {error}");
+            }
+        }
         if classify_upstream_status(status) == UpstreamErrorClass::Success {
             record_circuit_success(&state, &mut circuit_permit, circuit_policy);
         } else if let Some(permit) = circuit_permit.take() {
@@ -642,6 +732,12 @@ async fn forward_request(
             state: Arc::clone(&state),
             permit: Some(permit),
             policy: circuit_policy,
+            hot_switch: (selected_provider_index > 0
+                && classify_upstream_status(status) == UpstreamErrorClass::Success)
+                .then(|| HotSwitchCommit {
+                    app_type: route_app_type(route),
+                    provider_id: selected_provider_id,
+                }),
         }),
     );
     let body = BodyExt::boxed(StreamBody::new(stream));
@@ -698,17 +794,24 @@ fn route_path(route: RouteKind) -> &'static str {
     }
 }
 
-async fn load_provider_snapshot(
-    route: RouteKind,
-    state: &RouteState,
-) -> Result<ProviderSnapshot, String> {
+async fn load_provider_snapshot(route: RouteKind) -> Result<ProviderSnapshot, String> {
     let app_type = route_app_type(route);
     let providers = crate::provider::repository::list_providers(Some(app_type.to_string())).await?;
     let card = providers
         .into_iter()
         .find(|provider| provider.is_current && provider.enabled)
         .ok_or_else(|| "routing_provider_not_ready".to_string())?;
-    let detail = crate::provider::repository::get_provider(app_type.to_string(), card.id).await?;
+    load_provider_snapshot_for_provider(route, &card.id).await
+}
+
+async fn load_provider_snapshot_for_provider(
+    route: RouteKind,
+    provider_id: &str,
+) -> Result<ProviderSnapshot, String> {
+    let app_type = route_app_type(route);
+    let detail =
+        crate::provider::repository::get_provider(app_type.to_string(), provider_id.to_string())
+            .await?;
     let mut keys = detail
         .keys
         .into_iter()
@@ -778,7 +881,6 @@ async fn load_provider_snapshot(
     } else {
         parse_model_mappings(app_type, &detail.settings_config)?
     };
-    let selected_key = state.select_key(&pool_id, candidates)?;
     let base_url = detail
         .card
         .base_url
@@ -794,9 +896,36 @@ async fn load_provider_snapshot(
             .map(|config| config.api_key_field.clone()),
         claude_api_format: detail.claude_config.map(|config| config.api_format),
         pool_id,
-        selected_key,
+        key_candidates: candidates,
         model_mappings,
     })
+}
+
+async fn load_provider_snapshots(
+    route: RouteKind,
+    auto_failover_enabled: bool,
+) -> Result<Vec<ProviderSnapshot>, String> {
+    let app_type = route_app_type(route);
+    if !auto_failover_enabled {
+        return Ok(vec![load_provider_snapshot(route).await?]);
+    }
+    let provider_ids =
+        crate::provider::routing::load_failover_provider_ids_for_daemon(app_type).await?;
+    if provider_ids.is_empty() {
+        return Err("routing_provider_not_ready".to_string());
+    }
+    let mut snapshots = Vec::with_capacity(provider_ids.len());
+    let mut last_error = None;
+    for provider_id in provider_ids {
+        match load_provider_snapshot_for_provider(route, &provider_id).await {
+            Ok(snapshot) => snapshots.push(snapshot),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    if snapshots.is_empty() {
+        return Err(last_error.unwrap_or_else(|| "routing_provider_not_ready".to_string()));
+    }
+    Ok(snapshots)
 }
 
 fn parse_model_mappings(
@@ -976,6 +1105,19 @@ where
                                     .state
                                     .circuits
                                     .record_success(permit, circuit.policy);
+                            }
+                            if let Some(hot_switch) = circuit.hot_switch.take() {
+                                tokio::task::spawn_local(async move {
+                                    if let Err(error) =
+                                        crate::provider::routing::apply_hot_switch_for_active_homes(
+                                            hot_switch.app_type,
+                                            &hot_switch.provider_id,
+                                        )
+                                        .await
+                                    {
+                                        log::warn!("routing hot switch failed: {error}");
+                                    }
+                                });
                             }
                         }
                     }
@@ -1332,6 +1474,27 @@ mod tests {
             .unwrap_err(),
             "provider_model_mapping_duplicate_source"
         );
+    }
+
+    #[test]
+    fn failover_mapping_restarts_from_original_source_for_each_provider() {
+        let request = serde_json::json!({"model":"a","messages":[]});
+        let first = parse_model_mappings(
+            "codex",
+            r#"{"advanced":{"modelMappings":[{"source":"a","target":"targetA"}]}}"#,
+        )
+        .unwrap();
+        let fallback = parse_model_mappings(
+            "codex",
+            r#"{"advanced":{"modelMappings":[{"source":"a","target":"targetB"}]}}"#,
+        )
+        .unwrap();
+        let first_body: serde_json::Value =
+            serde_json::from_slice(&apply_model_mapping(&request, &first).unwrap()).unwrap();
+        assert_eq!(first_body["model"], "targetA");
+        let fallback_body: serde_json::Value =
+            serde_json::from_slice(&apply_model_mapping(&request, &fallback).unwrap()).unwrap();
+        assert_eq!(fallback_body["model"], "targetB");
     }
 
     #[test]

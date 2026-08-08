@@ -224,6 +224,21 @@ pub(crate) async fn load_failover_state(app_type: &str) -> Result<RoutingFailove
     })
 }
 
+pub(crate) async fn load_failover_provider_ids_for_daemon(
+    app_type: &str,
+) -> Result<Vec<String>, String> {
+    let state = load_failover_state(app_type).await?;
+    Ok(eligible_failover_provider_ids(&state.providers))
+}
+
+fn eligible_failover_provider_ids(providers: &[RoutingFailoverProvider]) -> Vec<String> {
+    providers
+        .iter()
+        .filter(|provider| provider.in_failover_queue && provider.ready)
+        .map(|provider| provider.id.clone())
+        .collect()
+}
+
 pub(crate) async fn set_failover_enabled(
     app_type: &str,
     enabled: bool,
@@ -283,6 +298,48 @@ pub(crate) async fn load_persisted_state() -> Result<RoutingPersistedState, Stri
     let service = load_service_config(&mut connection).await?;
     let takeovers = load_takeovers(&mut connection).await?;
     Ok(RoutingPersistedState { service, takeovers })
+}
+
+pub(crate) async fn apply_hot_switch_for_active_homes(
+    app_type: &str,
+    next_provider_id: &str,
+) -> Result<(), String> {
+    let app_type = normalize_routing_app_type(app_type)?;
+    let persisted = load_persisted_state().await?;
+    let targets = persisted
+        .takeovers
+        .iter()
+        .filter(|item| item.app_type == app_type)
+        .map(|item| {
+            let host =
+                if item.advertised_host.contains(':') && !item.advertised_host.starts_with('[') {
+                    format!("[{}]", item.advertised_host)
+                } else {
+                    item.advertised_host.clone()
+                };
+            crate::provider::global::HotSwitchTarget {
+                home_identity: crate::provider::global::HomeIdentityInput {
+                    environment_kind: item.home_identity.environment_kind.clone(),
+                    environment_id: Some(item.home_identity.environment_id.clone()),
+                },
+                projection: crate::provider::global::LocalRouteProjection {
+                    endpoint: format!("http://{host}:{}", item.applied_port),
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+    if targets.is_empty() {
+        return Ok(());
+    }
+    let previous_provider_id = current_provider_id(&app_type).await?;
+    crate::provider::global::apply_hot_switch(
+        &app_type,
+        &previous_provider_id,
+        next_provider_id,
+        &targets,
+    )
+    .await
+    .map(|_| ())
 }
 
 pub(crate) async fn save_service_config(config: &RoutingServiceConfig) -> Result<(), String> {
@@ -830,6 +887,49 @@ mod tests {
         assert_eq!(
             validate_failover_config(&invalid).unwrap_err(),
             "routing_failover_config_invalid"
+        );
+    }
+
+    #[test]
+    fn failover_provider_selection_keeps_queue_order_and_ready_boundary() {
+        let providers = vec![
+            RoutingFailoverProvider {
+                id: "a".to_string(),
+                name: "A".to_string(),
+                sort_index: 0,
+                is_current: true,
+                enabled: true,
+                ready: true,
+                in_failover_queue: true,
+                key_count: 2,
+                active_key_present: true,
+            },
+            RoutingFailoverProvider {
+                id: "b".to_string(),
+                name: "B".to_string(),
+                sort_index: 1,
+                is_current: false,
+                enabled: true,
+                ready: false,
+                in_failover_queue: true,
+                key_count: 1,
+                active_key_present: true,
+            },
+            RoutingFailoverProvider {
+                id: "c".to_string(),
+                name: "C".to_string(),
+                sort_index: 2,
+                is_current: false,
+                enabled: true,
+                ready: true,
+                in_failover_queue: true,
+                key_count: 2,
+                active_key_present: true,
+            },
+        ];
+        assert_eq!(
+            eligible_failover_provider_ids(&providers),
+            vec!["a".to_string(), "c".to_string()]
         );
     }
 
