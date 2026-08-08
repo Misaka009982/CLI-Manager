@@ -7,12 +7,12 @@
 | 字段 | 值 |
 | --- | --- |
 | Task | 08-08-ccs-routing-migration |
-| task.json 状态 | in_progress（P0-02 已完成并待独立提交，任务继续推进） |
+| task.json 状态 | in_progress（P0-03 已完成，P0-04 执行中） |
 | Changelog Target | [TEMP] |
 | 当前阶段 | P0：影响分析、Schema、协议与 Fixture 基线 |
-| 当前 Case | P0-03 |
-| 审批状态 | 已批准；P0-02 完成，P0-03 执行中 |
-| 最后更新时间 | 2026-08-08 22:14 |
+| 当前 Case | P0-04 |
+| 审批状态 | 已批准；P0-03 完成，P0-04 执行中 |
+| 最后更新时间 | 2026-08-08 23:03 |
 | 最后操作机器 | DESKTOP-Q49I074 |
 | 分支 | feat/native-provider-management |
 | 工作目录 | D:/github/CLI-Manager |
@@ -75,13 +75,13 @@
 
 | 阶段 | 范围 | Case 数 | 当前状态 |
 | --- | --- | ---: | --- |
-| P0 | 影响分析、Schema、协议、Fixture 基线 | 4 | P0-01/P0-02 completed；P0-03 in_progress |
+| P0 | 影响分析、Schema、协议、Fixture 基线 | 4 | P0-01/P0-02/P0-03 completed；P0-04 in_progress |
 | P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | pending |
 | P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | pending |
 | P3 | 全局出站代理 | 5 | pending |
 | P4 | 整流器与 Bedrock 优化 | 6 | pending |
 | P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | pending |
-| 合计 |  | 43 | 1 个实现 Case 完成 |
+| 合计 |  | 43 | 2 个实现 Case 完成 |
 
 ## 4. P0：影响分析、Schema、协议与 Fixture 基线
 
@@ -89,8 +89,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P0-01 | 锁定 provider、daemon、Home、writer、HTTP、UI 全链路触点并完成 upstream impact | 无 | src-tauri/src/provider、src-tauri/src/daemon、settings、sidebar、对应 spec | get_context phase 2.1；GitNexus query/context/impact；记录 HIGH/CRITICAL blast radius | 仅撤销分析记录，不碰生产文件 | completed | 2026-08-08 21:11；R1/R2 findings 已修复，R3/R4/R7/R8B 连续零发现；独立提交主题见执行日志 |
 | P0-02 | 以 additive 方式完成 provider DB v2 routing settings、request logs 和索引迁移 | P0-01 | provider/database.rs、migration.rs、repository/support.rs | fresh v1 升级、future schema、迁移中断、失败降级；针对性 Rust tests | 忽略 routing v2，恢复 v1 读取；保留 provider/key 数据 | completed | 2026-08-08 22:14；9 database tests、4 migration tests、123 provider tests 与 cargo check 通过；R1/R2 findings 修复后 R3/R4 连续零发现 |
-| P0-03 | 建立脱敏 JSON/SSE、Responses SSE、协议转换和整流器 fixture | P0-01 | route adapter tests、fixture 目录、request log 脱敏断言 | Claude 四类 apiFormat；Codex/Grok 三类 wireApi；tool/reasoning/media/usage；提交边界 | 未覆盖格式标记 unsupported，不静默 passthrough | in_progress | 2026-08-08 22:14 在 DESKTOP-Q49I074 接续；先做 fixture 范围影响分析 |
-| P0-04 | 定义 local_routing_v1 capability、最小控制帧和稳定错误码 | P0-01 | daemon/protocol.rs、client.rs、server.rs、discovery.rs、Tauri error DTO | 旧 daemon、未知 frame、frame 上限、secret 不出 frame/log/error；中英文错误映射 | 旧 daemon 只保留原能力，GUI 不发 routing frame | pending | 完整 provider document 不经过 control frame |
+| P0-03 | 建立脱敏 JSON/SSE、Responses SSE、协议转换和整流器 fixture | P0-01 | route adapter tests、fixture 目录、request log 脱敏断言 | Claude 四类 apiFormat；Codex/Grok 三类 wireApi；tool/reasoning/media/usage；提交边界 | 未覆盖格式标记 unsupported，不静默 passthrough | completed | 2026-08-08 23:03；10 格式均含 JSON/SSE，5 stream、mapping、12 rectifier 与 schema-v2 日志样本；5 focused、123 provider tests、cargo check 通过；R1/R2 修复后 R3/R4 连续零发现 |
+| P0-04 | 定义 local_routing_v1 capability、最小控制帧和稳定错误码 | P0-01 | daemon/protocol.rs、client.rs、server.rs、discovery.rs、Tauri error DTO | 旧 daemon、未知 frame、frame 上限、secret 不出 frame/log/error；中英文错误映射 | 旧 daemon 只保留原能力，GUI 不发 routing frame | in_progress | 2026-08-08 23:03 在 DESKTOP-Q49I074 接续；先做 daemon protocol/client/server/discovery symbol impact |
 
 ## 5. P1：本地路由
 
@@ -178,7 +178,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2026-08-08 21:11 | DESKTOP-Q49I074 | P0-01 | in_progress -> completed | task 规划、research、progress 与 docs/ccs 截图基线 | 远端 0/0；GitNexus impacts；Trellis/JSON/路径/表格/空白检查通过 | R1/R2 修复路径、风险和 A-01 遗漏；R3/R4/R7/R8B/R9/R10 连续零发现；R5/R6 元数据复核 | docs(routing): record P0-01 impact baseline | P0-02 |
 | 2026-08-08 22:14 | DESKTOP-Q49I074 | P0-02 | in_progress -> completed | provider/database.rs、backend provider contract、design 与 P0-02 research | `cargo fmt`；9 database tests；4 migration tests；123 provider tests；`cargo check`；Trellis/JSON/范围/脱敏检查 | R1 修复默认值与 schema shape 校验；R2 补 spec、backup-failure、checksum/default tests；R3/R4 连续零发现 | feat(routing): add provider schema v2 | P0-03 |
-| 2026-08-08 22:14 | DESKTOP-Q49I074 | P0-03 | pending -> in_progress | 尚未修改 fixture/生产代码 | 待执行协议 adapter/fixture 影响分析 | Review 待完成 | 待完成 | P0-03 |
+| 2026-08-08 23:03 | DESKTOP-Q49I074 | P0-03 | in_progress -> completed | `src-tauri/tests/routing_fixtures.rs`、5 个 routing fixture、P0-03 research/progress | 5 focused tests、123 provider tests、`cargo check`、Rustfmt、diff 与 secret/scope 检查通过 | R1/R2 findings 修复；R3/R4 连续零发现 | test(routing): add protocol fixture baseline | P0-04 |
+| 2026-08-08 23:03 | DESKTOP-Q49I074 | P0-04 | pending -> in_progress | 尚未修改 daemon/command 生产代码 | 待执行 daemon protocol capability 与错误 DTO 影响分析 | Review 待完成 | 待完成 | P0-04 |
 
 ## 12. 执行授权
 
