@@ -68,10 +68,22 @@ pub(crate) struct GlobalApplyInput {
     pub projection: Option<LocalRouteProjection>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LocalRouteProjection {
     pub endpoint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProjectionMode {
+    Direct,
+    LocalRoute(LocalRouteProjection),
+}
+
+fn projection_mode(projection: Option<&LocalRouteProjection>) -> ProjectionMode {
+    projection.map_or(ProjectionMode::Direct, |value| {
+        ProjectionMode::LocalRoute(value.clone())
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -905,6 +917,13 @@ async fn effective_settings(
 }
 
 async fn build_plan(input: &GlobalPreviewInput) -> Result<ProviderPlan, String> {
+    build_plan_with_mode(input, projection_mode(input.projection.as_ref())).await
+}
+
+async fn build_plan_with_mode(
+    input: &GlobalPreviewInput,
+    mode: ProjectionMode,
+) -> Result<ProviderPlan, String> {
     let app_type = normalize_type(&input.app_type)?;
     let provider_id = input.provider_id.trim();
     if provider_id.is_empty() {
@@ -954,8 +973,8 @@ async fn build_plan(input: &GlobalPreviewInput) -> Result<ProviderPlan, String> 
         home,
         targets,
     };
-    if let Some(projection) = input.projection.as_ref() {
-        apply_local_route_projection(&mut plan, projection)?;
+    if let ProjectionMode::LocalRoute(projection) = mode {
+        apply_local_route_projection(&mut plan, &projection)?;
     }
     Ok(plan)
 }
@@ -2149,6 +2168,18 @@ mod tests {
         );
         assert!(value["env"].get("ANTHROPIC_AUTH_TOKEN").is_none());
         assert!(value["hooks"].is_object());
+    }
+
+    #[test]
+    fn global_writer_has_explicit_direct_and_local_route_modes() {
+        let projection = LocalRouteProjection {
+            endpoint: "http://127.0.0.1:15721".to_string(),
+        };
+        assert_eq!(projection_mode(None), ProjectionMode::Direct);
+        assert_eq!(
+            projection_mode(Some(&projection)),
+            ProjectionMode::LocalRoute(projection)
+        );
     }
 
     #[test]
