@@ -4,6 +4,7 @@ import { useI18n } from "@/lib/i18n";
 import type { NativeProviderAppType, NativeProviderHomeIdentity } from "./nativeProviderTypes";
 import type { UseNativeProviderRoutingResult } from "./useNativeProviderRouting";
 import { NativeProviderFailoverSection } from "./NativeProviderFailoverSection";
+import { NativeProviderGlobalProxySection } from "./NativeProviderGlobalProxySection";
 
 interface NativeProviderRoutingSectionProps {
   appType: NativeProviderAppType;
@@ -125,6 +126,8 @@ export function NativeProviderRoutingSection({
             </Stack>
           </Accordion.Panel>
         </Accordion.Item>
+
+        <NativeProviderGlobalProxySection />
       </Accordion>
       <NativeProviderFailoverSection appType={appType} state={state} />
     </Stack>
