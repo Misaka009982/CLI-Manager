@@ -142,6 +142,14 @@ pub enum ClientFrame {
     },
     RoutingReload {
         id: u64,
+        #[serde(default)]
+        listen_address: Option<String>,
+        #[serde(default)]
+        preferred_port: Option<u16>,
+        #[serde(default)]
+        last_actual_port: Option<u16>,
+        #[serde(default)]
+        listener_addresses: Vec<String>,
     },
     RoutingStatus {
         id: u64,
@@ -154,6 +162,8 @@ pub enum ClientFrame {
         preferred_port: Option<u16>,
         #[serde(default)]
         last_actual_port: Option<u16>,
+        #[serde(default)]
+        listener_addresses: Vec<String>,
     },
     RoutingStop {
         id: u64,
@@ -171,7 +181,7 @@ pub enum ClientFrame {
 
 pub fn routing_control_id(frame: &ClientFrame) -> Option<u64> {
     match frame {
-        ClientFrame::RoutingReload { id }
+        ClientFrame::RoutingReload { id, .. }
         | ClientFrame::RoutingStatus { id }
         | ClientFrame::RoutingStart { id, .. }
         | ClientFrame::RoutingStop { id }
@@ -265,6 +275,8 @@ pub struct RoutingEvent {
 #[serde(rename_all = "camelCase")]
 pub struct RoutingStatus {
     pub status: String,
+    #[serde(default)]
+    pub listener_addresses: Vec<String>,
     pub preferred_port: u16,
     #[serde(default)]
     pub actual_port: Option<u16>,

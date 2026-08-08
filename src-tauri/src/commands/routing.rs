@@ -35,6 +35,7 @@ pub struct RoutingDaemonState {
     pub connected: bool,
     pub capability_supported: bool,
     pub error: Option<RoutingError>,
+    pub listener_addresses: Vec<String>,
     pub preferred_port: Option<u16>,
     pub actual_port: Option<u16>,
 }
@@ -81,6 +82,7 @@ fn daemon_state(client: Option<Arc<DaemonClient>>) -> RoutingDaemonState {
             connected: false,
             capability_supported: false,
             error: Some(RoutingError::service_unavailable()),
+            listener_addresses: Vec::new(),
             preferred_port: None,
             actual_port: None,
         };
@@ -91,6 +93,7 @@ fn daemon_state(client: Option<Arc<DaemonClient>>) -> RoutingDaemonState {
             connected: true,
             capability_supported: false,
             error: Some(error),
+            listener_addresses: Vec::new(),
             preferred_port: None,
             actual_port: None,
         };
@@ -104,6 +107,7 @@ fn daemon_state(client: Option<Arc<DaemonClient>>) -> RoutingDaemonState {
             connected: true,
             capability_supported: true,
             error: Some(RoutingError::service_unavailable()),
+            listener_addresses: Vec::new(),
             preferred_port: None,
             actual_port: None,
         },
@@ -115,6 +119,7 @@ fn daemon_state(client: Option<Arc<DaemonClient>>) -> RoutingDaemonState {
                 "routing_daemon_response_invalid",
                 "restart_daemon",
             )),
+            listener_addresses: Vec::new(),
             preferred_port: None,
             actual_port: None,
         },
@@ -132,6 +137,11 @@ fn routing_event_state(event: RoutingEvent) -> RoutingDaemonState {
         connected: true,
         capability_supported: true,
         error: event.error,
+        listener_addresses: event
+            .status
+            .as_ref()
+            .map(|status| status.listener_addresses.clone())
+            .unwrap_or_default(),
         preferred_port: event.status.as_ref().map(|status| status.preferred_port),
         actual_port: event.status.and_then(|status| status.actual_port),
     }
@@ -212,6 +222,7 @@ pub fn routing_set_service_enabled(
             listen_address: Some(persisted.service.listen_address.clone()),
             preferred_port: Some(persisted.service.preferred_port),
             last_actual_port: persisted.service.actual_port,
+            listener_addresses: Vec::new(),
         }
     } else {
         ClientFrame::RoutingStop { id }
@@ -233,6 +244,7 @@ pub fn routing_set_service_enabled(
                 listen_address: Some(previous_service.listen_address),
                 preferred_port: Some(previous_service.preferred_port),
                 last_actual_port: previous_service.actual_port,
+                listener_addresses: Vec::new(),
             }
         };
         let _ = request_control(client, rollback_frame);

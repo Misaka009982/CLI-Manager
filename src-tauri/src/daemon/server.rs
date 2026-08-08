@@ -12,7 +12,7 @@ use super::protocol::{
     BINARY_KIND_CHECKPOINT, BINARY_KIND_INPUT, BINARY_KIND_OUTPUT, BINARY_KIND_REPLAY,
     BINARY_KIND_REPLAY_RESET, BINARY_PROTOCOL_VERSION, CONTROL_PROTOCOL_VERSION, MAX_FRAME_BYTES,
 };
-use super::routing::{RoutingRuntime, FALLBACK_PORT_START};
+use super::routing::{PortAllocator, RoutingRuntime, FALLBACK_PORT_START};
 use super::ssh_agent_bridge::SshAgentBridgeManager;
 use crate::claude_hook::{remote_hook_payload_from_spool, spawn_hook_listener, HookPayloadSink};
 use crate::commands::cc_connect::handoff_notification::RemoteHandoffNotifier;
@@ -763,12 +763,14 @@ impl DaemonHost {
                 let snapshot = runtime.snapshot();
                 RoutingStatus {
                     status: snapshot.status,
+                    listener_addresses: snapshot.listen_addresses,
                     preferred_port: snapshot.preferred_port,
                     actual_port: snapshot.actual_port,
                 }
             })
             .unwrap_or(RoutingStatus {
                 status: "unknown".to_string(),
+                listener_addresses: Vec::new(),
                 preferred_port: FALLBACK_PORT_START,
                 actual_port: None,
             })
@@ -776,7 +778,7 @@ impl DaemonHost {
 
     fn routing_start(
         &self,
-        listen_address: &str,
+        listen_addresses: &[String],
         preferred_port: u16,
         last_actual_port: Option<u16>,
     ) -> Result<RoutingStatus, String> {
@@ -784,9 +786,38 @@ impl DaemonHost {
             .routing
             .lock()
             .map_err(|_| "routing_runtime_unavailable".to_string())?;
-        let snapshot = runtime.start(listen_address, preferred_port, last_actual_port)?;
+        let snapshot = runtime.start(listen_addresses, preferred_port, last_actual_port)?;
         Ok(RoutingStatus {
             status: snapshot.status,
+            listener_addresses: snapshot.listen_addresses,
+            preferred_port: snapshot.preferred_port,
+            actual_port: snapshot.actual_port,
+        })
+    }
+
+    fn routing_reload(
+        &self,
+        listen_addresses: &[String],
+        preferred_port: u16,
+        last_actual_port: Option<u16>,
+    ) -> Result<RoutingStatus, String> {
+        let normalized_addresses = if listen_addresses.is_empty() {
+            Vec::new()
+        } else {
+            PortAllocator::validate_addresses(listen_addresses)?
+        };
+        let mut runtime = self
+            .routing
+            .lock()
+            .map_err(|_| "routing_runtime_unavailable".to_string())?;
+        let snapshot = if runtime.is_running() {
+            runtime.rebind(&normalized_addresses, preferred_port, last_actual_port)?
+        } else {
+            runtime.snapshot()
+        };
+        Ok(RoutingStatus {
+            status: snapshot.status,
+            listener_addresses: snapshot.listen_addresses,
             preferred_port: snapshot.preferred_port,
             actual_port: snapshot.actual_port,
         })
@@ -800,6 +831,7 @@ impl DaemonHost {
         let snapshot = runtime.stop();
         Ok(RoutingStatus {
             status: snapshot.status,
+            listener_addresses: snapshot.listen_addresses,
             preferred_port: snapshot.preferred_port,
             actual_port: snapshot.actual_port,
         })
@@ -2163,28 +2195,64 @@ impl DaemonServer {
                     .release_consumer(&host_id, &consumer_id);
                 DaemonFrame::Ok { id }
             }
-            ClientFrame::RoutingReload { id } | ClientFrame::RoutingStatus { id } => {
-                DaemonFrame::RoutingEvent {
-                    event: RoutingEvent::status(id, self.host.routing_status()),
+            ClientFrame::RoutingReload {
+                id,
+                listen_address,
+                preferred_port,
+                last_actual_port,
+                listener_addresses,
+            } => {
+                let current = self.host.routing_status();
+                let addresses = if listener_addresses.is_empty() {
+                    if let Some(address) = listen_address {
+                        vec![address]
+                    } else {
+                        current.listener_addresses.clone()
+                    }
+                } else {
+                    listener_addresses
+                };
+                match self.host.routing_reload(
+                    &addresses,
+                    preferred_port.unwrap_or(current.preferred_port),
+                    last_actual_port.or(current.actual_port),
+                ) {
+                    Ok(status) => DaemonFrame::RoutingEvent {
+                        event: RoutingEvent::status(id, status),
+                    },
+                    Err(error) => DaemonFrame::RoutingEvent {
+                        event: RoutingEvent::error(id, RoutingError::runtime_failure(&error)),
+                    },
                 }
             }
+            ClientFrame::RoutingStatus { id } => DaemonFrame::RoutingEvent {
+                event: RoutingEvent::status(id, self.host.routing_status()),
+            },
             ClientFrame::RoutingStart {
                 id,
                 listen_address,
                 preferred_port,
                 last_actual_port,
-            } => match self.host.routing_start(
-                listen_address.as_deref().unwrap_or("127.0.0.1"),
-                preferred_port.unwrap_or(FALLBACK_PORT_START),
-                last_actual_port,
-            ) {
-                Ok(status) => DaemonFrame::RoutingEvent {
-                    event: RoutingEvent::status(id, status),
-                },
-                Err(error) => DaemonFrame::RoutingEvent {
-                    event: RoutingEvent::error(id, RoutingError::runtime_failure(&error)),
-                },
-            },
+                listener_addresses,
+            } => {
+                let addresses = if listener_addresses.is_empty() {
+                    vec![listen_address.unwrap_or_else(|| "127.0.0.1".to_string())]
+                } else {
+                    listener_addresses
+                };
+                match self.host.routing_start(
+                    &addresses,
+                    preferred_port.unwrap_or(FALLBACK_PORT_START),
+                    last_actual_port,
+                ) {
+                    Ok(status) => DaemonFrame::RoutingEvent {
+                        event: RoutingEvent::status(id, status),
+                    },
+                    Err(error) => DaemonFrame::RoutingEvent {
+                        event: RoutingEvent::error(id, RoutingError::runtime_failure(&error)),
+                    },
+                }
+            }
             ClientFrame::RoutingStop { id } => match self.host.routing_stop() {
                 Ok(status) => DaemonFrame::RoutingEvent {
                     event: RoutingEvent::status(id, status),
@@ -2627,6 +2695,7 @@ mod tests {
                     listen_address: None,
                     preferred_port: None,
                     last_actual_port: None,
+                    listener_addresses: Vec::new(),
                 })
                 .trim_end()
                 .to_string()
@@ -2712,6 +2781,7 @@ mod tests {
                 listen_address: Some("127.0.0.1".to_string()),
                 preferred_port: Some(preferred_port),
                 last_actual_port: None,
+                listener_addresses: Vec::new(),
             },
         );
         let DaemonFrame::RoutingEvent { event } = start else {
@@ -2728,6 +2798,34 @@ mod tests {
         let status = event.status.expect("stopped status");
         assert_eq!(status.status, "stopped");
         assert_eq!(status.actual_port, Some(preferred_port));
+    }
+
+    #[test]
+    fn routing_reload_rejects_wildcard_while_stopped() {
+        let server = DaemonServer {
+            host: Arc::new(DaemonHost::new()),
+            next_client_id: AtomicU64::new(1),
+            token: String::new(),
+            version: String::new(),
+            info_path: PathBuf::new(),
+        };
+        let reply = server.handle_frame(
+            0,
+            ClientFrame::RoutingReload {
+                id: 12,
+                listen_address: Some("0.0.0.0".to_string()),
+                preferred_port: Some(FALLBACK_PORT_START),
+                last_actual_port: None,
+                listener_addresses: Vec::new(),
+            },
+        );
+        let DaemonFrame::RoutingEvent { event } = reply else {
+            panic!("expected routing error");
+        };
+        assert_eq!(
+            event.error.expect("routing error").code,
+            "routing_listen_address_invalid"
+        );
     }
 
     #[test]

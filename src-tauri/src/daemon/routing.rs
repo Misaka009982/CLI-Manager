@@ -7,12 +7,19 @@ pub(crate) const MIN_PORT: u16 = 1_024;
 
 #[derive(Debug)]
 pub(crate) struct RoutingListenerLease {
-    _listener: TcpListener,
+    listeners: Vec<BoundListener>,
     pub(crate) actual_port: u16,
+}
+
+#[derive(Debug)]
+struct BoundListener {
+    address: String,
+    listener: TcpListener,
 }
 
 pub(crate) struct RoutingRuntime {
     lease: Option<RoutingListenerLease>,
+    listen_addresses: Vec<String>,
     preferred_port: u16,
     actual_port: Option<u16>,
 }
@@ -20,6 +27,7 @@ pub(crate) struct RoutingRuntime {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RoutingRuntimeSnapshot {
     pub(crate) status: String,
+    pub(crate) listen_addresses: Vec<String>,
     pub(crate) preferred_port: u16,
     pub(crate) actual_port: Option<u16>,
 }
@@ -28,6 +36,7 @@ impl RoutingRuntime {
     pub(crate) fn new() -> Self {
         Self {
             lease: None,
+            listen_addresses: Vec::new(),
             preferred_port: FALLBACK_PORT_START,
             actual_port: None,
         }
@@ -44,6 +53,7 @@ impl RoutingRuntime {
             } else {
                 "stopped".to_string()
             },
+            listen_addresses: self.listen_addresses.clone(),
             preferred_port: self.preferred_port,
             actual_port: self.actual_port,
         }
@@ -51,14 +61,38 @@ impl RoutingRuntime {
 
     pub(crate) fn start(
         &mut self,
-        listen_address: &str,
+        listen_addresses: &[String],
         preferred_port: u16,
         last_actual_port: Option<u16>,
     ) -> Result<RoutingRuntimeSnapshot, String> {
         if self.is_running() {
             return Ok(self.snapshot());
         }
-        let lease = PortAllocator::bind(listen_address, preferred_port, last_actual_port)?;
+        let lease = PortAllocator::bind(listen_addresses, preferred_port, last_actual_port)?;
+        self.listen_addresses = normalize_listener_addresses(listen_addresses)?;
+        self.preferred_port = preferred_port;
+        self.actual_port = Some(lease.actual_port);
+        self.lease = Some(lease);
+        Ok(self.snapshot())
+    }
+
+    pub(crate) fn rebind(
+        &mut self,
+        listen_addresses: &[String],
+        preferred_port: u16,
+        last_actual_port: Option<u16>,
+    ) -> Result<RoutingRuntimeSnapshot, String> {
+        let normalized_addresses = normalize_listener_addresses(listen_addresses)?;
+        let Some(previous) = self.lease.as_ref() else {
+            return self.start(&normalized_addresses, preferred_port, last_actual_port);
+        };
+        let lease = PortAllocator::rebind(
+            &normalized_addresses,
+            preferred_port,
+            last_actual_port,
+            previous,
+        )?;
+        self.listen_addresses = normalized_addresses;
         self.preferred_port = preferred_port;
         self.actual_port = Some(lease.actual_port);
         self.lease = Some(lease);
@@ -74,15 +108,34 @@ impl RoutingRuntime {
 pub(crate) struct PortAllocator;
 
 impl PortAllocator {
+    pub(crate) fn validate_addresses(listen_addresses: &[String]) -> Result<Vec<String>, String> {
+        normalize_listener_addresses(listen_addresses)
+    }
+
     pub(crate) fn bind(
-        listen_address: &str,
+        listen_addresses: &[String],
         preferred_port: u16,
         last_actual_port: Option<u16>,
     ) -> Result<RoutingListenerLease, String> {
         bind_with(
-            listen_address,
+            listen_addresses,
             preferred_port,
             last_actual_port,
+            |address, port| TcpListener::bind((address, port)),
+        )
+    }
+
+    pub(crate) fn rebind(
+        listen_addresses: &[String],
+        preferred_port: u16,
+        last_actual_port: Option<u16>,
+        previous: &RoutingListenerLease,
+    ) -> Result<RoutingListenerLease, String> {
+        bind_with_reuse(
+            listen_addresses,
+            preferred_port,
+            last_actual_port,
+            previous,
             |address, port| TcpListener::bind((address, port)),
         )
     }
@@ -118,8 +171,25 @@ fn candidate_ports(preferred_port: u16, last_actual_port: Option<u16>) -> Result
     Ok(candidates)
 }
 
+fn normalize_listener_addresses(listen_addresses: &[String]) -> Result<Vec<String>, String> {
+    if listen_addresses.is_empty() {
+        return Err("routing_listen_address_invalid".to_string());
+    }
+    let mut normalized = Vec::with_capacity(listen_addresses.len());
+    for address in listen_addresses {
+        let address = address.trim();
+        if !matches!(address, "127.0.0.1" | "::1" | "localhost") {
+            return Err("routing_listen_address_invalid".to_string());
+        }
+        if !normalized.iter().any(|item| item == address) {
+            normalized.push(address.to_string());
+        }
+    }
+    Ok(normalized)
+}
+
 fn bind_with<F>(
-    listen_address: &str,
+    listen_addresses: &[String],
     preferred_port: u16,
     last_actual_port: Option<u16>,
     mut bind: F,
@@ -127,15 +197,88 @@ fn bind_with<F>(
 where
     F: FnMut(&str, u16) -> io::Result<TcpListener>,
 {
-    let listen_address = listen_address.trim();
-    if !matches!(listen_address, "127.0.0.1" | "::1" | "localhost") {
-        return Err("routing_listen_address_invalid".to_string());
-    }
+    let listen_addresses = normalize_listener_addresses(listen_addresses)?;
     let candidates = candidate_ports(preferred_port, last_actual_port)?;
     for port in candidates {
-        if let Ok(listener) = bind(listen_address, port) {
+        let mut listeners = Vec::with_capacity(listen_addresses.len());
+        let mut candidate_usable = true;
+        for address in &listen_addresses {
+            match bind(address, port) {
+                Ok(listener) => listeners.push(listener),
+                Err(_) => {
+                    candidate_usable = false;
+                    break;
+                }
+            }
+        }
+        if candidate_usable {
             return Ok(RoutingListenerLease {
-                _listener: listener,
+                listeners: listeners
+                    .into_iter()
+                    .zip(listen_addresses.iter())
+                    .map(|(listener, address)| BoundListener {
+                        address: address.clone(),
+                        listener,
+                    })
+                    .collect(),
+                actual_port: port,
+            });
+        }
+    }
+    Err("routing_port_range_exhausted".to_string())
+}
+
+fn bind_with_reuse<F>(
+    listen_addresses: &[String],
+    preferred_port: u16,
+    last_actual_port: Option<u16>,
+    previous: &RoutingListenerLease,
+    mut bind: F,
+) -> Result<RoutingListenerLease, String>
+where
+    F: FnMut(&str, u16) -> io::Result<TcpListener>,
+{
+    let listen_addresses = normalize_listener_addresses(listen_addresses)?;
+    let candidates = candidate_ports(preferred_port, last_actual_port)?;
+    for port in candidates {
+        let mut listeners = Vec::with_capacity(listen_addresses.len());
+        let mut candidate_usable = true;
+        for address in &listen_addresses {
+            if port == previous.actual_port {
+                if let Some(existing) = previous
+                    .listeners
+                    .iter()
+                    .find(|listener| listener.address == *address)
+                {
+                    match existing.listener.try_clone() {
+                        Ok(listener) => {
+                            listeners.push(BoundListener {
+                                address: address.clone(),
+                                listener,
+                            });
+                            continue;
+                        }
+                        Err(_) => {
+                            candidate_usable = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            match bind(address, port) {
+                Ok(listener) => listeners.push(BoundListener {
+                    address: address.clone(),
+                    listener,
+                }),
+                Err(_) => {
+                    candidate_usable = false;
+                    break;
+                }
+            }
+        }
+        if candidate_usable {
+            return Ok(RoutingListenerLease {
+                listeners,
                 actual_port: port,
             });
         }
@@ -163,24 +306,37 @@ mod tests {
     fn preferred_port_occupied_falls_back_to_next_candidate() {
         let occupied = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let preferred = occupied.local_addr().unwrap().port();
-        let lease = PortAllocator::bind("127.0.0.1", preferred, None).unwrap();
+        let lease = PortAllocator::bind(&["127.0.0.1".to_string()], preferred, None).unwrap();
         assert_ne!(lease.actual_port, preferred);
     }
 
     #[test]
     fn invalid_port_is_rejected_before_bind() {
         assert_eq!(
-            PortAllocator::bind("127.0.0.1", 0, None).unwrap_err(),
+            PortAllocator::bind(&["127.0.0.1".to_string()], 0, None).unwrap_err(),
             "routing_port_invalid"
         );
     }
 
     #[test]
     fn exhausted_candidates_return_stable_error() {
-        let result = bind_with("127.0.0.1", 15_721, None, |_address, _port| {
-            Err(io::Error::new(io::ErrorKind::AddrInUse, "occupied"))
-        });
+        let result = bind_with(
+            &["127.0.0.1".to_string()],
+            15_721,
+            None,
+            |_address, _port| Err(io::Error::new(io::ErrorKind::AddrInUse, "occupied")),
+        );
         assert_eq!(result.unwrap_err(), "routing_port_range_exhausted");
+    }
+
+    #[test]
+    fn wildcard_and_lan_addresses_are_rejected_before_bind() {
+        for address in ["0.0.0.0", "::", "192.168.1.4"] {
+            assert_eq!(
+                PortAllocator::bind(&[address.to_string()], FALLBACK_PORT_START, None).unwrap_err(),
+                "routing_listen_address_invalid"
+            );
+        }
     }
 
     #[test]
@@ -189,15 +345,54 @@ mod tests {
         let preferred = probe.local_addr().unwrap().port();
         drop(probe);
         let mut runtime = RoutingRuntime::new();
-        let running = runtime.start("127.0.0.1", preferred, None).unwrap();
+        let running = runtime
+            .start(&["127.0.0.1".to_string()], preferred, None)
+            .unwrap();
         let actual = running.actual_port.expect("actual port");
         assert_eq!(runtime.stop().actual_port, Some(actual));
         assert_eq!(runtime.snapshot().actual_port, Some(actual));
 
         let mut restarted = RoutingRuntime::new();
         let reused = restarted
-            .start("127.0.0.1", preferred + 1, Some(actual))
+            .start(&["127.0.0.1".to_string()], preferred + 1, Some(actual))
             .unwrap();
         assert_eq!(reused.actual_port, Some(actual));
+    }
+
+    #[test]
+    fn failed_rebind_keeps_old_lease_and_actual_port() {
+        let probe = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let preferred = probe.local_addr().unwrap().port();
+        drop(probe);
+        let mut runtime = RoutingRuntime::new();
+        let running = runtime
+            .start(&["127.0.0.1".to_string()], preferred, None)
+            .unwrap();
+        let actual = running.actual_port;
+        let result = runtime.rebind(&["0.0.0.0".to_string()], preferred + 1, Some(preferred + 1));
+        assert_eq!(result.unwrap_err(), "routing_listen_address_invalid");
+        assert!(runtime.is_running());
+        assert_eq!(runtime.snapshot().actual_port, actual);
+    }
+
+    #[test]
+    fn rebind_reuses_unchanged_listener_on_same_actual_port() {
+        let probe = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let preferred = probe.local_addr().unwrap().port();
+        drop(probe);
+        let mut runtime = RoutingRuntime::new();
+        let running = runtime
+            .start(&["127.0.0.1".to_string()], preferred, None)
+            .unwrap();
+        let actual = running.actual_port;
+        let rebound = runtime
+            .rebind(
+                &["127.0.0.1".to_string()],
+                preferred + 1,
+                Some(actual.expect("actual port")),
+            )
+            .unwrap();
+        assert_eq!(rebound.actual_port, actual);
+        assert_eq!(rebound.preferred_port, preferred + 1);
     }
 }

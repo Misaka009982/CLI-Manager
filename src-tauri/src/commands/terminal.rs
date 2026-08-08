@@ -319,7 +319,7 @@ fn client_frame_id(frame: &ClientFrame) -> Option<u64> {
         | ClientFrame::Status { id }
         | ClientFrame::SshAgentRequest { id, .. }
         | ClientFrame::SshAgentRelease { id, .. }
-        | ClientFrame::RoutingReload { id }
+        | ClientFrame::RoutingReload { id, .. }
         | ClientFrame::RoutingStatus { id }
         | ClientFrame::RoutingStart { id, .. }
         | ClientFrame::RoutingStop { id }
@@ -455,7 +455,13 @@ mod tests {
     #[test]
     fn legacy_transport_rejects_routing_control_frames() {
         assert_eq!(
-            legacy_client_frame_id(&ClientFrame::RoutingReload { id: 7 }),
+            legacy_client_frame_id(&ClientFrame::RoutingReload {
+                id: 7,
+                listen_address: None,
+                preferred_port: None,
+                last_actual_port: None,
+                listener_addresses: Vec::new(),
+            }),
             Err(ROUTING_ERROR_PROTOCOL_UNSUPPORTED)
         );
         assert_eq!(legacy_client_frame_id(&ClientFrame::Ping { id: 8 }), Ok(8));
