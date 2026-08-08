@@ -1,18 +1,18 @@
 # CCS 路由迁移实施进度
 
-> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P1-13 已完成，当前指针为 P1-14。
+> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P1-14 已完成，当前指针为 P1-15。
 
 ## 0. 当前指针
 
 | 字段 | 值 |
 | --- | --- |
 | Task | 08-08-ccs-routing-migration |
-| task.json 状态 | in_progress（P0、P1-01 至 P1-13 已完成，当前指针为 P1-14） |
+| task.json 状态 | in_progress（P0、P1-01 至 P1-14 已完成，当前指针为 P1-15） |
 | Changelog Target | [TEMP] |
 | 当前阶段 | P1：本地路由 |
-| 当前 Case | P1-14 |
-| 审批状态 | 已批准；P1-13 完成，按 Case 顺序切换至 P1-14 指针 |
-| 最后更新时间 | 2026-08-09 05:00 |
+| 当前 Case | P1-15 |
+| 审批状态 | 已批准；P1-14 完成，按 Case 顺序切换至 P1-15 指针 |
+| 最后更新时间 | 2026-08-09 05:25 |
 | 最后操作机器 | DESKTOP-Q49I074 |
 | 分支 | feat/native-provider-management |
 | 工作目录 | F:/github/CLI-Manager |
@@ -76,12 +76,12 @@
 | 阶段 | 范围 | Case 数 | 当前状态 |
 | --- | --- | ---: | --- |
 | P0 | 影响分析、Schema、协议、Fixture 基线 | 4 | completed |
-| P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | P1-14 in_progress |
+| P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | P1-15 in_progress |
 | P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | pending |
 | P3 | 全局出站代理 | 5 | pending |
 | P4 | 整流器与 Bedrock 优化 | 6 | pending |
 | P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | pending |
-| 合计 |  | 43 | 17 个 Case 完成；P1-14 等待续做 |
+| 合计 |  | 43 | 18 个 Case 完成；P1-15 等待续做 |
 
 ## 4. P0：影响分析、Schema、协议与 Fixture 基线
 
@@ -109,8 +109,8 @@
 | P1-11 | 完成三应用 HTTP path、provider adapter、JSON/SSE 转发 | P0-03、P1-10 | route server、adapter、reqwest、request/response DTO | /v1/messages、/v1/responses、/v1/chat/completions、/grokbuild/v1；未知 path 404/405 | 未覆盖格式不接管，route off 走 direct | completed | 2026-08-09 04:10；固定 POST path、Grok wildcard suffix、CONNECT 拒绝、body/header 上限、hop-by-hop/auth 过滤、immutable provider snapshot、JSON/SSE 原样流式转发；Rust 942 passed/1 ignored、cargo check、fmt、TypeScript、diff check 通过；GitNexus staged detect_changes LOW/0 affected processes；R1/R2 修复后连续两轮零未解决发现；提交 `feat(routing): add fixed HTTP route forwarding` |
 | P1-12 | 完成 route-only enabled key pool、cursor、cooldown 和 reload generation | P1-01、P1-11 | provider key loader、route snapshot、forward attempt | sort_index 轮询；active-first；401/403/429 未提交前换 key；耗尽后 provider failure | 关闭 pool，恢复 active-key-only；不改 is_active | completed | 2026-08-09 04:35；按 `(app, provider)` 管理 enabled key pool，active-first、sort_index/id 顺序、immutable body/config attempt、401/403/429 未提交前轮换、bounded Retry-After cooldown、reload generation；Rust 945 passed/1 ignored、cargo check、fmt、TypeScript、diff check 通过；GitNexus staged detect_changes LOW/0 affected processes；R1/R2 连续两轮零未解决发现；提交 `feat(routing): add route key pool rotation` |
 | P1-13 | 完成模型映射 route-only 语义、每 attempt 重算和最终 model pin | P0-03、P1-11 | advanced.modelMappings、normalize/save、forward loop、model resolver | off 不重写；a->b outbound；重复/大小写/Body Override/A-B provider mapping | 禁用 mapper，保留配置和 direct behavior | completed | 2026-08-09 05:00；Codex/Grok `advanced.modelMappings` trim/精确大小写/duplicate reject/no-match preserve；每 attempt 从原始 JSON model 重算并最终 pin；Claude sonnet/opus/haiku/fable role mapping，fable fallback opus；非法 mapping 返回 400；Rust 947 passed/1 ignored、cargo check、fmt、TypeScript、diff check 通过；GitNexus staged detect_changes LOW/0 affected processes；R1/R2 修复后连续两轮零未解决发现；提交 `feat(routing): add route model mapping` |
-| P1-14 | 完成路由页面、四个 accordion、真实状态和供应商导航 | P1-01、P1-10、P1-13 | NativeProviderSettingsPage.tsx、tabs、routing sections、i18n | 供应商目录/CLI HOME/路由同级；固定优先级；端口/endpoint/status/queue 脱敏 | 隐藏 routing surface，不影响 catalog/home | in_progress | mapping 提示必须中英文明确 route-only |
-| P1-15 | 完成 Sidebar 快捷开关和本地路由端到端验收 | P1-04 至 P1-14 | SidebarFooter.tsx、PTY active target、session stores、toast/i18n | Windows local、WSL 多 distro、macOS；无 PTY/SSH/unsupported/no key 禁用并解释；on->request->off | 移除快捷入口，保留设置页和 direct flow | pending | P1 完成条件包含三平台，不可只交 Windows |
+| P1-14 | 完成路由页面、四个 accordion、真实状态和供应商导航 | P1-01、P1-10、P1-13 | NativeProviderSettingsPage.tsx、tabs、routing sections、i18n | 供应商目录/CLI HOME/路由同级；固定优先级；端口/endpoint/status/queue 脱敏 | 隐藏 routing surface，不影响 catalog/home | completed | 2026-08-09 05:25；新增 routing surface 与四个 accordion，读取/修改既有 routing commands，区分 persisted service 与 daemon live state，HomeIdentity 完整匹配；zh-CN/en-US 文案与 route-only 边界提示；TypeScript、cargo check/test、fmt、diff check 通过；GitNexus staged detect_changes HIGH（预期 page/i18n 8 flows，已报告风险）；R1/R2 连续两轮零未解决发现；提交 `feat(routing): add routing settings surface` |
+| P1-15 | 完成 Sidebar 快捷开关和本地路由端到端验收 | P1-04 至 P1-14 | SidebarFooter.tsx、PTY active target、session stores、toast/i18n | Windows local、WSL 多 distro、macOS；无 PTY/SSH/unsupported/no key 禁用并解释；on->request->off | 移除快捷入口，保留设置页和 direct flow | in_progress | P1 完成条件包含三平台，不可只交 Windows |
 
 ## 6. P2：自动故障转移
 
@@ -201,6 +201,8 @@
 | 2026-08-09 04:35 | DESKTOP-Q49I074 | P1-12 | in_progress -> completed | `src-tauri/src/daemon/route_http.rs`、progress | route_http key pool 7 focused；Rust 945 passed/1 ignored；cargo check、rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build | R1：复核 pool/attempt/cooldown/secret/lifecycle 数据流，0 findings；R2：复核 A-03、direct/scope/Live、旧 daemon、网络错误与 commit boundary，0 findings；连续两轮零未解决发现；GitNexus staged detect_changes LOW/0 affected processes | feat(routing): add route key pool rotation | P1-13 |
 
 | 2026-08-09 05:00 | DESKTOP-Q49I074 | P1-13 | in_progress -> completed | `src-tauri/src/daemon/route_http.rs`、progress | route_http mapping 9 focused；Rust 947 passed/1 ignored；cargo check、rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build | R1：复核原始 body/每 attempt 重算、Claude role、Codex/Grok mapping、secret、route-off，修复 pool 半初始化；R2：复核 Body Override final pin、duplicate/empty、大小写、direct/scope/Live、旧 daemon 和错误 DTO，修复非法 mapping 400；连续两轮零未解决发现；GitNexus staged detect_changes LOW/0 affected processes | feat(routing): add route model mapping | P1-14 |
+
+| 2026-08-09 05:25 | DESKTOP-Q49I074 | P1-14 | in_progress -> completed | `src/components/settings/pages/NativeProviderSettingsPage.tsx`、`src/components/settings/providers/NativeProviderRoutingSection.tsx`、`src/components/settings/providers/useNativeProviderRouting.ts`、`src/components/settings/providers/nativeProviderTypes.ts`、`src/lib/i18n.ts`、progress | TypeScript；Rust 947 passed/1 ignored；cargo check、rustfmt、diff check；未运行 tauri dev/build | R1：复核 surface 分支、HomeIdentity、persisted/live、secret/route-off，修复 environment identity 匹配；R2：复核四 accordion、catalog/home 回归、zh-CN/en-US、P1-15 边界，0 findings；连续两轮零未解决发现；GitNexus staged detect_changes HIGH 为预期 8 个 settings 流程 | feat(routing): add routing settings surface | P1-15 |
 
 ## 12. 执行授权
 

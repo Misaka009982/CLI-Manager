@@ -213,6 +213,43 @@ export interface NativeProviderGlobalCurrent {
   targets: NativeProviderGlobalTargetPreview[];
 }
 
+export interface NativeProviderRoutingService {
+  schemaVersion: number;
+  serviceEnabled: boolean;
+  listenAddress: string;
+  preferredPort: number;
+  actualPort: number | null;
+  showLocalQuickControl: boolean;
+  showFailoverQuickControl: boolean;
+  usageLoggingEnabled: boolean;
+}
+
+export interface NativeProviderRoutingTakeover {
+  appType: string;
+  homeIdentity: NativeProviderHomeIdentity;
+  endpointMode: string;
+  advertisedHost: string;
+  appliedPort: number;
+}
+
+export interface NativeProviderRoutingDaemon {
+  status: string;
+  connected: boolean;
+  capabilitySupported: boolean;
+  error: { code: string; hint: string } | null;
+  listenerAddresses: string[];
+  preferredPort: number | null;
+  actualPort: number | null;
+}
+
+export interface NativeProviderRoutingState {
+  persisted: {
+    service: NativeProviderRoutingService;
+    takeovers: NativeProviderRoutingTakeover[];
+  };
+  daemon: NativeProviderRoutingDaemon;
+}
+
 export interface NativeProviderEnvironmentInspectInput {
   appType?: NativeProviderAppType | null;
   homeIdentity: {

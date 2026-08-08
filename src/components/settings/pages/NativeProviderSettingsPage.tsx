@@ -13,6 +13,7 @@ import { NativeProviderFormModal } from "../providers/NativeProviderFormModal";
 import { NativeProviderGlobalSection } from "../providers/NativeProviderGlobalSection";
 import { NativeProviderKeySection } from "../providers/NativeProviderKeySection";
 import { NativeProviderHomeSection } from "../providers/NativeProviderHomeSection";
+import { NativeProviderRoutingSection } from "../providers/NativeProviderRoutingSection";
 import { NativeProviderImportSection } from "../providers/NativeProviderImportSection";
 import { NativeProviderTypeTabs } from "../providers/NativeProviderTypeTabs";
 import {
@@ -23,6 +24,7 @@ import {
 import { useNativeProviderCatalog } from "../providers/useNativeProviderCatalog";
 import { useNativeProviderCommonConfig } from "../providers/useNativeProviderCommonConfig";
 import { useNativeProviderHome } from "../providers/useNativeProviderHome";
+import { useNativeProviderRouting } from "../providers/useNativeProviderRouting";
 import {
   NATIVE_PROVIDER_APP_TYPES,
   type NativeProviderAppType,
@@ -51,7 +53,7 @@ interface NativeProviderSettingsPageProps {
   searchValue: string;
 }
 
-type NativeProviderSettingsSurface = "catalog" | "home";
+type NativeProviderSettingsSurface = "catalog" | "home" | "routing";
 
 const ERROR_TRANSLATIONS: Partial<Record<string, TranslationKey>> = {
   provider_invalid_app_type: "providerCatalog.errors.invalidAppType",
@@ -134,6 +136,7 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
     selectedDetail?.card.id ?? null,
     configuredRoots,
   );
+  const routingState = useNativeProviderRouting();
   useEffect(() => {
     pageCache.selectedProviderId = catalog.selectedProviderId;
     setDetailViewState(readCachedDetailView(catalog.selectedProviderId));
@@ -225,13 +228,20 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
         data={[
           { value: "catalog", label: t("providerCatalog.title") },
           { value: "home", label: t("providerCatalog.home.title") },
+          { value: "routing", label: t("providerCatalog.routing.title") },
         ]}
         className="w-full sm:w-fit"
       />
 
       <NativeProviderTypeTabs value={appType} labels={appTypeLabels} onChange={handleAppTypeChange} />
 
-      {surface === "home" ? (
+      {surface === "routing" ? (
+        <NativeProviderRoutingSection
+          appType={appType}
+          homeIdentity={homeState.home?.identity ?? null}
+          state={routingState}
+        />
+      ) : surface === "home" ? (
         <NativeProviderHomeSection
           appType={appType}
           providerId={selectedDetail?.card.id ?? null}
