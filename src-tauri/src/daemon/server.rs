@@ -7,10 +7,10 @@
 use super::discovery::{remove_daemon_info, write_daemon_info_exclusive, DaemonInfo};
 use super::protocol::{
     decode_binary_terminal_frame, decode_client_frame, encode_binary_terminal_frame, encode_frame,
-    supported_features, ClientFrame, DaemonFrame, ProcessTraits, ProtocolError, ReplayEntry,
-    SessionMeta, SessionStatusInfo, BINARY_KIND_CHECKPOINT, BINARY_KIND_INPUT, BINARY_KIND_OUTPUT,
-    BINARY_KIND_REPLAY, BINARY_KIND_REPLAY_RESET, BINARY_PROTOCOL_VERSION,
-    CONTROL_PROTOCOL_VERSION, MAX_FRAME_BYTES,
+    routing_control_id, supported_features, ClientFrame, DaemonFrame, ProcessTraits, ProtocolError,
+    ReplayEntry, RoutingError, RoutingEvent, SessionMeta, SessionStatusInfo,
+    BINARY_KIND_CHECKPOINT, BINARY_KIND_INPUT, BINARY_KIND_OUTPUT, BINARY_KIND_REPLAY,
+    BINARY_KIND_REPLAY_RESET, BINARY_PROTOCOL_VERSION, CONTROL_PROTOCOL_VERSION, MAX_FRAME_BYTES,
 };
 use super::ssh_agent_bridge::SshAgentBridgeManager;
 use crate::claude_hook::{remote_hook_payload_from_spool, spawn_hook_listener, HookPayloadSink};
@@ -1583,15 +1583,15 @@ impl DaemonServer {
                         break;
                     }
                 }
-                Err(ProtocolError::UnknownType(kind)) => {
+                Err(ProtocolError::UnknownType(_)) => {
                     // 前向兼容：未知 type 回错误帧但保持连接。
                     let _ = writer.send_frame(&DaemonFrame::Err {
                         id: 0,
-                        message: format!("unknown frame type: {kind}"),
+                        message: "unknown frame type".to_string(),
                     });
                 }
-                Err(ProtocolError::Malformed(reason)) => {
-                    log::warn!("daemon malformed frame ({peer}): {reason}");
+                Err(ProtocolError::Malformed(_)) => {
+                    log::warn!("daemon malformed frame ({peer})");
                     break; // 非法帧断连（契约）。
                 }
             }
@@ -1669,18 +1669,27 @@ impl DaemonServer {
             match message {
                 WebSocketClientMessage::Text(line) => match decode_client_frame(&line) {
                     Ok(frame) => {
+                        if let Some(id) = routing_control_id(&frame) {
+                            let _ = writer.send_frame(&DaemonFrame::RoutingEvent {
+                                event: RoutingEvent::error(
+                                    id,
+                                    RoutingError::protocol_unsupported("websocket"),
+                                ),
+                            });
+                            continue;
+                        }
                         if !self.dispatch(client_id, frame, &writer) {
                             break;
                         }
                     }
-                    Err(ProtocolError::UnknownType(kind)) => {
+                    Err(ProtocolError::UnknownType(_)) => {
                         let _ = writer.send_frame(&DaemonFrame::Err {
                             id: 0,
-                            message: format!("unknown frame type: {kind}"),
+                            message: "unknown frame type".to_string(),
                         });
                     }
-                    Err(ProtocolError::Malformed(reason)) => {
-                        log::warn!("daemon websocket malformed frame ({peer}): {reason}");
+                    Err(ProtocolError::Malformed(_)) => {
+                        log::warn!("daemon websocket malformed frame ({peer})");
                         break;
                     }
                 },
@@ -2093,6 +2102,13 @@ impl DaemonServer {
                     .release_consumer(&host_id, &consumer_id);
                 DaemonFrame::Ok { id }
             }
+            ClientFrame::RoutingReload { id }
+            | ClientFrame::RoutingStatus { id }
+            | ClientFrame::RoutingStart { id }
+            | ClientFrame::RoutingStop { id }
+            | ClientFrame::RoutingResetCircuit { id, .. } => DaemonFrame::RoutingEvent {
+                event: RoutingEvent::error(id, RoutingError::service_unavailable()),
+            },
             ClientFrame::Shutdown { id } => {
                 if self.host.alive_session_count() > 0 {
                     return err_frame(id, "sessions active");
@@ -2277,6 +2293,10 @@ fn maybe_activate_app_for_hook(payload: &crate::claude_hook::ClaudeHookPayload) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::protocol::{
+        decode_daemon_frame, ROUTING_ERROR_PROTOCOL_UNSUPPORTED, ROUTING_ERROR_SERVICE_UNAVAILABLE,
+    };
+    use tungstenite::client::IntoClientRequest;
 
     #[test]
     fn daemon_output_batch_stops_before_crossing_live_frame_budget() {
@@ -2417,6 +2437,167 @@ mod tests {
         assert_eq!(binary[1], BINARY_KIND_OUTPUT);
         assert_eq!(&binary[binary.len() - 5..], b"hello");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn ndjson_redacts_unknown_frame_types() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = Arc::new(DaemonServer {
+            host: Arc::new(DaemonHost::new()),
+            next_client_id: AtomicU64::new(1),
+            token: "token".to_string(),
+            version: "test".to_string(),
+            info_path: PathBuf::new(),
+        });
+        let server_thread = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            server.handle_connection(stream);
+        });
+
+        let stream = TcpStream::connect(address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+        writer
+            .write_all(
+                encode_frame(&ClientFrame::Auth {
+                    token: "token".to_string(),
+                    client_version: "test".to_string(),
+                })
+                .as_bytes(),
+            )
+            .unwrap();
+        assert!(matches!(
+            decode_daemon_frame(&read_line_bounded(&mut reader).unwrap()).unwrap(),
+            DaemonFrame::AuthOk { .. }
+        ));
+
+        writer
+            .write_all(b"{\"type\":\"token=must-not-be-returned\",\"id\":8}\n")
+            .unwrap();
+        let DaemonFrame::Err { message, .. } =
+            decode_daemon_frame(&read_line_bounded(&mut reader).unwrap()).unwrap()
+        else {
+            panic!("expected generic daemon error");
+        };
+        assert_eq!(message, "unknown frame type");
+        assert!(!message.contains("must-not-be-returned"));
+
+        drop(writer);
+        drop(reader);
+        server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn websocket_rejects_routing_control_and_redacts_unknown_frame_types() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = Arc::new(DaemonServer {
+            host: Arc::new(DaemonHost::new()),
+            next_client_id: AtomicU64::new(1),
+            token: "token".to_string(),
+            version: "test".to_string(),
+            info_path: PathBuf::new(),
+        });
+        let server_thread = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            server.handle_websocket_connection(stream);
+        });
+
+        let stream = TcpStream::connect(address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut request = format!("ws://{address}/pty").into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("origin", "http://localhost:1420".parse().unwrap());
+        let (mut client, _) = tungstenite::client(request, stream).unwrap();
+        client
+            .send(Message::Text(
+                encode_frame(&ClientFrame::Auth {
+                    token: "token".to_string(),
+                    client_version: "test".to_string(),
+                })
+                .trim_end()
+                .to_string()
+                .into(),
+            ))
+            .unwrap();
+        assert!(matches!(
+            client.read().unwrap(),
+            Message::Text(text)
+                if matches!(decode_daemon_frame(text.as_ref()).unwrap(), DaemonFrame::AuthOk { .. })
+        ));
+
+        client
+            .send(Message::Text(
+                encode_frame(&ClientFrame::RoutingStart { id: 7 })
+                    .trim_end()
+                    .to_string()
+                    .into(),
+            ))
+            .unwrap();
+        let Message::Text(text) = client.read().unwrap() else {
+            panic!("expected routing rejection");
+        };
+        let DaemonFrame::RoutingEvent { event } = decode_daemon_frame(text.as_ref()).unwrap()
+        else {
+            panic!("expected routing event");
+        };
+        assert_eq!(event.request_id, Some(7));
+        let error = event.error.unwrap();
+        assert_eq!(error.code, ROUTING_ERROR_PROTOCOL_UNSUPPORTED);
+        assert_eq!(
+            error.params.get("transport").map(String::as_str),
+            Some("websocket")
+        );
+
+        client
+            .send(Message::Text(
+                r#"{"type":"token=must-not-be-returned","id":8}"#.to_string().into(),
+            ))
+            .unwrap();
+        let Message::Text(text) = client.read().unwrap() else {
+            panic!("expected unknown-frame error");
+        };
+        let DaemonFrame::Err { message, .. } = decode_daemon_frame(text.as_ref()).unwrap() else {
+            panic!("expected generic daemon error");
+        };
+        assert_eq!(message, "unknown frame type");
+        assert!(!message.contains("must-not-be-returned"));
+
+        drop(client);
+        server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn routing_control_returns_sanitized_unavailable_error_until_runtime_exists() {
+        let server = DaemonServer {
+            host: Arc::new(DaemonHost::new()),
+            next_client_id: AtomicU64::new(1),
+            token: String::new(),
+            version: String::new(),
+            info_path: PathBuf::new(),
+        };
+        let reply = server.handle_frame(
+            0,
+            ClientFrame::RoutingResetCircuit {
+                id: 9,
+                app_type: "codex".to_string(),
+                provider_id: "token=must-not-be-returned".to_string(),
+            },
+        );
+        let encoded = encode_frame(&reply);
+        let DaemonFrame::RoutingEvent { event } = reply else {
+            panic!("expected routing event");
+        };
+        assert_eq!(event.request_id, Some(9));
+        assert_eq!(event.error.unwrap().code, ROUTING_ERROR_SERVICE_UNAVAILABLE);
+        assert!(!encoded.contains("must-not-be-returned"));
     }
 
     #[test]

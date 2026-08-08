@@ -10,6 +10,7 @@
 |-------|-------------|--------|
 | [WebDAV Sync Contracts](./webdav-sync-contracts.md) | WebDAV sync request/response boundaries, size checks, and validation cases | Active |
 | [Terminal Runtime Monitoring Contracts](./terminal-runtime-monitoring-contracts.md) | PTY env keys, shell OSC markers, tab runtime status, and resource growth diagnostics | Active |
+| [PTY Daemon Contracts](./pty-daemon-contracts.md) | Detached PtyHost transport, routing control-plane capability, protocol safety, and lifecycle contracts | Active |
 | [Terminal Output Scheduling Contracts](./terminal-output-scheduling-contracts.md) | Daemon live-frame budget, cross-terminal xterm fairness, Replay/Reset and ACK ordering | Active |
 | [Terminal OSC Color Contracts](./terminal-osc-color-contracts.md) | OSC 10/11 ownership, daemon color frames, local/WSL replies, and SSH filtering | Active |
 | [Tauri Updater Contracts](./tauri-updater-contracts.md) | Signed updater config, capabilities, release artifacts, and install/relaunch UX contracts | Active |

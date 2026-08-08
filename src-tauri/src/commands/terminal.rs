@@ -1,5 +1,8 @@
 use crate::daemon::client::{DaemonBridge, DaemonClient};
-use crate::daemon::protocol::{ClientFrame, SessionMeta, FEATURE_WS_BINARY_OUTPUT};
+use crate::daemon::protocol::{
+    routing_control_id, ClientFrame, SessionMeta, FEATURE_WS_BINARY_OUTPUT,
+    ROUTING_ERROR_PROTOCOL_UNSUPPORTED,
+};
 use crate::provider::scope::{self, ProviderLaunchConfig};
 use crate::pty::manager::{PtyOrphanCleanupSummary, PtyProcessStatus};
 use crate::ssh_launch::SshLaunchPlan;
@@ -316,8 +319,20 @@ fn client_frame_id(frame: &ClientFrame) -> Option<u64> {
         | ClientFrame::Status { id }
         | ClientFrame::SshAgentRequest { id, .. }
         | ClientFrame::SshAgentRelease { id, .. }
+        | ClientFrame::RoutingReload { id }
+        | ClientFrame::RoutingStatus { id }
+        | ClientFrame::RoutingStart { id }
+        | ClientFrame::RoutingStop { id }
+        | ClientFrame::RoutingResetCircuit { id, .. }
         | ClientFrame::Shutdown { id } => Some(*id),
     }
+}
+
+fn legacy_client_frame_id(frame: &ClientFrame) -> Result<u64, &'static str> {
+    if routing_control_id(frame).is_some() {
+        return Err(ROUTING_ERROR_PROTOCOL_UNSUPPORTED);
+    }
+    client_frame_id(frame).ok_or("legacy auth is not allowed")
 }
 
 /// 旧 daemon 的兼容 transport。只复用已鉴权的主进程 NDJSON 连接，
@@ -329,7 +344,7 @@ pub async fn pty_legacy_request(
 ) -> Result<serde_json::Value, String> {
     let frame: ClientFrame = serde_json::from_value(frame)
         .map_err(|err| format!("invalid legacy PtyHost request: {err}"))?;
-    let id = client_frame_id(&frame).ok_or_else(|| "legacy auth is not allowed".to_string())?;
+    let id = legacy_client_frame_id(&frame).map_err(str::to_string)?;
     let client = wait_for_daemon(&daemon_bridge)
         .await
         .ok_or_else(|| "PtyHost daemon unavailable".to_string())?;
@@ -370,8 +385,13 @@ pub async fn pty_daemon_sessions(
 
 #[cfg(test)]
 mod tests {
-    use super::{daemon_contract_is_current, provider_launch_configs, ProviderLaunchConfig};
-    use crate::daemon::protocol::FEATURE_WS_BINARY_OUTPUT;
+    use super::{
+        daemon_contract_is_current, legacy_client_frame_id, provider_launch_configs,
+        ProviderLaunchConfig,
+    };
+    use crate::daemon::protocol::{
+        ClientFrame, FEATURE_WS_BINARY_OUTPUT, ROUTING_ERROR_PROTOCOL_UNSUPPORTED,
+    };
 
     fn configs() -> (
         Option<ProviderLaunchConfig>,
@@ -430,5 +450,14 @@ mod tests {
         ));
         assert!(!daemon_contract_is_current("0.0.0", &features));
         assert!(!daemon_contract_is_current(env!("CARGO_PKG_VERSION"), &[]));
+    }
+
+    #[test]
+    fn legacy_transport_rejects_routing_control_frames() {
+        assert_eq!(
+            legacy_client_frame_id(&ClientFrame::RoutingReload { id: 7 }),
+            Err(ROUTING_ERROR_PROTOCOL_UNSUPPORTED)
+        );
+        assert_eq!(legacy_client_frame_id(&ClientFrame::Ping { id: 8 }), Ok(8));
     }
 }

@@ -151,11 +151,11 @@ impl DaemonClient {
             while let Some(line) = read_line_bounded(&mut reader) {
                 match decode_daemon_frame(&line) {
                     Ok(frame) => client.route_frame(frame, &app_handle),
-                    Err(ProtocolError::UnknownType(kind)) => {
-                        log::warn!("daemon pushed unknown frame type: {kind}");
+                    Err(ProtocolError::UnknownType(_)) => {
+                        log::warn!("daemon pushed unknown frame type");
                     }
-                    Err(ProtocolError::Malformed(reason)) => {
-                        log::warn!("daemon pushed malformed frame: {reason}");
+                    Err(ProtocolError::Malformed(_)) => {
+                        log::warn!("daemon pushed malformed frame");
                         break;
                     }
                 }
@@ -219,6 +219,16 @@ impl DaemonClient {
                 );
             }
             DaemonFrame::CheckpointAccepted { .. } | DaemonFrame::CheckpointRejected { .. } => {}
+            DaemonFrame::RoutingEvent { event } => {
+                if let Some(id) = event.request_id {
+                    let sender = self.pending.lock().ok().and_then(|mut p| p.remove(&id));
+                    if let Some(sender) = sender {
+                        let _ = sender.send(DaemonFrame::RoutingEvent { event });
+                    }
+                } else {
+                    let _ = app_handle.emit("routing-event", event);
+                }
+            }
             DaemonFrame::Pong { id }
             | DaemonFrame::Ok { id }
             | DaemonFrame::Created { id, .. }

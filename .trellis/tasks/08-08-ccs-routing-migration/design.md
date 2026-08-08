@@ -347,6 +347,8 @@ RoutingEvent { event }
 
 配置、queue、takeover intent 由 Tauri command 写 provider DB；frame 不传 API key、proxy password 或完整 provider document。
 
+Routing control frame 仅允许 Tauri 主进程持有的 NDJSON daemon client 发送。WebView WebSocket 与兼容入口 `pty_legacy_request` 必须返回 `routing_protocol_unsupported`，不能绕过 Tauri 配置校验和用户确认直接 start/stop/reload/reset。旧 daemon 的 feature 列表缺少 `local_routing_v1` 时，调用方必须先返回 `routing_feature_not_supported`，不得发送控制帧。
+
 ### 5.3 Tauri commands
 
 ```text

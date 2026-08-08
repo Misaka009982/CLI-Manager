@@ -1,18 +1,18 @@
 # CCS 路由迁移实施进度
 
-> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。用户已批准开始执行，当前从 P0-03 推进。
+> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0 已完成；当前仅将指针切换到 P1-01，按用户要求暂停实现，等待另一设备继续。
 
 ## 0. 当前指针
 
 | 字段 | 值 |
 | --- | --- |
 | Task | 08-08-ccs-routing-migration |
-| task.json 状态 | in_progress（P0-03 已完成，P0-04 执行中） |
+| task.json 状态 | in_progress（P0 已完成，P1-01 指针已切换但尚未实现） |
 | Changelog Target | [TEMP] |
-| 当前阶段 | P0：影响分析、Schema、协议与 Fixture 基线 |
-| 当前 Case | P0-04 |
-| 审批状态 | 已批准；P0-03 完成，P0-04 执行中 |
-| 最后更新时间 | 2026-08-08 23:03 |
+| 当前阶段 | P1：本地路由（暂停，未开始生产实现） |
+| 当前 Case | P1-01 |
+| 审批状态 | 已批准；P0 完成，按用户要求暂停，等待另一设备继续 P1-01 |
+| 最后更新时间 | 2026-08-08 23:54 |
 | 最后操作机器 | DESKTOP-Q49I074 |
 | 分支 | feat/native-provider-management |
 | 工作目录 | D:/github/CLI-Manager |
@@ -75,13 +75,13 @@
 
 | 阶段 | 范围 | Case 数 | 当前状态 |
 | --- | --- | ---: | --- |
-| P0 | 影响分析、Schema、协议、Fixture 基线 | 4 | P0-01/P0-02/P0-03 completed；P0-04 in_progress |
-| P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | pending |
+| P0 | 影响分析、Schema、协议、Fixture 基线 | 4 | completed |
+| P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | P1-01 in_progress（仅指针，尚未实现） |
 | P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | pending |
 | P3 | 全局出站代理 | 5 | pending |
 | P4 | 整流器与 Bedrock 优化 | 6 | pending |
 | P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | pending |
-| 合计 |  | 43 | 2 个实现 Case 完成 |
+| 合计 |  | 43 | 4 个 Case 完成；P1-01 等待续做 |
 
 ## 4. P0：影响分析、Schema、协议与 Fixture 基线
 
@@ -90,13 +90,13 @@
 | P0-01 | 锁定 provider、daemon、Home、writer、HTTP、UI 全链路触点并完成 upstream impact | 无 | src-tauri/src/provider、src-tauri/src/daemon、settings、sidebar、对应 spec | get_context phase 2.1；GitNexus query/context/impact；记录 HIGH/CRITICAL blast radius | 仅撤销分析记录，不碰生产文件 | completed | 2026-08-08 21:11；R1/R2 findings 已修复，R3/R4/R7/R8B 连续零发现；独立提交主题见执行日志 |
 | P0-02 | 以 additive 方式完成 provider DB v2 routing settings、request logs 和索引迁移 | P0-01 | provider/database.rs、migration.rs、repository/support.rs | fresh v1 升级、future schema、迁移中断、失败降级；针对性 Rust tests | 忽略 routing v2，恢复 v1 读取；保留 provider/key 数据 | completed | 2026-08-08 22:14；9 database tests、4 migration tests、123 provider tests 与 cargo check 通过；R1/R2 findings 修复后 R3/R4 连续零发现 |
 | P0-03 | 建立脱敏 JSON/SSE、Responses SSE、协议转换和整流器 fixture | P0-01 | route adapter tests、fixture 目录、request log 脱敏断言 | Claude 四类 apiFormat；Codex/Grok 三类 wireApi；tool/reasoning/media/usage；提交边界 | 未覆盖格式标记 unsupported，不静默 passthrough | completed | 2026-08-08 23:03；10 格式均含 JSON/SSE，5 stream、mapping、12 rectifier 与 schema-v2 日志样本；5 focused、123 provider tests、cargo check 通过；R1/R2 修复后 R3/R4 连续零发现 |
-| P0-04 | 定义 local_routing_v1 capability、最小控制帧和稳定错误码 | P0-01 | daemon/protocol.rs、client.rs、server.rs、discovery.rs、Tauri error DTO | 旧 daemon、未知 frame、frame 上限、secret 不出 frame/log/error；中英文错误映射 | 旧 daemon 只保留原能力，GUI 不发 routing frame | in_progress | 2026-08-08 23:03 在 DESKTOP-Q49I074 接续；先做 daemon protocol/client/server/discovery symbol impact |
+| P0-04 | 定义 local_routing_v1 capability、最小控制帧和稳定错误码 | P0-01 | daemon/protocol.rs、client.rs、server.rs、discovery.rs、Tauri error DTO | 旧 daemon、未知 frame、frame 上限、secret 不出 frame/log/error；中英文错误映射 | 旧 daemon 只保留原能力，GUI 不发 routing frame | completed | 2026-08-08 23:54；GitNexus `decode_daemon_frame` CRITICAL；914 Rust lib tests（1 ignored）、TypeScript、cargo check 通过；R1/R2 findings 修复后 R3/R4 连续零发现；提交主题 `feat(routing): add daemon protocol baseline` |
 
 ## 5. P1：本地路由
 
 | ID | 目标 | 前置依赖 | 实现触点 | 验收命令/场景 | 回滚点 | 状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| P1-01 | 建立 routing domain、持久化读取和 Tauri commands，区分持久化开关与真实 daemon 状态 | P0-02、P0-04 | provider repository/DTO、commands/provider.rs 或 routing command module、前端 invoke 类型 | 启停、无 current、无 active key、unsupported app、旧 daemon；错误时不写半成品 | routing 读取失败降级 route inactive，不影响 direct | pending | 先做边界校验，再接 UI |
+| P1-01 | 建立 routing domain、持久化读取和 Tauri commands，区分持久化开关与真实 daemon 状态 | P0-02、P0-04 | provider repository/DTO、commands/provider.rs 或 routing command module、前端 invoke 类型 | 启停、无 current、无 active key、unsupported app、旧 daemon；错误时不写半成品 | routing 读取失败降级 route inactive，不影响 direct | in_progress | 仅切换跨机器执行指针；用户要求 P0 提交后暂停，尚未修改任何 P1 代码。续做前先读 task/spec 并对拟修改 symbol 运行 GitNexus upstream impact |
 | P1-02 | 实现 preferredPort/actualPort、真实 bind 和端口回退 | P0-02、P0-04 | daemon listener、route settings、status DTO | 上次 actual -> preferred -> 15721-15799 升序去重；首选占用、范围耗尽、重启复用 | bind/projection 失败保留旧 listener、旧 actual 和旧 Live | pending | 合法用户端口 1024-65535，不增加范围起止 UI |
 | P1-03 | 实现 listener lease、安全地址校验和运行中原子换端口 | P1-02 | listener bind/lease、projection coordinator、status | 拒绝 0.0.0.0、::、LAN wildcard；完整 listener set 预绑定与失败回滚 | 释放新 lease，恢复旧 listener/endpoint/Live | pending | 不允许出现部分 Home 指向旧端口 |
 | P1-04 | 完成 Windows local CLI Home takeover/off/restore | P1-01、P1-03 | provider/home.rs、global.rs、native writer、Windows resolver | Claude/Codex/Grok；最小化、托盘、重启、显式关闭；非 owned 字段保留 | journal compensation 恢复 direct；partial 时 daemon 继续运行 | pending | 要求 active API key 和 ready provider |
@@ -180,6 +180,7 @@
 | 2026-08-08 22:14 | DESKTOP-Q49I074 | P0-02 | in_progress -> completed | provider/database.rs、backend provider contract、design 与 P0-02 research | `cargo fmt`；9 database tests；4 migration tests；123 provider tests；`cargo check`；Trellis/JSON/范围/脱敏检查 | R1 修复默认值与 schema shape 校验；R2 补 spec、backup-failure、checksum/default tests；R3/R4 连续零发现 | feat(routing): add provider schema v2 | P0-03 |
 | 2026-08-08 23:03 | DESKTOP-Q49I074 | P0-03 | in_progress -> completed | `src-tauri/tests/routing_fixtures.rs`、5 个 routing fixture、P0-03 research/progress | 5 focused tests、123 provider tests、`cargo check`、Rustfmt、diff 与 secret/scope 检查通过 | R1/R2 findings 修复；R3/R4 连续零发现 | test(routing): add protocol fixture baseline | P0-04 |
 | 2026-08-08 23:03 | DESKTOP-Q49I074 | P0-04 | pending -> in_progress | 尚未修改 daemon/command 生产代码 | 待执行 daemon protocol capability 与错误 DTO 影响分析 | Review 待完成 | 待完成 | P0-04 |
+| 2026-08-08 23:54 | DESKTOP-Q49I074 | P0-04 | in_progress -> completed | daemon protocol/server/client/discovery、terminal legacy relay、design、backend contract、P0-04 research/progress | 914 Rust lib tests（1 ignored）、TypeScript、cargo check、Rustfmt、diff check 通过；focused tests 见 research | R1/R2 findings 修复；R3/R4 连续零发现；GitNexus CRITICAL 风险已记录 | feat(routing): add daemon protocol baseline | P1-01（仅切换指针后暂停） |
 
 ## 12. 执行授权
 
