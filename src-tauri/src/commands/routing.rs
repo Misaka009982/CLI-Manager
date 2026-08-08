@@ -12,6 +12,7 @@ use crate::provider::routing::{self, RoutingPersistedState, TakeoverKey};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tauri::State;
 
@@ -166,6 +167,80 @@ fn local_route_endpoint(address: &str, port: u16) -> Result<String, RoutingError
         return Err(command_error("routing_port_invalid", "fix_input"));
     }
     Ok(format!("http://{host}:{port}"))
+}
+
+fn route_endpoint(address: &str, endpoint_mode: &str, port: u16) -> Result<String, RoutingError> {
+    if endpoint_mode == "wsl_gateway" {
+        let host = address
+            .parse::<Ipv4Addr>()
+            .map_err(|_| command_error("routing_wsl_gateway_invalid", "fix_input"))?;
+        if host.is_unspecified() || host.is_loopback() || port < 1_024 {
+            return Err(command_error("routing_wsl_gateway_invalid", "fix_input"));
+        }
+        return Ok(format!("http://{host}:{port}"));
+    }
+    local_route_endpoint(address, port)
+}
+
+fn add_listener_address(addresses: &mut Vec<String>, address: String) {
+    if !addresses.iter().any(|item| item == &address) {
+        addresses.push(address);
+    }
+}
+
+fn persisted_listener_addresses(
+    persisted: &RoutingPersistedState,
+) -> Result<Vec<String>, RoutingError> {
+    let mut addresses = vec![persisted.service.listen_address.clone()];
+    for item in &persisted.takeovers {
+        if item.home_identity.environment_kind != "wsl" {
+            continue;
+        }
+        match item.endpoint_mode.as_str() {
+            "wsl_mirrored" => add_listener_address(&mut addresses, "127.0.0.1".to_string()),
+            "wsl_gateway" => {
+                let gateway = routing::resolve_wsl_nat_gateway(&item.home_identity.environment_id)
+                    .map_err(map_input_error)?;
+                if gateway.address.to_string() != item.advertised_host {
+                    return Err(command_error(
+                        "routing_wsl_gateway_changed",
+                        "reload_home_preferences",
+                    ));
+                }
+                add_listener_address(&mut addresses, gateway.address.to_string());
+            }
+            _ => {}
+        }
+    }
+    Ok(addresses)
+}
+
+fn reload_routing_listeners(
+    client: Arc<DaemonClient>,
+    status: &RoutingStatus,
+    listener_addresses: Vec<String>,
+) -> Result<RoutingStatus, RoutingError> {
+    routing_status(request_control(
+        Some(client.clone()),
+        ClientFrame::RoutingReload {
+            id: client.next_request_id(),
+            listen_address: None,
+            preferred_port: Some(status.preferred_port),
+            last_actual_port: status.actual_port,
+            listener_addresses,
+        },
+    )?)
+}
+
+fn restore_routing_listeners(
+    client: Arc<DaemonClient>,
+    status: &RoutingStatus,
+    previous_listener_addresses: &[String],
+    changed: bool,
+) {
+    if changed {
+        let _ = reload_routing_listeners(client, status, previous_listener_addresses.to_vec());
+    }
 }
 
 fn block_on<T>(future: impl Future<Output = Result<T, String>>) -> Result<T, RoutingError> {
@@ -340,7 +415,7 @@ pub fn routing_set_takeover(
         return state(Some(client));
     }
 
-    let status = routing_status(request_control(
+    let mut status = routing_status(request_control(
         Some(client.clone()),
         ClientFrame::RoutingStatus {
             id: client.next_request_id(),
@@ -349,14 +424,96 @@ pub fn routing_set_takeover(
     if input.enabled && status.status != "running" {
         return Err(RoutingError::service_unavailable());
     }
-    let actual_port = status
-        .actual_port
-        .ok_or_else(|| RoutingError::service_unavailable())?;
+    let previous_listener_addresses = status.listener_addresses.clone();
+    let mut actual_port = status.actual_port.or_else(|| {
+        (!input.enabled)
+            .then(|| existing.as_ref().map(|item| item.applied_port))
+            .flatten()
+    });
+    let mut listeners_changed = false;
     let (endpoint_host, endpoint_mode) = if input.enabled && home.identity.environment_kind == "wsl"
     {
-        routing::probe_wsl_mirrored(&home.identity.environment_id, actual_port)
-            .map_err(map_input_error)?;
-        ("127.0.0.1".to_string(), "wsl_mirrored")
+        let mut listener_addresses = persisted_listener_addresses(&persisted)?;
+        add_listener_address(&mut listener_addresses, "127.0.0.1".to_string());
+        status = match reload_routing_listeners(client.clone(), &status, listener_addresses.clone())
+        {
+            Ok(status) => {
+                listeners_changed = status.listener_addresses != previous_listener_addresses;
+                status
+            }
+            Err(error) => return Err(error),
+        };
+        let port = match status.actual_port {
+            Some(port) => {
+                actual_port = Some(port);
+                port
+            }
+            None => {
+                let _ = reload_routing_listeners(
+                    client.clone(),
+                    &status,
+                    previous_listener_addresses.clone(),
+                );
+                return Err(RoutingError::service_unavailable());
+            }
+        };
+        let mirrored_probe = routing::probe_wsl_mirrored(&home.identity.environment_id, port)
+            .map_err(map_input_error);
+        if mirrored_probe.is_ok() {
+            ("127.0.0.1".to_string(), "wsl_mirrored")
+        } else {
+            let gateway = match routing::resolve_wsl_nat_gateway(&home.identity.environment_id) {
+                Ok(gateway) => gateway,
+                Err(error) => {
+                    let _ = reload_routing_listeners(
+                        client.clone(),
+                        &status,
+                        previous_listener_addresses.clone(),
+                    );
+                    return Err(map_input_error(error));
+                }
+            };
+            add_listener_address(&mut listener_addresses, gateway.address.to_string());
+            status = match reload_routing_listeners(client.clone(), &status, listener_addresses) {
+                Ok(status) => {
+                    listeners_changed = status.listener_addresses != previous_listener_addresses;
+                    status
+                }
+                Err(error) => {
+                    let _ = reload_routing_listeners(
+                        client.clone(),
+                        &status,
+                        previous_listener_addresses.clone(),
+                    );
+                    return Err(error);
+                }
+            };
+            let port = match status.actual_port {
+                Some(port) => {
+                    actual_port = Some(port);
+                    port
+                }
+                None => {
+                    let _ = reload_routing_listeners(
+                        client.clone(),
+                        &status,
+                        previous_listener_addresses.clone(),
+                    );
+                    return Err(RoutingError::service_unavailable());
+                }
+            };
+            if let Err(error) =
+                routing::probe_wsl_gateway(&home.identity.environment_id, gateway.address, port)
+            {
+                let _ = reload_routing_listeners(
+                    client.clone(),
+                    &status,
+                    previous_listener_addresses.clone(),
+                );
+                return Err(map_input_error(error));
+            }
+            (gateway.address.to_string(), "wsl_gateway")
+        }
     } else if !input.enabled {
         let existing = existing
             .as_ref()
@@ -368,7 +525,30 @@ pub fn routing_set_takeover(
     } else {
         (persisted.service.listen_address.clone(), "loopback")
     };
-    let endpoint = local_route_endpoint(&endpoint_host, actual_port)?;
+    let actual_port = match actual_port {
+        Some(port) => port,
+        None => {
+            restore_routing_listeners(
+                client.clone(),
+                &status,
+                &previous_listener_addresses,
+                listeners_changed,
+            );
+            return Err(RoutingError::service_unavailable());
+        }
+    };
+    let endpoint = match route_endpoint(&endpoint_host, endpoint_mode, actual_port) {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            restore_routing_listeners(
+                client.clone(),
+                &status,
+                &previous_listener_addresses,
+                listeners_changed,
+            );
+            return Err(error);
+        }
+    };
     let identity_input = HomeIdentityInput {
         environment_kind: home.identity.environment_kind.clone(),
         environment_id: Some(home.identity.environment_id.clone()),
@@ -382,7 +562,18 @@ pub fn routing_set_takeover(
         home_identity: identity_input.clone(),
         projection: input.enabled.then(|| projection.clone()),
     };
-    let preview = block_on(global::preview(preview_input))?;
+    let preview = match block_on(global::preview(preview_input)) {
+        Ok(preview) => preview,
+        Err(error) => {
+            restore_routing_listeners(
+                client.clone(),
+                &status,
+                &previous_listener_addresses,
+                listeners_changed,
+            );
+            return Err(error);
+        }
+    };
     let apply_input = GlobalApplyInput {
         app_type: app_type.clone(),
         provider_id: current_provider_id.clone(),
@@ -390,7 +581,15 @@ pub fn routing_set_takeover(
         preview_fingerprint: preview.fingerprint,
         projection: input.enabled.then_some(projection.clone()),
     };
-    block_on(global::apply(apply_input))?;
+    if let Err(error) = block_on(global::apply(apply_input)) {
+        restore_routing_listeners(
+            client.clone(),
+            &status,
+            &previous_listener_addresses,
+            listeners_changed,
+        );
+        return Err(error);
+    }
 
     let mut takeovers = persisted.takeovers;
     takeovers.retain(|item| !(item.app_type == app_type && item.home_identity == home.identity));
@@ -426,6 +625,12 @@ pub fn routing_set_takeover(
                 projection: rollback_projection,
             }));
         }
+        restore_routing_listeners(
+            client,
+            &status,
+            &previous_listener_addresses,
+            listeners_changed,
+        );
         return Err(error);
     }
     state(Some(client))

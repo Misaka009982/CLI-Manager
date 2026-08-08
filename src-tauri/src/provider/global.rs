@@ -973,7 +973,15 @@ fn route_endpoint_with_suffix(endpoint: &str, suffix: &str) -> Result<String, St
         .rsplit_once(':')
         .map(|(host, _)| host)
         .unwrap_or_default();
-    if !(host == "http://127.0.0.1" || host == "http://localhost" || host == "http://[::1]") {
+    let is_loopback =
+        host == "http://127.0.0.1" || host == "http://localhost" || host == "http://[::1]";
+    let is_ipv4_gateway = host
+        .strip_prefix("http://")
+        .and_then(|value| value.parse::<std::net::Ipv4Addr>().ok())
+        .is_some_and(|address| {
+            !address.is_unspecified() && !address.is_loopback() && !address.is_multicast()
+        });
+    if !is_loopback && !is_ipv4_gateway {
         return Err("routing_endpoint_invalid".to_string());
     }
     Ok(format!("{host}:{port}{suffix}"))
@@ -2147,6 +2155,14 @@ mod tests {
     fn local_route_projection_rejects_non_loopback_endpoint() {
         let result = route_endpoint_with_suffix("http://0.0.0.0:15721", "");
         assert_eq!(result.unwrap_err(), "routing_endpoint_invalid");
+    }
+
+    #[test]
+    fn local_route_projection_accepts_validated_wsl_gateway_endpoint() {
+        assert_eq!(
+            route_endpoint_with_suffix("http://172.28.224.1:15721", ""),
+            Ok("http://172.28.224.1:15721".to_string())
+        );
     }
 
     #[test]

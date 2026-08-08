@@ -178,7 +178,9 @@ fn normalize_listener_addresses(listen_addresses: &[String]) -> Result<Vec<Strin
     let mut normalized = Vec::with_capacity(listen_addresses.len());
     for address in listen_addresses {
         let address = address.trim();
-        if !matches!(address, "127.0.0.1" | "::1" | "localhost") {
+        if !matches!(address, "127.0.0.1" | "::1" | "localhost")
+            && !crate::provider::routing::is_local_unicast_address(address)
+        {
             return Err("routing_listen_address_invalid".to_string());
         }
         if !normalized.iter().any(|item| item == address) {

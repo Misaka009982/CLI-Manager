@@ -8,6 +8,15 @@ use std::collections::HashSet;
 use std::net::Ipv4Addr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::ERROR_BUFFER_OVERFLOW;
+#[cfg(windows)]
+use windows_sys::Win32::NetworkManagement::IpHelper::{
+    GetAdaptersAddresses, GAA_FLAG_INCLUDE_PREFIX, IP_ADAPTER_ADDRESSES_LH,
+};
+#[cfg(windows)]
+use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
+
 pub(crate) const SERVICE_SETTINGS_KEY: &str = "routing.service.v1";
 pub(crate) const TAKEOVERS_SETTINGS_KEY: &str = "routing.takeovers.v1";
 #[allow(dead_code)]
@@ -136,10 +145,18 @@ pub(crate) async fn current_provider_id(app_type: &str) -> Result<String, String
 }
 
 pub(crate) fn probe_wsl_mirrored(distro: &str, port: u16) -> Result<(), String> {
+    probe_wsl_endpoint(distro, "127.0.0.1", port)
+}
+
+pub(crate) fn probe_wsl_gateway(distro: &str, gateway: Ipv4Addr, port: u16) -> Result<(), String> {
+    probe_wsl_endpoint(distro, &gateway.to_string(), port)
+}
+
+fn probe_wsl_endpoint(distro: &str, host: &str, port: u16) -> Result<(), String> {
     let exe =
         wsl::find_wsl_exe().ok_or_else(|| "routing_wsl_probe_tool_unavailable".to_string())?;
     let script = format!(
-        "if command -v nc >/dev/null 2>&1; then nc -z -w 3 127.0.0.1 {port}; elif command -v bash >/dev/null 2>&1; then exec bash -lc 'exec 3<>/dev/tcp/127.0.0.1/{port}'; elif command -v curl >/dev/null 2>&1; then curl --connect-timeout 3 --max-time 4 -fsS http://127.0.0.1:{port}/ >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q -T 3 -O /dev/null http://127.0.0.1:{port}/; else exit 127; fi"
+        "if command -v nc >/dev/null 2>&1; then nc -z -w 3 {host} {port}; elif command -v bash >/dev/null 2>&1; then exec bash -lc 'exec 3<>/dev/tcp/{host}/{port}'; elif command -v curl >/dev/null 2>&1; then curl --connect-timeout 3 --max-time 4 -fsS http://{host}:{port}/ >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q -T 3 -O /dev/null http://{host}:{port}/; else exit 127; fi"
     );
     let mut command = shell_resolver::silent_command(exe.to_string_lossy().as_ref());
     command
@@ -158,6 +175,180 @@ pub(crate) fn probe_wsl_mirrored(distro: &str, port: u16) -> Result<(), String> 
     } else {
         Err("routing_wsl_probe_failed".to_string())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WslNatGateway {
+    pub address: Ipv4Addr,
+    pub network: Ipv4Addr,
+    pub prefix_length: u8,
+}
+
+pub(crate) fn resolve_wsl_nat_gateway(distro: &str) -> Result<WslNatGateway, String> {
+    let route = run_wsl_output(distro, &["ip", "-4", "route", "show", "default"])?;
+    let (gateway, device) = parse_default_route(&route)?;
+    let addresses = run_wsl_output(distro, &["ip", "-4", "addr", "show", "dev", &device])?;
+    let (network, prefix_length) = parse_interface_cidr(&addresses)?;
+    if !ipv4_in_cidr(gateway, network, prefix_length) {
+        return Err("routing_wsl_gateway_outside_interface".to_string());
+    }
+    if !is_local_unicast_address(&gateway.to_string()) {
+        return Err("routing_wsl_gateway_not_local".to_string());
+    }
+    Ok(WslNatGateway {
+        address: gateway,
+        network,
+        prefix_length,
+    })
+}
+
+fn run_wsl_output(distro: &str, args: &[&str]) -> Result<String, String> {
+    let exe =
+        wsl::find_wsl_exe().ok_or_else(|| "routing_wsl_route_tool_unavailable".to_string())?;
+    let mut command = shell_resolver::silent_command(exe.to_string_lossy().as_ref());
+    command.arg("-d").arg(distro).arg("--exec").args(args);
+    let output = shell_resolver::output_with_timeout(command, WSL_MIRRORED_PROBE_TIMEOUT)
+        .map_err(|_| "routing_wsl_route_failed".to_string())?;
+    if !output.status.success() {
+        return if output.status.code() == Some(127) {
+            Err("routing_wsl_route_tool_unavailable".to_string())
+        } else {
+            Err("routing_wsl_route_failed".to_string())
+        };
+    }
+    String::from_utf8(output.stdout).map_err(|_| "routing_wsl_route_failed".to_string())
+}
+
+fn parse_default_route(output: &str) -> Result<(Ipv4Addr, String), String> {
+    for line in output.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.first() != Some(&"default") {
+            continue;
+        }
+        let gateway = fields
+            .windows(2)
+            .find_map(|pair| (pair[0] == "via").then_some(pair[1]))
+            .and_then(|value| value.parse::<Ipv4Addr>().ok())
+            .ok_or_else(|| "routing_wsl_default_route_invalid".to_string())?;
+        let device = fields
+            .windows(2)
+            .find_map(|pair| (pair[0] == "dev").then_some(pair[1]))
+            .ok_or_else(|| "routing_wsl_default_route_invalid".to_string())?;
+        if device.is_empty()
+            || device.starts_with('-')
+            || !device
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || ".:_-".contains(character))
+        {
+            return Err("routing_wsl_default_route_invalid".to_string());
+        }
+        return Ok((gateway, device.to_string()));
+    }
+    Err("routing_wsl_default_route_missing".to_string())
+}
+
+fn parse_interface_cidr(output: &str) -> Result<(Ipv4Addr, u8), String> {
+    for line in output.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let Some(cidr) = fields
+            .windows(2)
+            .find_map(|pair| (pair[0] == "inet").then_some(pair[1]))
+        else {
+            continue;
+        };
+        let (address, prefix) = cidr
+            .split_once('/')
+            .ok_or_else(|| "routing_wsl_interface_cidr_invalid".to_string())?;
+        let address = address
+            .parse::<Ipv4Addr>()
+            .map_err(|_| "routing_wsl_interface_cidr_invalid".to_string())?;
+        let prefix_length = prefix
+            .parse::<u8>()
+            .ok()
+            .filter(|prefix| *prefix <= 32)
+            .ok_or_else(|| "routing_wsl_interface_cidr_invalid".to_string())?;
+        return Ok((network_address(address, prefix_length), prefix_length));
+    }
+    Err("routing_wsl_interface_cidr_missing".to_string())
+}
+
+fn network_address(address: Ipv4Addr, prefix_length: u8) -> Ipv4Addr {
+    let mask = if prefix_length == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix_length)
+    };
+    Ipv4Addr::from(u32::from(address) & mask)
+}
+
+fn ipv4_in_cidr(address: Ipv4Addr, network: Ipv4Addr, prefix_length: u8) -> bool {
+    network_address(address, prefix_length) == network
+}
+
+pub(crate) fn is_local_unicast_address(address: &str) -> bool {
+    let Ok(address) = address.parse::<Ipv4Addr>() else {
+        return false;
+    };
+    local_ipv4_unicast_addresses()
+        .map(|addresses| addresses.contains(&address))
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn local_ipv4_unicast_addresses() -> Result<Vec<Ipv4Addr>, String> {
+    let mut size = 15 * 1024u32;
+    let mut resize_attempts = 0;
+    loop {
+        let mut buffer = vec![0u64; (size as usize).div_ceil(std::mem::size_of::<u64>())];
+        let result = unsafe {
+            GetAdaptersAddresses(
+                AF_INET as u32,
+                GAA_FLAG_INCLUDE_PREFIX,
+                std::ptr::null(),
+                buffer.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>(),
+                &mut size,
+            )
+        };
+        if result == ERROR_BUFFER_OVERFLOW {
+            resize_attempts += 1;
+            if resize_attempts > 3 {
+                return Err("routing_windows_adapters_unavailable".to_string());
+            }
+            continue;
+        }
+        if result != 0 {
+            return Err("routing_windows_adapters_unavailable".to_string());
+        }
+
+        let mut addresses = Vec::new();
+        let mut adapter = buffer.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+        while !adapter.is_null() {
+            let mut unicast = unsafe { (*adapter).FirstUnicastAddress };
+            while !unicast.is_null() {
+                let socket_address = unsafe { (*unicast).Address };
+                if !socket_address.lpSockaddr.is_null()
+                    && unsafe { (*socket_address.lpSockaddr).sa_family } == AF_INET
+                {
+                    let address = unsafe {
+                        let sockaddr = socket_address.lpSockaddr.cast::<SOCKADDR_IN>();
+                        let bytes = (*sockaddr).sin_addr.S_un.S_un_b;
+                        Ipv4Addr::new(bytes.s_b1, bytes.s_b2, bytes.s_b3, bytes.s_b4)
+                    };
+                    if !addresses.contains(&address) {
+                        addresses.push(address);
+                    }
+                }
+                unicast = unsafe { (*unicast).Next };
+            }
+            adapter = unsafe { (*adapter).Next };
+        }
+        return Ok(addresses);
+    }
+}
+
+#[cfg(not(windows))]
+fn local_ipv4_unicast_addresses() -> Result<Vec<Ipv4Addr>, String> {
+    Err("routing_wsl_gateway_platform_unsupported".to_string())
 }
 
 pub(crate) fn takeover_key(
@@ -265,7 +456,10 @@ pub(crate) async fn save_takeovers(items: &[RoutingTakeoverItem]) -> Result<(), 
         }
         let key = takeover_key(&item.app_type, &item.home_identity)?;
         if !keys.insert(key)
-            || !matches!(item.endpoint_mode.as_str(), "loopback" | "wsl_mirrored")
+            || !matches!(
+                item.endpoint_mode.as_str(),
+                "loopback" | "wsl_mirrored" | "wsl_gateway"
+            )
             || item.advertised_host.trim().is_empty()
             || !is_safe_advertised_host(&item.endpoint_mode, &item.advertised_host)
             || item.applied_port < MIN_PORT
@@ -430,5 +624,33 @@ mod tests {
             identity: "wsl:Ubuntu".to_string(),
         };
         assert!(takeover_key("claude", &home).is_ok());
+    }
+
+    #[test]
+    fn parses_wsl_default_route_and_interface_cidr() {
+        let (gateway, device) =
+            parse_default_route("default via 172.28.224.1 dev eth0 proto kernel\n").unwrap();
+        assert_eq!(gateway, Ipv4Addr::new(172, 28, 224, 1));
+        assert_eq!(device, "eth0");
+
+        let (network, prefix) = parse_interface_cidr(
+            "2: eth0@if3: <BROADCAST>\n    inet 172.28.224.2/20 brd 172.28.239.255 scope global eth0\n",
+        )
+        .unwrap();
+        assert_eq!(network, Ipv4Addr::new(172, 28, 224, 0));
+        assert_eq!(prefix, 20);
+        assert!(ipv4_in_cidr(gateway, network, prefix));
+    }
+
+    #[test]
+    fn rejects_wsl_default_route_without_gateway_or_interface_cidr() {
+        assert_eq!(
+            parse_default_route("default dev eth0\n").unwrap_err(),
+            "routing_wsl_default_route_invalid"
+        );
+        assert_eq!(
+            parse_interface_cidr("2: eth0:\n").unwrap_err(),
+            "routing_wsl_interface_cidr_missing"
+        );
     }
 }
