@@ -290,4 +290,21 @@ mod tests {
         assert!(registry.acquire("claude", "provider-a", policy).is_ok());
         assert_eq!(registry.snapshots()[0].status, "halfOpen");
     }
+
+    #[test]
+    fn restart_starts_with_closed_runtime_and_does_not_restore_circuits() {
+        let registry = CircuitRegistry::default();
+        let policy = policy();
+        for _ in 0..2 {
+            let permit = registry.acquire("codex", "provider-a", policy).unwrap();
+            registry.record_failure(permit, policy);
+        }
+        assert_eq!(registry.snapshots()[0].status, "open");
+
+        let restarted = CircuitRegistry::default();
+        assert!(restarted.snapshots().is_empty());
+
+        registry.reset("codex", "provider-a");
+        assert_eq!(registry.snapshots()[0].status, "closed");
+    }
 }

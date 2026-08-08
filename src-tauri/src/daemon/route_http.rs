@@ -1278,6 +1278,44 @@ mod tests {
     }
 
     #[test]
+    fn failover_protocol_matrix_covers_all_supported_apps() {
+        let cases = [
+            (RouteKind::ClaudeMessages, "/v1/messages", "claude"),
+            (RouteKind::CodexResponses, "/v1/responses", "codex"),
+            (
+                RouteKind::CodexChatCompletions,
+                "/v1/chat/completions",
+                "codex",
+            ),
+            (
+                RouteKind::Grok,
+                "/grokbuild/v1/chat/completions",
+                "grokbuild",
+            ),
+        ];
+
+        for (route, path, app_type) in cases {
+            assert_eq!(classify_route(&Method::POST, path), Ok(route));
+            assert_eq!(route_app_type(route), app_type);
+            assert!(upstream_url("https://upstream.example/v1", route, path).is_ok());
+
+            let kind = if route == RouteKind::CodexResponses {
+                StreamCommitKind::ResponsesSse
+            } else {
+                StreamCommitKind::GenericSse
+            };
+            let mut tracker = StreamCommitTracker::new(kind);
+            assert!(!tracker.observe(&Bytes::from_static(b": keepalive\n\n")));
+            let event = if kind == StreamCommitKind::ResponsesSse {
+                b"data: {\"type\":\"response.output_text.delta\"}\n\n".as_slice()
+            } else {
+                b"data: {\"type\":\"message_start\"}\n\n".as_slice()
+            };
+            assert!(tracker.observe(&Bytes::from_static(event)));
+        }
+    }
+
+    #[test]
     fn upstream_error_classifier_separates_key_provider_and_capability_failures() {
         assert_eq!(
             classify_upstream_status(StatusCode::UNAUTHORIZED),
@@ -1432,6 +1470,37 @@ mod tests {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("retry-after", HeaderValue::from_static("999"));
         assert_eq!(retry_cooldown(429, &headers), KEY_COOLDOWN_MAX);
+    }
+
+    #[test]
+    fn key_cooldown_is_runtime_only_and_reload_rebuilds_the_pool() {
+        let state = RouteState::default();
+        let candidates = vec![candidate("one"), candidate("two")];
+        state
+            .select_key("claude:provider", candidates.clone())
+            .unwrap();
+        state.mark_cooldown(
+            "claude:provider",
+            "one",
+            401,
+            &reqwest::header::HeaderMap::new(),
+        );
+        assert_eq!(
+            state
+                .next_key("claude:provider", &HashSet::new())
+                .unwrap()
+                .id,
+            "two"
+        );
+
+        let restarted = RouteState::default();
+        assert_eq!(
+            restarted
+                .select_key("claude:provider", candidates)
+                .unwrap()
+                .id,
+            "one"
+        );
     }
 
     #[test]
