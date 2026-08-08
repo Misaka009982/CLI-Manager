@@ -1208,6 +1208,8 @@ pub fn run() {
             commands::routing::routing_set_failover_enabled,
             commands::routing::routing_set_failover_queue,
             commands::routing::routing_update_failover_config,
+            commands::routing::routing_get_global_proxy,
+            commands::routing::routing_set_global_proxy,
             commands::routing::routing_reset_circuit,
             commands::routing::routing_set_quick_controls,
             commands::routing::routing_set_takeover,

@@ -125,6 +125,37 @@ pub(crate) struct RoutingFailoverState {
     pub circuits: Vec<RoutingCircuitState>,
 }
 
+pub(crate) const GLOBAL_PROXY_SETTINGS_KEY: &str = "routing.global_proxy.v1";
+const GLOBAL_PROXY_CREDENTIAL_ACCOUNT: &str = "routing-global-proxy-password";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct RoutingGlobalProxyStored {
+    schema_version: u32,
+    url: Option<String>,
+    username: Option<String>,
+    password_credential_account: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutingGlobalProxyState {
+    pub schema_version: u32,
+    pub url: Option<String>,
+    pub username: Option<String>,
+    pub has_password: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutingGlobalProxyInput {
+    pub url: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    #[serde(default)]
+    pub clear_password: bool,
+}
+
 fn failover_settings_key(app_type: &str) -> String {
     format!("{FAILOVER_SETTINGS_PREFIX}{app_type}.v1")
 }
@@ -193,6 +224,161 @@ pub(crate) async fn save_failover_config(
         return Err(format!("routing_settings_missing:{key}"));
     }
     Ok(())
+}
+
+fn parse_global_proxy_stored(raw: &str) -> Result<RoutingGlobalProxyStored, String> {
+    let config = serde_json::from_str::<RoutingGlobalProxyStored>(raw)
+        .map_err(|_| format!("routing_settings_invalid:{GLOBAL_PROXY_SETTINGS_KEY}"))?;
+    if config.schema_version != 1
+        || config.password_credential_account != GLOBAL_PROXY_CREDENTIAL_ACCOUNT
+    {
+        return Err(format!(
+            "routing_settings_invalid:{GLOBAL_PROXY_SETTINGS_KEY}"
+        ));
+    }
+    Ok(config)
+}
+
+async fn load_global_proxy_stored(
+    connection: &mut SqliteConnection,
+) -> Result<RoutingGlobalProxyStored, String> {
+    let raw = load_setting(connection, GLOBAL_PROXY_SETTINGS_KEY).await?;
+    parse_global_proxy_stored(&raw)
+}
+
+fn global_proxy_state(
+    config: RoutingGlobalProxyStored,
+    has_password: bool,
+) -> RoutingGlobalProxyState {
+    RoutingGlobalProxyState {
+        schema_version: config.schema_version,
+        url: config.url,
+        username: config.username,
+        has_password,
+    }
+}
+
+pub(crate) fn normalize_global_proxy_url(raw: Option<&str>) -> Result<Option<String>, String> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let url = reqwest::Url::parse(raw).map_err(|_| "routing_proxy_url_invalid".to_string())?;
+    if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h")
+        || url.host_str().is_none()
+        || url.port().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err("routing_proxy_url_invalid".to_string());
+    }
+    Ok(Some(url.to_string()))
+}
+
+fn normalize_global_proxy_username(raw: Option<String>) -> Option<String> {
+    raw.and_then(|value| {
+        let value = value.trim().to_string();
+        (!value.is_empty()).then_some(value)
+    })
+}
+
+fn read_global_proxy_password() -> Result<Option<String>, String> {
+    crate::credential_store::get(GLOBAL_PROXY_CREDENTIAL_ACCOUNT)
+        .map_err(|_| "routing_proxy_credential_read_failed".to_string())
+}
+
+fn write_global_proxy_password(password: Option<&str>) -> Result<(), String> {
+    match password {
+        Some(password) => crate::credential_store::set(GLOBAL_PROXY_CREDENTIAL_ACCOUNT, password)
+            .map_err(|_| "routing_proxy_credential_write_failed".to_string()),
+        None => crate::credential_store::delete(GLOBAL_PROXY_CREDENTIAL_ACCOUNT)
+            .map_err(|_| "routing_proxy_credential_delete_failed".to_string()),
+    }
+}
+
+async fn write_global_proxy_stored(
+    connection: &mut SqliteConnection,
+    config: &RoutingGlobalProxyStored,
+) -> Result<(), String> {
+    let result = sqlx::query("UPDATE settings SET value = ?1 WHERE key = ?2")
+        .bind(serialize_json(config, GLOBAL_PROXY_SETTINGS_KEY)?)
+        .bind(GLOBAL_PROXY_SETTINGS_KEY)
+        .execute(&mut *connection)
+        .await
+        .map_err(|_| "routing_global_proxy_write_failed".to_string())?;
+    if result.rows_affected() != 1 {
+        return Err(format!(
+            "routing_settings_missing:{GLOBAL_PROXY_SETTINGS_KEY}"
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) async fn load_global_proxy() -> Result<RoutingGlobalProxyState, String> {
+    let mut connection = database::open_connection().await?;
+    let config = load_global_proxy_stored(&mut connection).await?;
+    let password = read_global_proxy_password()?;
+    Ok(global_proxy_state(config, password.is_some()))
+}
+
+pub(crate) async fn save_global_proxy(
+    input: RoutingGlobalProxyInput,
+) -> Result<RoutingGlobalProxyState, String> {
+    if input.clear_password
+        && input
+            .password
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+    {
+        return Err("routing_proxy_password_input_conflict".to_string());
+    }
+    let url = normalize_global_proxy_url(input.url.as_deref())?;
+    let username = normalize_global_proxy_username(input.username);
+    let mut connection = database::open_connection().await?;
+    let previous = load_global_proxy_stored(&mut connection).await?;
+    let previous_password = read_global_proxy_password()?;
+    let password_update = if input.clear_password {
+        None
+    } else if input
+        .password
+        .as_deref()
+        .is_some_and(|password| !password.is_empty())
+    {
+        input.password.as_deref()
+    } else {
+        previous_password.as_deref()
+    };
+    let changed_password = input.clear_password
+        || input
+            .password
+            .as_deref()
+            .is_some_and(|value| !value.is_empty());
+
+    if changed_password {
+        write_global_proxy_password(password_update)?;
+    }
+
+    let next = RoutingGlobalProxyStored {
+        schema_version: 1,
+        url,
+        username,
+        password_credential_account: GLOBAL_PROXY_CREDENTIAL_ACCOUNT.to_string(),
+    };
+    if let Err(error) = write_global_proxy_stored(&mut connection, &next).await {
+        if changed_password {
+            let restore_result = write_global_proxy_password(previous_password.as_deref());
+            if restore_result.is_err() {
+                return Err("routing_global_proxy_recovery_required".to_string());
+            }
+        }
+        return Err(error);
+    }
+    let has_password = if changed_password {
+        password_update.is_some()
+    } else {
+        previous_password.is_some()
+    };
+    drop(previous);
+    Ok(global_proxy_state(next, has_password))
 }
 
 pub(crate) async fn load_failover_state(app_type: &str) -> Result<RoutingFailoverState, String> {
@@ -888,6 +1074,43 @@ mod tests {
             validate_failover_config(&invalid).unwrap_err(),
             "routing_failover_config_invalid"
         );
+    }
+
+    #[test]
+    fn global_proxy_url_requires_supported_explicit_endpoint_without_credentials() {
+        assert_eq!(
+            normalize_global_proxy_url(Some(" http://proxy.example:8080 ")).unwrap(),
+            Some("http://proxy.example:8080/".to_string())
+        );
+        assert_eq!(
+            normalize_global_proxy_url(Some("socks5h://proxy.example:1080")).unwrap(),
+            Some("socks5h://proxy.example:1080".to_string())
+        );
+        for value in [
+            "ftp://proxy.example:21",
+            "http://proxy.example",
+            "http://user:password@proxy.example:8080",
+        ] {
+            assert_eq!(
+                normalize_global_proxy_url(Some(value)).unwrap_err(),
+                "routing_proxy_url_invalid"
+            );
+        }
+        assert_eq!(normalize_global_proxy_url(Some("  ")).unwrap(), None);
+    }
+
+    #[test]
+    fn global_proxy_state_serializes_presence_only_not_password_or_account() {
+        let state = RoutingGlobalProxyState {
+            schema_version: 1,
+            url: Some("http://proxy.example:8080/".to_string()),
+            username: Some("proxy-user".to_string()),
+            has_password: true,
+        };
+        let value = serde_json::to_value(state).unwrap();
+        assert_eq!(value["hasPassword"], true);
+        assert!(value.get("password").is_none());
+        assert!(value.get("passwordCredentialAccount").is_none());
     }
 
     #[test]
