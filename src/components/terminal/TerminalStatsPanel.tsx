@@ -71,6 +71,11 @@ const TERMINAL_PANEL_SCROLLBAR_STYLE = {
 // 避免重复解析 jsonl 时的「加载中」闪烁。终端数量有限，不做淘汰。
 const sessionDetailCache = new Map<string, HistorySessionDetail>();
 
+// 按完整项目统计作用域缓存今日用量：切换回已查询过的项目时先显示缓存，后台再刷新。
+// 请求和缓存都使用 todayUsageScopeKey，避免把其它项目的统计结果串到当前面板。
+const todayProjectStatsCache = new Map<string, TodayProjectStats>();
+const todayProjectStatsInFlight = new Map<string, Promise<TodayProjectStats | null>>();
+
 const ROLE_COLORS: Record<string, string> = {
   user: TERM.green,
   assistant: TERM.blue,
@@ -503,10 +508,10 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       : null,
     [project?.id, sourceFilter, todayUsageScope]
   );
-  // 统计结果必须与当前项目作用域一致；切换项目后旧结果立即失效，等待新请求返回。
+  // 统计结果必须与当前项目作用域一致；切换项目后只读取对应作用域的缓存，避免串显。
   const todayStats = todayStatsState?.scopeKey === todayUsageScopeKey
-    ? todayStatsState.value
-    : null;
+    ? todayStatsState.value ?? (todayUsageScopeKey ? todayProjectStatsCache.get(todayUsageScopeKey) ?? null : null)
+    : (todayUsageScopeKey ? todayProjectStatsCache.get(todayUsageScopeKey) ?? null : null);
 
   // 「会话级」卡片只认 hook 绑定的当前 CLI 会话；未绑定时保持空态。
   // 「今日项目用量」仍按项目聚合，不受此门控影响。
@@ -639,20 +644,35 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       return;
     }
     let cancelled = false;
+    const cached = todayProjectStatsCache.get(todayUsageScopeKey);
+    setTodayStatsState({ scopeKey: todayUsageScopeKey, value: cached ?? null });
     const loadTodayStats = async () => {
-      try {
-        const result = await fetchTodayProjectStatsMerged(
+      let request = todayProjectStatsInFlight.get(todayUsageScopeKey);
+      if (!request) {
+        request = fetchTodayProjectStatsMerged(
           todayUsageScope.projectKey,
           sourceFilter,
           todayUsageScope.projectPaths
-        );
-        if (!cancelled) {
-          setTodayStatsState({ scopeKey: todayUsageScopeKey, value: result });
-        }
-      } catch {
-        if (!cancelled) {
-          setTodayStatsState({ scopeKey: todayUsageScopeKey, value: null });
-        }
+        )
+          .then((result) => {
+            if (result) todayProjectStatsCache.set(todayUsageScopeKey, result);
+            return result;
+          })
+          .catch(() => null)
+          .finally(() => {
+            if (todayProjectStatsInFlight.get(todayUsageScopeKey) === request) {
+              todayProjectStatsInFlight.delete(todayUsageScopeKey);
+            }
+          });
+        todayProjectStatsInFlight.set(todayUsageScopeKey, request);
+      }
+      const result = await request;
+      if (!cancelled) {
+        // 刷新失败时保留当前作用域的旧缓存，避免慢查询/瞬时错误造成空白。
+        setTodayStatsState({
+          scopeKey: todayUsageScopeKey,
+          value: result ?? todayProjectStatsCache.get(todayUsageScopeKey) ?? null,
+        });
       }
     };
     void loadTodayStats();
