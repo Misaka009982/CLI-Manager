@@ -10,17 +10,20 @@ use reqwest::header::{
     AUTHORIZATION, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE as REQ_CONTENT_TYPE,
 };
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::error::Error;
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(120);
+const KEY_COOLDOWN_DEFAULT: Duration = Duration::from_secs(30);
+const KEY_COOLDOWN_MAX: Duration = Duration::from_secs(60);
 
 type BoxError = Box<dyn Error + Send + Sync>;
 type RouteBody = http_body_util::combinators::BoxBody<Bytes, BoxError>;
@@ -37,9 +40,98 @@ enum RouteKind {
 struct ProviderSnapshot {
     app_type: &'static str,
     base_url: String,
-    api_key: String,
     claude_api_key_field: Option<String>,
     claude_api_format: Option<String>,
+    pool_id: String,
+    selected_key: KeyCandidate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KeyCandidate {
+    id: String,
+    api_key: String,
+}
+
+#[derive(Debug)]
+struct KeyPool {
+    generation: u64,
+    candidates: Vec<KeyCandidate>,
+    cursor: usize,
+    cooldowns: HashMap<String, Instant>,
+}
+
+#[derive(Debug, Default)]
+struct RouteState {
+    pools: Mutex<HashMap<String, KeyPool>>,
+}
+
+impl RouteState {
+    fn select_key(
+        &self,
+        pool_id: &str,
+        candidates: Vec<KeyCandidate>,
+    ) -> Result<KeyCandidate, String> {
+        let mut pools = self
+            .pools
+            .lock()
+            .map_err(|_| "routing_key_pool_unavailable".to_string())?;
+        let pool = pools.entry(pool_id.to_string()).or_insert_with(|| KeyPool {
+            generation: 1,
+            candidates: candidates.clone(),
+            cursor: 0,
+            cooldowns: HashMap::new(),
+        });
+        if pool.candidates != candidates {
+            pool.generation = pool.generation.saturating_add(1);
+            pool.candidates = candidates;
+            pool.cursor = 0;
+            pool.cooldowns.clear();
+        }
+        pool.next_key(&HashSet::new())
+            .ok_or_else(|| "routing_provider_keys_cooling_down".to_string())
+    }
+
+    fn next_key(&self, pool_id: &str, used: &HashSet<String>) -> Option<KeyCandidate> {
+        let mut pools = self.pools.lock().ok()?;
+        pools.get_mut(pool_id)?.next_key(used)
+    }
+
+    fn mark_cooldown(
+        &self,
+        pool_id: &str,
+        key_id: &str,
+        status: u16,
+        headers: &reqwest::header::HeaderMap,
+    ) {
+        let Ok(mut pools) = self.pools.lock() else {
+            return;
+        };
+        let Some(pool) = pools.get_mut(pool_id) else {
+            return;
+        };
+        let duration = retry_cooldown(status, headers);
+        pool.cooldowns
+            .insert(key_id.to_string(), Instant::now() + duration);
+    }
+}
+
+impl KeyPool {
+    fn next_key(&mut self, used: &HashSet<String>) -> Option<KeyCandidate> {
+        let now = Instant::now();
+        self.cooldowns.retain(|_, deadline| *deadline > now);
+        if self.candidates.is_empty() {
+            return None;
+        }
+        for _ in 0..self.candidates.len() {
+            let index = self.cursor % self.candidates.len();
+            self.cursor = (self.cursor + 1) % self.candidates.len();
+            let candidate = &self.candidates[index];
+            if !used.contains(&candidate.id) && !self.cooldowns.contains_key(&candidate.id) {
+                return Some(candidate.clone());
+            }
+        }
+        None
+    }
 }
 
 pub(crate) struct RouteHttpServer {
@@ -53,6 +145,7 @@ impl RouteHttpServer {
             return Err("routing_listener_missing".to_string());
         }
         let stop = Arc::new(AtomicBool::new(false));
+        let state = Arc::new(RouteState::default());
         let mut workers = Vec::with_capacity(listeners.len());
         for source in listeners {
             let listener = match source.try_clone() {
@@ -67,6 +160,7 @@ impl RouteHttpServer {
                 return Err("routing_listener_nonblocking_failed".to_string());
             }
             let worker_stop = Arc::clone(&stop);
+            let worker_state = Arc::clone(&state);
             let worker = thread::Builder::new()
                 .name("cli-manager-route-http".to_string())
                 .spawn(move || {
@@ -79,7 +173,10 @@ impl RouteHttpServer {
                         Err(_) => return,
                     };
                     let local = tokio::task::LocalSet::new();
-                    local.block_on(&runtime, serve_listener(listener, worker_stop));
+                    local.block_on(
+                        &runtime,
+                        serve_listener(listener, worker_stop, Arc::clone(&worker_state)),
+                    );
                 })
                 .map_err(|_| "routing_listener_worker_failed".to_string());
             match worker {
@@ -110,7 +207,7 @@ impl Drop for RouteHttpServer {
     }
 }
 
-async fn serve_listener(listener: TcpListener, stop: Arc<AtomicBool>) {
+async fn serve_listener(listener: TcpListener, stop: Arc<AtomicBool>, state: Arc<RouteState>) {
     let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
         return;
     };
@@ -119,9 +216,12 @@ async fn serve_listener(listener: TcpListener, stop: Arc<AtomicBool>) {
             _ = tokio::time::sleep(Duration::from_millis(50)) => {},
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else { continue };
+                let connection_state = Arc::clone(&state);
                 tokio::task::spawn_local(async move {
                     let io = TokioIo::new(stream);
-                    let service = service_fn(handle_request);
+                    let service = service_fn(move |request| {
+                        handle_request(request, Arc::clone(&connection_state))
+                    });
                     let _ = hyper::server::conn::http1::Builder::new()
                         .serve_connection(io, service)
                         .await;
@@ -131,8 +231,11 @@ async fn serve_listener(listener: TcpListener, stop: Arc<AtomicBool>) {
     }
 }
 
-async fn handle_request(request: Request<Incoming>) -> Result<Response<RouteBody>, Infallible> {
-    Ok(match forward_request(request).await {
+async fn handle_request(
+    request: Request<Incoming>,
+    state: Arc<RouteState>,
+) -> Result<Response<RouteBody>, Infallible> {
+    Ok(match forward_request(request, state).await {
         Ok(response) => response,
         Err((status, message)) => error_response(status, message),
     })
@@ -140,6 +243,7 @@ async fn handle_request(request: Request<Incoming>) -> Result<Response<RouteBody
 
 async fn forward_request(
     request: Request<Incoming>,
+    state: Arc<RouteState>,
 ) -> Result<Response<RouteBody>, (StatusCode, &'static str)> {
     let request_path = request.uri().path().to_string();
     let route = classify_route(request.method(), &request_path)?;
@@ -155,37 +259,57 @@ async fn forward_request(
         .await
         .map_err(|_| (StatusCode::PAYLOAD_TOO_LARGE, "routing_body_too_large"))?
         .to_bytes();
-    let snapshot = load_provider_snapshot(route).await.map_err(|error| {
-        log::warn!("routing provider snapshot unavailable: {error}");
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "routing_provider_unavailable",
-        )
-    })?;
+    let snapshot = load_provider_snapshot(route, &state)
+        .await
+        .map_err(|error| {
+            log::warn!("routing provider snapshot unavailable: {error}");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "routing_provider_unavailable",
+            )
+        })?;
     let url = upstream_url(&snapshot.base_url, route, &request_path)
         .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_provider_endpoint_invalid"))?;
     let client = reqwest::Client::builder()
         .timeout(UPSTREAM_TIMEOUT)
         .build()
         .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_client_failed"))?;
-    let mut upstream = client.post(url);
-    for (name, value) in headers {
-        upstream = upstream.header(name, value);
-    }
-    if use_claude_api_key_header(&snapshot) {
-        upstream = upstream.header("x-api-key", snapshot.api_key.clone());
-    } else {
-        upstream = upstream.header(
-            AUTHORIZATION.as_str(),
-            format!("Bearer {}", snapshot.api_key),
+    let mut used_keys = HashSet::from([snapshot.selected_key.id.clone()]);
+    let mut selected_key = snapshot.selected_key.clone();
+    let response = loop {
+        let mut upstream = client.post(&url);
+        for (name, value) in &headers {
+            upstream = upstream.header(name, value);
+        }
+        if use_claude_api_key_header(&snapshot) {
+            upstream = upstream.header("x-api-key", selected_key.api_key.clone());
+        } else {
+            upstream = upstream.header(
+                AUTHORIZATION.as_str(),
+                format!("Bearer {}", selected_key.api_key),
+            );
+        }
+        let response = upstream
+            .header(REQ_CONTENT_TYPE.as_str(), "application/json")
+            .body(body.clone())
+            .send()
+            .await
+            .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_request_failed"))?;
+        if !is_key_retryable(response.status()) {
+            break response;
+        }
+        state.mark_cooldown(
+            &snapshot.pool_id,
+            &selected_key.id,
+            response.status().as_u16(),
+            response.headers(),
         );
-    }
-    let response = upstream
-        .header(REQ_CONTENT_TYPE.as_str(), "application/json")
-        .body(body)
-        .send()
-        .await
-        .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_request_failed"))?;
+        let Some(next_key) = state.next_key(&snapshot.pool_id, &used_keys) else {
+            break response;
+        };
+        used_keys.insert(next_key.id.clone());
+        selected_key = next_key;
+    };
     let status = response.status();
     let headers = response.headers().clone();
     let stream = response.bytes_stream().map(|chunk| {
@@ -247,7 +371,10 @@ fn route_path(route: RouteKind) -> &'static str {
     }
 }
 
-async fn load_provider_snapshot(route: RouteKind) -> Result<ProviderSnapshot, String> {
+async fn load_provider_snapshot(
+    route: RouteKind,
+    state: &RouteState,
+) -> Result<ProviderSnapshot, String> {
     let app_type = route_app_type(route);
     let providers = crate::provider::repository::list_providers(Some(app_type.to_string())).await?;
     let card = providers
@@ -255,17 +382,39 @@ async fn load_provider_snapshot(route: RouteKind) -> Result<ProviderSnapshot, St
         .find(|provider| provider.is_current && provider.enabled)
         .ok_or_else(|| "routing_provider_not_ready".to_string())?;
     let detail = crate::provider::repository::get_provider(app_type.to_string(), card.id).await?;
-    let key = detail
+    let mut keys = detail
         .keys
-        .iter()
-        .find(|key| key.is_active && key.enabled)
-        .ok_or_else(|| "routing_provider_key_not_active".to_string())?;
-    let api_key = crate::provider::repository::reveal_key(
-        app_type.to_string(),
-        detail.card.id.clone(),
-        key.id.clone(),
-    )
-    .await?;
+        .into_iter()
+        .filter(|key| key.enabled)
+        .collect::<Vec<_>>();
+    keys.sort_by(|left, right| {
+        left.sort_index
+            .cmp(&right.sort_index)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    if let Some(active_index) = keys.iter().position(|key| key.is_active) {
+        let active = keys.remove(active_index);
+        keys.insert(0, active);
+    }
+    if keys.is_empty() {
+        return Err("routing_provider_key_not_active".to_string());
+    }
+    let provider_id = detail.card.id.clone();
+    let mut candidates = Vec::with_capacity(keys.len());
+    for key in keys {
+        let api_key = crate::provider::repository::reveal_key(
+            app_type.to_string(),
+            provider_id.clone(),
+            key.id.clone(),
+        )
+        .await?;
+        candidates.push(KeyCandidate {
+            id: key.id,
+            api_key,
+        });
+    }
+    let pool_id = format!("{app_type}:{provider_id}");
+    let selected_key = state.select_key(&pool_id, candidates)?;
     let base_url = detail
         .card
         .base_url
@@ -274,12 +423,13 @@ async fn load_provider_snapshot(route: RouteKind) -> Result<ProviderSnapshot, St
     Ok(ProviderSnapshot {
         app_type,
         base_url,
-        api_key,
         claude_api_key_field: detail
             .claude_config
             .as_ref()
             .map(|config| config.api_key_field.clone()),
         claude_api_format: detail.claude_config.map(|config| config.api_format),
+        pool_id,
+        selected_key,
     })
 }
 
@@ -304,6 +454,25 @@ fn upstream_url(base_url: &str, route: RouteKind, request_path: &str) -> Result<
     url.set_path(if path.is_empty() { "/" } else { &path });
     url.set_query(None);
     Ok(url.to_string())
+}
+
+fn is_key_retryable(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 401 | 403 | 429)
+}
+
+fn retry_cooldown(status: u16, headers: &reqwest::header::HeaderMap) -> Duration {
+    if let Some(seconds) = headers
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+    {
+        return Duration::from_secs(seconds.min(KEY_COOLDOWN_MAX.as_secs()));
+    }
+    if status == 429 {
+        Duration::from_secs(5)
+    } else {
+        KEY_COOLDOWN_DEFAULT
+    }
 }
 
 fn use_claude_api_key_header(snapshot: &ProviderSnapshot) -> bool {
@@ -440,6 +609,85 @@ mod tests {
         assert!(is_hop_by_hop("Connection"));
         assert!(is_hop_by_hop("Content-Length"));
         assert!(!is_hop_by_hop("anthropic-version"));
+    }
+
+    fn candidate(id: &str) -> KeyCandidate {
+        KeyCandidate {
+            id: id.to_string(),
+            api_key: format!("secret-{id}"),
+        }
+    }
+
+    #[test]
+    fn key_pool_is_active_first_then_round_robin_without_duplicate_attempts() {
+        let state = RouteState::default();
+        let candidates = vec![candidate("active"), candidate("second"), candidate("third")];
+        assert_eq!(
+            state.select_key("claude:provider", candidates).unwrap().id,
+            "active"
+        );
+        let used = HashSet::from(["active".to_string()]);
+        assert_eq!(
+            state.next_key("claude:provider", &used).unwrap().id,
+            "second"
+        );
+        let used = HashSet::from(["active".to_string(), "second".to_string()]);
+        assert_eq!(
+            state.next_key("claude:provider", &used).unwrap().id,
+            "third"
+        );
+        let used = HashSet::from([
+            "active".to_string(),
+            "second".to_string(),
+            "third".to_string(),
+        ]);
+        assert!(state.next_key("claude:provider", &used).is_none());
+    }
+
+    #[test]
+    fn key_pool_reload_resets_cursor_and_generation() {
+        let state = RouteState::default();
+        state
+            .select_key(
+                "codex:provider",
+                vec![candidate("active"), candidate("second")],
+            )
+            .unwrap();
+        assert_eq!(state.pools.lock().unwrap()["codex:provider"].generation, 1);
+        assert_eq!(
+            state
+                .select_key(
+                    "codex:provider",
+                    vec![candidate("second"), candidate("active")]
+                )
+                .unwrap()
+                .id,
+            "second"
+        );
+        assert_eq!(state.pools.lock().unwrap()["codex:provider"].generation, 2);
+    }
+
+    #[test]
+    fn key_pool_cooldown_skips_key_and_bounds_retry_after() {
+        let state = RouteState::default();
+        state
+            .select_key(
+                "grokbuild:provider",
+                vec![candidate("one"), candidate("two")],
+            )
+            .unwrap();
+        let headers = reqwest::header::HeaderMap::new();
+        state.mark_cooldown("grokbuild:provider", "one", 401, &headers);
+        assert_eq!(
+            state
+                .next_key("grokbuild:provider", &HashSet::new())
+                .unwrap()
+                .id,
+            "two"
+        );
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("retry-after", HeaderValue::from_static("999"));
+        assert_eq!(retry_cooldown(429, &headers), KEY_COOLDOWN_MAX);
     }
 
     #[test]
