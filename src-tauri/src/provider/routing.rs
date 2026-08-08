@@ -1,11 +1,12 @@
 use crate::provider::database;
 use crate::provider::home::HomeIdentity;
 use crate::provider::repository::{meta_enabled, normalize_app_type, parse_meta};
+use crate::{shell_resolver, wsl};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqliteConnection};
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) const SERVICE_SETTINGS_KEY: &str = "routing.service.v1";
 pub(crate) const TAKEOVERS_SETTINGS_KEY: &str = "routing.takeovers.v1";
@@ -18,6 +19,7 @@ const MIN_PORT: u16 = 1_024;
 const ROUTING_LOG_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
 #[allow(dead_code)]
 const ROUTING_LOG_MAX_ROWS: i64 = 100_000;
+const WSL_MIRRORED_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -133,6 +135,31 @@ pub(crate) async fn current_provider_id(app_type: &str) -> Result<String, String
     .ok_or_else(|| "routing_provider_not_ready".to_string())
 }
 
+pub(crate) fn probe_wsl_mirrored(distro: &str, port: u16) -> Result<(), String> {
+    let exe =
+        wsl::find_wsl_exe().ok_or_else(|| "routing_wsl_probe_tool_unavailable".to_string())?;
+    let script = format!(
+        "if command -v nc >/dev/null 2>&1; then nc -z -w 3 127.0.0.1 {port}; elif command -v bash >/dev/null 2>&1; then exec bash -lc 'exec 3<>/dev/tcp/127.0.0.1/{port}'; elif command -v curl >/dev/null 2>&1; then curl --connect-timeout 3 --max-time 4 -fsS http://127.0.0.1:{port}/ >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q -T 3 -O /dev/null http://127.0.0.1:{port}/; else exit 127; fi"
+    );
+    let mut command = shell_resolver::silent_command(exe.to_string_lossy().as_ref());
+    command
+        .arg("-d")
+        .arg(distro)
+        .arg("--exec")
+        .arg("sh")
+        .arg("-lc")
+        .arg(script);
+    let output = shell_resolver::output_with_timeout(command, WSL_MIRRORED_PROBE_TIMEOUT)
+        .map_err(|_| "routing_wsl_probe_failed".to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else if output.status.code() == Some(127) {
+        Err("routing_wsl_probe_tool_unavailable".to_string())
+    } else {
+        Err("routing_wsl_probe_failed".to_string())
+    }
+}
+
 pub(crate) fn takeover_key(
     app_type: &str,
     home_identity: &HomeIdentity,
@@ -238,7 +265,7 @@ pub(crate) async fn save_takeovers(items: &[RoutingTakeoverItem]) -> Result<(), 
         }
         let key = takeover_key(&item.app_type, &item.home_identity)?;
         if !keys.insert(key)
-            || !matches!(item.endpoint_mode.as_str(), "loopback")
+            || !matches!(item.endpoint_mode.as_str(), "loopback" | "wsl_mirrored")
             || item.advertised_host.trim().is_empty()
             || !is_safe_advertised_host(&item.endpoint_mode, &item.advertised_host)
             || item.applied_port < MIN_PORT
@@ -390,6 +417,18 @@ mod tests {
     fn advertised_host_rejects_wildcards_and_non_loopback_loopback_modes() {
         assert!(!is_safe_advertised_host("loopback", "0.0.0.0"));
         assert!(!is_safe_advertised_host("loopback", "192.168.1.4"));
+        assert!(is_safe_advertised_host("wsl_mirrored", "127.0.0.1"));
+        assert!(!is_safe_advertised_host("wsl_mirrored", "172.28.224.1"));
         assert!(is_safe_advertised_host("wsl_gateway", "172.28.224.1"));
+    }
+
+    #[test]
+    fn wsl_home_identity_is_valid_for_takeover_storage() {
+        let home = HomeIdentity {
+            environment_kind: "wsl".to_string(),
+            environment_id: "Ubuntu".to_string(),
+            identity: "wsl:Ubuntu".to_string(),
+        };
+        assert!(takeover_key("claude", &home).is_ok());
     }
 }

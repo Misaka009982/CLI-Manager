@@ -320,10 +320,13 @@ pub fn routing_set_takeover(
         .ok_or_else(RoutingError::service_unavailable)?;
     ensure_local_routing_capability(&client.info().features)?;
 
-    if input.home_identity.environment_kind != "local" {
+    if !matches!(
+        input.home_identity.environment_kind.as_str(),
+        "local" | "wsl"
+    ) {
         return Err(command_error(
             "routing_home_environment_unsupported",
-            "use_windows_local_home",
+            "use_windows_local_or_wsl_home",
         ));
     }
     let persisted = block_on(routing::load_persisted_state())?;
@@ -349,7 +352,23 @@ pub fn routing_set_takeover(
     let actual_port = status
         .actual_port
         .ok_or_else(|| RoutingError::service_unavailable())?;
-    let endpoint = local_route_endpoint(&persisted.service.listen_address, actual_port)?;
+    let (endpoint_host, endpoint_mode) = if input.enabled && home.identity.environment_kind == "wsl"
+    {
+        routing::probe_wsl_mirrored(&home.identity.environment_id, actual_port)
+            .map_err(map_input_error)?;
+        ("127.0.0.1".to_string(), "wsl_mirrored")
+    } else if !input.enabled {
+        let existing = existing
+            .as_ref()
+            .ok_or_else(|| RoutingError::service_unavailable())?;
+        (
+            existing.advertised_host.clone(),
+            existing.endpoint_mode.as_str(),
+        )
+    } else {
+        (persisted.service.listen_address.clone(), "loopback")
+    };
+    let endpoint = local_route_endpoint(&endpoint_host, actual_port)?;
     let identity_input = HomeIdentityInput {
         environment_kind: home.identity.environment_kind.clone(),
         environment_id: Some(home.identity.environment_id.clone()),
@@ -379,8 +398,8 @@ pub fn routing_set_takeover(
         takeovers.push(routing::RoutingTakeoverItem {
             app_type: app_type.clone(),
             home_identity: home.identity.clone(),
-            endpoint_mode: "loopback".to_string(),
-            advertised_host: persisted.service.listen_address,
+            endpoint_mode: endpoint_mode.to_string(),
+            advertised_host: endpoint_host,
             applied_port: actual_port,
         });
     }
