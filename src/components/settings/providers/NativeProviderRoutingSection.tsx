@@ -5,6 +5,7 @@ import type { NativeProviderAppType, NativeProviderHomeIdentity } from "./native
 import type { UseNativeProviderRoutingResult } from "./useNativeProviderRouting";
 import { NativeProviderFailoverSection } from "./NativeProviderFailoverSection";
 import { NativeProviderGlobalProxySection } from "./NativeProviderGlobalProxySection";
+import { NativeProviderRectifierSection } from "./NativeProviderRectifierSection";
 
 interface NativeProviderRoutingSectionProps {
   appType: NativeProviderAppType;
@@ -128,6 +129,7 @@ export function NativeProviderRoutingSection({
         </Accordion.Item>
 
         <NativeProviderGlobalProxySection />
+        <NativeProviderRectifierSection state={state} />
       </Accordion>
       <NativeProviderFailoverSection appType={appType} state={state} />
     </Stack>

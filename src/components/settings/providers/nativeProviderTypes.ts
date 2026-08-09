@@ -250,6 +250,22 @@ export interface NativeProviderRoutingState {
   daemon: NativeProviderRoutingDaemon;
 }
 
+export interface NativeProviderRectifierConfig {
+  schemaVersion: number;
+  enabled: boolean;
+  requestThinkingSignature: boolean;
+  requestThinkingBudget: boolean;
+  requestMediaFallback: boolean;
+  requestMediaHeuristic: boolean;
+}
+
+export interface NativeProviderOptimizerConfig {
+  schemaVersion: number;
+  enabled: boolean;
+  thinkingOptimizer: boolean;
+  cacheInjection: boolean;
+}
+
 export interface NativeProviderEnvironmentInspectInput {
   appType?: NativeProviderAppType | null;
   homeIdentity: {

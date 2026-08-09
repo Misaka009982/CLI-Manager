@@ -6,11 +6,15 @@ import type {
   NativeProviderFailoverConfig,
   NativeProviderFailoverState,
   NativeProviderHomeIdentity,
+  NativeProviderOptimizerConfig,
+  NativeProviderRectifierConfig,
   NativeProviderRoutingState,
 } from "./nativeProviderTypes";
 
 export interface UseNativeProviderRoutingResult {
   state: NativeProviderRoutingState | null;
+  rectifierConfig: NativeProviderRectifierConfig | null;
+  optimizerConfig: NativeProviderOptimizerConfig | null;
   failoverState: Partial<Record<NativeProviderAppType, NativeProviderFailoverState>>;
   loading: boolean;
   failoverLoading: Partial<Record<NativeProviderAppType, boolean>>;
@@ -33,11 +37,15 @@ export interface UseNativeProviderRoutingResult {
   setFailoverQueue: (appType: NativeProviderAppType, providerIds: string[]) => Promise<void>;
   updateFailoverConfig: (appType: NativeProviderAppType, config: NativeProviderFailoverConfig) => Promise<void>;
   resetCircuit: (appType: NativeProviderAppType) => Promise<void>;
+  setRectifierConfig: (config: NativeProviderRectifierConfig) => Promise<void>;
+  setOptimizerConfig: (config: NativeProviderOptimizerConfig) => Promise<void>;
   clearError: () => void;
 }
 
 export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
   const [state, setState] = useState<NativeProviderRoutingState | null>(null);
+  const [rectifierConfig, setRectifierConfigState] = useState<NativeProviderRectifierConfig | null>(null);
+  const [optimizerConfig, setOptimizerConfigState] = useState<NativeProviderOptimizerConfig | null>(null);
   const [failoverState, setFailoverState] = useState<Partial<Record<NativeProviderAppType, NativeProviderFailoverState>>>({});
   const [loading, setLoading] = useState(true);
   const [failoverLoading, setFailoverLoading] = useState<Partial<Record<NativeProviderAppType, boolean>>>({});
@@ -47,7 +55,14 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      setState(await invoke<NativeProviderRoutingState>("routing_get_state"));
+      const [nextState, nextRectifier, nextOptimizer] = await Promise.all([
+        invoke<NativeProviderRoutingState>("routing_get_state"),
+        invoke<NativeProviderRectifierConfig>("routing_get_rectifier_config"),
+        invoke<NativeProviderOptimizerConfig>("routing_get_optimizer_config"),
+      ]);
+      setState(nextState);
+      setRectifierConfigState(nextRectifier);
+      setOptimizerConfigState(nextOptimizer);
       setErrorCode(null);
     } catch (error) {
       setErrorCode(providerErrorCode(error));
@@ -156,8 +171,26 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
     },
   ), [runFailover]);
 
+  const setRectifierConfig = useCallback((config: NativeProviderRectifierConfig) => runFailover(
+    "rectifier",
+    async () => {
+      const next = await invoke<NativeProviderRectifierConfig>("routing_set_rectifier_config", { config });
+      setRectifierConfigState(next);
+    },
+  ), [runFailover]);
+
+  const setOptimizerConfig = useCallback((config: NativeProviderOptimizerConfig) => runFailover(
+    "optimizer",
+    async () => {
+      const next = await invoke<NativeProviderOptimizerConfig>("routing_set_optimizer_config", { config });
+      setOptimizerConfigState(next);
+    },
+  ), [runFailover]);
+
   return {
     state,
+    rectifierConfig,
+    optimizerConfig,
     failoverState,
     loading,
     failoverLoading,
@@ -172,6 +205,8 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
     setFailoverQueue,
     updateFailoverConfig,
     resetCircuit,
+    setRectifierConfig,
+    setOptimizerConfig,
     clearError: () => setErrorCode(null),
   };
 }

@@ -377,7 +377,23 @@ fn rectifier_fixture_covers_exact_rules_and_route_scope() {
     assert!(media.iter().all(|case| {
         case["expected"]["retryOnce"] == true
             && case["expected"]["replacementText"] == "[Unsupported Image]"
+            && case["expected"]["logsOriginalMedia"]
+                .as_bool()
+                .unwrap_or(false)
+                == false
     }));
+    for case in &media {
+        let serialized_request = serde_json::to_string(&case["request"]).unwrap();
+        assert!(
+            serialized_request.contains("image")
+                || serialized_request.contains("file")
+                || serialized_request.contains("mcp")
+        );
+        assert!(!case["expected"]["replacementText"]
+            .as_str()
+            .unwrap()
+            .contains("fixture-image-url"));
+    }
     let heuristic_case = media
         .iter()
         .find(|case| case["id"] == "media-heuristic-disabled-still-keeps-explicit-fallback")
