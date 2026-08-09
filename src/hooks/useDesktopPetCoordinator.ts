@@ -224,6 +224,21 @@ export function useDesktopPetCoordinator({
   updateSettingRef.current = updateSetting;
   petWindowVisibleRef.current = petWindowVisible;
 
+  const synchronizeDesktopPetWindow = useCallback(async () => {
+    const settingsState = useSettingsStore.getState();
+    if (!settingsState.loaded) return;
+    const current = settingsState.desktopPet;
+    await emitTo(DESKTOP_PET_WINDOW_LABEL, DESKTOP_PET_CLOSE_MENU_EVENT).catch(() => {});
+    await invoke("desktop_pet_window_sync", {
+      config: {
+        enabled: petWindowVisibleRef.current,
+        alwaysOnTop: current.alwaysOnTop,
+        scale: desktopPetScale(current.size),
+        position: current.position,
+      },
+    });
+  }, []);
+
   const sendState = useCallback(async (force = false) => {
     const stats = deliveryStatsRef.current;
     stats.requests += 1;
@@ -325,17 +340,9 @@ export function useDesktopPetCoordinator({
       petAppliedWindowConfigKeyRef.current = null;
       return;
     }
-    void (async () => {
-      await emitTo(DESKTOP_PET_WINDOW_LABEL, DESKTOP_PET_CLOSE_MENU_EVENT).catch(() => {});
-      await invoke("desktop_pet_window_sync", {
-        config: {
-          enabled: petWindowVisible,
-          alwaysOnTop: desktopPet.alwaysOnTop,
-          scale: desktopPetScale(desktopPet.size),
-          position: desktopPet.position,
-        },
-      });
-    })().catch((err) => logWarn("Failed to synchronize desktop pet window", err));
+    void synchronizeDesktopPetWindow().catch((err) => {
+      logWarn("Failed to synchronize desktop pet window", err);
+    });
   }, [
     appReady,
     desktopPet.alwaysOnTop,
@@ -343,6 +350,7 @@ export function useDesktopPetCoordinator({
     desktopPet.size,
     petWindowVisible,
     settingsLoaded,
+    synchronizeDesktopPetWindow,
   ]);
 
   useEffect(() => {
@@ -352,7 +360,14 @@ export function useDesktopPetCoordinator({
 
   useEffect(() => {
     const unlistenReady = listen(DESKTOP_PET_READY_EVENT, () => {
-      void sendState(true);
+      void (async () => {
+        try {
+          await synchronizeDesktopPetWindow();
+        } catch (err) {
+          logWarn("Failed to resynchronize ready desktop pet window", err);
+        }
+        await sendState(true);
+      })();
     });
     const unlistenOpenTarget = listen<DesktopPetOpenTargetPayload>(DESKTOP_PET_OPEN_TARGET_EVENT, (event) => {
       void (async () => {
@@ -435,7 +450,7 @@ export function useDesktopPetCoordinator({
       void unlistenPosition.then((unlisten) => unlisten());
       void unlistenSizeChange.then((unlisten) => unlisten());
     };
-  }, [sendState]);
+  }, [sendState, synchronizeDesktopPetWindow]);
 }
 
 function desktopPetWindowConfigKey(

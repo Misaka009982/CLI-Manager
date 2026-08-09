@@ -28,7 +28,7 @@ import { resolveHistoryProjectPath } from "../../lib/historyProjectPaths";
 import { resolveCliToolHistorySourceId } from "../../lib/cliTools";
 import { shouldSidebarBootstrapProjects } from "../../lib/projectLoadPolicy";
 import { getProviderSwitchAppType, parseProjectEnvVars } from "../../lib/providerSwitching";
-import { isSameProjectFileContext, projectWithWorktreePath, projectWithWorktreeProviderOverrides } from "../../lib/terminalProject";
+import { projectWithWorktreePath, projectWithWorktreeProviderOverrides } from "../../lib/terminalProject";
 import { ALL_TERMINALS_SCOPE, collectProjectIdsForGroup, sessionMatchesTerminalScope } from "../../lib/terminalScope";
 import { projectSupportsCapability, type ProjectCapability } from "../../lib/projectCapabilities";
 import { TreeContext, worktreeListCollapseId, type TreeActions } from "./TreeContext";
@@ -265,7 +265,6 @@ export function Sidebar({
   const persistedSidebarWidth = useSettingsStore((s) => s.sidebarWidth);
   const openFileProject = useFileExplorerStore((s) => s.openProject);
   const fileProject = useFileExplorerStore((s) => s.project);
-  const openFiles = useFileExplorerStore((s) => s.openFiles);
   const closeHistory = useHistoryStore((s) => s.closeHistory);
   const openHistory = useHistoryStore((s) => s.openHistory);
   const triggerGlobalSearchFocus = useHistoryStore((s) => s.triggerGlobalSearchFocus);
@@ -1337,17 +1336,6 @@ export function Sidebar({
   const handleOpenProjectFiles = useCallback(async (project: Project) => {
     if (rejectUnsupportedCapability(project, "files")) return;
     try {
-      const dirtyFiles = openFiles.filter((file) => file.content !== file.savedContent);
-      if (!isSameProjectFileContext(fileProject, project) && dirtyFiles.length > 0) {
-        const confirmed = await confirm({
-          title: t("sidebar.toast.unsavedFileConfirm"),
-          message: t("files.editor.unsavedSwitchWithFiles", {
-            files: dirtyFiles.map((file) => file.path).join("\n"),
-          }),
-          danger: true,
-        });
-        if (!confirmed) return;
-      }
       await openFileProject(project);
       setShowFileExplorer(true);
       closeHistory();
@@ -1355,7 +1343,7 @@ export function Sidebar({
       logError("Failed to open project file browser", err);
       toast.error(t("sidebar.toast.openProjectFilesFailed"), { description: String(err) });
     }
-  }, [closeHistory, confirm, fileProject, openFileProject, openFiles, rejectUnsupportedCapability, t]);
+  }, [closeHistory, openFileProject, rejectUnsupportedCapability, t]);
 
   const handleOpenWorktreeFiles = useCallback(async (project: Project, worktree: WorktreeRecord) => {
     if (rejectMissingWorktree(worktree)) return;

@@ -34,8 +34,10 @@ import type {
   HistoryStatsSourceItem,
   Group,
   Project,
+  RequestLogSource,
+  RequestLogStatsPayload,
 } from "../../lib/types";
-import { fetchHistoryStatsPayload, fetchRemoteHistoryStatsPayload } from "../../stores/historyStore";
+import { fetchHistoryRequestLogStats, fetchHistoryStatsPayload, fetchRemoteHistoryStatsPayload } from "../../stores/historyStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { HISTORY_SOURCE_DESCRIPTORS, HISTORY_SOURCE_DESCRIPTOR_BY_ID } from "../../lib/historySources";
 import { TimelineHeatmap } from "./TimelineHeatmap";
@@ -75,6 +77,7 @@ const DATE_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const MONTH_INPUT_PATTERN = /^(\d{4})-(\d{2})$/;
 const YEAR_INPUT_PATTERN = /^(\d{4})$/;
 const HOUR_MS = 60 * 60 * 1000;
+const REQUEST_LOG_SOURCE_IDS = new Set(["claude", "codex", "gemini", "opencode", "grok"]);
 
 type StatsProjectTreeNode =
   | { type: "group"; group: Group; children: StatsProjectTreeNode[] }
@@ -608,6 +611,100 @@ function KpiStrip({ stats }: { stats: HistoryStatsPayload }) {
         );
       })}
     </div>
+  );
+}
+
+function RequestUsageOverview({ stats }: { stats: RequestLogStatsPayload }) {
+  const { language, t } = useI18n();
+  const trendData = stats.trend.map((item) => ({
+    ...item,
+    bucketLabel: axisBucketLabel(item.bucket_start_ms, stats.granularity),
+    bucketTitle: formatBucketLabel(item.bucket_start_ms, stats.granularity, language),
+    totalTokens: item.total_tokens,
+    costValue: Number(item.total_cost_usd.toFixed(4)),
+  }));
+  const pricedTokens = Math.max(0, stats.total_tokens - stats.total_unpriced_tokens);
+  const coverage = stats.total_tokens > 0 ? (pricedTokens / stats.total_tokens) * 100 : 0;
+  const kpis = [
+    { icon: Layers, label: t("stats.requestUsage.totalTokens"), value: formatCompactCount(stats.total_tokens, language), hint: formatCount(stats.total_tokens, language) },
+    { icon: ScrollText, label: t("stats.requestUsage.requests"), value: formatCompactCount(stats.total_requests, language), hint: formatCount(stats.total_requests, language) },
+    { icon: Database, label: t("stats.requestUsage.cacheHitRate"), value: formatPercent(stats.cache_hit_rate * 100), hint: t("stats.requestUsage.cacheHitHint") },
+    { icon: Coins, label: t("stats.requestUsage.cost"), value: formatCost(stats.total_cost_usd), hint: stats.total_unpriced_tokens > 0 ? t("stats.kpi.unpriced", { value: formatCompactCount(stats.total_unpriced_tokens, language) }) : t("stats.kpi.localEstimate") },
+    { icon: Activity, label: t("stats.requestUsage.coverage"), value: formatPercent(coverage), hint: t("stats.kpi.coverageHint") },
+  ];
+
+  return (
+    <section className="space-y-3 rounded-2xl border border-accent/25 bg-accent/5 p-3 lg:p-4">
+      <SectionHeading icon={Activity} title={t("stats.requestUsage.title")} hint={t("stats.requestUsage.subtitle")} />
+      <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-5">
+        {kpis.map((item) => {
+          const Icon = item.icon;
+          return (
+            <div key={item.label} className="min-w-0 rounded-xl border border-border/60 bg-bg-secondary px-3 py-2.5">
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-text-muted"><Icon size={12} className="text-accent" />{item.label}</div>
+              <div className="mt-1.5 truncate text-[21px] font-semibold tabular-nums text-text-primary">{item.value}</div>
+              <div className="mt-1 truncate text-[10px] text-text-secondary" title={item.hint}>{item.hint}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)]">
+        <div className="rounded-xl border border-border/60 bg-bg-secondary p-3">
+          <div className="mb-2 text-[12px] font-semibold text-text-primary">{t("stats.requestUsage.trend")}</div>
+          {trendData.length > 0 ? (
+            <div className="h-[250px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={trendData} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+                  <CartesianGrid stroke="var(--border)" strokeOpacity={0.42} vertical={false} />
+                  <XAxis dataKey="bucketLabel" tick={RECHARTS_AXIS_STYLE} tickLine={false} axisLine={{ stroke: "var(--border)" }} minTickGap={18} />
+                  <YAxis tick={RECHARTS_AXIS_STYLE} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactCount(Number(value), language)} allowDecimals={false} />
+                  <Tooltip
+                    cursor={RECHARTS_AXIS_CURSOR}
+                    wrapperStyle={RECHARTS_TOOLTIP_WRAPPER_STYLE}
+                    content={(props) => <DailyUsageTrendTooltip {...props} language={language} costLabel={t("stats.trend.cost")} />}
+                  />
+                  <Line type="monotone" dataKey="totalTokens" name={t("stats.trend.totalToken")} stroke={HISTORY_TREND_COLORS.total} strokeWidth={2.5} dot={{ r: 2 }} />
+                  <Line type="monotone" dataKey="input_tokens" name={t("termStats.input")} stroke={HISTORY_TREND_COLORS.input} strokeWidth={1.5} dot={false} />
+                  <Line type="monotone" dataKey="output_tokens" name={t("termStats.output")} stroke={HISTORY_TREND_COLORS.output} strokeWidth={1.5} dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          ) : <EmptyBlock text={t("stats.requestUsage.empty")} />}
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
+          <div className="rounded-xl border border-border/60 bg-bg-secondary p-3">
+            <div className="mb-2 text-[12px] font-semibold text-text-primary">{t("stats.requestUsage.sources")}</div>
+            <div className="space-y-2">
+              {stats.source_distribution.length === 0 && <div className="text-[11px] text-text-muted">{t("stats.requestUsage.empty")}</div>}
+              {stats.source_distribution.map((item) => (
+                <div key={item.source} className="space-y-1">
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="truncate font-medium text-text-primary">{t(HISTORY_SOURCE_DESCRIPTOR_BY_ID.get(item.source)?.labelKey ?? "common.allSources")}</span>
+                    <span className="shrink-0 tabular-nums text-text-secondary">{formatPercent(item.ratio * 100)}</span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-bg-tertiary"><div className="h-full rounded-full bg-accent" style={{ width: `${Math.max(2, item.ratio * 100)}%` }} /></div>
+                  <div className="text-[10px] text-text-muted">{formatCompactCount(item.total_tokens, language)} Token · {formatCount(item.requests, language)} {t("stats.requestUsage.requestUnit")}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-xl border border-border/60 bg-bg-secondary p-3">
+            <div className="mb-2 text-[12px] font-semibold text-text-primary">{t("stats.requestUsage.models")}</div>
+            <div className="space-y-1.5">
+              {stats.model_distribution.length === 0 && <div className="text-[11px] text-text-muted">{t("stats.requestUsage.empty")}</div>}
+              {stats.model_distribution.slice(0, 6).map((item) => (
+                <div key={item.model} className="flex items-center justify-between gap-2 rounded-lg bg-bg-primary px-2 py-1.5 text-[11px]">
+                  <span className="min-w-0 truncate font-medium text-text-primary">{item.model === "unknown" ? t("requestLogs.unknownModel") : item.model}</span>
+                  <span className="shrink-0 tabular-nums text-text-secondary">{formatPercent(item.ratio * 100)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -1317,6 +1414,7 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
   const [projectKey, setProjectKey] = useState("");
   const [projectId, setProjectId] = useState("");
   const [sourceFilter, setSourceFilter] = useState<HistorySourceFilter>("all");
+  const [modelFilter, setModelFilter] = useState("");
   const [activeTab, setActiveTab] = useState<StatsPanelTab>("overview");
   const [timeWindow, setTimeWindow] = useState<StatsTimeWindowState>(() => getDefaultStatsTimeWindow());
   const [manualRefresh, setManualRefresh] = useState<{ key: string; nonce: number } | null>(null);
@@ -1341,8 +1439,8 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
 
   const dateRangeLabel = dateBounds.error ? t("stats.rangeInactive") : statsTimeWindowLabel(resolvedTimeWindow, dateRange, t);
   const statsBaseQueryKey = useMemo(
-    () => `${sourceFilter}|project_id=${projectId || ALL_PROJECTS_VALUE}|path=${projectPath || ALL_PROJECTS_VALUE}|key=${projectKey || ALL_PROJECTS_VALUE}|${dateBounds.startAt ?? "invalid"}|${dateBounds.endAt ?? "invalid"}`,
-    [dateBounds.endAt, dateBounds.startAt, projectId, projectKey, projectPath, sourceFilter]
+    () => `${sourceFilter}|project_id=${projectId || ALL_PROJECTS_VALUE}|path=${projectPath || ALL_PROJECTS_VALUE}|key=${projectKey || ALL_PROJECTS_VALUE}|model=${modelFilter || "all"}|${dateBounds.startAt ?? "invalid"}|${dateBounds.endAt ?? "invalid"}`,
+    [dateBounds.endAt, dateBounds.startAt, modelFilter, projectId, projectKey, projectPath, sourceFilter]
   );
   const effectiveRefreshNonce = manualRefresh?.key === statsBaseQueryKey ? manualRefresh.nonce : 0;
   const statsQuery = useQuery({
@@ -1370,11 +1468,42 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
   const loadingStats = statsQuery.isFetching;
   const statsError = statsQuery.error ? String(statsQuery.error) : null;
   const statsUpdatedAt = statsQuery.dataUpdatedAt || null;
+  const requestStatsSupported = sourceFilter === "all" || REQUEST_LOG_SOURCE_IDS.has(sourceFilter);
+  const requestLogSourceFilter: RequestLogSource | null = requestStatsSupported && sourceFilter !== "all"
+    ? sourceFilter as RequestLogSource
+    : null;
+  const requestStatsQuery = useQuery({
+    queryKey: ["historyRequestLogStats", sourceFilter, projectId || null, projectPath || null, projectKey || null, modelFilter || null, dateBounds.startAt, dateBounds.endAt, effectiveRefreshNonce],
+    queryFn: async () => {
+      if (dateBounds.startAt === null || dateBounds.endAt === null) {
+        throw new Error(dateBounds.error ?? "Invalid stats range");
+      }
+      return fetchHistoryRequestLogStats({
+        sourceFilter,
+        projectKey: projectPath ? null : projectKey || null,
+        projectPath: projectPath || null,
+        model: modelFilter || null,
+        startAt: dateBounds.startAt,
+        endAt: dateBounds.endAt,
+        force: effectiveRefreshNonce > 0,
+      });
+    },
+    enabled: open
+      && activeTab === "overview"
+      && selectedProject?.environment_type !== "ssh"
+      && requestStatsSupported
+      && dateBounds.error === null
+      && dateBounds.startAt !== null
+      && dateBounds.endAt !== null,
+    refetchInterval: 60_000,
+  });
+  const requestStats = requestStatsQuery.data ?? null;
   useEffect(() => {
     if (!open) return;
     setProjectKey("");
     setProjectId("");
     setSourceFilter("all");
+    setModelFilter("");
     setActiveTab("overview");
     setTimeWindow(getDefaultStatsTimeWindow());
   }, [open]);
@@ -1402,7 +1531,7 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
     if (!open) return;
     setSelectedDayStart(null);
     setDayVisibleCount(DAY_SESSION_PAGE_SIZE);
-  }, [open, sourceFilter, projectId, projectKey, dateRange.startDate, dateRange.endDate]);
+  }, [dateRange.endDate, dateRange.startDate, modelFilter, open, projectId, projectKey, sourceFilter]);
 
   useEffect(() => {
     setDayVisibleCount(DAY_SESSION_PAGE_SIZE);
@@ -1519,6 +1648,13 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
               onSelectProjectId={(id) => { setProjectId(id); setProjectKey(""); }}
               onClear={() => { setProjectId(""); setProjectKey(""); }}
             />
+            <input
+              value={modelFilter}
+              onChange={(event) => setModelFilter(event.target.value)}
+              className={`${controlClass} min-w-[150px] max-w-[240px]`}
+              placeholder={t("stats.requestUsage.modelFilter")}
+              aria-label={t("stats.requestUsage.modelFilter")}
+            />
             <Select
               value={timeWindow.mode}
               onChange={(e) => setTimeWindow((prev) => nextStatsTimeWindowForMode(e.target.value as StatsTimeWindowMode, prev))}
@@ -1549,7 +1685,17 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
 
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden xl:p-5">
           {activeTab === "requests" ? (
-            <RequestLogsView onOpenSession={async (key) => { await onOpenSession(key); onClose(); }} />
+            <RequestLogsView
+              globalFilters={selectedProject?.environment_type === "ssh" ? undefined : {
+                source: requestLogSourceFilter,
+                project_key: projectPath ? null : projectKey || null,
+                project_path: projectPath || null,
+                model: modelFilter.trim() || null,
+                start_at: dateBounds.startAt,
+                end_at: dateBounds.endAt,
+              }}
+              onOpenSession={async (key) => { await onOpenSession(key); onClose(); }}
+            />
           ) : (
             <div className="w-full space-y-3">
               {(waitingForStatsQuery || (loadingStats && !stats)) && <StatsSkeleton />}
@@ -1564,6 +1710,13 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
                   {loadingStats && <div className="text-[12px] font-medium text-text-muted">{t("stats.updating")}</div>}
                   <KpiStrip stats={stats} />
                   <ContextNote sourceLabel={sourceLabel} projectLabel={projectLabel} dateRangeLabel={dateRangeLabel} stats={stats} />
+                  {requestStatsQuery.isFetching && !requestStats && requestStatsSupported && <div className="text-[12px] font-medium text-text-muted">{t("stats.requestUsage.loading")}</div>}
+                  {requestStatsQuery.error && requestStatsSupported && (
+                    <section className="rounded-xl border border-warning/30 bg-warning/5 p-3 text-[12px] text-warning">
+                      {t("stats.requestUsage.loadFailed", { error: String(requestStatsQuery.error) })}
+                    </section>
+                  )}
+                  {requestStats && <RequestUsageOverview stats={requestStats} />}
                   <DailyUsageTrendChart items={trendItems} granularity={statsGranularity} />
 
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-12 [&>*]:h-full [&>*]:min-w-0 [&>*>*]:h-full">

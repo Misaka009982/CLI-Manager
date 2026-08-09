@@ -333,7 +333,7 @@ export function TerminalSidePanel({
       <div
         ref={tabListRef}
         className="flex shrink-0 gap-1 border-b px-2 py-1.5"
-        style={{ borderColor: TERM_PANEL.border }}
+        style={{ backgroundColor: TERM_PANEL.bg, borderColor: TERM_PANEL.border }}
       >
         {tabs.map((tab) => {
           const selected = activeTab === tab.key;

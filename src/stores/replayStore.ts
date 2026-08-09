@@ -122,6 +122,19 @@ const OOM_REPLAY_EVENTS_WARN_COUNT = 200;
 const REPLAY_EVENTS_IN_MEMORY_LIMIT = 200;
 const SNAPSHOT_PATCH_DIR = "replay-snapshots";
 const SNAPSHOT_PATCH_STORAGE = "file";
+const SNAPSHOT_CAPTURE_DEBOUNCE_MS = 750;
+
+interface SnapshotCaptureRequest {
+  sessionKey: string;
+  projectPath: string;
+  reason?: string;
+}
+
+type SnapshotCaptureRunner = (request: SnapshotCaptureRequest) => Promise<ReplayEvent | null>;
+
+const inFlightSnapshotCaptures = new Map<string, Promise<ReplayEvent | null>>();
+const pendingAutomaticSnapshotRequests = new Map<string, SnapshotCaptureRequest>();
+const automaticSnapshotTimers = new Map<string, number>();
 
 function stringByteLength(value: string): number {
   if (typeof Blob !== "undefined") return new Blob([value]).size;
@@ -171,6 +184,45 @@ function normalizeTimestamp(value: string | null | undefined): string {
 function trimOptional(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function snapshotProjectKey(projectPath: string): string {
+  const normalized = projectPath.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+function isExternalHookSession(sessionKey: string): boolean {
+  return sessionKey.trim().startsWith("external:");
+}
+
+function armAutomaticSnapshot(key: string, capture: SnapshotCaptureRunner): void {
+  const existingTimer = automaticSnapshotTimers.get(key);
+  if (existingTimer !== undefined) window.clearTimeout(existingTimer);
+
+  const timer = window.setTimeout(() => {
+    automaticSnapshotTimers.delete(key);
+    const activeCapture = inFlightSnapshotCaptures.get(key);
+    if (activeCapture) {
+      void activeCapture.finally(() => {
+        if (pendingAutomaticSnapshotRequests.has(key)) armAutomaticSnapshot(key, capture);
+      }).catch(() => {});
+      return;
+    }
+
+    const request = pendingAutomaticSnapshotRequests.get(key);
+    if (!request) return;
+    pendingAutomaticSnapshotRequests.delete(key);
+    void capture(request).finally(() => {
+      if (pendingAutomaticSnapshotRequests.has(key)) armAutomaticSnapshot(key, capture);
+    }).catch(() => {});
+  }, SNAPSHOT_CAPTURE_DEBOUNCE_MS);
+  automaticSnapshotTimers.set(key, timer);
+}
+
+function scheduleAutomaticSnapshot(request: SnapshotCaptureRequest, capture: SnapshotCaptureRunner): void {
+  const key = snapshotProjectKey(request.projectPath);
+  pendingAutomaticSnapshotRequests.set(key, request);
+  armAutomaticSnapshot(key, capture);
 }
 
 function parseJsonArray(value: string): string[] {
@@ -656,7 +708,8 @@ function applyPersistedEvent(session: ReplaySession, event: ReplayEvent) {
   }, events.length >= OOM_REPLAY_EVENTS_WARN_COUNT || patchStats.maxPatchBytes >= OOM_PATCH_WARN_BYTES);
 }
 
-function shouldCaptureSnapshot(event: CliHookEventName): boolean {
+function shouldCaptureSnapshot(event: CliHookEventName, sessionKey?: string): boolean {
+  if (sessionKey && isExternalHookSession(sessionKey)) return false;
   return event === "UserPromptSubmit" ||
     event === "ToolStop" ||
     event === "AgentToolStop" ||
@@ -774,7 +827,7 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
         : trimOptional(payload.cwd) ?? existing?.projectPath ?? null;
       const rawPayload = payload as unknown as Record<string, unknown>;
       const rawPayloadBytes = stringByteLength(JSON.stringify(rawPayload));
-      const willCaptureSnapshot = Boolean(projectPath && shouldCaptureSnapshot(payload.event));
+      const willCaptureSnapshot = Boolean(projectPath && shouldCaptureSnapshot(payload.event, sessionKey));
       logReplayOomDiagnostic("recordCliHookEvent", {
         sessionKey,
         event: payload.event,
@@ -800,8 +853,11 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
       );
       applyPersistedEvent(session, event);
 
-      if (projectPath && shouldCaptureSnapshot(payload.event)) {
-        void get().captureCodeSnapshot(sessionKey, projectPath, payload.event);
+      if (projectPath && shouldCaptureSnapshot(payload.event, sessionKey)) {
+        scheduleAutomaticSnapshot(
+          { sessionKey, projectPath, reason: payload.event },
+          (request) => get().captureCodeSnapshot(request.sessionKey, request.projectPath, request.reason),
+        );
       }
     } catch (err) {
       logError("Failed to record AI replay hook event", { payload, err });
@@ -812,89 +868,110 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
   captureCodeSnapshot: async (sessionKey, projectPath, reason) => {
     const normalizedProjectPath = trimOptional(projectPath);
     if (!normalizedProjectPath) return null;
-    try {
-      await ensureTables();
-      const startedAt = performance.now();
-      const snapshot = await invoke<ReplayWorktreeSnapshot>("git_get_worktree_snapshot", {
-        projectPath: normalizedProjectPath,
-      });
-      const elapsedMs = Math.round(performance.now() - startedAt);
-      const patchBytes = snapshot.patchBytes ?? stringByteLength(snapshot.patch);
-      logReplayOomDiagnostic("captureCodeSnapshot.result", {
+    const key = snapshotProjectKey(normalizedProjectPath);
+    if (inFlightSnapshotCaptures.has(key)) {
+      logReplayOomDiagnostic("captureCodeSnapshot.coalesced", {
         sessionKey,
         projectPath: normalizedProjectPath,
         reason: reason ?? "manual",
-        dirty: snapshot.dirty,
-        files: snapshot.files.length,
-        patchBytes,
-        patchTruncated: Boolean(snapshot.patchTruncated),
-        elapsedMs,
-        thresholdExceeded: patchBytes >= OOM_PATCH_WARN_BYTES || Boolean(snapshot.patchTruncated),
-      }, patchBytes >= OOM_PATCH_WARN_BYTES || Boolean(snapshot.patchTruncated));
-      if (!snapshot.dirty) return null;
-      if (!snapshot.patch.trim() && !snapshot.patchTruncated) return null;
+      });
+      return null;
+    }
 
-      const lastSnapshot = await getLastSnapshotPayload(sessionKey);
-      if (!snapshot.patchTruncated && lastSnapshot?.patch === snapshot.patch && lastSnapshot?.head === snapshot.head) {
-        logReplayOomDiagnostic("captureCodeSnapshot.skippedDuplicate", {
+    const capturePromise = (async (): Promise<ReplayEvent | null> => {
+      try {
+        await ensureTables();
+        const startedAt = performance.now();
+        const snapshot = await invoke<ReplayWorktreeSnapshot>("git_get_worktree_snapshot", {
+          projectPath: normalizedProjectPath,
+        });
+        const elapsedMs = Math.round(performance.now() - startedAt);
+        const patchBytes = snapshot.patchBytes ?? stringByteLength(snapshot.patch);
+        logReplayOomDiagnostic("captureCodeSnapshot.result", {
           sessionKey,
           projectPath: normalizedProjectPath,
+          reason: reason ?? "manual",
+          dirty: snapshot.dirty,
+          files: snapshot.files.length,
           patchBytes,
-        }, patchBytes >= OOM_PATCH_WARN_BYTES);
+          patchTruncated: Boolean(snapshot.patchTruncated),
+          elapsedMs,
+          thresholdExceeded: patchBytes >= OOM_PATCH_WARN_BYTES || Boolean(snapshot.patchTruncated),
+        }, patchBytes >= OOM_PATCH_WARN_BYTES || Boolean(snapshot.patchTruncated));
+        if (!snapshot.dirty) return null;
+        if (!snapshot.patch.trim() && !snapshot.patchTruncated) return null;
+
+        const lastSnapshot = await getLastSnapshotPayload(sessionKey);
+        if (!snapshot.patchTruncated && lastSnapshot?.patch === snapshot.patch && lastSnapshot?.head === snapshot.head) {
+          logReplayOomDiagnostic("captureCodeSnapshot.skippedDuplicate", {
+            sessionKey,
+            projectPath: normalizedProjectPath,
+            patchBytes,
+          }, patchBytes >= OOM_PATCH_WARN_BYTES);
+          return null;
+        }
+
+        const existing = await fetchSession(sessionKey);
+        const title = existing?.title ?? `${snapshot.branch ?? "git"} replay`;
+        const timestamp = new Date().toISOString();
+        const detail = translateCurrent("aiReplay.snapshot.detail", {
+          count: snapshot.files.length,
+          branch: snapshot.branch ?? snapshot.head.slice(0, 7),
+        });
+        const checkpointId = `snapshot-${Date.now().toString(36)}`;
+        const payload: Record<string, unknown> = {
+          ...snapshot,
+          patchBytes,
+          checkpointId,
+          reason: reason ?? "manual",
+          changedFiles: snapshot.files.map((file) => file.path),
+        };
+        let persistedPayload = payload;
+        if (snapshot.patch.trim()) {
+          const patchPath = await writeSnapshotPatchFile(sessionKey, checkpointId, snapshot.patch);
+          persistedPayload = {
+            ...payload,
+            patchPath,
+            patchStorage: SNAPSHOT_PATCH_STORAGE,
+          };
+          delete persistedPayload.patch;
+        }
+        const { session, event } = await persistReplayEvent(
+          sessionKey,
+          {
+            title,
+            cliSessionId: existing?.cliSessionId ?? null,
+            source: existing?.source ?? null,
+            projectPath: normalizedProjectPath,
+          },
+          {
+            kind: "snapshot",
+            title: translateCurrent("aiReplay.snapshot.title"),
+            detail,
+            timestamp,
+            durationMs: null,
+            status: "saved",
+            tags: ["snapshot", "git", "rollback"],
+            payload,
+            persistedPayload,
+          }
+        );
+        applyPersistedEvent(session, event);
+        return event;
+      } catch (err) {
+        logError("Failed to capture AI replay code snapshot", { sessionKey, projectPath, err });
+        set({ error: String(err) });
         return null;
       }
+    })();
 
-      const existing = await fetchSession(sessionKey);
-      const title = existing?.title ?? `${snapshot.branch ?? "git"} replay`;
-      const timestamp = new Date().toISOString();
-      const detail = translateCurrent("aiReplay.snapshot.detail", {
-        count: snapshot.files.length,
-        branch: snapshot.branch ?? snapshot.head.slice(0, 7),
-      });
-      const checkpointId = `snapshot-${Date.now().toString(36)}`;
-      const payload: Record<string, unknown> = {
-        ...snapshot,
-        patchBytes,
-        checkpointId,
-        reason: reason ?? "manual",
-        changedFiles: snapshot.files.map((file) => file.path),
-      };
-      let persistedPayload = payload;
-      if (snapshot.patch.trim()) {
-        const patchPath = await writeSnapshotPatchFile(sessionKey, checkpointId, snapshot.patch);
-        persistedPayload = {
-          ...payload,
-          patchPath,
-          patchStorage: SNAPSHOT_PATCH_STORAGE,
-        };
-        delete persistedPayload.patch;
+    inFlightSnapshotCaptures.set(key, capturePromise);
+    try {
+      return await capturePromise;
+    } finally {
+      if (inFlightSnapshotCaptures.get(key) === capturePromise) {
+        inFlightSnapshotCaptures.delete(key);
       }
-      const { session, event } = await persistReplayEvent(
-        sessionKey,
-        {
-          title,
-          cliSessionId: existing?.cliSessionId ?? null,
-          source: existing?.source ?? null,
-          projectPath: normalizedProjectPath,
-        },
-        {
-          kind: "snapshot",
-          title: translateCurrent("aiReplay.snapshot.title"),
-          detail,
-          timestamp,
-          durationMs: null,
-          status: "saved",
-          tags: ["snapshot", "git", "rollback"],
-          payload,
-          persistedPayload,
-        }
-      );
-      applyPersistedEvent(session, event);
-      return event;
-    } catch (err) {
-      logError("Failed to capture AI replay code snapshot", { sessionKey, projectPath, err });
-      set({ error: String(err) });
-      return null;
     }
   },
 }));

@@ -1,6 +1,9 @@
 import { Component, memo, useMemo, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import "katex/dist/katex.min.css";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import bash from "react-syntax-highlighter/dist/esm/languages/prism/bash";
@@ -52,7 +55,8 @@ const supportsRegExpLookbehind = (() => {
     return false;
   }
 })();
-const remarkPlugins = supportsRegExpLookbehind ? [remarkGfm] : [];
+const remarkPlugins = supportsRegExpLookbehind ? [remarkGfm, remarkMath] : [];
+const rehypePlugins = [rehypeKatex];
 
 export type MarkdownVariant = "default" | "terminal";
 export type MarkdownLinkBehavior = "preview" | "open";
@@ -463,7 +467,12 @@ export const MarkdownContent = memo(function MarkdownContent({
       )}
     >
       <MarkdownRenderBoundary content={content}>
-        <Markdown remarkPlugins={remarkPlugins} components={makeComponents(query, linkBehavior, codeTheme)} skipHtml>
+        <Markdown
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
+          components={makeComponents(query, linkBehavior, codeTheme)}
+          skipHtml
+        >
           {content}
         </Markdown>
       </MarkdownRenderBoundary>

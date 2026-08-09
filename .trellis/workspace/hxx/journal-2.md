@@ -501,3 +501,201 @@ Claude、Codex、Pi、Grok 的非强制配置目录解析在已选目录失效�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 74: 修复远程连接设置页面响应式布局
+
+**Date**: 2026-08-06
+**Task**: 修复远程连接设置页面响应式布局
+**Branch**: `master`
+
+### Summary
+
+完成 cc-connect 设置页流式宽度和窄屏换行；更新 V1.3.5 变更日志与前端响应式布局规约；npx tsc --noEmit、git diff --check 通过。保留现有 Pi 任务未解决状态，不归档。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `89c84ce2` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 75: 新增 Codex 运行时光标隐藏开关
+
+**Date**: 2026-08-06
+**Task**: 新增 Codex 运行时光标隐藏开关
+**Branch**: `master`
+
+### Summary
+
+在 Windows 开发者设置中新增默认关闭的隐藏 CODEX 运行时光标开关，复用 V1.3.0 前 80ms 光标显示合并逻辑，仅对 Codex 会话生效；补齐中英文文案、设置持久化、文档和回归检查。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `66e71e22` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 76: 修复 Codex 光标隐藏未生效
+
+**Date**: 2026-08-06
+**Task**: 修复 Codex 光标隐藏未生效
+**Branch**: `master`
+
+### Summary
+
+定位并修复 Codex 光标隐藏开关未生效：首帧 Codex 输出在写入前锁存识别结果，重新 focus 的全部路径重新应用 CSI ?25l；同步更新终端契约、变更记录、功能清单和回归断言。类型检查与 21 个相关测试通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4a605543` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 77: 修复 Tab 图标在项目 CLI 工具变更后不刷新
+
+**Date**: 2026-08-07
+**Task**: 修复 Tab 图标在项目 CLI 工具变更后不刷新
+**Branch**: `master`
+
+### Summary
+
+项目 cli_tool 从 codex 改为 opencode 后，已启动会话的 Tab 图标不更新——因 inferSessionVendor 只读 session.startupCmd，不参考 project.cli_tool。改为 project 优先 + session 兜底，与 buildTerminalTabHoverInfo 已有模式一致。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9bf48abf` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 78: 支持 Windows 便携版与自定义数据目录
+
+**Date**: 2026-08-07
+**Task**: 支持 Windows 便携版与自定义数据目录
+**Branch**: `master`
+
+### Summary
+
+实现 Windows 便携版、自定义数据根目录、迁移重启和便携更新分流，并修复 Windows verbatim 路径导致 SQLite URL 启动失败。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eafe5da3` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 79: 补齐 Tab CLI 工具图标并新增 Kimi
+
+**Date**: 2026-08-07
+**Task**: 补齐 Tab CLI 工具图标并新增 Kimi
+**Branch**: `master`
+
+### Summary
+
+OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 上不显示图标——Tab 只用 VendorIcon，这些工具 descriptor 的 vendor 为 null。改为厂商图标 -> CLI 工具图标 -> 无 的回退链，新增 cliToolIcon prop 贯穿 SortableTab/SortableWorkspanTab/DragOverlayTab。同时新增 Kimi CLI 工具（命令 kimi，vendor kimi，LobeHub Kimi 彩色图标），暂不接入历史解析。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d6036889` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

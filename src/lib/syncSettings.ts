@@ -53,6 +53,7 @@ export const SETTING_BACKUP_POLICY = {
   ccusageAnalyticsEnabled: "preferences",
   ccusageUseWsl: "excluded",
   windowsConptyCompatibilityFixEnabled: "excluded",
+  hideCodexRuntimeCursor: "excluded",
   terminalSessionRestoreEnabled: "excluded",
   terminalSessionRestoreMode: "excluded",
   projectWorktreeConfigEnabled: "preferences",

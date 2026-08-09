@@ -24,6 +24,56 @@ import { useTerminalStore } from "../stores/terminalStore";
 const MIN_TERMINAL_COLS = 40;
 const MIN_TERMINAL_ROWS = 8;
 const HIDDEN_WEBGL_DISPOSE_DELAY_MS = 10_000;
+const PTY_LIVE_WRITE_BATCH_BYTES = 64 * 1024;
+const PTY_VISIBLE_WRITE_BURST = 3;
+
+interface ScheduledTerminalWrite {
+  token: symbol;
+  isVisible: () => boolean;
+  flush: () => void;
+}
+
+const scheduledTerminalWrites = new Map<symbol, ScheduledTerminalWrite>();
+let terminalWriteSchedulerRafId: number | null = null;
+let visibleWriteBurst = 0;
+
+const scheduleGlobalTerminalWrite = () => {
+  if (terminalWriteSchedulerRafId !== null || scheduledTerminalWrites.size === 0) return;
+  terminalWriteSchedulerRafId = requestAnimationFrame(() => {
+    terminalWriteSchedulerRafId = null;
+    const entries = [...scheduledTerminalWrites.values()];
+    const visible = entries.find((entry) => entry.isVisible());
+    const hidden = entries.find((entry) => !entry.isVisible());
+    const selected = visible && (!hidden || visibleWriteBurst < PTY_VISIBLE_WRITE_BURST)
+      ? visible
+      : hidden ?? visible;
+    if (!selected) return;
+    visibleWriteBurst = selected.isVisible() ? visibleWriteBurst + 1 : 0;
+    scheduledTerminalWrites.delete(selected.token);
+    selected.flush();
+    if (scheduledTerminalWrites.size === 0) {
+      visibleWriteBurst = 0;
+      return;
+    }
+    scheduleGlobalTerminalWrite();
+  });
+};
+
+const requestGlobalTerminalWrite = (entry: ScheduledTerminalWrite) => {
+  scheduledTerminalWrites.set(entry.token, entry);
+  scheduleGlobalTerminalWrite();
+};
+
+const cancelGlobalTerminalWrite = (token: symbol) => {
+  scheduledTerminalWrites.delete(token);
+  if (scheduledTerminalWrites.size === 0) {
+    if (terminalWriteSchedulerRafId !== null) {
+      cancelAnimationFrame(terminalWriteSchedulerRafId);
+      terminalWriteSchedulerRafId = null;
+    }
+    visibleWriteBurst = 0;
+  }
+};
 
 type NormalizeTerminalOutput = (text: string) => string;
 type TransformTerminalOutput = (text: string) => string;
@@ -38,6 +88,7 @@ export interface TerminalOutputDiagnostics {
 interface PendingTerminalWrite {
   text: string;
   charCount: number;
+  byteLength: number;
   commit: ((charCount: number) => void) | null;
   replay: boolean;
   replayBatchEnd: boolean;
@@ -46,10 +97,16 @@ interface PendingTerminalWrite {
   reset: boolean;
 }
 
-interface PendingViewportRestore {
-  marker: IMarker;
-  terminal: Terminal;
-}
+type PendingViewportRestore =
+  | {
+    kind: "bottom";
+    terminal: Terminal;
+  }
+  | {
+    kind: "marker";
+    marker: IMarker;
+    terminal: Terminal;
+  };
 
 interface UseTerminalDisplayOptions {
   sessionId: string;
@@ -115,7 +172,7 @@ export function useTerminalDisplay({
   const fitRafRef = useRef<number | null>(null);
   const needsViewportRefreshRef = useRef(false);
   const ptyPendingChunksRef = useRef<PendingTerminalWrite[]>([]);
-  const ptyWriteRafIdRef = useRef<number | null>(null);
+  const ptyWriteScheduleTokenRef = useRef(Symbol(sessionId));
   const ptyWriteInProgressRef = useRef(false);
   const ptyUnlistenRef = useRef<UnlistenFn | null>(null);
   const lastObservedSizeRef = useRef<{ width: number; height: number } | null>(null);
@@ -132,11 +189,10 @@ export function useTerminalDisplay({
     }
     const pending = pendingViewportRestoreRef.current;
     pendingViewportRestoreRef.current = null;
-    if (pending && !pending.marker.isDisposed) pending.marker.dispose();
+    if (pending?.kind === "marker" && !pending.marker.isDisposed) pending.marker.dispose();
   };
 
-  const scheduleViewportRestore = (terminal: Terminal, marker: IMarker) => {
-    const pending = { terminal, marker };
+  const scheduleViewportRestore = (pending: PendingViewportRestore) => {
     pendingViewportRestoreRef.current = pending;
     viewportRestoreRafRef.current = requestAnimationFrame(() => {
       if (pendingViewportRestoreRef.current !== pending) return;
@@ -145,11 +201,14 @@ export function useTerminalDisplay({
         if (pendingViewportRestoreRef.current !== pending) return;
         pendingViewportRestoreRef.current = null;
         try {
-          if (terminalRef.current === terminal && !marker.isDisposed) {
-            terminal.scrollToLine(marker.line);
+          if (terminalRef.current !== pending.terminal) return;
+          if (pending.kind === "bottom") {
+            pending.terminal.scrollToBottom();
+          } else if (!pending.marker.isDisposed) {
+            pending.terminal.scrollToLine(pending.marker.line);
           }
         } finally {
-          if (!marker.isDisposed) marker.dispose();
+          if (pending.kind === "marker" && !pending.marker.isDisposed) pending.marker.dispose();
         }
       });
     });
@@ -253,15 +312,17 @@ export function useTerminalDisplay({
       if (
         cancelled
         || ptyWriteInProgressRef.current
-        || ptyWriteRafIdRef.current !== null
         || ptyPendingChunksRef.current.length === 0
       ) {
         return;
       }
-      ptyWriteRafIdRef.current = requestAnimationFrame(flushPendingWrites);
+      requestGlobalTerminalWrite({
+        token: ptyWriteScheduleTokenRef.current,
+        isVisible: () => isVisibleRef.current,
+        flush: flushPendingWrites,
+      });
     };
     const flushPendingWrites = () => {
-      ptyWriteRafIdRef.current = null;
       if (cancelled || ptyWriteInProgressRef.current) return;
       const terminal = terminalRef.current;
       if (!terminal) return;
@@ -269,12 +330,23 @@ export function useTerminalDisplay({
       if (!first) return;
       const pending = [first];
       if (!first.replay && !first.reset) {
+        let pendingBytes = first.byteLength;
+        // Keep each live write bounded at complete PTY frame boundaries so a
+        // continuous producer cannot monopolize the WebView main thread.
         while (
           ptyPendingChunksRef.current[0]
           && !ptyPendingChunksRef.current[0].replay
           && !ptyPendingChunksRef.current[0].reset
         ) {
+          const next = ptyPendingChunksRef.current[0];
+          if (
+            pending.length > 0
+            && pendingBytes + next.byteLength > PTY_LIVE_WRITE_BATCH_BYTES
+          ) {
+            break;
+          }
           pending.push(ptyPendingChunksRef.current.shift()!);
+          pendingBytes += next.byteLength;
         }
       } else {
         forwardPtyResizeRef.current = false;
@@ -330,6 +402,7 @@ export function useTerminalDisplay({
       ptyPendingChunksRef.current.push({
         text,
         charCount: rawText.length,
+        byteLength: payload.data.byteLength,
         commit: delivery.commit,
         replay: payload.kind === "replay",
         replayBatchEnd: payload.replayBatchEnd === true,
@@ -397,10 +470,7 @@ export function useTerminalDisplay({
       cancelled = true;
       bufferedLivePayloads.length = 0;
       forwardPtyResizeRef.current = true;
-      if (ptyWriteRafIdRef.current !== null) {
-        cancelAnimationFrame(ptyWriteRafIdRef.current);
-        ptyWriteRafIdRef.current = null;
-      }
+      cancelGlobalTerminalWrite(ptyWriteScheduleTokenRef.current);
       ptyPendingChunksRef.current = [];
       ptyWriteInProgressRef.current = false;
       ptyUnlistenRef.current?.();
@@ -469,10 +539,8 @@ export function useTerminalDisplay({
   };
 
   const resetOutputState = () => {
-    if (ptyWriteRafIdRef.current !== null) {
-      cancelAnimationFrame(ptyWriteRafIdRef.current);
-      ptyWriteRafIdRef.current = null;
-    }
+    cancelPendingViewportRestore();
+    cancelGlobalTerminalWrite(ptyWriteScheduleTokenRef.current);
     ptyPendingChunksRef.current = [];
     ptyWriteInProgressRef.current = false;
     forwardPtyResizeRef.current = true;
@@ -497,9 +565,15 @@ export function useTerminalDisplay({
       barrier.begin(terminal, container);
     }
     const buffer = terminal.buffer.active;
+    const isHorizontalReflow = cols !== terminal.cols;
+    const wasAtLiveBottom = (
+      isHorizontalReflow
+      && buffer.type === "normal"
+      && buffer.viewportY === buffer.baseY
+    );
     // Horizontal reflow changes physical row indexes; a marker follows the logical viewport line.
     const viewportMarker = (
-      cols !== terminal.cols
+      isHorizontalReflow
       && buffer.type === "normal"
       && buffer.viewportY < buffer.baseY
     )
@@ -507,7 +581,13 @@ export function useTerminalDisplay({
       : undefined;
     terminal.resize(cols, rows);
     resizeRenderBarrierRef.current?.noteContainerResize();
-    if (viewportMarker) scheduleViewportRestore(terminal, viewportMarker);
+    if (wasAtLiveBottom) {
+      // Reassert xterm's live-follow intent before and after its asynchronous DOM viewport sync.
+      terminal.scrollToBottom();
+      scheduleViewportRestore({ kind: "bottom", terminal });
+    } else if (viewportMarker) {
+      scheduleViewportRestore({ kind: "marker", marker: viewportMarker, terminal });
+    }
   };
 
   const getResizeDebouncer = () => {

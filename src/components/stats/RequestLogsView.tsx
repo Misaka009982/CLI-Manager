@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -21,20 +21,30 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
-import type { RequestLogFilters, RequestLogPage, RequestLogSyncResult } from "../../lib/types";
-import { useSettingsStore } from "../../stores/settingsStore";
-import { useI18n, type AppLanguage } from "../../lib/i18n";
+import type { RequestLogFilters, RequestLogPage, RequestLogSource } from "../../lib/types";
+import { syncHistoryRequestLogs } from "../../stores/historyStore";
+import { useI18n, type AppLanguage, type TranslationKey } from "../../lib/i18n";
+import { getHistoryPathArgs } from "../../lib/historyPathArgs";
 import { VendorIcon } from "../VendorIcon";
 import { StatsDatePicker } from "./StatsDatePicker";
 
 const PAGE_SIZE = 20;
 
-type RequestLogSourceFilter = "all" | "claude" | "codex";
+const REQUEST_LOG_SOURCE_LABEL_KEYS: Record<RequestLogSource, TranslationKey> = {
+  claude: "requestLogs.source.claude",
+  codex: "requestLogs.source.codex",
+  gemini: "requestLogs.source.gemini",
+  opencode: "requestLogs.source.opencode",
+  grok: "requestLogs.source.grok",
+};
+
+type RequestLogSourceFilter = "all" | RequestLogSource;
 type RequestLogDatePreset = "today" | "last7Days" | "last30Days";
 
 interface RequestLogDraftFilters {
   source: RequestLogSourceFilter;
   project: string;
+  projectPath: string;
   model: string;
   session: string;
   startDate: string;
@@ -43,6 +53,7 @@ interface RequestLogDraftFilters {
 
 interface RequestLogsViewProps {
   onOpenSession: (sessionKey: string) => Promise<void>;
+  globalFilters?: RequestLogFilters;
 }
 
 function pad2(value: number): string {
@@ -59,6 +70,7 @@ function defaultFilters(): RequestLogDraftFilters {
   return {
     source: "all",
     project: "",
+    projectPath: "",
     model: "",
     session: "",
     startDate: toDateInput(start),
@@ -96,10 +108,24 @@ function normalizeFilters(filters: RequestLogDraftFilters): RequestLogFilters {
   return {
     source: filters.source === "all" ? null : filters.source,
     project_key: filters.project.trim() || null,
+    project_path: filters.projectPath.trim() || null,
     model: filters.model.trim() || null,
     session_query: filters.session.trim() || null,
     start_at: parseDate(filters.startDate, false),
     end_at: parseDate(filters.endDate, true),
+  };
+}
+
+function requestLogDraftFromGlobalFilters(filters: RequestLogFilters): RequestLogDraftFilters {
+  const defaults = defaultFilters();
+  return {
+    ...defaults,
+    source: filters.source ?? "all",
+    project: filters.project_key ?? "",
+    projectPath: filters.project_path ?? "",
+    model: filters.model ?? "",
+    startDate: typeof filters.start_at === "number" ? toDateInput(new Date(filters.start_at)) : defaults.startDate,
+    endDate: typeof filters.end_at === "number" ? toDateInput(new Date(filters.end_at)) : defaults.endDate,
   };
 }
 
@@ -123,6 +149,11 @@ function formatCompact(value: number, language: AppLanguage): string {
 function formatCost(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "$0.00";
   return `$${value.toFixed(value < 1 ? 4 : 2)}`;
+}
+
+function formatRate(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0%";
+  return `${(value * 100).toFixed(1)}%`;
 }
 
 function formatDateTime(value: number, language: AppLanguage): string {
@@ -150,10 +181,8 @@ function outlierThreshold(values: number[]): number {
   return average * 2;
 }
 
-export function RequestLogsView({ onOpenSession }: RequestLogsViewProps) {
+export function RequestLogsView({ onOpenSession, globalFilters }: RequestLogsViewProps) {
   const { language, t } = useI18n();
-  const claudeConfigDir = useSettingsStore((state) => state.claudeHookConfigDir);
-  const codexConfigDir = useSettingsStore((state) => state.codexHookConfigDir);
   const [draft, setDraft] = useState<RequestLogDraftFilters>(() => defaultFilters());
   const [applied, setApplied] = useState<RequestLogDraftFilters>(() => defaultFilters());
   const [page, setPage] = useState(0);
@@ -161,19 +190,31 @@ export function RequestLogsView({ onOpenSession }: RequestLogsViewProps) {
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const globalFiltersKey = JSON.stringify(globalFilters ?? null);
   const filters = useMemo(() => normalizeFilters(applied), [applied]);
   const draftFilters = useMemo(() => normalizeFilters(draft), [draft]);
   const invalidRange = hasInvalidDateRange(draftFilters);
   const invalidAppliedRange = hasInvalidDateRange(filters);
 
+  useEffect(() => {
+    if (!globalFilters) return;
+    const next = requestLogDraftFromGlobalFilters(globalFilters);
+    setDraft(next);
+    setApplied(next);
+    setPage(0);
+  }, [globalFiltersKey]);
+
   const query = useQuery({
     queryKey: ["historyRequestLogs", filters, page, refreshNonce],
-    queryFn: () =>
-      invoke<RequestLogPage>("history_list_request_logs", {
+    queryFn: async () => {
+      await syncHistoryRequestLogs(false);
+      return invoke<RequestLogPage>("history_list_request_logs", {
         filters,
         page,
         pageSize: PAGE_SIZE,
-      }),
+        ...(await getHistoryPathArgs()),
+      });
+    },
     enabled: !invalidAppliedRange,
   });
 
@@ -204,8 +245,9 @@ export function RequestLogsView({ onOpenSession }: RequestLogsViewProps) {
   };
 
   const applyQuickFilter = (patch: Partial<RequestLogDraftFilters>) => {
-    setDraft((current) => ({ ...current, ...patch }));
-    setApplied((current) => ({ ...current, ...patch }));
+    const nextPatch = patch.project === undefined ? patch : { ...patch, projectPath: "" };
+    setDraft((current) => ({ ...current, ...nextPatch }));
+    setApplied((current) => ({ ...current, ...nextPatch }));
     setPage(0);
   };
 
@@ -231,11 +273,7 @@ export function RequestLogsView({ onOpenSession }: RequestLogsViewProps) {
     setSyncing(true);
     setSyncError(null);
     try {
-      await invoke<RequestLogSyncResult>("history_sync_request_logs", {
-        claudeConfigDir: claudeConfigDir?.trim() || null,
-        codexConfigDir: codexConfigDir?.trim() || null,
-        force: true,
-      });
+      await syncHistoryRequestLogs(true);
       setPage(0);
       setRefreshNonce(Date.now());
     } catch (error) {
@@ -259,13 +297,16 @@ export function RequestLogsView({ onOpenSession }: RequestLogsViewProps) {
               aria-label={t("requestLogs.filter.source")}
             >
               <option value="all">{t("common.allSources")}</option>
-              <option value="claude">Claude</option>
-              <option value="codex">Codex</option>
+              <option value="claude">{t("requestLogs.source.claude")}</option>
+              <option value="codex">{t("requestLogs.source.codex")}</option>
+              <option value="gemini">{t("requestLogs.source.gemini")}</option>
+              <option value="opencode">{t("requestLogs.source.opencode")}</option>
+              <option value="grok">{t("requestLogs.source.grok")}</option>
             </Select>
           </div>
           <input
             value={draft.project}
-            onChange={(event) => setDraft((current) => ({ ...current, project: event.target.value }))}
+            onChange={(event) => setDraft((current) => ({ ...current, project: event.target.value, projectPath: "" }))}
             className={`${controlClass} min-w-[220px] flex-[1_1_300px] xl:max-w-[520px]`}
             placeholder={t("requestLogs.filter.project")}
             aria-label={t("requestLogs.filter.project")}
@@ -358,10 +399,11 @@ export function RequestLogsView({ onOpenSession }: RequestLogsViewProps) {
         {syncError && <div className="mt-2 text-[12px] text-danger" role="alert">{t("requestLogs.syncFailed", { error: syncError })}</div>}
       </Card>
 
-      <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 xl:grid-cols-5">
         {[
           { icon: FileText, label: t("requestLogs.summary.records"), value: formatCount(result?.summary.total ?? 0, language) },
           { icon: Layers3, label: t("requestLogs.summary.tokens"), value: formatCompact(result?.summary.total_tokens ?? 0, language) },
+          { icon: Database, label: t("requestLogs.summary.cacheHitRate"), value: formatRate(result?.summary.cache_hit_rate ?? 0) },
           { icon: Coins, label: t("requestLogs.summary.cost"), value: formatCost(result?.summary.total_cost_usd ?? 0) },
           { icon: Database, label: t("requestLogs.summary.unpriced"), value: formatCompact(result?.summary.unpriced_tokens ?? 0, language) },
         ].map((item) => {
@@ -409,7 +451,16 @@ export function RequestLogsView({ onOpenSession }: RequestLogsViewProps) {
                 {result.data.map((item, rowIndex) => {
                   const tokenOutlier = item.total_tokens > tokenOutlierThreshold;
                   const costOutlier = item.total_cost_usd > costOutlierThreshold;
-                  const sourceLabel = item.source === "codex" ? t("requestLogs.source.codex") : t("requestLogs.source.claude");
+                  const sourceLabel = t(REQUEST_LOG_SOURCE_LABEL_KEYS[item.source]);
+                  const sourceVendor = item.source === "claude"
+                    ? "claude"
+                    : item.source === "codex"
+                      ? "openai"
+                      : item.source === "gemini"
+                        ? "gemini"
+                        : item.source === "grok"
+                          ? "grok"
+                          : null;
                   return (
                     <tr
                       key={item.request_id}
@@ -433,7 +484,7 @@ export function RequestLogsView({ onOpenSession }: RequestLogsViewProps) {
                           className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-bg-primary px-2 py-0.5 font-medium text-text-secondary transition-colors hover:border-primary/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                           title={t("requestLogs.applyQuickFilter", { value: sourceLabel })}
                         >
-                          <VendorIcon vendor={item.source === "codex" ? "openai" : "claude"} size={13} />
+                          <VendorIcon vendor={sourceVendor} fallback={Database} size={13} />
                           {sourceLabel}
                         </button>
                       </td>

@@ -710,8 +710,44 @@ fn apply_webview_disable_gpu_config(config: &mut tauri::Config) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn show_startup_error(error: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, MB_ICONERROR, MB_OK, MB_SETFOREGROUND,
+    };
+
+    let title = std::ffi::OsStr::new("CLI-Manager")
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let message = format!(
+        "CLI-Manager 数据目录初始化失败，应用无法继续启动。\n\nData directory initialization failed.\n\n{error}"
+    )
+    .encode_utf16()
+    .chain(Some(0))
+    .collect::<Vec<_>>();
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            message.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn show_startup_error(error: &str) {
+    eprintln!("CLI-Manager data directory initialization failed: {error}");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(err) = app_paths::prepare_gui_startup() {
+        show_startup_error(&err);
+        return;
+    }
     let linux_graphics = linux_graphics::initialize(
         app_paths::cli_manager_data_dir()
             .ok()
@@ -790,6 +826,11 @@ pub fn run() {
             }
             if let Err(err) = app_paths::migrate_legacy_app_files(app.handle()) {
                 log::warn!("CLI-Manager data migration skipped: {err}");
+            }
+            if let Ok(pets_dir) = app_paths::pets_dir() {
+                if let Err(err) = app.asset_protocol_scope().allow_directory(pets_dir, true) {
+                    log::warn!("desktop pet asset scope unavailable: {err}");
+                }
             }
             conpty_sideload::initialize(app.handle());
             // 保留应用自身调试日志，但压掉 sqlx 的逐条 SQL 输出。
@@ -914,8 +955,13 @@ pub fn run() {
             commands::terminal::pty_legacy_request,
             commands::terminal::pty_daemon_upgrade_if_idle,
             commands::terminal::pty_daemon_sessions,
+            commands::app_data::app_get_data_storage_status,
+            commands::app_data::app_inspect_data_dir,
+            commands::app_data::app_prepare_data_dir_switch,
             commands::cc_connect::cc_connect_get_status,
             commands::cc_connect::cc_connect_inspect_executable,
+            commands::cc_connect::cc_connect_check_update,
+            commands::cc_connect::cc_connect_update,
             commands::cc_connect::cc_connect_save_profile,
             commands::cc_connect::cc_connect_clear_credentials,
             commands::cc_connect::cc_connect_weixin_authorization_start,
@@ -945,6 +991,7 @@ pub fn run() {
             commands::terminal_shell::terminal_shell_scan,
             commands::terminal_shell::terminal_shell_icon,
             commands::ssh::ssh_client_status,
+            commands::ssh::ssh_resolve_user,
             commands::ssh::ssh_test_connection,
             commands::ssh::ssh_agent_probe,
             commands::ssh::ssh_agent_install_preview,
@@ -1039,6 +1086,7 @@ pub fn run() {
             commands::history::history_get_stats,
             commands::history::request_logs::history_sync_request_logs,
             commands::history::request_logs::history_list_request_logs,
+            commands::history::request_logs::history_get_request_log_stats,
             commands::history_sources::history_sources_list_descriptors,
             commands::history_sources::history_sources_detect,
             commands::history_sources::history_sources_validate,

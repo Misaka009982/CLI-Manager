@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 35
-- **Last Active**: 2026-07-31
+- **Total Sessions**: 40
+- **Last Active**: 2026-08-08
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1190 | Active |
+| `journal-1.md` | ~1355 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,11 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 40 | 2026-08-08 | 修复持续输出时终端右键清屏 | `d1a7c244` | `master` |
+| 39 | 2026-08-06 | 彻底修复多会话终端输出卡死 | `e46052c2` | `master` |
+| 38 | 2026-08-06 | 统一终端侧边栏标题与缓存命中率 | `fb89406a` | `master` |
+| 37 | 2026-08-05 | 修复项目切换丢失文件预览与 Tab 卡死 | `f5544d3b` | `master` |
+| 36 | 2026-08-03 | 修复子任务分屏滚动条与工具栏 | `b7c148b7` | `master` |
 | 35 | 2026-07-31 | 终端状态标记设置预览 | `2e73f3a7` | `feat/terminal-status-marker-settings` |
 | 34 | 2026-07-31 | 终端状态标记设置与视觉优化 | `5603bde1` | `feat/terminal-status-marker-settings` |
 | 33 | 2026-07-24 | 完善终端 Tab 悬浮信息卡 | `592729e9` | `master` |

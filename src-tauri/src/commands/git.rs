@@ -2,17 +2,29 @@ use git2::{build::CheckoutBuilder, DiffOptions, Repository, ResetType, StatusOpt
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, State};
 
 pub use super::git_diff::{GitDiffOptions, GitFileDiffPayload};
 use crate::git_watcher::GitWatcherBridge;
-use crate::shell_resolver::silent_command;
+use crate::shell_resolver::{output_with_timeout, silent_command};
 
 const GIT_DIFF_LINE_STATS_STATUS_LIMIT: usize = 500;
 const GIT_DIFF_LINE_STATS_LINE_LIMIT: usize = 200_000;
-const OOM_PATCH_WARN_BYTES: usize = 1024 * 1024;
-const OOM_SNAPSHOT_PATCH_RETURN_MAX_BYTES: usize = 1024 * 1024;
+const MAX_WORKTREE_PATCH_BYTES: usize = 4 * 1024 * 1024;
+const OOM_PATCH_WARN_BYTES: usize = MAX_WORKTREE_PATCH_BYTES;
+const OOM_SNAPSHOT_PATCH_RETURN_MAX_BYTES: usize = MAX_WORKTREE_PATCH_BYTES;
 const OOM_SNAPSHOT_FILES_WARN_COUNT: usize = 500;
+const WSL_GIT_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+static WORKTREE_OPERATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn acquire_worktree_operation_lock() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    WORKTREE_OPERATION_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "worktree_operation_lock_poisoned".to_string())
+}
 
 fn log_worktree_snapshot_oom_diagnostic(
     phase: &str,
@@ -321,6 +333,10 @@ fn git_get_changes_wsl(
         &["status", "--porcelain=v1", "-z", "-unormal"],
     )
     .map_err(|e| {
+        if e == "not_git_repository" {
+            log::debug!("[git_get_changes:wsl] 非 Git 仓库: project_path={project_path}");
+            return e;
+        }
         let err_msg = format!("获取 WSL Git 状态失败: {e}");
         log::error!("[git_get_changes:wsl] {}", err_msg);
         err_msg
@@ -515,18 +531,24 @@ pub(super) fn run_wsl_git(
     let args = build_wsl_git_command_args(distro, linux_path, git_args);
     cmd.args(&args);
 
-    let output = cmd.output().map_err(|e| format!("spawn_failed: {e}"))?;
+    let output = output_with_timeout(cmd, WSL_GIT_COMMAND_TIMEOUT).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::TimedOut {
+            "wsl_git_timeout".to_string()
+        } else {
+            format!("spawn_failed: {e}")
+        }
+    })?;
     if output.status.success() {
         return Ok(output.stdout);
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let snippet = format!("{stderr}{stdout}")
-        .trim()
-        .chars()
-        .take(300)
-        .collect::<String>();
+    let combined_output = format!("{stderr}{stdout}");
+    if is_not_git_repository_output(&combined_output) {
+        return Err("not_git_repository".to_string());
+    }
+    let snippet = combined_output.trim().chars().take(300).collect::<String>();
     Err(format!(
         "wsl_git_failed(exit={}): {}",
         output
@@ -536,6 +558,13 @@ pub(super) fn run_wsl_git(
             .unwrap_or_else(|| "?".to_string()),
         snippet
     ))
+}
+
+fn is_not_git_repository_output(output: &str) -> bool {
+    let normalized = output.to_ascii_lowercase();
+    normalized.contains("not a git repository")
+        || normalized.contains("不是一个 git 仓库")
+        || normalized.contains("不是 git 仓库")
 }
 
 pub(super) fn resolve_wsl_mnt_git_project_path(distro: &str, linux_path: &str) -> Option<String> {
@@ -566,10 +595,9 @@ fn resolve_wsl_linux_realpath(distro: &str, linux_path: &str) -> Option<String> 
         .as_deref()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "wsl.exe".to_string());
-    let output = silent_command(&program)
-        .args(["-d", distro, "--exec", "readlink", "-f", linux_path])
-        .output()
-        .ok()?;
+    let mut command = silent_command(&program);
+    command.args(["-d", distro, "--exec", "readlink", "-f", linux_path]);
+    let output = output_with_timeout(command, WSL_GIT_COMMAND_TIMEOUT).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -778,7 +806,14 @@ fn collect_git_changes_from_repo(repo: &Repository) -> Result<Vec<GitFileChange>
     Ok(changes)
 }
 
-fn build_worktree_patch(repo: &Repository) -> Result<String, String> {
+#[derive(Debug)]
+struct BoundedPatch {
+    text: String,
+    bytes: usize,
+    truncated: bool,
+}
+
+fn build_worktree_patch(repo: &Repository) -> Result<BoundedPatch, String> {
     let head_tree = repo
         .head()
         .and_then(|head| head.peel_to_tree())
@@ -789,30 +824,30 @@ fn build_worktree_patch(repo: &Repository) -> Result<String, String> {
         .include_untracked(true)
         .recurse_untracked_dirs(true)
         .show_untracked_content(true)
-        .show_binary(true)
+        .show_binary(false)
+        .max_size(MAX_WORKTREE_PATCH_BYTES as i64)
         .context_lines(3);
 
     let diff = repo
         .diff_tree_to_workdir_with_index(Some(&head_tree), Some(&mut diff_opts))
         .map_err(|e| format!("snapshot_diff_failed: {e}"))?;
-    format_diff_to_text_allow_empty(&diff)
+    format_diff_to_bounded_text(&diff, MAX_WORKTREE_PATCH_BYTES)
 }
 
 fn build_worktree_snapshot(
     project_path: &str,
     repo: &Repository,
 ) -> Result<GitWorktreeSnapshot, String> {
-    let patch = build_worktree_patch(repo)?;
-    let patch_bytes = patch.len();
     let files = collect_git_changes_from_repo(repo)?;
+    let patch = build_worktree_patch(repo)?;
     Ok(GitWorktreeSnapshot {
         project_path: project_path.to_string(),
         head: repo_head_oid(repo)?,
         branch: repo_branch_name(repo),
-        dirty: !patch.trim().is_empty() || !files.is_empty(),
-        patch,
-        patch_bytes,
-        patch_truncated: false,
+        dirty: patch.truncated || !patch.text.trim().is_empty() || !files.is_empty(),
+        patch: patch.text,
+        patch_bytes: patch.bytes,
+        patch_truncated: patch.truncated,
         files,
     })
 }
@@ -821,7 +856,8 @@ fn truncate_snapshot_patch_for_webview(snapshot: &mut GitWorktreeSnapshot) {
     if snapshot.patch.len() <= OOM_SNAPSHOT_PATCH_RETURN_MAX_BYTES {
         return;
     }
-    snapshot.patch.clear();
+    // Assignment drops the oversized allocation; String::clear() would retain its capacity.
+    snapshot.patch = String::new();
     snapshot.patch_truncated = true;
 }
 
@@ -993,6 +1029,7 @@ pub async fn git_get_worktree_snapshot(
     log::debug!("[git_get_worktree_snapshot] project_path: {}", project_path);
 
     tokio::task::spawn_blocking(move || {
+        let _worktree_lock = acquire_worktree_operation_lock()?;
         let started_at = std::time::Instant::now();
         let effective_project_path = effective_git_project_path(&project_path);
         let path = Path::new(&effective_project_path);
@@ -1086,6 +1123,7 @@ pub async fn git_restore_worktree_snapshot(
     );
 
     tokio::task::spawn_blocking(move || {
+        let _worktree_lock = acquire_worktree_operation_lock()?;
         let effective_project_path = effective_git_project_path(&project_path);
         let path = Path::new(&effective_project_path);
         if !crate::wsl::is_wsl_config_dir(&project_path) && !path.exists() {
@@ -1098,7 +1136,10 @@ pub async fn git_restore_worktree_snapshot(
         }
 
         let current_patch = build_worktree_patch(&repo)?;
-        if current_patch != expected_current_patch {
+        if current_patch.truncated {
+            return Err("worktree_snapshot_too_large".to_string());
+        }
+        if current_patch.text != expected_current_patch {
             return Err("worktree_changed_since_snapshot".to_string());
         }
 
@@ -1148,6 +1189,7 @@ pub async fn git_fork_worktree_snapshot(
     validate_snapshot_branch_name(&branch_name)?;
 
     tokio::task::spawn_blocking(move || {
+        let _worktree_lock = acquire_worktree_operation_lock()?;
         let effective_project_path = effective_git_project_path(&project_path);
         let path = Path::new(&effective_project_path);
         if !crate::wsl::is_wsl_config_dir(&project_path) && !path.exists() {
@@ -1160,7 +1202,10 @@ pub async fn git_fork_worktree_snapshot(
         }
 
         let current_patch = build_worktree_patch(&repo)?;
-        if current_patch != expected_current_patch {
+        if current_patch.truncated {
+            return Err("worktree_snapshot_too_large".to_string());
+        }
+        if current_patch.text != expected_current_patch {
             return Err("worktree_changed_since_snapshot".to_string());
         }
 
@@ -1213,6 +1258,50 @@ pub(super) fn format_diff_to_text_allow_empty(diff: &git2::Diff) -> Result<Strin
     .map_err(|e| format!("打印 diff 失败: {}", e))?;
 
     Ok(patch_text)
+}
+
+fn format_diff_to_bounded_text(
+    diff: &git2::Diff,
+    max_bytes: usize,
+) -> Result<BoundedPatch, String> {
+    let mut patch_text = String::new();
+    let mut patch_bytes = 0usize;
+    let mut truncated = false;
+
+    let result = diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+        if line.origin() == 'B' {
+            truncated = true;
+            return false;
+        }
+        let prefix_bytes = usize::from(matches!(line.origin(), '+' | '-' | ' '));
+        let line_bytes = prefix_bytes.saturating_add(line.content().len());
+        patch_bytes = patch_bytes.saturating_add(line_bytes);
+        if patch_text.len().saturating_add(line_bytes) > max_bytes {
+            truncated = true;
+            return false;
+        }
+        match line.origin() {
+            '+' | '-' | ' ' => patch_text.push(line.origin()),
+            _ => {}
+        }
+        patch_text.push_str(std::str::from_utf8(line.content()).unwrap_or(""));
+        true
+    });
+
+    if let Err(err) = result {
+        if !truncated {
+            return Err(format!("打印受限 diff 失败: {}", err));
+        }
+    }
+    if truncated {
+        patch_text = String::new();
+    }
+
+    Ok(BoundedPatch {
+        text: patch_text,
+        bytes: patch_bytes,
+        truncated,
+    })
 }
 
 /// 校验前端传入的 repo 相对路径（前端不可信，防越界）。
@@ -2554,10 +2643,11 @@ mod tests {
         build_reverse_hunk_patch, build_reverse_lines_patch, build_worktree_snapshot,
         build_wsl_git_command_args, collect_git_changes_from_repo, git_delete_untracked_paths,
         git_fork_worktree_snapshot, git_get_file_diff, git_restore_worktree_snapshot,
-        is_nested_repo_entry, is_no_stash_created, parse_wsl_git_status, parse_wsl_numstat,
-        remove_untracked_snapshot_file, scan_git_repository_paths, should_skip_diff_line_stats,
-        validate_branch_name, validate_repo_relative_path, validate_snapshot_branch_name,
-        GIT_DIFF_LINE_STATS_STATUS_LIMIT,
+        is_nested_repo_entry, is_no_stash_created, is_not_git_repository_output,
+        parse_wsl_git_status, parse_wsl_numstat, remove_untracked_snapshot_file,
+        scan_git_repository_paths, should_skip_diff_line_stats, validate_branch_name,
+        validate_repo_relative_path, validate_snapshot_branch_name,
+        GIT_DIFF_LINE_STATS_STATUS_LIMIT, MAX_WORKTREE_PATCH_BYTES,
     };
     use git2::{IndexAddOption, Repository, Signature};
     use std::fs;
@@ -2746,6 +2836,25 @@ mod tests {
     }
 
     #[test]
+    fn worktree_snapshot_bounds_large_untracked_patch() {
+        let (_temp, repo_path) = init_temp_repo();
+        let large_file = Path::new(&repo_path).join("large.txt");
+        fs::write(
+            &large_file,
+            vec![b'x'; MAX_WORKTREE_PATCH_BYTES.saturating_add(1024)],
+        )
+        .unwrap();
+
+        let repo = Repository::open(&repo_path).unwrap();
+        let snapshot = build_worktree_snapshot(&repo_path, &repo).unwrap();
+
+        assert!(snapshot.patch_truncated);
+        assert!(snapshot.patch.is_empty());
+        assert!(snapshot.dirty);
+        assert!(snapshot.files.iter().any(|file| file.path == "large.txt"));
+    }
+
+    #[test]
     fn is_nested_repo_entry_detects_nested_repo_dir_only() {
         let temp = tempfile::tempdir().unwrap();
         let repo = Repository::init(temp.path()).unwrap();
@@ -2842,6 +2951,19 @@ mod tests {
                 "--porcelain=v1",
             ]
         );
+    }
+
+    #[test]
+    fn recognizes_wsl_non_git_repository_errors() {
+        assert!(is_not_git_repository_output(
+            "fatal: not a git repository (or any of the parent directories): .git"
+        ));
+        assert!(is_not_git_repository_output(
+            "致命错误：不是一个 Git 仓库（或者任何父目录）：.git"
+        ));
+        assert!(!is_not_git_repository_output(
+            "fatal: detected dubious ownership in repository"
+        ));
     }
 
     #[test]

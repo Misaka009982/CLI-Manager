@@ -49,6 +49,7 @@ import {
   resolveTodayUsageProjectPaths,
 } from "../../lib/historyProjectPaths";
 import { TerminalSquare } from "../icons";
+import { TerminalPanelHeader } from "./TerminalPanelHeader";
 
 interface TerminalStatsPanelProps {
   activeSessionId: string | null;
@@ -425,7 +426,10 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const worktrees = useWorktreeStore((state) => state.worktrees);
 
   const [latestSession, setLatestSession] = useState<HistorySessionDetail | null>(null);
-  const [todayStats, setTodayStats] = useState<TodayProjectStats | null>(null);
+  const [todayStatsState, setTodayStatsState] = useState<{
+    scopeKey: string;
+    value: TodayProjectStats | null;
+  } | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [, setNowTick] = useState(0);
   const [refreshSeq, setRefreshSeq] = useState(0);
@@ -436,6 +440,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const sessionLoadInFlightRef = useRef(new Set<string>());
   const remoteHistoryContextRef = useRef<SshAgentHistoryContext | null>(null);
   const wasPanelActiveRef = useRef(false);
+  const freshDetailRef = useRef(false);
 
   const terminalSession = useMemo(
     () => terminalSessions.find((session) => session.id === activeSessionId) ?? null,
@@ -487,6 +492,21 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     ),
     [latestSession?.project_key, todayUsageProjectPaths]
   );
+  const todayUsageScopeKey = useMemo(
+    () => todayUsageScope
+      ? JSON.stringify([
+          project?.id ?? "",
+          sourceFilter ?? "",
+          todayUsageScope.projectKey,
+          todayUsageScope.projectPaths,
+        ])
+      : null,
+    [project?.id, sourceFilter, todayUsageScope]
+  );
+  // 统计结果必须与当前项目作用域一致；切换项目后旧结果立即失效，等待新请求返回。
+  const todayStats = todayStatsState?.scopeKey === todayUsageScopeKey
+    ? todayStatsState.value
+    : null;
 
   // 「会话级」卡片只认 hook 绑定的当前 CLI 会话；未绑定时保持空态。
   // 「今日项目用量」仍按项目聚合，不受此门控影响。
@@ -549,6 +569,8 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     const loadSession = async (initial: boolean) => {
       if (sessionLoadInFlightRef.current.has(scopeKey)) return;
       sessionLoadInFlightRef.current.add(scopeKey);
+      const freshDetail = !isSshProject && freshDetailRef.current;
+      freshDetailRef.current = false;
       const current = latestRef.current;
       const prev = current
         ? { filePath: current.file_path, updatedAt: current.updated_at }
@@ -574,7 +596,10 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
             prev,
             sourceFilter,
             terminalSession?.cliSessionId,
-            { forceCatalogRefresh: waitingForUsage }
+            {
+              forceCatalogRefresh: waitingForUsage || freshDetail,
+              freshDetail,
+            }
           );
         }
       } catch {
@@ -605,12 +630,12 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   // 今日项目用量：会话数据变化时同步刷新（与终端 CLI 来源保持一致）
   // Issue #137：聚合主项目 + worktree 路径，主仓库 Tab 与 worktree Tab 看到同一套「今日项目」合计。
   useEffect(() => {
-    if (!panelActive || !todayUsageScope) {
-      setTodayStats(null);
+    if (!panelActive || !todayUsageScope || !todayUsageScopeKey) {
+      setTodayStatsState(null);
       return;
     }
     if (isSshProject) {
-      setTodayStats(null);
+      setTodayStatsState(null);
       return;
     }
     let cancelled = false;
@@ -621,16 +646,20 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
           sourceFilter,
           todayUsageScope.projectPaths
         );
-        if (!cancelled) setTodayStats(result);
+        if (!cancelled) {
+          setTodayStatsState({ scopeKey: todayUsageScopeKey, value: result });
+        }
       } catch {
-        if (!cancelled) setTodayStats(null);
+        if (!cancelled) {
+          setTodayStatsState({ scopeKey: todayUsageScopeKey, value: null });
+        }
       }
     };
     void loadTodayStats();
     return () => {
       cancelled = true;
     };
-  }, [isSshProject, latestSession?.updated_at, panelActive, project, sourceFilter, todayUsageScope]);
+  }, [isSshProject, latestSession?.updated_at, panelActive, project, sourceFilter, todayUsageScope, todayUsageScopeKey]);
 
   // 空闲时数据轮询返回 unchanged 不会触发重渲染，需独立 tick 让头部相对时间文案随时间走字
   useEffect(() => {
@@ -644,6 +673,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const stats = useMemo(() => calculateTokenStats(latestSession), [latestSession]);
 
   const handleRefresh = useCallback(() => {
+    freshDetailRef.current = true;
     latestRef.current = null;
     setRefreshSeq((prev) => prev + 1);
   }, []);
@@ -755,8 +785,8 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   };
 
   const containerClassName = embedded
-    ? "flex h-full min-h-0 flex-col gap-2 overflow-y-auto p-2 font-mono ui-thin-scroll"
-    : "relative z-[1] flex w-[188px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-border p-2 font-mono ui-thin-scroll";
+    ? "flex h-full min-h-0 flex-col overflow-hidden font-mono"
+    : "relative z-[1] flex w-[188px] shrink-0 flex-col overflow-hidden border-l border-border font-mono";
   const Container = embedded ? "div" : "aside";
   const containerStyle = {
     backgroundColor: TERM.bg,
@@ -768,16 +798,16 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       className={containerClassName}
       style={containerStyle}
     >
-      <div className="flex items-center justify-between px-1 py-0.5">
-        <span className="flex items-center gap-2 text-[11px] font-bold" style={{ color: TERM.fg }}>
-          <LiveDot />
-          {t("termStats.live")}
-          {sourceFilter && (
-            <SourcePill source={sourceFilter} />
-          )}
-        </span>
-        <span className="flex items-center gap-1.5 text-[10px]" style={{ color: TERM.dim }}>
+      <TerminalPanelHeader
+        icon={<LiveDot />}
+        accent={TERM.cyan}
+        title={t("termStats.live")}
+        titleAccessory={sourceFilter ? <SourcePill source={sourceFilter} /> : undefined}
+        actions={(
+          <>
+            <span className="text-[10px]" style={{ color: TERM.dim }}>
           {updatedAt && <span>{formatRelativeTime(updatedAt)}</span>}
+            </span>
           <button
             onClick={handleRefresh}
             className="ui-focus-ring rounded p-0.5"
@@ -787,20 +817,23 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
           >
             <RefreshCw size={11} />
           </button>
-        </span>
-      </div>
+          </>
+        )}
+      />
 
-      {!displayProjectPath ? (
-        <EmptyHint text={t("termStats.noProject")} />
-      ) : !displaySession ? (
-        <EmptyHint text={t("termStats.noSessionRecord", { source: sourceFilter ?? "CLI" })} />
-      ) : !hasVisibleCard ? (
-        <EmptyHint text={t("termStats.noVisibleCards")} />
-      ) : (
-        <>
-          {terminalStatsCardOrder.map(renderStatsCard)}
-        </>
-      )}
+      <div className="ui-thin-scroll flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+        {!displayProjectPath ? (
+          <EmptyHint text={t("termStats.noProject")} />
+        ) : !displaySession ? (
+          <EmptyHint text={t("termStats.noSessionRecord", { source: sourceFilter ?? "CLI" })} />
+        ) : !hasVisibleCard ? (
+          <EmptyHint text={t("termStats.noVisibleCards")} />
+        ) : (
+          <>
+            {terminalStatsCardOrder.map(renderStatsCard)}
+          </>
+        )}
+      </div>
       {diffFileChange && displayProjectPath && (
         <DiffViewerModal
           open={Boolean(diffFileChange)}

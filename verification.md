@@ -832,3 +832,75 @@
 - `npm run build`：通过，完成 6702 个模块转换。
 - `git diff --check`：通过，仅有仓库现有 Windows 行尾提示。
 - 尚未连接真实高延迟 SSH 主机做首次握手与后续逐级浏览的耗时对比；需在开发模式或安装包中完成实际网络冒烟。
+
+## cc-connect Codex 托管恢复 Provider 修复（2026-08-03）
+
+### 根因与发现清单
+
+- 根因位于 CLI-Manager app-server 代理与 Codex `thread/resume` 的配置边界：代理把只存在于进程级 `-c` 覆盖中的合成 Provider `cli_manager_remote` 再写入请求级 `modelProvider`；Codex 0.146.0 会从持久化配置层解析该请求字段，因此报 `Model provider cli_manager_remote not found`。
+- 微信、Telegram、飞书和企业微信共用该 Agent 链路，平台收发、cc-connect 启动、原 Session ID、工作目录、项目 Provider 数据、模型目录和真实 `CODEX_HOME` 均已确认不是本次失败源。
+- 修复删除请求级 Provider 注入及其无用参数传递；项目登记 Provider 继续由 app-server 启动时的 `-c model_provider`、Provider 定义和密钥环境强制生效。Session 防漂移、新线程拦截、SSH cwd 改写与文件投递提示保持不变。
+
+### 验证结果
+
+- `cargo test --locked --manifest-path src-tauri/Cargo.toml codex_app_server_proxy::tests`：18 项通过。
+- `node scripts/codexAppServerProxy.e2e.test.mjs`：4 项通过。
+- 使用新编译代理和真实 Codex 0.146.0 恢复原失败会话 `019fc591-8a0b-7872-95b5-49c591ed4db1`：恢复成功，Session ID 保持不变，模型为 `gpt-5.6-sol`。
+- 对照验证保留请求级 `modelProvider` 时稳定复现原错误，删除该字段后同会话成功恢复。
+
+## SSH Config 用户身份与 PtyHost 升级修复（2026-08-04）
+
+### 根因与发现清单
+
+- Hook 失败根因位于 SSH Config 连接身份与 Hook 元数据持久化的边界：Config 别名主机按设计不保存 `username`，但 Hook 检查、安装和卸载完成后仍直接用该空字段写入集成记录，固定触发 `ssh_user_required`。
+- 修复通过本机 OpenSSH `ssh -G` 解析当前别名、Include、Match 和默认规则最终生效的 `User`，直连主机继续优先使用已登记用户名；解析结果接入 Hook 检查、安装、卸载及项目覆盖记录入口，不修改远端 SSH Agent 协议。
+- SSH 启动失败根因位于持久 PtyHost 与新版本应用的进程生命周期边界：旧 daemon 有存活会话时会被保留，而创建 SSH 会话要求 daemon 与应用版本一致；旧逻辑在会话结束后也只报错，不会重新尝试升级。
+- 修复统一 daemon 的版本和二进制传输能力检查：无存活会话时串行关闭旧 daemon、启动当前版本并重置前端旧传输；仍有存活会话时保留会话并显示明确的关闭提示，不强杀用户任务。
+- 触点包括 `commands/ssh.rs`、`SshCliIntegrationDialog`、Hook 元数据 Store、`commands/terminal.rs`、`TerminalProcessManager`、`PtyHostSocket`、终端错误映射和中英文文案；SSH 认证、代理、跳板机、远端 Agent 制品、cc-connect 和普通本地 PTY 创建逻辑已确认不改变。
+- GitNexus CLI 因其运行依赖缺少 `tree-sitter-kotlin` 无法建立索引；已降级使用 codebase-memory moderate 索引、调用路径、`rg`、源码和 Git diff 复核，工作区检测只包含上述预期链路。
+
+### 场景覆盖与验证结果
+
+- 覆盖直连显式用户名、SSH Config 别名解析、无法解析用户名、daemon 当前版本、旧 daemon 空闲自动升级、旧 daemon 存活会话阻塞，以及升级后的 WebSocket 重新连接。
+- `cargo test commands::ssh::tests::`：29 项通过。
+- `cargo test commands::terminal::tests::`：2 项通过。
+- `node scripts/ptyHostSocket.test.mjs`：11 项通过。
+- `node scripts/terminalProcessManager.test.mjs`：7 项通过。
+- `cargo check`、`npx tsc --noEmit`、`cargo fmt --all -- --check`、`git diff --check`：通过。
+- 尚未使用受影响用户的 SSH Config 和跨版本残留 daemon 做真实机器冒烟；需由安装包验证 Hook 检查/安装，以及保留旧会话和关闭旧会话后的 SSH 启动行为。
+
+## cc-connect 项目无关连接配置（2026-08-04）
+
+### 根因与发现清单
+
+- 日志中的 `remote profile is stale; save it again from the current project list` 来自远程连接 Profile 对项目 ID、名称和路径的强一致校验；该校验发生在宠物选中会话的目标解析之前，因此设置项目与托管项目不同、项目移动或重新登记都可能直接阻断启动。
+- 设置页已移除项目和 Agent 选择；后端使用固定控制工作区维持平台连接，宠物托管请求继续从真实终端会话传递项目、工作目录、CLI Session ID、Worktree/SSH 元数据，并在启动时读取该项目当前 Provider。
+- `/cli_manager_switch` 改为保存独立 `runtimeProjectId`，启动时动态解析；无效目标回退控制工作区。旧平台 Session 与微信状态会复制到控制身份，活动中的旧托管直到取消后才迁移。
+- 触点包括 cc-connect Profile 归一化/启动/自动启动、配置生成、项目切换、平台 Session 与微信状态迁移、托管预检/开始/取消、设置页和中英文说明；凭据存储、cc-connect 源码、SSH Agent 协议、终端挂起/恢复和 Hook 通知协议确认不改变。
+
+### 场景与验证
+
+- 覆盖无项目配置的控制待机、旧项目 Profile 迁移、平台 Session/微信状态保留、宠物选择不同本地项目、动态 Provider、持久化远程项目切换、项目移动/删除回退、活动旧托管取消兼容，以及本地/SSH 目标的既有工作目录验证。
+- `cargo test commands::cc_connect::tests::`：48 项通过。
+- `cargo test commands::cc_connect::handoff::tests::`：2 项通过。
+- `node scripts/remoteHandoff.test.mjs`：5 项通过。
+- `cargo fmt --all -- --check`、`cargo check`、`npx tsc --noEmit`、`npm run build`、`git diff --check`：通过。
+- 尚未执行真实 Telegram、微信、飞书、企业微信授权及安装包冒烟；该项留给后续打包测试阶段。
+
+## 桌宠状态气泡顶部裁切修复（2026-08-06）
+
+### 根因与发现清单
+
+- 根因位于桌宠 CSS 缩放与 Tauri 原生窗口尺寸的同步边界：宠物画面和状态气泡已按用户尺寸渲染时，隐藏窗口首次显示、WebView2 残留缩放或跨 DPI 显示器恢复可能仍保留基础 `190 x 210` 窗口，超出透明 WebView 顶边的气泡会被根节点裁切。
+- `desktop_pet_window_sync` 现在按目标显示器 DPI 直接计算物理窗口尺寸，先应用目标位置和尺寸，显示后校验并在窗口管理器改写几何信息时重新应用；Windows 桌宠 WebView 同时恢复为 100% 页面缩放。
+- 桌宠窗口发出 ready 事件后会强制重跑一次原生窗口同步，再发送配置与状态，覆盖首次显示时窗口尚未稳定的时序。
+- 已修改 `src-tauri/src/commands/desktop_pet.rs` 与 `src/hooks/useDesktopPetCoordinator.ts`；已复核但未修改状态气泡 CSS、宠物资源解析、目录扫描、菜单展开几何、任务状态和远程托管逻辑。
+- GitNexus MCP 当前未暴露；已降级使用 codebase-memory moderate 索引、调用路径、`rg`、源码和 Git diff。工作区检测仅包含上述两处实现及本验证记录。
+
+### 场景与验证
+
+- 覆盖宠物尺寸 40%～150%、显示器 DPI 100%/125%/150%、保存位置与默认位置、隐藏窗口首次显示、桌宠 ready 后恢复，以及 Windows WebView2 非 100% 残留缩放。
+- `cargo test desktop_pet --lib`：15 项通过，包含新增的尺寸与 DPI 组合测试。
+- `node --test scripts/desktopPetSize.test.mjs scripts/desktopPetMenuGeometry.test.mjs scripts/desktopPetTransport.test.mjs scripts/desktopPetStatus.test.mjs`：25 项通过。
+- `npx tsc --noEmit`、`npm run build`、`cargo check`、`cargo fmt -- --check`、`git diff --check`：通过。
+- 当前机器未复现 Issue #196 用户的 WebView2/显示器状态；最终仍需由受影响 Windows 11 机器验证内置小猫和 Codex Pets 在原尺寸设置下的气泡完整性。

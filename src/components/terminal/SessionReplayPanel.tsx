@@ -49,6 +49,7 @@ import {
   type ReplayProgressStepKind,
   type ReplayProgressTurn,
 } from "./replayProgressModel";
+import { TerminalPanelHeader } from "./TerminalPanelHeader";
 
 interface SessionReplayPanelProps {
   activeSessionId: string | null;
@@ -947,24 +948,21 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
 
   return (
     <div
-      className="ui-thin-scroll flex h-full min-h-0 flex-col gap-2 overflow-x-hidden overflow-y-auto p-2 font-mono"
+      className="flex h-full min-h-0 flex-col overflow-hidden font-mono"
       style={{
         backgroundColor: TERM_PANEL.bg,
         "--ui-scrollbar-thumb": TERM_PANEL.border,
         "--ui-scrollbar-track": TERM_PANEL.bg,
       } as CSSProperties}
     >
-      <header className="flex shrink-0 items-start justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl" style={{ color: TERM_PANEL.cyan, backgroundColor: panelColorTint(TERM_PANEL.cyan, 12) }}>
-            <Sparkles size={14} />
-          </span>
-          <div className="min-w-0">
-            <div className="truncate text-[12px] font-bold" style={{ color: TERM_PANEL.fg }}>{t("aiReplay.title")}</div>
-            <div className="truncate text-[9px]" style={{ color: TERM_PANEL.dim }} title={selectedSessionTitle}>{selectedSessionTitle}</div>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+      <TerminalPanelHeader
+        icon={<Sparkles size={14} />}
+        accent={TERM_PANEL.cyan}
+        title={t("aiReplay.title")}
+        subtitle={selectedSessionTitle}
+        subtitleTitle={selectedSessionTitle}
+        actions={(
+          <>
           {viewingHistory && activeSessionId && (
             <button type="button" onClick={() => void handleBackToCurrent()} className="ui-focus-ring rounded-lg border px-2 py-1.5 text-[9px] font-semibold" style={{ color: TERM_PANEL.cyan, borderColor: panelColorTint(TERM_PANEL.cyan, 34), backgroundColor: panelColorTint(TERM_PANEL.cyan, 8) }}>
               {t("aiReplay.action.backToCurrent")}
@@ -982,8 +980,11 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
           >
             <History size={12} />
           </button>
-        </div>
-      </header>
+          </>
+        )}
+      />
+
+      <div className="ui-thin-scroll flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto p-2">
 
       {historyOpen && (
         <section className="shrink-0 rounded-xl border p-2" style={{ backgroundColor: TERM_PANEL.card, borderColor: TERM_PANEL.border }}>
@@ -1108,6 +1109,7 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
         onClose={() => setPendingAction(null)}
         onConfirm={() => void handleConfirmPendingAction()}
       />
+      </div>
     </div>
   );
 }
