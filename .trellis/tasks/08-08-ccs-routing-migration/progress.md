@@ -1,18 +1,18 @@
 # CCS 路由迁移实施进度
 
-> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P4-06 已完成，当前指针为 P5-01。
+> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P5-01 已完成，当前指针为 P5-02。
 
 ## 0. 当前指针
 
 | 字段 | 值 |
 | --- | --- |
 | Task | 08-08-ccs-routing-migration |
-| task.json 状态 | in_progress（P0、P1-01 至 P4-06 已完成，当前指针为 P5-01） |
+| task.json 状态 | in_progress（P0、P1-01 至 P5-01 已完成，当前指针为 P5-02） |
 | Changelog Target | [TEMP] |
 | 当前阶段 | P5：集成验收与交付 |
-| 当前 Case | P5-01 |
-| 审批状态 | 已批准；P4-06 完成，按 Case 顺序切换至 P5-01 指针 |
-| 最后更新时间 | 2026-08-09 15:00 |
+| 当前 Case | P5-02 |
+| 审批状态 | 已批准；P5-01 质量门禁完成，按 Case 顺序切换至 P5-02 指针 |
+| 最后更新时间 | 2026-08-09 08:56 |
 | 最后操作机器 | DESKTOP-Q49I074 |
 | 分支 | feat/native-provider-management |
 | 工作目录 | F:/github/CLI-Manager |
@@ -79,9 +79,9 @@
 | P1 | 本地路由、端口、三平台、writer、daemon、HTTP、mapping、多密钥、UI | 15 | completed |
 | P2 | 队列、熔断、provider/key failover、流提交、热切换 | 7 | completed |
 | P3 | 全局出站代理 | 5 | completed |
-| P4 | 整流器与 Bedrock 优化 | 6 | P4-02 in_progress |
-| P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | pending |
-| 合计 |  | 43 | 37 个 Case 完成；P5-01 等待实现 |
+| P4 | 整流器与 Bedrock 优化 | 6 | completed |
+| P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | P5-02 in_progress |
+| 合计 |  | 43 | 38 个 Case 完成；P5-02 进行中 |
 
 ## 4. P0：影响分析、Schema、协议与 Fixture 基线
 
@@ -149,8 +149,8 @@
 
 | ID | 目标 | 前置依赖 | 实现触点 | 验收命令/场景 | 回滚点 | 状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| P5-01 | 完成 DB -> commands -> daemon -> HTTP -> writer -> UI 跨层质量门禁 | P1-15、P2-07、P3-05、P4-06 | 全任务新增/修改 symbol、GitNexus execution flows | rtk cargo check；rtk cargo test；rtk npx tsc --noEmit；rtk git diff --check；不主动运行 tauri dev/build | 按阶段回滚 | in_progress | 按 Case 顺序开始；先核对全任务变更与跨层执行流 |
-| P5-02 | 完成 Windows local、Windows WSL、macOS local 平台矩阵 | P5-01 | 三平台 runner、Home writer、daemon lifecycle | takeover/off/restore、端口回退、重启、GUI exit、多 Home、多 distro、gateway failure | 平台级关闭 takeover，恢复 direct | pending | 三平台都是首版完成条件 |
+| P5-01 | 完成 DB -> commands -> daemon -> HTTP -> writer -> UI 跨层质量门禁 | P1-15、P2-07、P3-05、P4-06 | 全任务新增/修改 symbol、GitNexus execution flows | rtk cargo check；rtk cargo test；rtk npx tsc --noEmit；rtk git diff --check；不主动运行 tauri dev/build | 按阶段回滚 | completed | 2026-08-09 08:56；定向 routing 42、provider 158；全 Rust 994 passed/1 ignored；cargo check、TypeScript、diff check 通过；GitNexus detect_changes(scope=all) clean、无受影响流程；执行流查询因 FTS 扩展不可用降级，已记录为工具环境限制；R1/R2 连续两轮零未解决发现；未运行 tauri dev/build；独立提交主题：docs(progress): complete P5-01 quality gate |
+| P5-02 | 完成 Windows local、Windows WSL、macOS local 平台矩阵 | P5-01 | 三平台 runner、Home writer、daemon lifecycle | takeover/off/restore、端口回退、重启、GUI exit、多 Home、多 distro、gateway failure | 平台级关闭 takeover，恢复 direct | in_progress | 按 Case 顺序开始；先执行平台环境与已有 runner 能力盘点 |
 | P5-03 | 完成功能与故障注入矩阵 | P5-02 | fixture、fake upstream、UI interaction tests | 四模块开关、三应用、JSON/SSE、mapping、multi-key、provider failover、proxy、rectifier | 标记 unsupported/blocked，不放宽安全边界 | pending | 覆盖主路径与边界 |
 | P5-04 | 完成生命周期、并发、恢复、secret redaction 审计 | P5-03 | daemon、journal、DB、credential store、logs | 并发 takeover/rebind、crash、drift、migration failure、日志/DTO/frame 搜索 secret/body/header | 恢复最后 verified generation | pending | 重点检查数据损坏风险 |
 | P5-05 | 完成 i18n/a11y/响应式/许可文档 | P5-03 | src/lib/i18n.ts、routing UI、NOTICE、third-party license | 中英文切换、24 小时制、键盘/aria、1024/1440 无横溢；仅复制 substantial CCS code 时补许可 | 撤回未验证文案/许可变更 | pending | 不新增无必要依赖 |
@@ -227,6 +227,7 @@
 | 2026-08-09 20:30 | DESKTOP-Q49I074 | P4-04 | in_progress -> completed；P4-05 pending -> in_progress | `src-tauri/src/daemon/route_http.rs`、`progress.md` | media 3、signature 2、budget 2 focused；Rust 989 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build | R1 修复对象值嵌套漏替换；R2 修复 `file_search_call` 工具块误判并新增保留回归；连续两轮零未解决发现；GitNexus 既有 route symbols UNKNOWN，无 HIGH/CRITICAL | feat(routing): add media fallback and text-only heuristic | P4-05 |
 | 2026-08-09 22:00 | DESKTOP-Q49I074 | P4-05 | in_progress -> completed；P4-06 pending -> in_progress | `src-tauri/src/provider/routing.rs`、`src-tauri/src/commands/routing.rs`、`src-tauri/src/lib.rs`、`src-tauri/src/daemon/route_http.rs`、`progress.md` | Bedrock 4、optimizer 1、media 3、signature 2、budget 2 focused；Rust 994 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build | R1 修复缺失/零 max_tokens 的无效预算与 cache 配额边界；R2 修复后无 warning，复核 effective env、Claude-only、Haiku/新旧模型、4 breakpoint 上限、原始 body failover 隔离，0 findings；连续两轮零未解决发现；GitNexus route targets UNKNOWN，`lib.rs::run` LOW，无 HIGH/CRITICAL | feat(routing): add Bedrock thinking and cache optimizer | P4-06 |
 | 2026-08-10 00:00 | DESKTOP-Q49I074 | P4-06 | in_progress -> completed；P5-01 pending -> in_progress | `src/components/settings/providers/nativeProviderTypes.ts`、`useNativeProviderRouting.ts`、`NativeProviderRectifierSection.tsx`、`NativeProviderRoutingSection.tsx`、`src/lib/i18n.ts`、`src-tauri/tests/routing_fixtures.rs`、`progress.md` | fixture rectifier 1；Rust 994 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build | R1 复核 hook 配置加载/保存、route-off 保留、总开关与子开关、Bedrock/non-Bedrock 边界、Switch/Accordion aria 与中英文 key；R2 复核后 0 findings，连续两轮零未解决发现；GitNexus UI symbols UNKNOWN，无 HIGH/CRITICAL | feat(routing): add rectifier and optimizer controls | P5-01 |
+| 2026-08-09 08:56 | DESKTOP-Q49I074 | P5-01 | in_progress -> completed；P5-02 pending -> in_progress | 仅验证：全任务既有变更与跨层执行流 | routing 42、provider 158 focused；Rust 994 passed/1 ignored；cargo check、TypeScript、diff check；GitNexus detect_changes(scope=all) clean、无受影响流程；未运行 tauri dev/build | R1/R2 连续两轮零未解决发现；执行流查询因 LadybugDB FTS 扩展不可用降级，已记录工具环境限制 | docs(progress): complete P5-01 quality gate | P5-02 |
 
 ## 12. 执行授权
 
