@@ -462,6 +462,12 @@ pub fn routing_reset_circuit(
 ) -> Result<RoutingFailoverState, RoutingError> {
     let state = block_on(routing::load_failover_state(&app_type))?;
     let app_type = state.app_type.clone();
+    let first_provider_id = state
+        .providers
+        .iter()
+        .filter(|provider| provider.in_failover_queue && provider.ready)
+        .min_by_key(|provider| provider.sort_index)
+        .map(|provider| provider.id.clone());
     let client = daemon_bridge
         .get()
         .ok_or_else(RoutingError::service_unavailable)?;
@@ -474,6 +480,15 @@ pub fn routing_reset_circuit(
         },
     )?;
     let _ = routing_status(event)?;
+    if let Some(first_provider_id) = first_provider_id {
+        let current_provider_id = block_on(routing::current_provider_id(&app_type))?;
+        if current_provider_id != first_provider_id {
+            block_on(routing::apply_hot_switch_for_active_homes(
+                &app_type,
+                &first_provider_id,
+            ))?;
+        }
+    }
     Ok(merge_daemon_circuits(state, Some(client), &app_type))
 }
 

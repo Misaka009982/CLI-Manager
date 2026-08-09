@@ -251,6 +251,8 @@ generic configuration textarea.
 - Failover queue rows render `isCurrent` as an explicit localized “In use”
   badge with the primary color, so the channel currently selected by routing is
   distinguishable from merely queued or ready providers.
+- The “In use” badge uses a filled, high-contrast style rather than a light
+  status pill so it remains legible among queue membership and health badges.
 
 ## Provider key visual clarity contract (2026-08-07)
 

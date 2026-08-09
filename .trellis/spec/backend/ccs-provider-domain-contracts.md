@@ -1057,3 +1057,6 @@ stop routing + remove takeovers
   if recovery fails.
 - Re-enabling an already-persisted service must reconcile the daemon instead of
   returning early.
+
+- Resetting failover circuits also resets the active route provider to the first
+  ready provider in the saved queue order when an active takeover exists.

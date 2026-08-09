@@ -121,7 +121,7 @@ export function NativeProviderFailoverSection({ appType, state }: NativeProvider
                       <Group gap="xs" wrap="wrap">
                         <Text size="xs" c="dimmed" w={18}>{provider.inFailoverQueue ? `${failover.providers.filter((item) => item.inFailoverQueue).indexOf(provider) + 1}` : "—"}</Text>
                         <Text size="sm">{provider.name}</Text>
-                        {provider.isCurrent && <Badge color="cliPrimary" variant="light">{t("providerCatalog.failover.current")}</Badge>}
+                        {provider.isCurrent && <Badge color="cliPrimary" variant="filled" size="sm" fw={700}>{t("providerCatalog.failover.current")}</Badge>}
                         <Badge color={provider.inFailoverQueue ? "blue" : provider.ready ? "green" : "gray"} variant="light">
                           {provider.inFailoverQueue
                             ? t("providerCatalog.failover.inQueue")

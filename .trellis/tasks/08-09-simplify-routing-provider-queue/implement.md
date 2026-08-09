@@ -10,3 +10,4 @@
 8. Treat Codex Responses `response.completed` as the streaming success boundary, immediately open the failed stream circuit, and promote the successful fallback provider for the next request; run GitNexus `detect_changes()` before delivery and update changelog/feature inventory per the delivery checklist.
 9. Reconcile persisted routing intent with daemon runtime state so an enabled-but-stopped listener is restarted on routing refresh, while the UI reflects the actual daemon status.
 10. Cache provider settings navigation/scroll state and make the active failover provider explicit in the queue.
+11. Make the active badge high contrast and reset the active route provider to the queue head when circuits are reset.
