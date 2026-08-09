@@ -138,6 +138,7 @@ pub(crate) struct RoutingRectifierConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum RoutingRectifierRule {
     ThinkingSignature,
     ThinkingBudget,

@@ -448,17 +448,7 @@ async fn forward_request(
                 "routing_rectifier_config_unavailable",
             )
         })?;
-    let request_context = (
-        rectifier_config,
-        crate::provider::routing::RoutingRetryContext::default(),
-    );
-    let _rectifier_rule_available = [
-        crate::provider::routing::RoutingRectifierRule::ThinkingSignature,
-        crate::provider::routing::RoutingRectifierRule::ThinkingBudget,
-        crate::provider::routing::RoutingRectifierRule::MediaFallback,
-    ]
-    .into_iter()
-    .any(|rule| request_context.1.can_retry(&request_context.0, rule));
+    let mut retry_context = crate::provider::routing::RoutingRetryContext::default();
     let failover_config =
         crate::provider::routing::load_failover_config_for_daemon(route_app_type(route))
             .await
@@ -564,6 +554,7 @@ async fn forward_request(
                 }
             };
         let mut used_keys = HashSet::from([selected_key.id.clone()]);
+        let mut provider_request = request_json.clone();
         let outcome = loop {
             let mut upstream = client.post(&url);
             for (name, value) in &headers {
@@ -577,7 +568,7 @@ async fn forward_request(
                     format!("Bearer {}", selected_key.api_key),
                 );
             }
-            let attempt_body = apply_model_mapping(&request_json, &snapshot.model_mappings)
+            let attempt_body = apply_model_mapping(&provider_request, &snapshot.model_mappings)
                 .map_err(|_| (StatusCode::BAD_REQUEST, "routing_model_mapping_invalid"))?;
             let send_result = if streaming {
                 match tokio::time::timeout(
@@ -627,6 +618,28 @@ async fn forward_request(
                     )
                 }
             };
+            if !streaming
+                && response.status() == StatusCode::BAD_REQUEST
+                && snapshot.app_type == "claude"
+                && snapshot.claude_api_format.as_deref() == Some("anthropic")
+                && retry_context.can_retry(
+                    &rectifier_config,
+                    crate::provider::routing::RoutingRectifierRule::ThinkingSignature,
+                )
+            {
+                let error_body = response
+                    .bytes()
+                    .await
+                    .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_body_failed"))?;
+                if is_thinking_signature_error(&error_body) {
+                    remove_invalid_thinking_blocks(&mut provider_request);
+                    retry_context.mark_used(
+                        crate::provider::routing::RoutingRectifierRule::ThinkingSignature,
+                    );
+                    continue;
+                }
+                return Err((StatusCode::BAD_REQUEST, "routing_upstream_client_error"));
+            }
             if classify_upstream_status(response.status()) == UpstreamErrorClass::Provider {
                 break ProviderAttemptOutcome::Failure(
                     StatusCode::BAD_GATEWAY,
@@ -1017,6 +1030,38 @@ fn apply_model_mapping(
     serde_json::to_vec(&request).map_err(|_| "routing_request_serialize_failed".to_string())
 }
 
+fn is_thinking_signature_error(body: &[u8]) -> bool {
+    let body = String::from_utf8_lossy(body).to_ascii_lowercase();
+    body.contains("signature")
+        && (body.contains("invalid")
+            || body.contains("missing")
+            || body.contains("extra")
+            || body.contains("modified")
+            || body.contains("altered"))
+}
+
+fn remove_invalid_thinking_blocks(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Array(items) => {
+            items.retain(|item| {
+                !matches!(
+                    item.get("type").and_then(serde_json::Value::as_str),
+                    Some("thinking" | "redacted_thinking")
+                )
+            });
+            for item in items {
+                remove_invalid_thinking_blocks(item);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for item in object.values_mut() {
+                remove_invalid_thinking_blocks(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn upstream_url(base_url: &str, route: RouteKind, request_path: &str) -> Result<String, ()> {
     let mut url = reqwest::Url::parse(base_url.trim()).map_err(|_| ())?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
@@ -1376,6 +1421,44 @@ mod tests {
         assert_eq!(max_attempts(0), 1);
         assert_eq!(max_attempts(3), 4);
         assert_eq!(max_attempts(u32::MAX), u32::MAX);
+    }
+
+    #[test]
+    fn signature_classifier_requires_explicit_signature_error_language() {
+        assert!(is_thinking_signature_error(
+            br#"{"error":"invalid thinking signature"}"#
+        ));
+        assert!(is_thinking_signature_error(
+            br#"{"error":"missing signature"}"#
+        ));
+        assert!(!is_thinking_signature_error(
+            br#"{"error":"invalid JSON body"}"#
+        ));
+        assert!(!is_thinking_signature_error(
+            br#"{"error":"signature is valid"}"#
+        ));
+    }
+
+    #[test]
+    fn signature_rectifier_removes_only_thinking_blocks_and_preserves_request_data() {
+        let mut request = serde_json::json!({
+            "model": "fixture",
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "secret reasoning", "signature": "bad"},
+                    {"type": "text", "text": "keep this"},
+                    {"type": "redacted_thinking", "data": "opaque"}
+                ]
+            }]
+        });
+        remove_invalid_thinking_blocks(&mut request);
+        assert_eq!(request["model"], "fixture");
+        assert_eq!(
+            request["messages"][0]["content"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(request["messages"][0]["content"][0]["text"], "keep this");
     }
 
     #[test]
