@@ -89,6 +89,15 @@ export function withCodexConfigOverrides(
   return `${match[1]} ${args.join(" ")}${normalized.slice(match[1].length)}`;
 }
 
+export function withCodexProfile(command: string | undefined, profileName: string): string | undefined {
+  const normalized = normalizeDirectCodexStartupCommand(command);
+  const profile = profileName.trim();
+  if (!normalized || !profile || hasProfileArg(normalized)) return normalized;
+  const match = DIRECT_CODEX_COMMAND_PATTERN.exec(normalized);
+  if (!match) return undefined;
+  return match[1] + " " + CODEX_PROFILE_ARG + " " + profile + normalized.slice(match[1].length);
+}
+
 export function withGrokModelOverride(
   command: string | undefined,
   model: string,

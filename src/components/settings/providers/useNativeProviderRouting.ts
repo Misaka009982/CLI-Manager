@@ -23,6 +23,7 @@ export interface UseNativeProviderRoutingResult {
   refresh: () => Promise<void>;
   refreshFailover: (appType: NativeProviderAppType) => Promise<void>;
   setServiceEnabled: (enabled: boolean) => Promise<void>;
+  setPreferredPort: (port: number) => Promise<void>;
   setQuickControls: (input: {
     showLocalQuickControl: boolean;
     showFailoverQuickControl: boolean;
@@ -35,6 +36,7 @@ export interface UseNativeProviderRoutingResult {
   ) => Promise<void>;
   setFailoverEnabled: (appType: NativeProviderAppType, enabled: boolean) => Promise<void>;
   setFailoverQueue: (appType: NativeProviderAppType, providerIds: string[]) => Promise<void>;
+  reorderFailoverQueue: (appType: NativeProviderAppType, providerIds: string[]) => Promise<void>;
   updateFailoverConfig: (appType: NativeProviderAppType, config: NativeProviderFailoverConfig) => Promise<void>;
   resetCircuit: (appType: NativeProviderAppType) => Promise<void>;
   setRectifierConfig: (config: NativeProviderRectifierConfig) => Promise<void>;
@@ -55,14 +57,23 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextState, nextRectifier, nextOptimizer] = await Promise.all([
+      const [stateResult, rectifierResult, optimizerResult] = await Promise.allSettled([
         invoke<NativeProviderRoutingState>("routing_get_state"),
         invoke<NativeProviderRectifierConfig>("routing_get_rectifier_config"),
         invoke<NativeProviderOptimizerConfig>("routing_get_optimizer_config"),
       ]);
+      if (stateResult.status === "rejected") throw stateResult.reason;
+      let nextState = stateResult.value;
+      if (nextState.persisted.service.serviceEnabled && nextState.daemon.status !== "running") {
+        try {
+          nextState = await invoke<NativeProviderRoutingState>("routing_set_service_enabled", { enabled: true });
+        } catch {
+          // Keep the real stopped state visible when daemon recovery fails.
+        }
+      }
       setState(nextState);
-      setRectifierConfigState(nextRectifier);
-      setOptimizerConfigState(nextOptimizer);
+      if (rectifierResult.status === "fulfilled") setRectifierConfigState(rectifierResult.value);
+      if (optimizerResult.status === "fulfilled") setOptimizerConfigState(optimizerResult.value);
       setErrorCode(null);
     } catch (error) {
       setErrorCode(providerErrorCode(error));
@@ -76,9 +87,8 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
     try {
       const next = await invoke<NativeProviderFailoverState>("routing_get_failover_queue", { appType });
       setFailoverState((current) => ({ ...current, [appType]: next }));
-      setErrorCode(null);
-    } catch (error) {
-      setErrorCode(providerErrorCode(error));
+    } catch {
+      // Queue polling is auxiliary; a transient daemon read must not mask the takeover controls.
     } finally {
       setFailoverLoading((current) => ({ ...current, [appType]: false }));
     }
@@ -104,6 +114,11 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
   const setServiceEnabled = useCallback((enabled: boolean) => run(
     "service",
     () => invoke<NativeProviderRoutingState>("routing_set_service_enabled", { enabled }),
+  ), [run]);
+
+  const setPreferredPort = useCallback((port: number) => run(
+    "preferred-port",
+    () => invoke<NativeProviderRoutingState>("routing_set_preferred_port", { port }),
   ), [run]);
 
   const setQuickControls = useCallback((input: {
@@ -146,9 +161,48 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
   const setFailoverQueue = useCallback((appType: NativeProviderAppType, providerIds: string[]) => runFailover(
     "failover-queue",
     async () => {
-      const next = await invoke<NativeProviderFailoverState>("routing_set_failover_queue", {
-        input: { appType, providerIds },
-      });
+      const previous = failoverState[appType];
+      if (previous) {
+        const queued = new Set(providerIds);
+        setFailoverState((current) => {
+          const currentState = current[appType];
+          if (!currentState) return current;
+          return {
+            ...current,
+            [appType]: {
+              ...currentState,
+              providers: currentState.providers.map((provider) => (
+                queued.has(provider.id) === provider.inFailoverQueue
+                  ? provider
+                  : { ...provider, inFailoverQueue: queued.has(provider.id) }
+              )),
+            },
+          };
+        });
+      }
+      try {
+        const next = await invoke<NativeProviderFailoverState>("routing_set_failover_queue", {
+          input: { appType, providerIds },
+        });
+        setFailoverState((current) => ({
+          ...current,
+          [appType]: {
+            ...next,
+            providers: current[appType]?.providers ?? next.providers,
+          },
+        }));
+      } catch (error) {
+        if (previous) setFailoverState((current) => ({ ...current, [appType]: previous }));
+        throw error;
+      }
+    },
+  ), [failoverState, runFailover]);
+
+  const reorderFailoverQueue = useCallback((appType: NativeProviderAppType, providerIds: string[]) => runFailover(
+    "failover-reorder",
+    async () => {
+      await invoke("provider_catalog_reorder", { appType, providerIds });
+      const next = await invoke<NativeProviderFailoverState>("routing_get_failover_queue", { appType });
       setFailoverState((current) => ({ ...current, [appType]: next }));
     },
   ), [runFailover]);
@@ -199,10 +253,12 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
     refresh,
     refreshFailover,
     setServiceEnabled,
+    setPreferredPort,
     setQuickControls,
     setTakeover,
     setFailoverEnabled,
     setFailoverQueue,
+    reorderFailoverQueue,
     updateFailoverConfig,
     resetCircuit,
     setRectifierConfig,

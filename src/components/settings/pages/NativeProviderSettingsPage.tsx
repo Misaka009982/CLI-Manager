@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Modal, SegmentedControl, Stack, Tabs } from "@mantine/core";
 import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
@@ -32,16 +32,22 @@ import {
   type NativeProviderUpdateInput,
 } from "../providers/nativeProviderTypes";
 
+type NativeProviderSettingsSurface = "catalog" | "home" | "routing";
+
 interface NativeProviderPageCache {
   appType: NativeProviderAppType;
+  surface: NativeProviderSettingsSurface;
   selectedProviderId: string | null;
   detailViewByProvider: Map<string, NativeProviderDetailView>;
+  scrollTop: number;
 }
 
 const pageCache: NativeProviderPageCache = {
   appType: NATIVE_PROVIDER_APP_TYPES[0],
+  surface: "catalog",
   selectedProviderId: null,
   detailViewByProvider: new Map(),
+  scrollTop: 0,
 };
 
 function readCachedDetailView(providerId: string | null): NativeProviderDetailView {
@@ -52,8 +58,6 @@ function readCachedDetailView(providerId: string | null): NativeProviderDetailVi
 interface NativeProviderSettingsPageProps {
   searchValue: string;
 }
-
-type NativeProviderSettingsSurface = "catalog" | "home" | "routing";
 
 const ERROR_TRANSLATIONS: Partial<Record<string, TranslationKey>> = {
   provider_invalid_app_type: "providerCatalog.errors.invalidAppType",
@@ -88,10 +92,11 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
   const { t } = useI18n();
   const { confirm, confirmDialog } = useAppConfirm();
   const [appType, setAppType] = useState<NativeProviderAppType>(pageCache.appType);
-  const [surface, setSurface] = useState<NativeProviderSettingsSurface>("catalog");
+  const [surface, setSurface] = useState<NativeProviderSettingsSurface>(pageCache.surface);
   const [importOpened, setImportOpened] = useState(false);
   const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
   const [documentDirty, setDocumentDirty] = useState(false);
+  const pageRef = useRef<HTMLDivElement | null>(null);
   const catalog = useNativeProviderCatalog(appType);
   const commonConfig = useNativeProviderCommonConfig(appType);
   const claudeHookConfigDir = useSettingsStore((settings) => settings.claudeHookConfigDir);
@@ -141,6 +146,25 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
     pageCache.selectedProviderId = catalog.selectedProviderId;
     setDetailViewState(readCachedDetailView(catalog.selectedProviderId));
   }, [catalog.selectedProviderId]);
+
+  useEffect(() => {
+    const page = pageRef.current;
+    const container = page?.closest<HTMLElement>(".overflow-y-auto");
+    if (!container) return;
+    const restore = () => {
+      if (pageCache.scrollTop > 0) container.scrollTop = pageCache.scrollTop;
+    };
+    const onScroll = () => {
+      pageCache.scrollTop = container.scrollTop;
+    };
+    restore();
+    const frame = requestAnimationFrame(restore);
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      container.removeEventListener("scroll", onScroll);
+    };
+  }, []);
   const errorKey = catalog.errorCode ? ERROR_TRANSLATIONS[catalog.errorCode] : undefined;
   const errorMessage = t(errorKey ?? "providerCatalog.errors.generic");
   const busy = Boolean(catalog.action);
@@ -211,6 +235,7 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
 
   const handleSurfaceChange = (next: string) => {
     const nextSurface = next as NativeProviderSettingsSurface;
+    pageCache.surface = nextSurface;
     setSurface(nextSurface);
     if (nextSurface !== "catalog") setImportOpened(false);
   };
@@ -220,7 +245,7 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
   };
 
   return (
-    <Stack gap="md">
+    <Stack ref={pageRef} gap="md">
       <SegmentedControl
         value={surface}
         onChange={handleSurfaceChange}

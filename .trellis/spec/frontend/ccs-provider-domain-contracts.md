@@ -243,6 +243,15 @@ generic configuration textarea.
   in global/project/Worktree resolution. Current or referenced providers may
   not be disabled, and their stable backend errors require localized feedback.
 
+## Provider routing page memory and active-channel contract (2026-08-09)
+
+- Reopening the provider settings page restores the last app type, surface
+  (catalog/Home/routing), detail tab, selected provider, and outer page scroll
+  position from the in-memory page cache.
+- Failover queue rows render `isCurrent` as an explicit localized “In use”
+  badge with the primary color, so the channel currently selected by routing is
+  distinguishable from merely queued or ready providers.
+
 ## Provider key visual clarity contract (2026-08-07)
 
 - `enabled` means "in the candidate pool, allowed to be activated." Render it

@@ -548,6 +548,7 @@ config.toml: model_provider + [model_providers.<name>] without credentials
 ```text
 provider_scope_prepare(input: ScopePrepareInput) -> ProviderLaunchSnapshot?
 ProviderLaunchSnapshot.configOverrides: string[]
+ProviderLaunchSnapshot.codexProfileName: string?
 ProviderLaunchConfig = { appType, providerId, snapshotId, claudeSettingsPath?, generatedHome?, grokModel? }
 ```
 
@@ -557,16 +558,18 @@ ProviderLaunchConfig = { appType, providerId, snapshotId, claudeSettingsPath?, g
   provider into the selected real Home, so launch must not create a snapshot
   or override `CODEX_HOME`.
 - Codex project/Worktree/explicit resolution returns a snapshot containing a
-  secret key file plus non-secret `-c` overrides for only `model`,
-  `model_provider` and the selected `model_providers` entry. It must not create
-  generated `auth.json`, `config.toml` or `generatedHome`.
+  secret key file plus a generated non-secret profile name. The profile is
+  written beside the selected real Codex Home config and the command uses
+  `--profile <name>`; it must not redirect `CODEX_HOME` or create a generated
+  `auth.json`/`generatedHome`.
 - PTY preparation validates the snapshot manifest, injects the active key as
   `CLI_MANAGER_PROVIDER_KEY`, and leaves `CODEX_HOME` unchanged.
-- The frontend appends each override as a separate quoted `-c` argument only
-  to a direct Codex command. SSH continues to discard local provider launch
-  data.
-- Persisted legacy Codex snapshots with `generatedHome` or without
-  `configOverrides` are released and rebuilt before a recreated PTY starts.
+- The frontend appends `--profile <name>` only to a direct Codex command;
+  legacy snapshots without a profile name may continue using their existing
+  `-c` overrides. SSH continues to discard local provider launch data.
+- Persisted legacy Codex snapshots with `generatedHome` remain invalid; a
+  snapshot without `codexProfileName` may use its existing `configOverrides`
+  fallback until the next fresh launch rebuilds it.
 
 ### 4. Validation & Error Matrix
 
@@ -591,10 +594,11 @@ ProviderLaunchConfig = { appType, providerId, snapshotId, claudeSettingsPath?, g
 
 - Assert global Codex selection is passthrough and project/Worktree sources
   still materialize scoped launch data.
-- Assert scoped snapshots create no Codex Home, expose no secret in DTO
-  overrides, and keep the key only in the protected snapshot file/environment.
-- Assert direct new/resume commands receive quoted `-c` values, unsupported
-  commands fail closed, and shell interpolation characters are rejected.
+- Assert scoped snapshots create no isolated Codex Home, expose no secret in
+  the profile or DTO, and keep the key only in the protected snapshot
+  file/environment.
+- Assert direct new/resume commands receive `--profile`, unsupported commands
+  fail closed, and legacy `-c` fallback remains available.
 - Type-check all launch DTO consumers and run provider module Rust tests.
 
 ### 7. Wrong vs Correct
@@ -610,7 +614,7 @@ provider scope -> generated/codex/{auth.json,config.toml}
 
 ```text
 global -> real Home files, no snapshot
-project/Worktree -> real CODEX_HOME + non-secret `-c` overrides
+project/Worktree -> real CODEX_HOME + non-secret `--profile` profile
   + active key in PTY child environment
 ```
 
@@ -935,3 +939,121 @@ frontend sessionRoot = <home>/.grok/sessions
   -> backend collect(root)
   -> <home>/.grok/sessions/<project>/<session>/updates.jsonl
 ```
+
+## Scenario: Preferred local-routing port editing (2026-08-09)
+
+### 1. Scope / Trigger
+
+- Trigger: the routing settings UI edits the persisted preferred listener port.
+- Goal: allow a user-selected port without leaving an active Home projection
+  pointing at an old route endpoint.
+
+### 2. Signatures
+
+```text
+routing_set_preferred_port(port: u16) -> RoutingState
+```
+
+### 3. Contracts
+
+- `port` must be in the existing service-config range `1024..=65535`.
+- The command persists `routing.service.v1.preferred_port` and returns the
+  normal persisted service plus daemon state DTO.
+- The command accepts a port change only when the local routing service is
+  stopped and the takeover list is empty. The next service start uses the
+  saved port.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Port below 1024 | `routing_port_invalid` |
+| Service is enabled | `routing_port_change_requires_service_disabled` |
+| Any Home takeover remains | `routing_port_change_requires_takeover_disabled` |
+| Same as persisted port | return current state without a write |
+
+### 5. Good/Base/Bad Cases
+
+- Good: stop routing, remove takeovers, save port `18080`, then start routing;
+  the listener selects `18080` as its preferred candidate.
+- Base: the UI disables the input while service/takeovers are active and
+  explains the prerequisite in both supported locales.
+- Bad: live-change only the listener port while leaving a takeover's stored
+  endpoint and Home projection on the previous port.
+
+### 6. Tests Required
+
+- Rust: `validate_service_config` rejects `1023` with `routing_port_invalid`.
+- Rust: routing service tests continue to cover listener start/reload and
+  occupied-port fallback behavior.
+- Frontend: type-check the port input and command payload; manually verify
+  save/disable/re-enable in both `zh-CN` and `en-US`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+running listener + active takeover
+  -> overwrite preferred_port only
+  -> Home still points to the old endpoint
+```
+
+#### Correct
+
+```text
+stop routing + remove takeovers
+  -> persist preferred_port
+  -> start routing with the new preferred candidate
+```
+
+## Scenario: Streaming failover circuit and provider memory (2026-08-09)
+
+### 1. Scope / Trigger
+
+- Trigger: an enabled failover route returns an HTTP success response but its
+  SSE stream ends before the protocol completion event.
+- Goal: avoid repeating the failed provider during CLI reconnects and retain
+  the successful fallback provider for the next request.
+
+### 2. Contracts
+
+- Codex Responses streaming is successful only after `response.completed`.
+  `error`, `response.failed`, early EOF, upstream read errors, and timeouts
+  before completion are failures.
+- A streaming failure opens that provider's runtime circuit immediately. The
+  next request skips it and tries the next eligible queued provider.
+- After a fallback provider completes successfully, it becomes the current
+  provider through the existing hot-switch path. Daemon failover selection
+  promotes that current eligible provider to the front while preserving the
+  saved order of the remaining queue.
+- The already-started HTTP stream is not replayed mid-response; failover is
+  applied to the next client request/reconnect.
+
+### 3. Tests Required
+
+- Assert Codex Responses output chunks do not settle success before
+  `response.completed`.
+- Assert an incomplete stream records a failure using an immediate-open
+  policy.
+- Assert the current eligible provider is promoted ahead of the saved queue
+  order for daemon selection.
+
+## Scenario: Persisted routing intent and daemon runtime reconciliation (2026-08-09)
+
+### 1. Scope / Trigger
+
+- Trigger: the persisted routing service setting is enabled, but the daemon
+  has restarted or is otherwise stopped.
+- Goal: do not present a stopped listener as enabled, and restore the desired
+  listener when the routing page refreshes or the user enables it again.
+
+### 2. Contracts
+
+- `service_enabled` is the persisted desired state; `daemon.status` is the
+  runtime truth used by the UI and takeover/failover gating.
+- If persisted service intent is enabled while the daemon is stopped, routing
+  state refresh attempts `RoutingStart` and keeps the real stopped state visible
+  if recovery fails.
+- Re-enabling an already-persisted service must reconcile the daemon instead of
+  returning early.

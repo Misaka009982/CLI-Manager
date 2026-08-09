@@ -484,7 +484,11 @@ pub fn routing_set_service_enabled(
 ) -> Result<RoutingState, RoutingError> {
     let client = daemon_bridge.get();
     let mut persisted = block_on(routing::load_persisted_state())?;
-    if persisted.service.service_enabled == enabled {
+    let daemon_running = client
+        .as_ref()
+        .map(|client| daemon_state(Some(client.clone())).status == "running")
+        .unwrap_or(false);
+    if persisted.service.service_enabled == enabled && daemon_running == enabled {
         return Ok(RoutingState {
             persisted,
             daemon: daemon_state(client),
@@ -529,6 +533,43 @@ pub fn routing_set_service_enabled(
         let _ = request_control(client, rollback_frame);
         return Err(error);
     }
+    Ok(RoutingState {
+        persisted,
+        daemon: daemon_state(client),
+    })
+}
+
+#[tauri::command]
+pub fn routing_set_preferred_port(
+    daemon_bridge: State<'_, DaemonBridge>,
+    port: u16,
+) -> Result<RoutingState, RoutingError> {
+    let client = daemon_bridge.get();
+    let mut persisted = block_on(routing::load_persisted_state())?;
+    if persisted.service.preferred_port == port {
+        return Ok(RoutingState {
+            persisted,
+            daemon: daemon_state(client),
+        });
+    }
+    if persisted.service.service_enabled {
+        return Err(command_error(
+            "routing_port_change_requires_service_disabled",
+            "disable_local_routing_first",
+        ));
+    }
+    if !persisted.takeovers.is_empty() {
+        return Err(command_error(
+            "routing_port_change_requires_takeover_disabled",
+            "disable_takeover_first",
+        ));
+    }
+    persisted.service.preferred_port = port;
+    routing::validate_service_config(&persisted.service).map_err(|error| {
+        let code = error.split(':').next().unwrap_or("routing_port_invalid");
+        command_error(code, "fix_input")
+    })?;
+    block_on(routing::save_service_config(&persisted.service))?;
     Ok(RoutingState {
         persisted,
         daemon: daemon_state(client),
@@ -600,6 +641,12 @@ pub fn routing_set_takeover(
         .iter()
         .find(|item| item.app_type == app_type && item.home_identity == home.identity)
         .cloned();
+    if !input.enabled {
+        let failover = block_on(routing::load_failover_state(&app_type))?;
+        if failover.config.auto_failover_enabled {
+            block_on(routing::set_failover_enabled(&app_type, false))?;
+        }
+    }
     if !input.enabled && existing.is_none() {
         return state(Some(client));
     }

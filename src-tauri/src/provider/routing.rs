@@ -758,7 +758,14 @@ pub(crate) async fn load_failover_provider_ids_for_daemon(
     app_type: &str,
 ) -> Result<Vec<String>, String> {
     let state = load_failover_state(app_type).await?;
-    Ok(eligible_failover_provider_ids(&state.providers))
+    let mut provider_ids = eligible_failover_provider_ids(&state.providers);
+    let current_id = state
+        .providers
+        .iter()
+        .find(|provider| provider.is_current && provider.in_failover_queue && provider.ready)
+        .map(|provider| provider.id.as_str());
+    prioritize_current_provider(&mut provider_ids, current_id);
+    Ok(provider_ids)
 }
 
 fn eligible_failover_provider_ids(providers: &[RoutingFailoverProvider]) -> Vec<String> {
@@ -767,6 +774,16 @@ fn eligible_failover_provider_ids(providers: &[RoutingFailoverProvider]) -> Vec<
         .filter(|provider| provider.in_failover_queue && provider.ready)
         .map(|provider| provider.id.clone())
         .collect()
+}
+
+fn prioritize_current_provider(provider_ids: &mut Vec<String>, current_id: Option<&str>) {
+    let Some(current_id) = current_id else {
+        return;
+    };
+    if let Some(index) = provider_ids.iter().position(|id| id == current_id) {
+        let current = provider_ids.remove(index);
+        provider_ids.insert(0, current);
+    }
 }
 
 pub(crate) async fn set_failover_enabled(
@@ -1445,6 +1462,12 @@ mod tests {
             validate_service_config(&wildcard).unwrap_err(),
             "routing_listen_address_invalid"
         );
+        let mut invalid_port = service();
+        invalid_port.preferred_port = 1_023;
+        assert_eq!(
+            validate_service_config(&invalid_port).unwrap_err(),
+            "routing_port_invalid"
+        );
     }
 
     fn failover_config() -> RoutingFailoverConfig {
@@ -1706,6 +1729,15 @@ mod tests {
             eligible_failover_provider_ids(&providers),
             vec!["a".to_string(), "c".to_string()]
         );
+    }
+
+    #[test]
+    fn failover_provider_selection_remembers_current_provider() {
+        let mut provider_ids = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        prioritize_current_provider(&mut provider_ids, Some("c"));
+        assert_eq!(provider_ids, vec!["c", "a", "b"]);
+        prioritize_current_provider(&mut provider_ids, Some("missing"));
+        assert_eq!(provider_ids, vec!["c", "a", "b"]);
     }
 
     #[test]

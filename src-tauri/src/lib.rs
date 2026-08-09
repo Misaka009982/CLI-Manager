@@ -1210,6 +1210,7 @@ pub fn run() {
             commands::routing::routing_get_state,
             commands::routing::routing_get_failover_queue,
             commands::routing::routing_set_service_enabled,
+            commands::routing::routing_set_preferred_port,
             commands::routing::routing_set_failover_enabled,
             commands::routing::routing_set_failover_queue,
             commands::routing::routing_update_failover_config,

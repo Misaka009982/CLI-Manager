@@ -25,6 +25,7 @@ import {
   resolveProjectStartupCommand,
   withClaudeSettingsPath,
   withCodexConfigOverrides,
+  withCodexProfile,
   withCodexLightTuiTheme,
   withGrokModelOverride,
 } from "../lib/projectStartupCommand";
@@ -1408,7 +1409,7 @@ function buildNativeProviderLaunchConfigs(
     };
   }
   if (snapshot.appType === "codex") {
-    if (snapshot.generatedHome || snapshot.configOverrides.length === 0) {
+    if (snapshot.generatedHome || (!snapshot.codexProfileName && snapshot.configOverrides.length === 0)) {
       throw new Error("provider_snapshot_missing");
     }
     return {
@@ -1574,10 +1575,9 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
   );
   let providerStartupCmd = resolvedStartupCmd;
   if (providerSnapshot?.appType === "codex") {
-    providerStartupCmd = withCodexConfigOverrides(
-      resolvedStartupCmd,
-      providerSnapshot.configOverrides,
-    );
+    providerStartupCmd = providerSnapshot.codexProfileName
+      ? withCodexProfile(resolvedStartupCmd, providerSnapshot.codexProfileName)
+      : withCodexConfigOverrides(resolvedStartupCmd, providerSnapshot.configOverrides);
     if (!providerStartupCmd) {
       releaseProviderSnapshot(providerSnapshot);
       throw new Error("provider_codex_command_unsupported");
@@ -1863,10 +1863,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       providerSnapshot ? { includeProviderOverrides: false } : {},
     );
     if (!sshHandoff && providerSnapshot?.appType === "codex") {
-      const scopedResumeCommand = withCodexConfigOverrides(
-        resumeCommand,
-        providerSnapshot.configOverrides,
-      );
+      const scopedResumeCommand = providerSnapshot.codexProfileName
+        ? withCodexProfile(resumeCommand, providerSnapshot.codexProfileName)
+        : withCodexConfigOverrides(resumeCommand, providerSnapshot.configOverrides);
       if (!scopedResumeCommand) {
         releaseProviderSnapshot(providerSnapshot);
         throw new Error("provider_codex_command_unsupported");
