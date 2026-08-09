@@ -1060,3 +1060,7 @@ stop routing + remove takeovers
 
 - Resetting failover circuits also resets the active route provider to the first
   ready provider in the saved queue order when an active takeover exists.
+- Each failover request logs the ordered candidate IDs, snapshot-load skips,
+  circuit skips, actual attempts, upstream status classification, stream
+  completion/failure, and the final selected provider so queue traversal can be
+  diagnosed from daemon logs.

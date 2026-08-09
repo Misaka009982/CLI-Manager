@@ -11,3 +11,4 @@
 9. Reconcile persisted routing intent with daemon runtime state so an enabled-but-stopped listener is restarted on routing refresh, while the UI reflects the actual daemon status.
 10. Cache provider settings navigation/scroll state and make the active failover provider explicit in the queue.
 11. Make the active badge high contrast and reset the active route provider to the queue head when circuits are reset.
+12. Add per-request failover traversal logs for candidate order, circuit decisions, upstream results, stream outcomes, and final selection.

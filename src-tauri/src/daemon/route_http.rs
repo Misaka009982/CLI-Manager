@@ -58,6 +58,7 @@ enum MediaCapability {
 struct ProviderSnapshot {
     app_type: &'static str,
     provider_id: String,
+    provider_name: String,
     base_url: String,
     claude_api_key_field: Option<String>,
     claude_api_format: Option<String>,
@@ -194,6 +195,9 @@ struct CircuitCommit {
     state: Arc<RouteState>,
     permit: Option<CircuitPermit>,
     policy: CircuitPolicy,
+    app_type: &'static str,
+    provider_id: String,
+    provider_name: String,
     hot_switch: Option<HotSwitchCommit>,
 }
 
@@ -521,6 +525,21 @@ async fn forward_request(
                 )
             }
         })?;
+    log::info!(
+        "routing candidates: app_type={} order={} max_attempts={} streaming={}",
+        route_app_type(route),
+        snapshots
+            .iter()
+            .map(|snapshot| format!("{}({})", snapshot.provider_name, snapshot.provider_id))
+            .collect::<Vec<_>>()
+            .join(" -> "),
+        if failover_config.auto_failover_enabled {
+            max_attempts(failover_config.max_retries)
+        } else {
+            1
+        },
+        streaming,
+    );
     crate::provider::network_client::current_client_from_persisted()
         .await
         .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_client_failed"))?;
@@ -546,6 +565,13 @@ async fn forward_request(
             break None;
         }
         let snapshot = snapshots[provider_index].clone();
+        log::info!(
+            "routing provider attempt: app_type={} index={} provider={} provider_id={}",
+            snapshot.app_type,
+            provider_index + 1,
+            snapshot.provider_name,
+            snapshot.provider_id,
+        );
         let mut circuit_permit = if failover_config.auto_failover_enabled {
             match state.circuits.acquire(
                 route_app_type(route),
@@ -554,6 +580,12 @@ async fn forward_request(
             ) {
                 Ok(permit) => Some(permit),
                 Err(_) => {
+                    log::warn!(
+                        "routing provider skipped: app_type={} provider={} provider_id={} reason=circuit_open",
+                        snapshot.app_type,
+                        snapshot.provider_name,
+                        snapshot.provider_id,
+                    );
                     provider_index = provider_index.saturating_add(1);
                     continue;
                 }
@@ -669,18 +701,38 @@ async fn forward_request(
             let response = match send_result {
                 Ok(response) => response,
                 Err(UpstreamSendFailure::Timeout) => {
+                    log::warn!(
+                        "routing provider failed: app_type={} provider={} provider_id={} reason=timeout",
+                        snapshot.app_type,
+                        snapshot.provider_name,
+                        snapshot.provider_id,
+                    );
                     break ProviderAttemptOutcome::Failure(
                         StatusCode::GATEWAY_TIMEOUT,
                         "routing_upstream_timeout",
-                    )
+                    );
                 }
                 Err(UpstreamSendFailure::Request) => {
+                    log::warn!(
+                        "routing provider failed: app_type={} provider={} provider_id={} reason=request_error",
+                        snapshot.app_type,
+                        snapshot.provider_name,
+                        snapshot.provider_id,
+                    );
                     break ProviderAttemptOutcome::Failure(
                         StatusCode::BAD_GATEWAY,
                         "routing_upstream_request_failed",
-                    )
+                    );
                 }
             };
+            log::info!(
+                "routing provider response: app_type={} provider={} provider_id={} status={} class={:?}",
+                snapshot.app_type,
+                snapshot.provider_name,
+                snapshot.provider_id,
+                response.status().as_u16(),
+                classify_upstream_status(response.status()),
+            );
             let is_anthropic_provider = snapshot.app_type == "claude"
                 && snapshot.claude_api_format.as_deref() == Some("anthropic");
             let is_media_status = is_media_capability_status(response.status());
@@ -764,14 +816,30 @@ async fn forward_request(
         };
         match outcome {
             ProviderAttemptOutcome::Response(response) => {
+                log::info!(
+                    "routing provider selected: app_type={} provider={} provider_id={} index={}",
+                    snapshot.app_type,
+                    snapshot.provider_name,
+                    snapshot.provider_id,
+                    provider_index + 1,
+                );
                 break Some((
                     response,
                     circuit_permit,
                     provider_index,
                     snapshot.provider_id,
+                    snapshot.provider_name,
                 ));
             }
             ProviderAttemptOutcome::Failure(status, message) => {
+                log::warn!(
+                    "routing provider circuit failure: app_type={} provider={} provider_id={} status={} reason={}",
+                    snapshot.app_type,
+                    snapshot.provider_name,
+                    snapshot.provider_id,
+                    status.as_u16(),
+                    message,
+                );
                 record_circuit_failure(&state, &mut circuit_permit, circuit_policy);
                 terminal_failure = Some((status, message));
             }
@@ -781,6 +849,12 @@ async fn forward_request(
                     snapshot.app_type,
                     snapshot.provider_id
                 );
+                log::warn!(
+                    "routing provider circuit failure: app_type={} provider={} provider_id={} reason=key_exhausted",
+                    snapshot.app_type,
+                    snapshot.provider_name,
+                    snapshot.provider_id,
+                );
                 record_circuit_failure(&state, &mut circuit_permit, circuit_policy);
                 terminal_failure =
                     Some((StatusCode::BAD_GATEWAY, "routing_provider_key_exhausted"));
@@ -788,15 +862,35 @@ async fn forward_request(
         }
         provider_index = provider_index.saturating_add(1);
     };
-    let Some((response, mut circuit_permit, selected_provider_index, selected_provider_id)) =
-        selected
+    let Some((
+        response,
+        mut circuit_permit,
+        selected_provider_index,
+        selected_provider_id,
+        selected_provider_name,
+    )) = selected
     else {
+        log::warn!(
+            "routing failover exhausted: app_type={} attempted={} loaded={} max_attempts={}",
+            route_app_type(route),
+            provider_index,
+            snapshots.len(),
+            max_provider_attempts,
+        );
         return Err(terminal_failure.unwrap_or((
             StatusCode::SERVICE_UNAVAILABLE,
             "routing_provider_circuit_open",
         )));
     };
     let status = response.status();
+    log::info!(
+        "routing provider final response: app_type={} provider={} provider_id={} status={} index={}",
+        route_app_type(route),
+        selected_provider_name,
+        selected_provider_id,
+        status.as_u16(),
+        selected_provider_index + 1,
+    );
     let headers = response.headers().clone();
     if !streaming {
         let body = match tokio::time::timeout(
@@ -869,6 +963,9 @@ async fn forward_request(
             state: Arc::clone(&state),
             permit: Some(permit),
             policy: circuit_policy,
+            app_type: route_app_type(route),
+            provider_id: selected_provider_id.clone(),
+            provider_name: selected_provider_name.clone(),
             hot_switch: (selected_provider_index > 0
                 && classify_upstream_status(status) == UpstreamErrorClass::Success)
                 .then(|| HotSwitchCommit {
@@ -1026,6 +1123,7 @@ async fn load_provider_snapshot_for_provider(
     Ok(ProviderSnapshot {
         app_type,
         provider_id: detail.card.id,
+        provider_name: detail.card.name,
         base_url,
         claude_api_key_field: detail
             .claude_config
@@ -1054,12 +1152,25 @@ async fn load_provider_snapshots(
     if provider_ids.is_empty() {
         return Err("routing_provider_not_ready".to_string());
     }
+    log::info!(
+        "routing queue order: app_type={} provider_ids={}",
+        app_type,
+        provider_ids.join(" -> "),
+    );
     let mut snapshots = Vec::with_capacity(provider_ids.len());
     let mut last_error = None;
     for provider_id in provider_ids {
         match load_provider_snapshot_for_provider(route, &provider_id).await {
             Ok(snapshot) => snapshots.push(snapshot),
-            Err(error) => last_error = Some(error),
+            Err(error) => {
+                log::warn!(
+                    "routing candidate skipped before request: app_type={} provider_id={} reason={}",
+                    app_type,
+                    provider_id,
+                    error,
+                );
+                last_error = Some(error);
+            }
         }
     }
     if snapshots.is_empty() {
@@ -1690,6 +1801,12 @@ fn finish_stream_circuit<S>(state: &mut TimedBodyState<S>) {
         .as_ref()
         .is_some_and(|tracker| !tracker.settled)
     {
+        log::warn!(
+            "routing provider stream failure: app_type={} provider={} provider_id={} reason=incomplete_stream",
+            circuit.app_type,
+            circuit.provider_name,
+            circuit.provider_id,
+        );
         if let Some(permit) = circuit.permit {
             circuit
                 .state
@@ -1752,6 +1869,12 @@ where
                     match outcome {
                         StreamCommitOutcome::Success => {
                             if let Some(circuit) = state.circuit.as_mut() {
+                                log::info!(
+                                    "routing provider stream completed: app_type={} provider={} provider_id={}",
+                                    circuit.app_type,
+                                    circuit.provider_name,
+                                    circuit.provider_id,
+                                );
                                 if let Some(permit) = circuit.permit.take() {
                                     circuit
                                         .state
@@ -1774,6 +1897,12 @@ where
                         }
                         StreamCommitOutcome::Failure => {
                             if let Some(circuit) = state.circuit.as_mut() {
+                                log::warn!(
+                                    "routing provider stream failure: app_type={} provider={} provider_id={} reason=error_event",
+                                    circuit.app_type,
+                                    circuit.provider_name,
+                                    circuit.provider_id,
+                                );
                                 if let Some(permit) = circuit.permit.take() {
                                     circuit.state.circuits.record_failure(
                                         permit,
