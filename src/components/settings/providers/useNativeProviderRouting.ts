@@ -86,7 +86,15 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
     setFailoverLoading((current) => ({ ...current, [appType]: true }));
     try {
       const next = await invoke<NativeProviderFailoverState>("routing_get_failover_queue", { appType });
-      setFailoverState((current) => ({ ...current, [appType]: next }));
+      setFailoverState((current) => {
+        const previous = current[appType];
+        return {
+          ...current,
+          [appType]: previous
+            ? { ...previous, circuit: next.circuit, circuits: next.circuits }
+            : next,
+        };
+      });
     } catch {
       // Queue polling is auxiliary; a transient daemon read must not mask the takeover controls.
     } finally {
@@ -184,13 +192,7 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
         const next = await invoke<NativeProviderFailoverState>("routing_set_failover_queue", {
           input: { appType, providerIds },
         });
-        setFailoverState((current) => ({
-          ...current,
-          [appType]: {
-            ...next,
-            providers: current[appType]?.providers ?? next.providers,
-          },
-        }));
+        setFailoverState((current) => ({ ...current, [appType]: next }));
       } catch (error) {
         if (previous) setFailoverState((current) => ({ ...current, [appType]: previous }));
         throw error;

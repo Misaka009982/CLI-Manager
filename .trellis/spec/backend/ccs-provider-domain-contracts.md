@@ -1064,3 +1064,52 @@ stop routing + remove takeovers
   circuit skips, actual attempts, upstream status classification, stream
   completion/failure, and the final selected provider so queue traversal can be
   diagnosed from daemon logs.
+
+## Scenario: Manual hot-switch queue mode (2026-08-09)
+
+### 1. Scope / Trigger
+
+- Trigger: an active CLI Home takeover with automatic failover disabled.
+- Goal: reuse the failover queue as a single-provider manual route selector.
+
+### 2. Signatures
+
+- `routing_set_failover_queue(input: RoutingFailoverQueueInput) -> RoutingFailoverState`
+- `set_failover_enabled(app_type: &str, enabled: bool) -> RoutingFailoverState`
+- `apply_hot_switch_for_active_homes(app_type: &str, next_provider_id: &str)`
+
+### 3. Contracts
+
+- With automatic failover disabled, the queue contains exactly one ready
+  provider; selecting it hot-switches active takeovers and updates `is_current`.
+- With automatic failover enabled, multiple ready providers are allowed and the
+  daemon traverses them by queue order and circuit state.
+- Disabling automatic failover normalizes the queue to the current provider;
+  enabling it preserves that provider as the initial queue entry.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Automatic failover off and queue length is not one | `routing_failover_manual_queue_single` |
+| Automatic failover on and queue is empty | `routing_failover_queue_empty` |
+| Selected provider is not ready | `routing_provider_not_ready` |
+| Hot switch fails | Restore the previous queue and return the error |
+
+### 5. Good / Base / Bad
+
+- Good: selecting B produces `[B]`, applies the hot switch, and marks B current.
+- Base: automatic mode keeps a multi-provider queue for traversal.
+- Bad: an empty or multi-provider manual queue is rejected.
+
+### 6. Tests Required
+
+- Reject manual queues with zero or multiple providers.
+- Restore the previous queue when a hot switch fails.
+- Verify multi-provider traversal is only available when automatic failover is on.
+
+### 7. Wrong vs Correct
+
+- Wrong: manual mode stores `[A, B]`, leaving the active route ambiguous.
+- Correct: manual mode stores `[B]` and hot-switches to B; automatic mode stores
+  `[A, B]` and lets failover traverse it.

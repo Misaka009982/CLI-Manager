@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Accordion, ActionIcon, Alert, Button, Group, NumberInput, Stack, Switch, Text, Badge } from "@mantine/core";
+import { Accordion, ActionIcon, Alert, Button, Group, NumberInput, Radio, Stack, Switch, Text, Badge } from "@mantine/core";
 import { ArrowDown, ArrowLeftRight, ArrowUp, RotateCcw, Save } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import type { NativeProviderAppType, NativeProviderFailoverConfig } from "./nativeProviderTypes";
@@ -17,18 +17,19 @@ export function NativeProviderFailoverSection({ appType, state }: NativeProvider
   const service = routing?.persisted.service;
   const [configDraft, setConfigDraft] = useState<NativeProviderFailoverConfig | null>(null);
   const [configDirty, setConfigDirty] = useState(false);
-  const busy = Boolean(state.action) || Boolean(state.failoverLoading[appType]);
+  const busy = Boolean(state.action);
   const daemonUnsupported = routing?.daemon.capabilitySupported === false;
   const daemonDisconnected = Boolean(routing && !routing.daemon.connected);
   const serviceRunning = Boolean(service?.serviceEnabled && routing?.daemon.status === "running");
   const runtimeAvailable = Boolean(serviceRunning && routing?.daemon.capabilitySupported && routing.daemon.connected);
+  const manualSwitch = Boolean(failover && !failover.config.autoFailoverEnabled);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      if (!state.action) void state.refreshFailover(appType);
-    }, 5_000);
+      if (!state.action && !state.failoverLoading[appType]) void state.refreshFailover(appType);
+    }, 1_000);
     return () => window.clearInterval(timer);
-  }, [appType, state.action, state.refreshFailover]);
+  }, [appType, state.action, state.failoverLoading, state.refreshFailover]);
 
   useEffect(() => {
     if (!failover || configDirty) return;
@@ -37,6 +38,11 @@ export function NativeProviderFailoverSection({ appType, state }: NativeProvider
 
   const updateQueue = async (providerId: string, enabled: boolean) => {
     if (!failover) return;
+    if (manualSwitch) {
+      if (!enabled) return;
+      await state.setFailoverQueue(appType, [providerId]);
+      return;
+    }
     const providerIds = failover.providers
       .filter((provider) => provider.id === providerId ? enabled : provider.inFailoverQueue)
       .map((provider) => provider.id);
@@ -111,11 +117,33 @@ export function NativeProviderFailoverSection({ appType, state }: NativeProvider
             <Text size="sm" c="dimmed">{t("providerCatalog.failover.loading")}</Text>
           ) : failover ? (
             <>
-              <Text size="sm" c="dimmed">{t("providerCatalog.failover.statusPolling")}</Text>
+              <Text size="sm" c="dimmed">
+                {manualSwitch
+                  ? t("providerCatalog.failover.manualSwitchDescription")
+                  : t("providerCatalog.failover.statusPolling")}
+              </Text>
               <Stack gap="xs">
                 {failover.providers.map((provider) => {
                   const circuit = circuitByProvider.get(provider.id);
-                  const degraded = circuit ? circuit.status !== "closed" : routing?.daemon.status === "degraded";
+                  const circuitStatus = circuit?.status;
+                  const circuitLabel = circuitStatus === "open"
+                    ? t("providerCatalog.failover.circuit.open")
+                    : circuitStatus === "halfOpen"
+                      ? t("providerCatalog.failover.circuit.halfOpen")
+                      : circuitStatus === "closed"
+                        ? t("providerCatalog.failover.healthy")
+                        : circuit
+                          ? t("providerCatalog.failover.circuit.unknown")
+                          : routing?.daemon.status === "degraded"
+                            ? t("providerCatalog.failover.degraded")
+                            : t("providerCatalog.failover.healthy");
+                  const circuitColor = circuitStatus === "open"
+                    ? "red"
+                    : circuitStatus === "halfOpen"
+                      ? "yellow"
+                      : circuitStatus === "closed"
+                        ? "green"
+                        : routing?.daemon.status === "degraded" ? "yellow" : "green";
                   return (
                     <Group key={provider.id} justify="space-between" wrap="nowrap" className="min-h-9 rounded-md px-2 py-1 hover:bg-gray-50">
                       <Group gap="xs" wrap="wrap">
@@ -129,12 +157,10 @@ export function NativeProviderFailoverSection({ appType, state }: NativeProvider
                               ? t("providerCatalog.failover.ready")
                               : t("providerCatalog.failover.notReady")}
                         </Badge>
-                        <Badge color={degraded ? "yellow" : "green"} variant="light">
-                          {degraded ? t("providerCatalog.failover.degraded") : t("providerCatalog.failover.healthy")}
-                        </Badge>
+                        <Badge color={circuitColor} variant="light">{circuitLabel}</Badge>
                       </Group>
                       <Group gap={2} wrap="nowrap">
-                        {provider.inFailoverQueue && (
+                        {provider.inFailoverQueue && !manualSwitch && (
                           <>
                             <ActionIcon aria-label={t("providerCatalog.failover.moveUp", { name: provider.name })} variant="subtle" size="sm" disabled={busy || failover.providers.filter((item) => item.inFailoverQueue)[0]?.id === provider.id} onClick={() => void moveQueuedProvider(provider.id, -1)}>
                               <ArrowUp size={14} />
@@ -144,12 +170,21 @@ export function NativeProviderFailoverSection({ appType, state }: NativeProvider
                             </ActionIcon>
                           </>
                         )}
-                        <Switch
-                          aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })}
-                          checked={provider.inFailoverQueue}
-                          disabled={busy || !provider.ready}
-                          onChange={(event) => void updateQueue(provider.id, event.currentTarget.checked)}
-                        />
+                        {manualSwitch ? (
+                          <Radio
+                            aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })}
+                            checked={provider.inFailoverQueue}
+                            disabled={busy || !provider.ready}
+                            onChange={() => void updateQueue(provider.id, true)}
+                          />
+                        ) : (
+                          <Switch
+                            aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })}
+                            checked={provider.inFailoverQueue}
+                            disabled={busy || !provider.ready}
+                            onChange={(event) => void updateQueue(provider.id, event.currentTarget.checked)}
+                          />
+                        )}
                       </Group>
                     </Group>
                   );

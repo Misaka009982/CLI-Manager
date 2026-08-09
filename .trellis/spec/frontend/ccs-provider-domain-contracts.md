@@ -278,3 +278,13 @@ generic configuration textarea.
   activation that the backend already committed.
 - A key that is `!enabled && !isActive` is **Archived** (已封存). Its row
   should be visually de-emphasized and the Activate button disabled.
+
+## Manual hot-switch queue presentation (2026-08-09)
+
+- When automatic failover is disabled, present the queue as a single-selection
+  control. Selecting a ready provider calls `routing_set_failover_queue` with
+  one provider ID and uses the backend result to update the In use indicator.
+- Hide reorder controls in manual mode; automatic mode keeps switches and
+  priority arrows.
+- Background polling replaces only circuit state (`circuit` / `circuits`) and
+  preserves provider membership, configuration drafts, and control affordances.

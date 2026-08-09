@@ -74,7 +74,6 @@ enum UpstreamErrorClass {
     Success,
     Key,
     Provider,
-    Capability,
     Client,
 }
 
@@ -787,6 +786,12 @@ async fn forward_request(
                         .mark_used(crate::provider::routing::RoutingRectifierRule::MediaFallback);
                     continue;
                 }
+                if failover_config.auto_failover_enabled {
+                    break ProviderAttemptOutcome::Failure(
+                        StatusCode::BAD_GATEWAY,
+                        "routing_upstream_provider_failed",
+                    );
+                }
                 return Err((StatusCode::BAD_REQUEST, "routing_upstream_client_error"));
             }
             if classify_upstream_status(response.status()) == UpstreamErrorClass::Provider {
@@ -1094,24 +1099,32 @@ async fn load_provider_snapshot_for_provider(
         let sonnet = fallback(&config.default_sonnet_model, &config.model);
         let haiku = fallback(&config.default_haiku_model, &sonnet);
         let fable = fallback(&config.default_fable_model, &opus);
-        vec![
-            ModelMapping {
-                source: "sonnet".to_string(),
-                target: sonnet,
-            },
-            ModelMapping {
-                source: "opus".to_string(),
-                target: opus.clone(),
-            },
-            ModelMapping {
-                source: "haiku".to_string(),
-                target: haiku,
-            },
-            ModelMapping {
-                source: "fable".to_string(),
-                target: fable,
-            },
-        ]
+        let mut mappings = Vec::with_capacity(8);
+        add_claude_model_mapping(
+            &mut mappings,
+            "sonnet",
+            &sonnet,
+            &config.default_sonnet_model_name,
+        );
+        add_claude_model_mapping(
+            &mut mappings,
+            "opus",
+            &opus,
+            &config.default_opus_model_name,
+        );
+        add_claude_model_mapping(
+            &mut mappings,
+            "haiku",
+            &haiku,
+            &config.default_haiku_model_name,
+        );
+        add_claude_model_mapping(
+            &mut mappings,
+            "fable",
+            &fable,
+            &config.default_fable_model_name,
+        );
+        mappings
     } else {
         parse_model_mappings(app_type, &detail.settings_config)?
     };
@@ -1177,6 +1190,36 @@ async fn load_provider_snapshots(
         return Err(last_error.unwrap_or_else(|| "routing_provider_not_ready".to_string()));
     }
     Ok(snapshots)
+}
+
+fn add_claude_model_mapping(
+    mappings: &mut Vec<ModelMapping>,
+    role: &str,
+    target: &str,
+    display_name: &str,
+) {
+    mappings.push(ModelMapping {
+        source: role.to_string(),
+        target: target.to_string(),
+    });
+    let display_name = display_name.trim();
+    if !display_name.is_empty() && display_name != role && display_name != target {
+        mappings.push(ModelMapping {
+            source: display_name.to_string(),
+            target: target.to_string(),
+        });
+        if display_name.len() > 4
+            && display_name[display_name.len() - 4..].eq_ignore_ascii_case("[1m]")
+        {
+            let base_name = display_name[..display_name.len() - 4].trim_end();
+            if !base_name.is_empty() && base_name != role && base_name != target {
+                mappings.push(ModelMapping {
+                    source: base_name.to_string(),
+                    target: target.to_string(),
+                });
+            }
+        }
+    }
 }
 
 fn parse_model_mappings(
@@ -1753,9 +1796,7 @@ fn upstream_url(base_url: &str, route: RouteKind, request_path: &str) -> Result<
 fn classify_upstream_status(status: StatusCode) -> UpstreamErrorClass {
     match status.as_u16() {
         401 | 403 | 429 => UpstreamErrorClass::Key,
-        400 | 405 | 406 | 413 | 414 | 415 | 422 | 501 => UpstreamErrorClass::Capability,
-        400..=499 => UpstreamErrorClass::Client,
-        500..=599 => UpstreamErrorClass::Provider,
+        400..=599 => UpstreamErrorClass::Provider,
         _ if status.is_success() => UpstreamErrorClass::Success,
         _ => UpstreamErrorClass::Client,
     }
@@ -2102,7 +2143,7 @@ mod tests {
     }
 
     #[test]
-    fn upstream_error_classifier_separates_key_provider_and_capability_failures() {
+    fn upstream_error_classifier_separates_key_and_provider_failures() {
         assert_eq!(
             classify_upstream_status(StatusCode::UNAUTHORIZED),
             UpstreamErrorClass::Key
@@ -2117,15 +2158,15 @@ mod tests {
         );
         assert_eq!(
             classify_upstream_status(StatusCode::UNPROCESSABLE_ENTITY),
-            UpstreamErrorClass::Capability
+            UpstreamErrorClass::Provider
         );
         assert_eq!(
             classify_upstream_status(StatusCode::BAD_REQUEST),
-            UpstreamErrorClass::Capability
+            UpstreamErrorClass::Provider
         );
         assert_eq!(
             classify_upstream_status(StatusCode::NOT_FOUND),
-            UpstreamErrorClass::Client
+            UpstreamErrorClass::Provider
         );
         assert_eq!(
             classify_upstream_status(StatusCode::OK),
@@ -2651,6 +2692,20 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&unchanged).unwrap()["model"],
             "A"
         );
+    }
+
+    #[test]
+    fn claude_model_mapping_accepts_custom_display_name() {
+        let mut mappings = Vec::new();
+        add_claude_model_mapping(&mut mappings, "fable", "gpt-5.6-sol", "claude-fable-5[1m]");
+        for model in ["claude-fable-5[1m]", "claude-fable-5"] {
+            let body =
+                apply_model_mapping(&serde_json::json!({"model": model}), &mappings).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()["model"],
+                "gpt-5.6-sol"
+            );
+        }
     }
 
     #[test]

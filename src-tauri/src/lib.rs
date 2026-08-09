@@ -823,6 +823,7 @@ pub fn run() {
                 .level_for("hyper_util", LevelFilter::Warn)
                 .level_for("reqwest", LevelFilter::Warn)
                 .level_for("sqlx", LevelFilter::Info)
+                .level_for("keyring_core", LevelFilter::Warn)
                 .timezone_strategy(TimezoneStrategy::UseLocal)
                 .targets(targets)
                 .build()

@@ -21,6 +21,7 @@ const ROUTING_ERROR_TRANSLATIONS: Partial<Record<string, TranslationKey>> = {
   routing_port_invalid: "providerCatalog.routing.errors.portInvalid",
   routing_port_change_requires_service_disabled: "providerCatalog.routing.errors.portRequiresServiceDisabled",
   routing_port_change_requires_takeover_disabled: "providerCatalog.routing.errors.portRequiresTakeoverDisabled",
+  routing_failover_manual_queue_single: "providerCatalog.routing.errors.manualQueueSingle",
 };
 
 export function NativeProviderRoutingSection({

@@ -258,7 +258,7 @@ pub(crate) struct RoutingGlobalProxyTestResult {
 const GLOBAL_PROXY_SCAN_PORTS: [u16; 8] =
     [7_890, 7_891, 1_080, 8_080, 8_888, 3_128, 10_808, 10_809];
 const GLOBAL_PROXY_SCAN_TIMEOUT: Duration = Duration::from_millis(250);
-const GLOBAL_PROXY_TEST_TIMEOUT: Duration = Duration::from_secs(10);
+const GLOBAL_PROXY_TEST_TIMEOUT: Duration = Duration::from_secs(5);
 const GLOBAL_PROXY_TEST_ENDPOINTS: [&str; 3] = [
     "https://httpbin.org/get",
     "https://www.google.com/generate_204",
@@ -712,17 +712,22 @@ pub(crate) async fn test_global_proxy(
         .timeout(GLOBAL_PROXY_TEST_TIMEOUT)
         .build()
         .map_err(|_| "routing_proxy_test_client_failed".to_string())?;
-    for endpoint in GLOBAL_PROXY_TEST_ENDPOINTS {
-        if let Ok(response) = client.get(endpoint).send().await {
-            if response.status().as_u16() == 407 {
-                continue;
+    let test = async {
+        for endpoint in GLOBAL_PROXY_TEST_ENDPOINTS {
+            if let Ok(response) = client.get(endpoint).send().await {
+                if response.status().as_u16() == 407 {
+                    continue;
+                }
+                return Ok(RoutingGlobalProxyTestResult {
+                    endpoint: endpoint.to_string(),
+                });
             }
-            return Ok(RoutingGlobalProxyTestResult {
-                endpoint: endpoint.to_string(),
-            });
         }
-    }
-    Err("routing_proxy_test_failed".to_string())
+        Err("routing_proxy_test_failed".to_string())
+    };
+    tokio::time::timeout(GLOBAL_PROXY_TEST_TIMEOUT, test)
+        .await
+        .unwrap_or_else(|_| Err("routing_proxy_test_failed".to_string()))
 }
 
 pub(crate) async fn load_failover_state(app_type: &str) -> Result<RoutingFailoverState, String> {
@@ -801,6 +806,7 @@ pub(crate) async fn set_failover_enabled(
         .filter(|provider| provider.in_failover_queue)
         .map(|provider| provider.id.clone())
         .collect();
+    let mut normalized_queue = false;
 
     if enabled {
         let persisted = load_persisted_state().await?;
@@ -816,10 +822,16 @@ pub(crate) async fn set_failover_enabled(
             let current_id = current_provider_id(&app_type).await?;
             set_failover_queue(&app_type, std::slice::from_ref(&current_id)).await?;
         }
+    } else {
+        let current_id = current_provider_id(&app_type).await?;
+        if previous_ids != vec![current_id.clone()] {
+            set_failover_queue(&app_type, std::slice::from_ref(&current_id)).await?;
+            normalized_queue = true;
+        }
     }
     config.auto_failover_enabled = enabled;
     if let Err(error) = save_failover_config(&app_type, &config).await {
-        if enabled && previous_ids.is_empty() {
+        if (enabled && previous_ids.is_empty()) || normalized_queue {
             let _ = set_failover_queue(&app_type, &previous_ids).await;
         }
         return Err(error);
@@ -836,7 +848,25 @@ pub(crate) async fn set_failover_queue_and_load(
     if current.config.auto_failover_enabled && provider_ids.is_empty() {
         return Err("routing_failover_queue_empty".to_string());
     }
+    if !current.config.auto_failover_enabled && provider_ids.len() != 1 {
+        return Err("routing_failover_manual_queue_single".to_string());
+    }
+    let previous_provider_id = if current.config.auto_failover_enabled {
+        None
+    } else {
+        Some(current_provider_id(&app_type).await?)
+    };
     set_failover_queue(&app_type, provider_ids).await?;
+    if let Some(previous_provider_id) = previous_provider_id {
+        let next_provider_id = provider_ids[0].trim();
+        if next_provider_id != previous_provider_id {
+            if let Err(error) = apply_hot_switch_for_active_homes(&app_type, next_provider_id).await
+            {
+                let _ = set_failover_queue(&app_type, &[previous_provider_id]);
+                return Err(error);
+            }
+        }
+    }
     load_failover_state(&app_type).await
 }
 
