@@ -22,6 +22,7 @@ use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
 pub(crate) const SERVICE_SETTINGS_KEY: &str = "routing.service.v1";
 pub(crate) const TAKEOVERS_SETTINGS_KEY: &str = "routing.takeovers.v1";
 pub(crate) const RECTIFIER_SETTINGS_KEY: &str = "routing.rectifier.v1";
+pub(crate) const OPTIMIZER_SETTINGS_KEY: &str = "routing.optimizer.v1";
 const FAILOVER_SETTINGS_PREFIX: &str = "routing.app.";
 #[allow(dead_code)]
 pub(crate) const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1";
@@ -135,6 +136,15 @@ pub(crate) struct RoutingRectifierConfig {
     pub request_thinking_budget: bool,
     pub request_media_fallback: bool,
     pub request_media_heuristic: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoutingOptimizerConfig {
+    pub schema_version: u32,
+    pub enabled: bool,
+    pub thinking_optimizer: bool,
+    pub cache_injection: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -292,6 +302,13 @@ fn validate_rectifier_config(config: &RoutingRectifierConfig) -> Result<(), Stri
     Ok(())
 }
 
+fn validate_optimizer_config(config: &RoutingOptimizerConfig) -> Result<(), String> {
+    if config.schema_version != 1 {
+        return Err("routing_optimizer_config_invalid".to_string());
+    }
+    Ok(())
+}
+
 pub(crate) async fn load_rectifier_config() -> Result<RoutingRectifierConfig, String> {
     let mut connection = database::open_connection().await?;
     let raw = load_setting(&mut connection, RECTIFIER_SETTINGS_KEY).await?;
@@ -312,6 +329,30 @@ pub(crate) async fn save_rectifier_config(config: &RoutingRectifierConfig) -> Re
         .map_err(|_| "routing_rectifier_config_write_failed".to_string())?;
     if result.rows_affected() != 1 {
         return Err(format!("routing_settings_missing:{RECTIFIER_SETTINGS_KEY}"));
+    }
+    Ok(())
+}
+
+pub(crate) async fn load_optimizer_config() -> Result<RoutingOptimizerConfig, String> {
+    let mut connection = database::open_connection().await?;
+    let raw = load_setting(&mut connection, OPTIMIZER_SETTINGS_KEY).await?;
+    let config = serde_json::from_str::<RoutingOptimizerConfig>(&raw)
+        .map_err(|_| format!("routing_settings_invalid:{OPTIMIZER_SETTINGS_KEY}"))?;
+    validate_optimizer_config(&config)?;
+    Ok(config)
+}
+
+pub(crate) async fn save_optimizer_config(config: &RoutingOptimizerConfig) -> Result<(), String> {
+    validate_optimizer_config(config)?;
+    let mut connection = database::open_connection().await?;
+    let result = sqlx::query("UPDATE settings SET value = ?1 WHERE key = ?2")
+        .bind(serialize_json(config, OPTIMIZER_SETTINGS_KEY)?)
+        .bind(OPTIMIZER_SETTINGS_KEY)
+        .execute(&mut connection)
+        .await
+        .map_err(|_| "routing_optimizer_config_write_failed".to_string())?;
+    if result.rows_affected() != 1 {
+        return Err(format!("routing_settings_missing:{OPTIMIZER_SETTINGS_KEY}"));
     }
     Ok(())
 }
@@ -1441,6 +1482,26 @@ mod tests {
         assert_eq!(
             validate_rectifier_config(&invalid).unwrap_err(),
             "routing_rectifier_config_invalid"
+        );
+    }
+
+    #[test]
+    fn optimizer_config_requires_schema_one_and_preserves_switches() {
+        let config = RoutingOptimizerConfig {
+            schema_version: 1,
+            enabled: false,
+            thinking_optimizer: true,
+            cache_injection: true,
+        };
+        assert!(validate_optimizer_config(&config).is_ok());
+        let serialized = serde_json::to_value(&config).unwrap();
+        assert_eq!(serialized["thinkingOptimizer"], true);
+        assert_eq!(serialized["cacheInjection"], true);
+        let mut invalid = config;
+        invalid.schema_version = 2;
+        assert_eq!(
+            validate_optimizer_config(&invalid).unwrap_err(),
+            "routing_optimizer_config_invalid"
         );
     }
 

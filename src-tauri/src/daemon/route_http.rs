@@ -65,6 +65,7 @@ struct ProviderSnapshot {
     key_candidates: Vec<KeyCandidate>,
     model_mappings: Vec<ModelMapping>,
     media_capability: MediaCapability,
+    bedrock_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -466,6 +467,14 @@ async fn forward_request(
                 "routing_rectifier_config_unavailable",
             )
         })?;
+    let optimizer_config = crate::provider::routing::load_optimizer_config()
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "routing_optimizer_config_unavailable",
+            )
+        })?;
     let mut retry_context = crate::provider::routing::RoutingRetryContext::default();
     let failover_config =
         crate::provider::routing::load_failover_config_for_daemon(route_app_type(route))
@@ -585,9 +594,18 @@ async fn forward_request(
         {
             retry_context.mark_used(crate::provider::routing::RoutingRectifierRule::MediaFallback);
         }
+        let mut attempt_headers = headers.clone();
+        if apply_bedrock_optimizations(
+            &mut provider_request,
+            &optimizer_config,
+            snapshot.bedrock_enabled,
+            mapped_model.as_deref(),
+        ) {
+            add_bedrock_beta_header(&mut attempt_headers);
+        }
         let outcome = loop {
             let mut upstream = client.post(&url);
-            for (name, value) in &headers {
+            for (name, value) in &attempt_headers {
                 upstream = upstream.header(name, value);
             }
             if use_claude_api_key_header(&snapshot) {
@@ -1000,6 +1018,8 @@ async fn load_provider_snapshot_for_provider(
         key_candidates: candidates,
         model_mappings,
         media_capability: declared_media_capability(&detail.settings_config),
+        bedrock_enabled: app_type == "claude"
+            && effective_bedrock_enabled(&detail.effective_settings_config),
     })
 }
 
@@ -1267,6 +1287,233 @@ fn is_media_block(value: &serde_json::Value) -> bool {
     ["image_url", "image_data", "file_data", "file_id"]
         .iter()
         .any(|key| object.contains_key(*key))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BedrockModelGeneration {
+    Haiku,
+    Adaptive,
+    Legacy,
+}
+
+const BEDROCK_BETA: &str = "interleaved-thinking-2025-05-14";
+const BEDROCK_CACHE_TTL: &str = "5m";
+const MAX_BEDROCK_CACHE_BREAKPOINTS: usize = 4;
+
+fn effective_bedrock_enabled(settings_config: &str) -> bool {
+    let Ok(settings) = serde_json::from_str::<serde_json::Value>(settings_config) else {
+        return false;
+    };
+    settings
+        .get("env")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|env| env.get("CLAUDE_CODE_USE_BEDROCK"))
+        .and_then(serde_json::Value::as_str)
+        == Some("1")
+}
+
+fn bedrock_model_generation(model: Option<&str>) -> BedrockModelGeneration {
+    let normalized = model.unwrap_or_default().trim().to_ascii_lowercase();
+    if normalized.contains("haiku") {
+        BedrockModelGeneration::Haiku
+    } else if normalized.contains("claude-3-7")
+        || normalized.contains("claude-3.7")
+        || normalized.contains("claude-4")
+        || normalized.contains("claude-sonnet-4")
+        || normalized.contains("claude-opus-4")
+    {
+        BedrockModelGeneration::Adaptive
+    } else {
+        BedrockModelGeneration::Legacy
+    }
+}
+
+fn apply_bedrock_optimizations(
+    request: &mut serde_json::Value,
+    config: &crate::provider::routing::RoutingOptimizerConfig,
+    bedrock_enabled: bool,
+    model: Option<&str>,
+) -> bool {
+    if !config.enabled || !bedrock_enabled {
+        return false;
+    }
+    let mut adds_beta = false;
+    if config.thinking_optimizer {
+        match bedrock_model_generation(model) {
+            BedrockModelGeneration::Haiku => {}
+            BedrockModelGeneration::Adaptive => {
+                set_thinking_object(request, "adaptive", None, Some("max"));
+            }
+            BedrockModelGeneration::Legacy => {
+                if let Some(max_tokens) = request
+                    .get("max_tokens")
+                    .and_then(serde_json::Value::as_u64)
+                    .filter(|value| *value > 0)
+                {
+                    set_thinking_object(
+                        request,
+                        "enabled",
+                        Some(max_tokens.saturating_sub(1).max(1)),
+                        None,
+                    );
+                    adds_beta = true;
+                }
+            }
+        }
+    }
+    if config.cache_injection {
+        inject_bedrock_cache_breakpoints(request);
+    }
+    adds_beta
+}
+
+fn set_thinking_object(
+    request: &mut serde_json::Value,
+    thinking_type: &str,
+    budget_tokens: Option<u64>,
+    effort: Option<&str>,
+) {
+    let Some(object) = request.as_object_mut() else {
+        return;
+    };
+    let thinking = object
+        .entry("thinking")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(thinking) = thinking.as_object_mut() else {
+        *thinking = serde_json::json!({});
+        let Some(thinking) = thinking.as_object_mut() else {
+            return;
+        };
+        thinking.insert("type".to_string(), serde_json::json!(thinking_type));
+        if let Some(budget_tokens) = budget_tokens {
+            thinking.insert(
+                "budget_tokens".to_string(),
+                serde_json::json!(budget_tokens),
+            );
+            thinking.remove("effort");
+        } else {
+            thinking.remove("budget_tokens");
+        }
+        if let Some(effort) = effort {
+            thinking.insert("effort".to_string(), serde_json::json!(effort));
+        }
+        return;
+    };
+    thinking.insert("type".to_string(), serde_json::json!(thinking_type));
+    if let Some(budget_tokens) = budget_tokens {
+        thinking.insert(
+            "budget_tokens".to_string(),
+            serde_json::json!(budget_tokens),
+        );
+        thinking.remove("effort");
+    } else {
+        thinking.remove("budget_tokens");
+    }
+    if let Some(effort) = effort {
+        thinking.insert("effort".to_string(), serde_json::json!(effort));
+    }
+}
+
+fn add_bedrock_beta_header(headers: &mut Vec<(HeaderName, HeaderValue)>) {
+    if headers
+        .iter()
+        .any(|(name, _)| name.as_str().eq_ignore_ascii_case("anthropic-beta"))
+    {
+        return;
+    }
+    headers.push((
+        HeaderName::from_static("anthropic-beta"),
+        HeaderValue::from_static(BEDROCK_BETA),
+    ));
+}
+
+fn inject_bedrock_cache_breakpoints(request: &mut serde_json::Value) -> bool {
+    let mut remaining =
+        MAX_BEDROCK_CACHE_BREAKPOINTS.saturating_sub(cache_breakpoint_count(request));
+    if remaining == 0 {
+        return false;
+    }
+    let mut changed = false;
+    if let Some(tools) = request.get_mut("tools") {
+        if add_cache_to_last_array_item(tools) {
+            remaining -= 1;
+            changed = true;
+        }
+    }
+    if remaining > 0 {
+        if let Some(system) = request.get_mut("system") {
+            if add_cache_to_last_array_item(system) || add_cache_to_block(system) {
+                remaining -= 1;
+                changed = true;
+            }
+        }
+    }
+    if remaining > 0 {
+        if let Some(messages) = request.get_mut("messages") {
+            if let Some(messages) = messages.as_array_mut() {
+                let latest = messages.len().checked_sub(1);
+                if let Some(index) = latest {
+                    if add_cache_to_message(&mut messages[index]) {
+                        remaining -= 1;
+                        changed = true;
+                    }
+                }
+                if remaining > 0 {
+                    if let Some(index) = messages.iter().enumerate().position(|(index, message)| {
+                        message.get("role").and_then(serde_json::Value::as_str) == Some("user")
+                            && Some(index) != latest
+                    }) {
+                        if add_cache_to_message(&mut messages[index]) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    changed
+}
+
+fn cache_breakpoint_count(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Object(object) => {
+            let current = usize::from(object.get("cache_control").is_some());
+            current + object.values().map(cache_breakpoint_count).sum::<usize>()
+        }
+        serde_json::Value::Array(items) => items.iter().map(cache_breakpoint_count).sum(),
+        _ => 0,
+    }
+}
+
+fn add_cache_to_last_array_item(value: &mut serde_json::Value) -> bool {
+    value
+        .as_array_mut()
+        .and_then(|items| items.last_mut())
+        .is_some_and(add_cache_to_block)
+}
+
+fn add_cache_to_message(message: &mut serde_json::Value) -> bool {
+    let Some(content) = message.get_mut("content") else {
+        return false;
+    };
+    if let Some(items) = content.as_array_mut() {
+        return items.last_mut().is_some_and(add_cache_to_block);
+    }
+    add_cache_to_block(content)
+}
+
+fn add_cache_to_block(value: &mut serde_json::Value) -> bool {
+    let Some(object) = value.as_object_mut() else {
+        return false;
+    };
+    if object.contains_key("cache_control") {
+        return false;
+    }
+    object.insert(
+        "cache_control".to_string(),
+        serde_json::json!({"type": "ephemeral", "ttl": BEDROCK_CACHE_TTL}),
+    );
+    true
 }
 
 fn is_thinking_signature_error(body: &[u8]) -> bool {
@@ -1926,6 +2173,149 @@ mod tests {
         assert!(is_text_only_model("text-davinci-003"));
         assert!(is_text_only_model("vendor/text-only-fixture"));
         assert!(!is_text_only_model("claude-3-5-sonnet"));
+    }
+
+    fn optimizer_config() -> crate::provider::routing::RoutingOptimizerConfig {
+        crate::provider::routing::RoutingOptimizerConfig {
+            schema_version: 1,
+            enabled: true,
+            thinking_optimizer: true,
+            cache_injection: true,
+        }
+    }
+
+    #[test]
+    fn bedrock_detection_uses_effective_env_only() {
+        assert!(effective_bedrock_enabled(
+            r#"{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}"#
+        ));
+        assert!(!effective_bedrock_enabled(
+            r#"{"env":{"CLAUDE_CODE_USE_BEDROCK":"0"}}"#
+        ));
+        assert!(!effective_bedrock_enabled(
+            r#"{"name":"bedrock","baseUrl":"https://bedrock.example","env":{}}"#
+        ));
+    }
+
+    #[test]
+    fn bedrock_thinking_optimizer_applies_generation_rules_without_cross_provider_fields() {
+        let config = optimizer_config();
+        assert_eq!(
+            bedrock_model_generation(Some("us.anthropic.claude-3-5-sonnet")),
+            BedrockModelGeneration::Legacy
+        );
+        assert_eq!(
+            bedrock_model_generation(Some("us.anthropic.claude-3-7-sonnet")),
+            BedrockModelGeneration::Adaptive
+        );
+        assert_eq!(
+            bedrock_model_generation(Some("us.anthropic.claude-3-haiku")),
+            BedrockModelGeneration::Haiku
+        );
+
+        let mut legacy = serde_json::json!({
+            "model": "us.anthropic.claude-3-5-sonnet",
+            "max_tokens": 4096,
+            "thinking": {"type": "adaptive", "effort": "max", "fixture": true}
+        });
+        assert!(apply_bedrock_optimizations(
+            &mut legacy,
+            &config,
+            true,
+            Some("us.anthropic.claude-3-5-sonnet")
+        ));
+        assert_eq!(legacy["thinking"]["type"], "enabled");
+        assert_eq!(legacy["thinking"]["budget_tokens"], 4095);
+        assert_eq!(legacy["thinking"]["fixture"], true);
+        assert!(legacy["thinking"]["effort"].is_null());
+
+        let mut missing_max_tokens = serde_json::json!({
+            "model": "us.anthropic.claude-3-5-sonnet",
+            "thinking": {"type": "adaptive"}
+        });
+        assert!(!apply_bedrock_optimizations(
+            &mut missing_max_tokens,
+            &config,
+            true,
+            Some("us.anthropic.claude-3-5-sonnet")
+        ));
+        assert_eq!(missing_max_tokens["thinking"]["type"], "adaptive");
+
+        let mut adaptive = serde_json::json!({
+            "model": "us.anthropic.claude-3-7-sonnet",
+            "thinking": {"type": "enabled", "budget_tokens": 1024}
+        });
+        assert!(!apply_bedrock_optimizations(
+            &mut adaptive,
+            &config,
+            true,
+            Some("us.anthropic.claude-3-7-sonnet")
+        ));
+        assert_eq!(adaptive["thinking"]["type"], "adaptive");
+        assert_eq!(adaptive["thinking"]["effort"], "max");
+        assert!(adaptive["thinking"]["budget_tokens"].is_null());
+
+        let mut haiku = serde_json::json!({
+            "model": "us.anthropic.claude-3-haiku",
+            "thinking": {"type": "enabled", "budget_tokens": 1024}
+        });
+        let before = haiku.clone();
+        apply_bedrock_optimizations(
+            &mut haiku,
+            &config,
+            true,
+            Some("us.anthropic.claude-3-haiku"),
+        );
+        assert_eq!(haiku["thinking"], before["thinking"]);
+    }
+
+    #[test]
+    fn bedrock_cache_injection_preserves_existing_and_caps_at_four_breakpoints() {
+        let config = optimizer_config();
+        let mut request = serde_json::json!({
+            "tools": [{"name": "lookup"}],
+            "system": [{"type": "text", "text": "system", "cache_control": {"type": "ephemeral"}}],
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "old"}]},
+                {"role": "user", "content": [{"type": "text", "text": "latest"}]}
+            ]
+        });
+        assert!(!apply_bedrock_optimizations(
+            &mut request,
+            &config,
+            true,
+            Some("us.anthropic.claude-3-7-sonnet")
+        ));
+        assert_eq!(cache_breakpoint_count(&request), 4);
+        assert_eq!(request["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(
+            request["system"][0]["cache_control"]["ttl"],
+            serde_json::Value::Null
+        );
+
+        let mut capped = request.clone();
+        assert!(!inject_bedrock_cache_breakpoints(&mut capped));
+        assert_eq!(cache_breakpoint_count(&capped), 4);
+    }
+
+    #[test]
+    fn bedrock_beta_header_is_added_once_and_optimizer_is_route_local() {
+        let mut headers = Vec::new();
+        add_bedrock_beta_header(&mut headers);
+        add_bedrock_beta_header(&mut headers);
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].1, HeaderValue::from_static(BEDROCK_BETA));
+
+        let config = optimizer_config();
+        let mut non_bedrock = serde_json::json!({"model":"claude-sonnet-4","max_tokens":4096});
+        assert!(!apply_bedrock_optimizations(
+            &mut non_bedrock,
+            &config,
+            false,
+            Some("claude-sonnet-4")
+        ));
+        assert!(non_bedrock.get("thinking").is_none());
+        assert!(non_bedrock.get("tools").is_none());
     }
 
     #[test]
