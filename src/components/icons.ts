@@ -1,7 +1,9 @@
 export {
   Activity,
   AlertTriangle,
+  ArrowDown,
   ArrowLeftRight,
+  ArrowUp,
   BarChart3,
   Boxes,
   Braces,

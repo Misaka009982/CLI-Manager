@@ -1,4 +1,4 @@
-import type { Project } from "./types";
+import type { Project, TerminalSession } from "./types";
 
 export type ProviderSwitchAppType = "claude" | "codex" | "grokbuild";
 
@@ -39,6 +39,28 @@ export function getProviderSwitchAppType(project: Pick<Project, "cli_tool">): Pr
   if (cliTool === "codex") return "codex";
   if (cliTool.includes("claude")) return "claude";
   if (cliTool.includes("grok")) return "grokbuild";
+  return null;
+}
+
+export function getProviderSwitchAppTypeFromCliTool(cliTool: string | null | undefined): ProviderSwitchAppType | null {
+  return getProviderSwitchAppType({ cli_tool: cliTool ?? "" });
+}
+
+export function resolveProviderSwitchAppType(
+  session?: Pick<TerminalSession, "cliTool" | "startupCmd" | "title"> | null,
+  project?: Pick<Project, "cli_tool" | "startup_cmd"> | null,
+): ProviderSwitchAppType | null {
+  const candidates = [
+    session?.cliTool,
+    session?.startupCmd,
+    session?.title,
+    project?.cli_tool,
+    project?.startup_cmd,
+  ];
+  for (const candidate of candidates) {
+    const appType = getProviderSwitchAppTypeFromCliTool(candidate);
+    if (appType) return appType;
+  }
   return null;
 }
 

@@ -122,6 +122,7 @@ const TERMINAL_TOOLBAR_OPTIONS: { key: TerminalToolbarOptionKey; labelKey: Trans
   { key: "replay", labelKey: "settings.general.toolbar.replay" },
   { key: "files", labelKey: "settings.general.toolbar.files" },
   { key: "stats", labelKey: "settings.general.toolbar.stats" },
+  { key: "providers", labelKey: "settings.general.toolbar.providers" },
   { key: "gitChanges", labelKey: "settings.general.toolbar.gitChanges" },
   { key: "systemResources", labelKey: "settings.general.toolbar.systemResources" },
   { key: "backgroundTasks", labelKey: "settings.general.toolbar.backgroundTasks" },

@@ -1731,6 +1731,7 @@ function App() {
               onToggleFullscreen={handleToggleTerminalFullscreen}
               projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
               terminalScope={terminalScope}
+              onOpenProviderSettings={() => handleOpenSettings("native-providers")}
             />
           </main>
         </div>

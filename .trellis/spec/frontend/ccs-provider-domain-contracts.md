@@ -288,3 +288,19 @@ generic configuration textarea.
   priority arrows.
 - Background polling replaces only circuit state (`circuit` / `circuits`) and
   preserves provider membership, configuration drafts, and control affordances.
+
+## Terminal provider quick-switch panel (2026-08-10)
+
+- The terminal action rail exposes a right-side `providers` panel in both
+  merged and independent-panel layouts. It reuses the native provider
+  catalog/current/global preview commands; provider maintenance remains in
+  Settings via the panel footer.
+- The panel resolves its app type from the active terminal session/project
+  (`claude`, `codex`, or `grokbuild`) and provides keyboard-roving tabs. It
+  polls `routing_get_failover_queue` only while open and preserves the last
+  successful snapshot when auxiliary routing reads fail.
+- Automatic failover renders queue membership and priority arrows; manual
+  failover renders a single-select queue and sends exactly one provider ID to
+  `routing_set_failover_queue`, allowing an active local takeover to hot-switch
+  without a global confirmation dialog. Global switches still require the
+  existing preview/confirm/apply flow.
