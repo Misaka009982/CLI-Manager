@@ -37,6 +37,23 @@ enum RouteKind {
     Grok,
 }
 
+const UNSUPPORTED_MEDIA_PLACEHOLDER: &str = "[Unsupported Image]";
+const TEXT_ONLY_MODEL_IDS: &[&str] = &[
+    "text-davinci-002",
+    "text-davinci-003",
+    "gpt-3.5-turbo-instruct",
+    "claude-2",
+    "claude-2.0",
+    "claude-2.1",
+    "claude-instant-1.2",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediaCapability {
+    Unknown,
+    TextOnly,
+}
+
 #[derive(Debug, Clone)]
 struct ProviderSnapshot {
     app_type: &'static str,
@@ -47,6 +64,7 @@ struct ProviderSnapshot {
     pool_id: String,
     key_candidates: Vec<KeyCandidate>,
     model_mappings: Vec<ModelMapping>,
+    media_capability: MediaCapability,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -555,6 +573,18 @@ async fn forward_request(
             };
         let mut used_keys = HashSet::from([selected_key.id.clone()]);
         let mut provider_request = request_json.clone();
+        let mapped_model = effective_model_for_request(&provider_request, &snapshot.model_mappings);
+        if retry_context.can_retry(
+            &rectifier_config,
+            crate::provider::routing::RoutingRectifierRule::MediaFallback,
+        ) && should_preflight_media_fallback(
+            &rectifier_config,
+            snapshot.media_capability,
+            mapped_model.as_deref(),
+        ) && replace_unsupported_media(&mut provider_request)
+        {
+            retry_context.mark_used(crate::provider::routing::RoutingRectifierRule::MediaFallback);
+        }
         let outcome = loop {
             let mut upstream = client.post(&url);
             for (name, value) in &headers {
@@ -618,48 +648,59 @@ async fn forward_request(
                     )
                 }
             };
-            if !streaming
+            let is_anthropic_provider = snapshot.app_type == "claude"
+                && snapshot.claude_api_format.as_deref() == Some("anthropic");
+            let is_media_status = is_media_capability_status(response.status());
+            let can_signature = retry_context.can_retry(
+                &rectifier_config,
+                crate::provider::routing::RoutingRectifierRule::ThinkingSignature,
+            );
+            let can_budget = retry_context.can_retry(
+                &rectifier_config,
+                crate::provider::routing::RoutingRectifierRule::ThinkingBudget,
+            );
+            let can_media = retry_context.can_retry(
+                &rectifier_config,
+                crate::provider::routing::RoutingRectifierRule::MediaFallback,
+            );
+            let should_read_anthropic_client_error = !streaming
                 && response.status() == StatusCode::BAD_REQUEST
-                && snapshot.app_type == "claude"
-                && snapshot.claude_api_format.as_deref() == Some("anthropic")
-                && retry_context.can_retry(
-                    &rectifier_config,
-                    crate::provider::routing::RoutingRectifierRule::ThinkingSignature,
-                )
-            {
+                && is_anthropic_provider
+                && (can_signature || can_budget || can_media);
+            let should_read_media_error = !streaming
+                && is_media_status
+                && (!is_anthropic_provider || response.status() != StatusCode::BAD_REQUEST)
+                && can_media;
+            if should_read_anthropic_client_error || should_read_media_error {
                 let error_body = response
                     .bytes()
                     .await
                     .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_body_failed"))?;
-                if is_thinking_signature_error(&error_body) {
-                    remove_invalid_thinking_blocks(&mut provider_request);
-                    retry_context.mark_used(
-                        crate::provider::routing::RoutingRectifierRule::ThinkingSignature,
-                    );
-                    continue;
-                }
-                return Err((StatusCode::BAD_REQUEST, "routing_upstream_client_error"));
-            }
-            if !streaming
-                && response.status() == StatusCode::BAD_REQUEST
-                && snapshot.app_type == "claude"
-                && snapshot.claude_api_format.as_deref() == Some("anthropic")
-                && retry_context.can_retry(
-                    &rectifier_config,
-                    crate::provider::routing::RoutingRectifierRule::ThinkingBudget,
-                )
-            {
-                let error_body = response
-                    .bytes()
-                    .await
-                    .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_body_failed"))?;
-                if is_thinking_budget_error(&error_body) {
-                    if rectify_thinking_budget(&mut provider_request) {
+                if should_read_anthropic_client_error {
+                    if can_signature && is_thinking_signature_error(&error_body) {
+                        remove_invalid_thinking_blocks(&mut provider_request);
+                        retry_context.mark_used(
+                            crate::provider::routing::RoutingRectifierRule::ThinkingSignature,
+                        );
+                        continue;
+                    }
+                    if can_budget
+                        && is_thinking_budget_error(&error_body)
+                        && rectify_thinking_budget(&mut provider_request)
+                    {
                         retry_context.mark_used(
                             crate::provider::routing::RoutingRectifierRule::ThinkingBudget,
                         );
                         continue;
                     }
+                }
+                if can_media
+                    && is_media_capability_error(&error_body)
+                    && replace_unsupported_media(&mut provider_request)
+                {
+                    retry_context
+                        .mark_used(crate::provider::routing::RoutingRectifierRule::MediaFallback);
+                    continue;
                 }
                 return Err((StatusCode::BAD_REQUEST, "routing_upstream_client_error"));
             }
@@ -958,6 +999,7 @@ async fn load_provider_snapshot_for_provider(
         pool_id,
         key_candidates: candidates,
         model_mappings,
+        media_capability: declared_media_capability(&detail.settings_config),
     })
 }
 
@@ -1051,6 +1093,180 @@ fn apply_model_mapping(
         );
     }
     serde_json::to_vec(&request).map_err(|_| "routing_request_serialize_failed".to_string())
+}
+
+fn effective_model_for_request(
+    request: &serde_json::Value,
+    mappings: &[ModelMapping],
+) -> Option<String> {
+    let model = request.get("model")?.as_str()?;
+    mappings
+        .iter()
+        .find(|mapping| mapping.source == model)
+        .map(|mapping| mapping.target.clone())
+        .or_else(|| Some(model.to_string()))
+}
+
+fn should_preflight_media_fallback(
+    config: &crate::provider::routing::RoutingRectifierConfig,
+    capability: MediaCapability,
+    model: Option<&str>,
+) -> bool {
+    capability == MediaCapability::TextOnly
+        || (config.request_media_heuristic && model.is_some_and(is_text_only_model))
+}
+
+fn declared_media_capability(settings_config: &str) -> MediaCapability {
+    let Ok(settings) = serde_json::from_str::<serde_json::Value>(settings_config) else {
+        return MediaCapability::Unknown;
+    };
+    if contains_explicit_text_only_declaration(&settings) {
+        MediaCapability::TextOnly
+    } else {
+        MediaCapability::Unknown
+    }
+}
+
+fn contains_explicit_text_only_declaration(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            let explicitly_text_only = object
+                .get("textOnly")
+                .or_else(|| object.get("text_only"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+            let images_disabled = object
+                .get("supportsImages")
+                .or_else(|| object.get("supports_images"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(false);
+            let modalities_are_text_only = object
+                .get("inputModalities")
+                .or_else(|| object.get("input_modalities"))
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|modalities| {
+                    !modalities.is_empty()
+                        && modalities.iter().all(|modality| {
+                            modality
+                                .as_str()
+                                .is_some_and(|value| value.eq_ignore_ascii_case("text"))
+                        })
+                });
+            explicitly_text_only
+                || images_disabled
+                || modalities_are_text_only
+                || object.values().any(contains_explicit_text_only_declaration)
+        }
+        serde_json::Value::Array(items) => {
+            items.iter().any(contains_explicit_text_only_declaration)
+        }
+        _ => false,
+    }
+}
+
+fn is_text_only_model(model: &str) -> bool {
+    let normalized = model.trim().to_ascii_lowercase();
+    TEXT_ONLY_MODEL_IDS
+        .iter()
+        .any(|candidate| *candidate == normalized)
+        || normalized.contains("text-only")
+        || normalized.contains("text_only")
+}
+
+fn is_media_capability_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::BAD_REQUEST
+            | StatusCode::UNSUPPORTED_MEDIA_TYPE
+            | StatusCode::UNPROCESSABLE_ENTITY
+            | StatusCode::NOT_IMPLEMENTED
+    )
+}
+
+fn is_media_capability_error(body: &[u8]) -> bool {
+    let body = String::from_utf8_lossy(body).to_ascii_lowercase();
+    let mentions_media = ["image", "picture", "photo", "vision", "media", "file"]
+        .iter()
+        .any(|term| body.contains(term));
+    let rejects_media = [
+        "not supported",
+        "unsupported",
+        "does not support",
+        "cannot support",
+        "can't support",
+        "invalid input modality",
+        "not available",
+    ]
+    .iter()
+    .any(|term| body.contains(term));
+    mentions_media && rejects_media
+}
+
+fn replace_unsupported_media(value: &mut serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Array(items) => {
+            let mut replaced = false;
+            for item in items {
+                if is_media_block(item) {
+                    *item = serde_json::json!({
+                        "type": "text",
+                        "text": UNSUPPORTED_MEDIA_PLACEHOLDER
+                    });
+                    replaced = true;
+                } else {
+                    replaced |= replace_unsupported_media(item);
+                }
+            }
+            replaced
+        }
+        serde_json::Value::Object(object) => {
+            let mut replaced = false;
+            for item in object.values_mut() {
+                if is_media_block(item) {
+                    *item = serde_json::json!({
+                        "type": "text",
+                        "text": UNSUPPORTED_MEDIA_PLACEHOLDER
+                    });
+                    replaced = true;
+                } else {
+                    replaced |= replace_unsupported_media(item);
+                }
+            }
+            replaced
+        }
+        _ => false,
+    }
+}
+
+fn is_media_block(value: &serde_json::Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let type_name = object
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_ascii_lowercase);
+    if type_name.as_deref().is_some_and(|value| {
+        matches!(
+            value,
+            "image"
+                | "input_image"
+                | "image_url"
+                | "input_file"
+                | "file"
+                | "document"
+                | "mcp_image"
+                | "mcp_file"
+        ) || (value.starts_with("input_") && value.contains("image"))
+            || (value.starts_with("mcp_") && value.contains("image"))
+            || (value.starts_with("input_") && value.contains("file"))
+            || (value.starts_with("mcp_") && value.contains("file"))
+    }) {
+        return true;
+    }
+    ["image_url", "image_data", "file_data", "file_id"]
+        .iter()
+        .any(|key| object.contains_key(*key))
 }
 
 fn is_thinking_signature_error(body: &[u8]) -> bool {
@@ -1601,6 +1817,115 @@ mod tests {
         assert!(!rectify_thinking_budget(&mut adaptive));
         assert_eq!(adaptive["thinking"]["type"], "adaptive");
         assert_eq!(adaptive["max_tokens"], 4096);
+    }
+
+    #[test]
+    fn media_classifier_requires_explicit_unsupported_media_language() {
+        assert!(is_media_capability_error(
+            br#"{"error":"image input is not supported"}"#
+        ));
+        assert!(is_media_capability_error(
+            br#"{"error":"nested image content unsupported"}"#
+        ));
+        assert!(!is_media_capability_error(
+            br#"{"error":"invalid JSON body"}"#
+        ));
+        assert!(!is_media_capability_error(
+            br#"{"error":"image generated successfully"}"#
+        ));
+    }
+
+    #[test]
+    fn media_fallback_replaces_claude_codex_tool_and_mcp_blocks_without_media_leakage() {
+        let mut request = serde_json::json!({
+            "model": "fixture",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "url", "url": "secret-image-url"}},
+                    {"type": "text", "text": "keep this"},
+                    {"type": "tool_result", "content": [
+                        {"type": "mcp_image", "data": "secret-image-bytes"},
+                        {"type": "input_file", "file_id": "secret-file-id"},
+                        {"type": "file_search_call", "id": "keep-tool-call"}
+                    ]}
+                ]
+            }],
+            "input": [{"type": "input_image", "image_url": "secret-input-url"}],
+            "nested": {"content": {"type": "image", "source": {"data": "secret-nested-image"}}}
+        });
+        assert!(replace_unsupported_media(&mut request));
+        let serialized = serde_json::to_string(&request).unwrap();
+        assert!(!serialized.contains("secret-image-url"));
+        assert!(!serialized.contains("secret-image-bytes"));
+        assert!(!serialized.contains("secret-file-id"));
+        assert!(!serialized.contains("secret-input-url"));
+        assert!(!serialized.contains("secret-nested-image"));
+        assert_eq!(request["messages"][0]["content"][1]["text"], "keep this");
+        assert_eq!(
+            request["messages"][0]["content"][0]["text"],
+            UNSUPPORTED_MEDIA_PLACEHOLDER
+        );
+        assert_eq!(
+            request["messages"][0]["content"][2]["content"][0]["text"],
+            UNSUPPORTED_MEDIA_PLACEHOLDER
+        );
+        assert_eq!(
+            request["messages"][0]["content"][2]["content"][2]["id"],
+            "keep-tool-call"
+        );
+        assert_eq!(request["input"][0]["text"], UNSUPPORTED_MEDIA_PLACEHOLDER);
+        assert_eq!(
+            request["nested"]["content"]["text"],
+            UNSUPPORTED_MEDIA_PLACEHOLDER
+        );
+    }
+
+    #[test]
+    fn media_preflight_keeps_explicit_capability_when_heuristic_is_disabled() {
+        let mut config = crate::provider::routing::RoutingRectifierConfig {
+            schema_version: 1,
+            enabled: true,
+            request_thinking_signature: true,
+            request_thinking_budget: true,
+            request_media_fallback: true,
+            request_media_heuristic: false,
+        };
+        assert!(should_preflight_media_fallback(
+            &config,
+            MediaCapability::TextOnly,
+            Some("provider-custom-model")
+        ));
+        assert!(!should_preflight_media_fallback(
+            &config,
+            MediaCapability::Unknown,
+            Some("provider-custom-model")
+        ));
+        config.request_media_heuristic = true;
+        assert!(should_preflight_media_fallback(
+            &config,
+            MediaCapability::Unknown,
+            Some("text-only-fixture")
+        ));
+    }
+
+    #[test]
+    fn declared_text_only_capability_is_explicit_and_model_heuristic_is_bounded() {
+        assert_eq!(
+            declared_media_capability(r#"{"advanced":{"supportsImages":false}}"#),
+            MediaCapability::TextOnly
+        );
+        assert_eq!(
+            declared_media_capability(r#"{"capabilities":{"inputModalities":["text"]}}"#),
+            MediaCapability::TextOnly
+        );
+        assert_eq!(
+            declared_media_capability(r#"{"advanced":{"supportsImages":true}}"#),
+            MediaCapability::Unknown
+        );
+        assert!(is_text_only_model("text-davinci-003"));
+        assert!(is_text_only_model("vendor/text-only-fixture"));
+        assert!(!is_text_only_model("claude-3-5-sonnet"));
     }
 
     #[test]

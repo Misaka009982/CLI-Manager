@@ -1,17 +1,17 @@
 # CCS 路由迁移实施进度
 
-> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P4-03 已完成，当前指针为 P4-04。
+> 本文件是当前任务的跨机器执行指针，不替代 prd.md、design.md、implement.md 和 research/。P0、P1-01 至 P4-04 已完成，当前指针为 P4-05。
 
 ## 0. 当前指针
 
 | 字段 | 值 |
 | --- | --- |
 | Task | 08-08-ccs-routing-migration |
-| task.json 状态 | in_progress（P0、P1-01 至 P4-03 已完成，当前指针为 P4-04） |
+| task.json 状态 | in_progress（P0、P1-01 至 P4-04 已完成，当前指针为 P4-05） |
 | Changelog Target | [TEMP] |
-| 当前阶段 | P3：全局出站代理 |
-| 当前 Case | P4-04 |
-| 审批状态 | 已批准；P4-03 完成，按 Case 顺序切换至 P4-04 指针 |
+| 当前阶段 | P4：整流器与 Bedrock 优化 |
+| 当前 Case | P4-05 |
+| 审批状态 | 已批准；P4-04 完成，按 Case 顺序切换至 P4-05 指针 |
 | 最后更新时间 | 2026-08-09 15:00 |
 | 最后操作机器 | DESKTOP-Q49I074 |
 | 分支 | feat/native-provider-management |
@@ -81,7 +81,7 @@
 | P3 | 全局出站代理 | 5 | completed |
 | P4 | 整流器与 Bedrock 优化 | 6 | P4-02 in_progress |
 | P5 | 跨平台、质量、i18n/a11y、许可、最终验收 | 6 | pending |
-| 合计 |  | 43 | 34 个 Case 完成；P4-04 等待实现 |
+| 合计 |  | 43 | 35 个 Case 完成；P4-05 等待实现 |
 
 ## 4. P0：影响分析、Schema、协议与 Fixture 基线
 
@@ -141,8 +141,8 @@
 | P4-01 | 建立总开关、子开关和每 logical request 的 RetryContext | P0-02、P1-11 | routing settings、daemon runtime、attempt context | 总开关关闭不执行但保留子配置；route off 不改请求；每条规则最多一次 | 关闭总开关 | completed | 新增 `RoutingRectifierConfig` 的 schema-1 读取/校验/保存与 `routing_get/set_rectifier_config` commands；route HTTP 每个 logical request 读取配置并创建独立 `RoutingRetryContext`，总开关/三个规则 bit 均支持一次性 claim，未实现具体整流规则。定向 rectifier 2、route_http 17；全 Rust 981 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build；R1/R2 连续两轮零未解决发现；GitNexus route 目标 UNKNOWN、`lib.rs::run` LOW，无 HIGH/CRITICAL；独立提交主题：feat(routing): add rectifier config and retry context；下一步仅执行 P4-02 |
 | P4-02 | 迁移 Thinking signature 修复规则 | P4-01、P0-03 | Anthropic body transformer、classifier、fixtures | 有效不改；明确 invalid/missing/extra 最多一次重试；不记原 thinking | 关闭 signature rule | completed | route HTTP 在 Claude Anthropic provider 的明确 400 signature invalid/missing/extra/modified/altered 错误下，基于原始 body 副本删除 thinking/redacted_thinking block，同 provider 最多重试一次；无关 400 返回 sanitized client error，不进 failover；非 Anthropic、streaming、关闭总开关或子开关均不整流。signature 2、route_http 17 focused；全 Rust 983 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check 通过；未运行 tauri dev/build；R1/R2 连续两轮零未解决发现；GitNexus route target UNKNOWN，无 HIGH/CRITICAL；独立提交主题：feat(routing): add thinking signature rectifier；下一步仅执行 P4-03 |
 | P4-03 | 迁移 Thinking budget 修复规则 | P4-01、P0-03 | budget transformer、retry context | 只匹配明确 budget/thinking 错误；adaptive 不误改；max_tokens 合法 | 关闭 budget rule | completed | route HTTP 仅在 Claude Anthropic 明确 budget/thinking/max-token constraint 错误下，非 adaptive 请求最多整流一次：保留 thinking 其他字段，设置 enabled/32000，缺失或过小 max_tokens 设置 64000；adaptive、无关错误、非 Anthropic 不改不重试，不回写 provider 配置。budget 2、signature 1、route_http 17 focused；全 Rust 985 passed/1 ignored（首次全量遇既有 ssh_askpass socket 波动，重跑通过）、cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；R1 修复 thinking 字段覆盖并复验，R2 0；连续两轮零未解决发现；GitNexus route target UNKNOWN，无 HIGH/CRITICAL；独立提交主题：feat(routing): add thinking budget rectifier；下一步仅执行 P4-04 |
-| P4-04 | 迁移媒体降级和 text-only 预判 | P4-01、P0-03 | media resolver、三类 adapter、nested media traversal | 仅 400/415/422/501 明确媒体能力错误；图片/文件/工具/MCP 覆盖；不记原图 | 关闭 media fallback | in_progress | 按 Case 顺序开始；占位文本不能泄漏原始媒体 |
-| P4-05 | 迁移 Bedrock thinking/cache optimizer | P4-01 至 P4-03 | effective provider env、Bedrock transformer、cache breakpoints | 仅环境判定为 Bedrock；Haiku/新旧模型规则；最多四个五分钟 ephemeral breakpoint；failover 不泄漏字段 | 关闭 Bedrock optimizer | pending | 不从显示名或 URL 猜 provider |
+| P4-04 | 迁移媒体降级和 text-only 预判 | P4-01、P0-03 | media resolver、三类 adapter、nested media traversal | 仅 400/415/422/501 明确媒体能力错误；图片/文件/工具/MCP 覆盖；不记原图 | 关闭 media fallback | completed | route HTTP 支持显式 text-only capability、受开关控制的 bounded text-only model heuristic，以及 400/415/422/501 明确媒体能力错误的同 provider 一次 fallback；递归覆盖 Claude/Codex、tool、MCP、image/file block，统一替换 `[Unsupported Image]`，工具调用字段保留且原媒体不进入日志/错误。media 3、signature 2、budget 2 focused；全 Rust 989 passed/1 ignored、cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build；R1 修复对象值嵌套漏替换，R2 修复 `file_search_call` 工具块误判并复验，连续两轮零未解决发现；GitNexus 既有 route symbols 为 UNKNOWN，无 HIGH/CRITICAL；独立提交主题见执行日志 |
+| P4-05 | 迁移 Bedrock thinking/cache optimizer | P4-01 至 P4-03 | effective provider env、Bedrock transformer、cache breakpoints | 仅环境判定为 Bedrock；Haiku/新旧模型规则；最多四个五分钟 ephemeral breakpoint；failover 不泄漏字段 | 关闭 Bedrock optimizer | in_progress | 按 Case 顺序开始；不从显示名或 URL 猜 provider |
 | P4-06 | 完成整流器 UI、i18n、fixture 回归 | P4-02 至 P4-05 | rectifier accordion、i18n/aria、metrics | 总开关、子开关、route off、Bedrock/non-Bedrock、一次重试；focused tests | 关闭总开关并保留配置 | pending | 通过后进入 P5 |
 
 ## 9. P5：集成验收与交付
@@ -224,6 +224,7 @@
 | 2026-08-09 18:00 | DESKTOP-Q49I074 | P4-02 | in_progress -> completed；P4-03 pending -> in_progress | `src-tauri/src/daemon/route_http.rs`、`src-tauri/src/provider/routing.rs`、`progress.md` | signature 2、route_http 17 focused；Rust 983 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build | R1 复核 Anthropic/apiFormat、精确错误匹配、原始 body clone、thinking block 移除和 secret/log surface，0 findings；R2 复核一次性 bit、provider handoff、streaming/client error、route/master/sub-switch 边界，0 findings；连续两轮零未解决发现；GitNexus route target UNKNOWN，无 HIGH/CRITICAL | feat(routing): add thinking signature rectifier | P4-03 |
 
 | 2026-08-09 19:00 | DESKTOP-Q49I074 | P4-03 | in_progress -> completed；P4-04 pending -> in_progress | `src-tauri/src/daemon/route_http.rs`、`progress.md` | budget 2、signature 1、route_http 17 focused；Rust 985 passed/1 ignored（全量首次 ssh_askpass socket 波动后重跑通过）；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build | R1 发现并修复整体替换 thinking object 丢字段，新增 effort 保留回归；R2 复核 adaptive guard、精确 constraint classifier、一次性 bit、provider/route-off/配置持久化边界，0 findings；连续两轮零未解决发现；GitNexus route target UNKNOWN，无 HIGH/CRITICAL | feat(routing): add thinking budget rectifier | P4-04 |
+| 2026-08-09 20:30 | DESKTOP-Q49I074 | P4-04 | in_progress -> completed；P4-05 pending -> in_progress | `src-tauri/src/daemon/route_http.rs`、`progress.md` | media 3、signature 2、budget 2 focused；Rust 989 passed/1 ignored；cargo check、Rustfmt、TypeScript、diff check；未运行 tauri dev/build | R1 修复对象值嵌套漏替换；R2 修复 `file_search_call` 工具块误判并新增保留回归；连续两轮零未解决发现；GitNexus 既有 route symbols UNKNOWN，无 HIGH/CRITICAL | feat(routing): add media fallback and text-only heuristic | P4-05 |
 
 ## 12. 执行授权
 
