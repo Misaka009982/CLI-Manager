@@ -640,6 +640,29 @@ async fn forward_request(
                 }
                 return Err((StatusCode::BAD_REQUEST, "routing_upstream_client_error"));
             }
+            if !streaming
+                && response.status() == StatusCode::BAD_REQUEST
+                && snapshot.app_type == "claude"
+                && snapshot.claude_api_format.as_deref() == Some("anthropic")
+                && retry_context.can_retry(
+                    &rectifier_config,
+                    crate::provider::routing::RoutingRectifierRule::ThinkingBudget,
+                )
+            {
+                let error_body = response
+                    .bytes()
+                    .await
+                    .map_err(|_| (StatusCode::BAD_GATEWAY, "routing_upstream_body_failed"))?;
+                if is_thinking_budget_error(&error_body) {
+                    if rectify_thinking_budget(&mut provider_request) {
+                        retry_context.mark_used(
+                            crate::provider::routing::RoutingRectifierRule::ThinkingBudget,
+                        );
+                        continue;
+                    }
+                }
+                return Err((StatusCode::BAD_REQUEST, "routing_upstream_client_error"));
+            }
             if classify_upstream_status(response.status()) == UpstreamErrorClass::Provider {
                 break ProviderAttemptOutcome::Failure(
                     StatusCode::BAD_GATEWAY,
@@ -1038,6 +1061,56 @@ fn is_thinking_signature_error(body: &[u8]) -> bool {
             || body.contains("extra")
             || body.contains("modified")
             || body.contains("altered"))
+}
+
+fn is_thinking_budget_error(body: &[u8]) -> bool {
+    let body = String::from_utf8_lossy(body).to_ascii_lowercase();
+    let mentions_budget = body.contains("budget")
+        || body.contains("max_tokens")
+        || body.contains("max token")
+        || body.contains("thinking");
+    mentions_budget
+        && (body.contains("constraint")
+            || body.contains("less than")
+            || body.contains("must be")
+            || body.contains("invalid")
+            || body.contains("too small")
+            || body.contains("too large"))
+}
+
+fn rectify_thinking_budget(request: &mut serde_json::Value) -> bool {
+    let Some(object) = request.as_object_mut() else {
+        return false;
+    };
+    if object
+        .get("thinking")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|thinking| thinking.get("type"))
+        .and_then(serde_json::Value::as_str)
+        == Some("adaptive")
+    {
+        return false;
+    }
+    match object.get_mut("thinking") {
+        Some(serde_json::Value::Object(thinking)) => {
+            thinking.insert("type".to_string(), serde_json::json!("enabled"));
+            thinking.insert("budget_tokens".to_string(), serde_json::json!(32000));
+        }
+        _ => {
+            object.insert(
+                "thinking".to_string(),
+                serde_json::json!({"type":"enabled", "budget_tokens":32000}),
+            );
+        }
+    }
+    let max_tokens_too_small = object
+        .get("max_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .is_none_or(|value| value < 64_000);
+    if max_tokens_too_small {
+        object.insert("max_tokens".to_string(), serde_json::json!(64_000));
+    }
+    true
 }
 
 fn remove_invalid_thinking_blocks(value: &mut serde_json::Value) {
@@ -1491,6 +1564,43 @@ mod tests {
             .unwrap(),
             "https://example.test/grokbuild/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn budget_classifier_requires_explicit_budget_or_thinking_constraint() {
+        assert!(is_thinking_budget_error(
+            br#"{"error":"budget_tokens must be less than max_tokens"}"#
+        ));
+        assert!(is_thinking_budget_error(
+            br#"{"error":"thinking budget constraint"}"#
+        ));
+        assert!(!is_thinking_budget_error(
+            br#"{"error":"invalid JSON body"}"#
+        ));
+        assert!(!is_thinking_budget_error(
+            br#"{"error":"model is unavailable"}"#
+        ));
+    }
+
+    #[test]
+    fn budget_rectifier_sets_safe_values_and_keeps_adaptive_thinking() {
+        let mut request = serde_json::json!({
+            "thinking": {"type": "enabled", "budget_tokens": 65536, "effort": "max"},
+            "max_tokens": 1024
+        });
+        assert!(rectify_thinking_budget(&mut request));
+        assert_eq!(request["thinking"]["type"], "enabled");
+        assert_eq!(request["thinking"]["budget_tokens"], 32000);
+        assert_eq!(request["thinking"]["effort"], "max");
+        assert_eq!(request["max_tokens"], 64000);
+
+        let mut adaptive = serde_json::json!({
+            "thinking": {"type": "adaptive"},
+            "max_tokens": 4096
+        });
+        assert!(!rectify_thinking_budget(&mut adaptive));
+        assert_eq!(adaptive["thinking"]["type"], "adaptive");
+        assert_eq!(adaptive["max_tokens"], 4096);
     }
 
     #[test]
