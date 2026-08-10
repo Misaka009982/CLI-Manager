@@ -699,3 +699,36 @@ OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 80: 同步 master 并发布版本 1.3.5
+
+**Date**: 2026-08-10
+**Task**: 同步 master 并发布版本 1.3.5
+**Branch**: `master`
+
+### Summary
+
+拉取 origin/master，将 package.json、package-lock.json、src-tauri/Cargo.toml、Cargo.lock 和 tauri.conf.json 的应用版本统一更新为 1.3.5；cargo check 通过，版本一致性校验通过，未推送远端。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eabf83fc` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
