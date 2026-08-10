@@ -334,6 +334,12 @@ fn resolve_runtime_paths(app: &AppHandle) -> Result<(std::path::PathBuf, std::pa
 }
 
 #[cfg(target_os = "windows")]
+/// Electron 的应用加载器不接受 `\\?\` 扩展路径，子进程参数需使用普通 Win32 路径。
+fn electron_app_dir_argument(app_dir: &std::path::Path) -> std::path::PathBuf {
+    crate::app_paths::strip_windows_verbatim_prefix(app_dir.to_path_buf())
+}
+
+#[cfg(target_os = "windows")]
 fn sync_or_start(
     app: &AppHandle,
     state: &DesktopPetCompanionState,
@@ -397,10 +403,11 @@ fn start_process(
     const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
     let (executable, app_dir) = resolve_runtime_paths(app)?;
+    let electron_app_dir = electron_app_dir_argument(&app_dir);
     let token = Uuid::new_v4().to_string();
     let mut command = Command::new(executable);
     command
-        .arg(&app_dir)
+        .arg(electron_app_dir)
         .arg(format!("--cli-manager-pet-token={token}"))
         .arg(format!("--cli-manager-pet-parent-pid={}", std::process::id()))
         .current_dir(app_dir.parent().unwrap_or(&app_dir))
@@ -848,4 +855,32 @@ fn stop_process(mut process: DesktopPetCompanionProcess) {
     }
     let _ = process.child.kill();
     let _ = process.child.wait();
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::electron_app_dir_argument;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn electron_app_argument_removes_windows_verbatim_prefix() {
+        assert_eq!(
+            electron_app_dir_argument(Path::new(
+                r"\\?\D:\Program Files\CLI-Manager\resources\electron-pet\app"
+            )),
+            PathBuf::from(r"D:\Program Files\CLI-Manager\resources\electron-pet\app")
+        );
+        assert_eq!(
+            electron_app_dir_argument(Path::new(
+                r"\\?\UNC\server\share\CLI-Manager\resources\electron-pet\app"
+            )),
+            PathBuf::from(r"\\server\share\CLI-Manager\resources\electron-pet\app")
+        );
+        assert_eq!(
+            electron_app_dir_argument(Path::new(
+                r"D:\CLI-Manager\resources\electron-pet\app"
+            )),
+            PathBuf::from(r"D:\CLI-Manager\resources\electron-pet\app")
+        );
+    }
 }

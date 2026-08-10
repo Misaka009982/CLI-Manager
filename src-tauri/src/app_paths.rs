@@ -254,7 +254,7 @@ fn ensure_existing_prefixes_are_not_links(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+pub(crate) fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
     let value = path.to_string_lossy().into_owned();
     if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
         PathBuf::from(format!(r"\\{rest}"))
