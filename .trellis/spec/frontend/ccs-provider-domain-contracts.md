@@ -295,10 +295,20 @@ generic configuration textarea.
   merged and independent-panel layouts. It reuses the native provider
   catalog/current/global preview commands; provider maintenance remains in
   Settings via the panel footer.
+- The panel renders the shared `TerminalPanelHeader` above the CLI-type
+  selector, using the Providers title, `ArrowLeftRight` icon, and provider
+  accent. Do not replace it with a provider-specific title row or treat the
+  outer merged-tab strip as a substitute for the content header.
 - The panel resolves its app type from the active terminal session/project
   (`claude`, `codex`, or `grokbuild`) and provides keyboard-roving tabs. It
   polls `routing_get_failover_queue` only while open and preserves the last
   successful snapshot when auxiliary routing reads fail.
+- Treat the daemon listener and the current CLI Home takeover as distinct
+  states. The local-routing switch and the panel's user-facing routing status
+  represent the current Home takeover; report routing as running only when
+  that takeover exists and the daemon service is running. Runtime capability
+  gates may continue to use daemon service/connection state directly, because
+  disabling one Home takeover intentionally leaves the shared daemon running.
 - Automatic failover renders queue membership and priority arrows; manual
   failover renders a single-select queue and sends exactly one provider ID to
   `routing_set_failover_queue`, allowing an active local takeover to hot-switch

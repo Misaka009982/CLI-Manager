@@ -3,11 +3,12 @@ import { toast } from "sonner";
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowDown, ArrowLeftRight, ArrowUp, Boxes, Check, CircleAlert, GripVertical, RefreshCw, Settings, Zap } from "../icons";
+import { ArrowDown, ArrowLeftRight, ArrowUp, Boxes, CircleAlert, GripVertical, RefreshCw, Settings } from "../icons";
 import { useI18n } from "../../lib/i18n";
 import type { NativeProviderAppType, NativeProviderFailoverProvider } from "../settings/providers/nativeProviderTypes";
 import { useAppConfirm } from "../ui/useAppConfirm";
 import { useProviderQuickSwitch } from "./useProviderQuickSwitch";
+import { TerminalPanelHeader } from "./TerminalPanelHeader";
 import { TERM_PANEL, panelColorTint } from "../stats/termStatsUi";
 import { VendorIcon, inferVendor } from "../VendorIcon";
 import { DND_ACTIVATION_CONSTRAINT, DND_SORTABLE_TRANSITION } from "../../lib/dragInteraction";
@@ -32,8 +33,6 @@ function appTypeLabelKey(appType: NativeProviderAppType): "providerCatalog.appTy
 
 // 终端皮肤下的紧凑开关行：不引入通用应用控件，配色全部走 TERM_PANEL 变量。
 function RoutingToggleRow({
-  icon,
-  iconColor,
   label,
   hint,
   checked,
@@ -41,8 +40,6 @@ function RoutingToggleRow({
   busy,
   onToggle,
 }: {
-  icon: ReactNode;
-  iconColor: string;
   label: string;
   hint: string;
   checked: boolean;
@@ -50,15 +47,12 @@ function RoutingToggleRow({
   busy: boolean;
   onToggle: (next: boolean) => void;
 }) {
-  const trackColor = checked ? panelColorTint(iconColor, 55) : TERM_PANEL.track;
+  const trackColor = checked ? panelColorTint(TERM_PANEL.green, 55) : TERM_PANEL.track;
   return (
-    <div className="flex items-center justify-between gap-2" style={{ opacity: disabled ? 0.55 : 1 }}>
-      <div className="flex min-w-0 items-center gap-1.5">
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md" style={{ color: iconColor, backgroundColor: panelColorTint(iconColor, 14) }}>{icon}</span>
-        <div className="min-w-0">
-          <div className="truncate text-[11px] font-semibold" style={{ color: TERM_PANEL.fg }}>{label}</div>
-          <div className="truncate text-[10px]" style={{ color: TERM_PANEL.dim }} title={hint}>{hint}</div>
-        </div>
+    <div className="flex items-center justify-between gap-3" style={{ opacity: disabled ? 0.55 : 1 }}>
+      <div className="flex min-w-0 flex-1 items-baseline gap-2">
+        <span className="shrink-0 text-[11px] font-semibold" style={{ color: TERM_PANEL.fg }}>{label}</span>
+        <span className="min-w-0 flex-1 truncate text-[10px]" style={{ color: TERM_PANEL.dim }} title={hint}>{hint}</span>
       </div>
       <button
         type="button"
@@ -68,17 +62,17 @@ function RoutingToggleRow({
         title={hint}
         disabled={disabled}
         className="ui-focus-ring relative shrink-0 rounded-full transition-colors disabled:cursor-not-allowed"
-        style={{ width: 30, height: 16, backgroundColor: trackColor, border: `1px solid ${checked ? panelColorTint(iconColor, 70) : TERM_PANEL.border}` }}
+        style={{ width: 28, height: 14, backgroundColor: trackColor }}
         onClick={() => onToggle(!checked)}
       >
         <span
           className="absolute top-1/2 rounded-full transition-all"
           style={{
-            width: 10,
-            height: 10,
-            left: checked ? 16 : 2,
+            width: 8,
+            height: 8,
+            left: checked ? 17 : 3,
             transform: "translateY(-50%)",
-            backgroundColor: checked ? iconColor : TERM_PANEL.dim,
+            backgroundColor: checked ? TERM_PANEL.green : TERM_PANEL.dim,
             opacity: busy ? 0.5 : 1,
           }}
         />
@@ -183,6 +177,7 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
   const serviceRunning = Boolean(service?.serviceEnabled && daemon?.status === "running");
   const autoFailover = failover?.config.autoFailoverEnabled ?? false;
   const localRouting = quickSwitch.hasLocalTakeover;
+  const localRoutingRunning = Boolean(localRouting && serviceRunning);
   // 自动故障转移要求 daemon 已连接且支持本地路由能力；仅「服务已启用」不足以放行。
   const runtimeAvailable = Boolean(serviceRunning && daemon?.capabilitySupported && daemon.connected);
   const busy = Boolean(quickSwitch.action);
@@ -362,6 +357,11 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
 
   return (
     <div className="flex h-full min-h-0 flex-col" style={{ color: TERM_PANEL.fg, backgroundColor: TERM_PANEL.bg }}>
+      <TerminalPanelHeader
+        icon={<ArrowLeftRight size={13} />}
+        accent={TERM_PANEL.green}
+        title={t("terminal.panel.providers")}
+      />
       <div className="shrink-0 border-b px-3 py-3" style={{ borderColor: TERM_PANEL.border }}>
         <div className="mb-2 flex items-center justify-between">
           <span className="text-[11px] font-semibold" style={{ color: TERM_PANEL.dim }}>{t("providerQuickSwitch.cliTypes")}</span>
@@ -397,24 +397,21 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        <div className="mb-3 rounded-lg border px-3 py-2.5" style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.card }}>
-          <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span className="flex h-5 w-5 items-center justify-center rounded-md" style={{ color: TERM_PANEL.green, backgroundColor: panelColorTint(TERM_PANEL.green, 14) }}><ArrowLeftRight size={12} /></span>
-            <div className="min-w-0">
-              <div className="truncate text-[11px] font-semibold">{t("providerQuickSwitch.routingStatus")}</div>
-              <div className="truncate text-[10px]" style={{ color: TERM_PANEL.dim }}>{autoFailover ? t("providerQuickSwitch.autoFailover") : t("providerQuickSwitch.manualFailover")}</div>
+        <div className="mb-3 grid grid-cols-[80px_minmax(0,1fr)] gap-3 rounded-lg border px-3 py-2.5" style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.card }}>
+          <div className="flex min-w-0 flex-col justify-center">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md" style={{ color: TERM_PANEL.green, backgroundColor: panelColorTint(TERM_PANEL.green, 14) }}><ArrowLeftRight size={12} /></span>
+              <div className="min-w-0">
+                <div className="truncate text-[11px] font-semibold">{t("providerQuickSwitch.routingStatus")}</div>
+                <div className="truncate text-[10px]" style={{ color: localRoutingRunning ? TERM_PANEL.green : TERM_PANEL.yellow }}>
+                  {localRoutingRunning ? t("providerQuickSwitch.routingRunning") : t("providerQuickSwitch.routingUnavailable")}
+                </div>
+              </div>
             </div>
           </div>
-          <span className="shrink-0 rounded-full px-2 py-1 text-[10px] font-medium" style={{ color: serviceRunning ? TERM_PANEL.green : TERM_PANEL.yellow, backgroundColor: panelColorTint(serviceRunning ? TERM_PANEL.green : TERM_PANEL.yellow, 14) }}>
-            {serviceRunning ? t("providerQuickSwitch.routingRunning") : t("providerQuickSwitch.routingUnavailable")}
-          </span>
-          </div>
 
-          <div className="mt-2.5 space-y-2 border-t pt-2.5" style={{ borderColor: TERM_PANEL.border }}>
+          <div className="min-w-0 space-y-2 border-l pl-3" style={{ borderColor: TERM_PANEL.border }}>
             <RoutingToggleRow
-              icon={<ArrowLeftRight size={12} />}
-              iconColor={TERM_PANEL.green}
               label={t("providerQuickSwitch.localRouting")}
               hint={localRouting
                 ? t("providerQuickSwitch.localRoutingOnHint", { app: appLabel })
@@ -425,8 +422,6 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
               onToggle={(next) => void handleLocalRoutingToggle(next)}
             />
             <RoutingToggleRow
-              icon={<Zap size={12} />}
-              iconColor={TERM_PANEL.yellow}
               label={t("providerQuickSwitch.autoFailover")}
               hint={!localRouting
                 ? t("providerQuickSwitch.failoverNeedsRouting")
@@ -441,13 +436,6 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
               onToggle={(next) => void handleFailoverToggle(next)}
             />
           </div>
-
-          {failover && <div className="mt-2 flex items-center justify-between border-t pt-2 text-[10px]" style={{ borderColor: TERM_PANEL.border, color: TERM_PANEL.dim }}>
-            <span>{t("providerQuickSwitch.currentProvider")}</span>
-            <span className="max-w-[60%] truncate text-right" style={{ color: TERM_PANEL.fg }}>
-              {currentId ? rows.find((provider) => provider.id === currentId)?.name ?? t("providerQuickSwitch.unknownProvider") : t("providerQuickSwitch.noCurrentProvider")}
-            </span>
-          </div>}
         </div>
 
         <div className="mb-2 flex items-center justify-between">
@@ -475,16 +463,15 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
             const circuit = failover?.circuits.find((item) => item.providerId === provider.id)
               ?? (failover?.circuit.providerId === provider.id ? failover.circuit : null);
             const vendor = inferVendor(`${provider.name} ${provider.model ?? ""} ${provider.baseUrl ?? ""}`);
-            // 旧实现在正常态会渲染两个同义绿徽章（circuitLabel 回落 healthy + ready
-            // 「可入队」），未就绪时更会字面输出两遍「不可入队」。这里收敛成单一状态：
-            // 只有异常才给文字，正常态只留一个中性小点，绿色让位给「当前供应商」。
+            // 当前供应商由整张卡片的高亮表达；右侧只用状态圆点呈现可用性/熔断状态。
+            // 左右标记绝对居中，正文保持单列，避免为两个装饰标记拆成三列布局。
             const status = circuit?.status === "open"
-              ? { color: TERM_PANEL.red, label: t("providerCatalog.failover.circuit.open") }
+              ? { color: TERM_PANEL.red, label: t("providerCatalog.failover.circuit.open"), showLabel: true }
               : circuit?.status === "halfOpen"
-                ? { color: TERM_PANEL.yellow, label: t("providerCatalog.failover.circuit.halfOpen") }
+                ? { color: TERM_PANEL.yellow, label: t("providerCatalog.failover.circuit.halfOpen"), showLabel: true }
                 : provider.ready
-                  ? { color: TERM_PANEL.dim, label: null }
-                  : { color: TERM_PANEL.yellow, label: t("providerCatalog.failover.notReady") };
+                  ? { color: TERM_PANEL.green, label: t("providerCatalog.failover.ready"), showLabel: false }
+                  : { color: TERM_PANEL.yellow, label: t("providerCatalog.failover.notReady"), showLabel: true };
             return (
               <SortableProviderRow
                 key={provider.id}
@@ -502,35 +489,37 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                     aria-checked={selected}
                     tabIndex={index === 0 ? 0 : -1}
                     disabled={Boolean(quickSwitch.action) || !provider.ready}
-                    className="ui-focus-ring min-w-0 flex-1 px-2.5 py-2.5 text-left disabled:cursor-not-allowed disabled:opacity-55"
+                    className="ui-focus-ring relative min-w-0 flex-1 px-2.5 py-2.5 text-left disabled:cursor-not-allowed disabled:opacity-55"
                     onClick={() => void handleGlobalSwitch(provider)}
                     onKeyDown={(event) => handleRowKeyDown(event, index)}
                     title={provider.baseUrl ?? undefined}
                   >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md" style={{ backgroundColor: TERM_PANEL.cardInner }}>
+                    <span className="absolute left-2.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md" style={{ backgroundColor: TERM_PANEL.cardInner }}>
                         <VendorIcon vendor={vendor} size={14} fallback={Boxes} />
-                      </span>
-                      <span className="min-w-0 truncate text-[13px] font-semibold tracking-tight" style={{ color: TERM_PANEL.fg }}>{provider.name}</span>
-                      {provider.inFailoverQueue && <span className="shrink-0 rounded px-1 text-[9px]" style={{ color: TERM_PANEL.green, backgroundColor: panelColorTint(TERM_PANEL.green, 14) }}>#{(queuePosition.get(provider.id) ?? 0) + 1}</span>}
-                      {selected && <span className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-full" style={{ color: TERM_PANEL.green, backgroundColor: panelColorTint(TERM_PANEL.green, 18) }} aria-label={t("providerQuickSwitch.currentProvider")}><Check size={12} /></span>}
                     </span>
-                    <span className="ml-7 flex min-w-0 items-center gap-2 text-[11px]" style={{ color: TERM_PANEL.dim }}>
-                      <span className="min-w-0 flex-1 truncate">{provider.model ?? provider.baseUrl ?? t("providerQuickSwitch.noModel")}</span>
-                      <span
-                        className="mr-0.5 h-1.5 w-1.5 shrink-0 rounded-full"
-                        style={{ backgroundColor: status.color }}
-                        aria-hidden="true"
-                      />
-                      {status.label && (
-                        <span className="shrink-0" style={{ color: status.color }}>{status.label}</span>
-                      )}
+                    <span className={`block min-w-0 pl-7 ${status.showLabel ? "pr-20" : "pr-5"}`}>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="min-w-0 truncate text-[13px] font-semibold tracking-tight" style={{ color: TERM_PANEL.fg }}>{provider.name}</span>
+                        {provider.inFailoverQueue && <span className="shrink-0 rounded px-1 text-[9px]" style={{ color: TERM_PANEL.green, backgroundColor: panelColorTint(TERM_PANEL.green, 14) }}>#{(queuePosition.get(provider.id) ?? 0) + 1}</span>}
+                      </span>
+                      <span className="mt-0.5 block min-w-0 truncate text-[11px]" style={{ color: TERM_PANEL.dim }}>
+                        {provider.model ?? provider.baseUrl ?? t("providerQuickSwitch.noModel")}
+                      </span>
+                    </span>
+                    <span
+                      role="img"
+                      aria-label={status.label}
+                      title={status.label}
+                      className="absolute right-2.5 top-1/2 flex -translate-y-1/2 items-center gap-1.5 text-[10px]"
+                      style={{ color: status.color }}
+                    >
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: status.color }} aria-hidden="true" />
+                      {status.showLabel && <span className="shrink-0">{status.label}</span>}
                     </span>
                   </button>
 
                   {canReorder && (
                     <>
-                      {dragHandle}
                       {failover && (
                         <>
                           {autoFailover && (
@@ -548,6 +537,7 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                           )}
                         </>
                       )}
+                      {dragHandle}
                     </>
                   )}
                 </div>

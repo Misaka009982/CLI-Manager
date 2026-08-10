@@ -1057,7 +1057,7 @@ const { suffixParts, leaf: displayNode } = collectCompactDirectoryChain(node);
 
 ### Convention: Terminal auxiliary panels share one themed header
 
-**What**: Realtime stats, Git changes, project files in `mode="panel"`, replay, and system resources must render their top title through `TerminalPanelHeader`. The shared header uses `TERM_PANEL.bg` as its fallback and mirrors the terminal pane Tab bar gradient in both light and dark terminal themes.
+**What**: Realtime stats, Git changes, project files in `mode="panel"`, replay, system resources, and the provider quick-switch panel must render their top title through `TerminalPanelHeader`. The shared header uses `TERM_PANEL.bg` as its fallback and mirrors the terminal pane Tab bar gradient in both light and dark terminal themes.
 
 **Why**: These panels share one resizable terminal-side shell. Independent header markup drifts in height, icon scale, border color, and light-skin background, making adjacent Tab and title bands look unrelated.
 
@@ -1081,7 +1081,7 @@ const { suffixParts, leaf: displayNode } = collectCompactDirectoryChain(node);
 <div className="px-2 py-1 text-[15px] font-bold">{t("git.title")}</div>
 ```
 
-**Tests**: Run `npx tsc --noEmit`; manually compare all five panels in merged and independent modes, at their minimum widths, with one dark and one light terminal-side skin.
+**Tests**: Run `npx tsc --noEmit`; manually compare all six panels in merged and independent modes, at their minimum widths, with one dark and one light terminal-side skin.
 
 ### Convention: Stats charts use a shared semantic palette
 
