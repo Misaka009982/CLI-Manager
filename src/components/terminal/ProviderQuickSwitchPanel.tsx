@@ -356,7 +356,15 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
           : null;
 
   return (
-    <div className="flex h-full min-h-0 flex-col" style={{ color: TERM_PANEL.fg, backgroundColor: TERM_PANEL.bg }}>
+    <div
+      className="flex h-full min-h-0 flex-col"
+      style={{
+        color: TERM_PANEL.fg,
+        backgroundColor: TERM_PANEL.bg,
+        "--ui-scrollbar-thumb": TERM_PANEL.border,
+        "--ui-scrollbar-track": TERM_PANEL.bg,
+      } as CSSProperties}
+    >
       <TerminalPanelHeader
         icon={<ArrowLeftRight size={13} />}
         accent={TERM_PANEL.green}
@@ -396,7 +404,7 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div className="ui-thin-scroll min-h-0 flex-1 overflow-y-auto px-3 py-3">
         <div className="mb-3 grid grid-cols-[80px_minmax(0,1fr)] gap-3 rounded-lg border px-3 py-2.5" style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.card }}>
           <div className="flex min-w-0 flex-col justify-center">
             <div className="flex min-w-0 items-center gap-1.5">
