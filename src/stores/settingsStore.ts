@@ -188,6 +188,7 @@ export type FileExplorerIgnoredPaths = Record<string, string[]>;
 export type LanguagePreference = "auto" | "zh-CN" | "zh-TW" | "en-US";
 export type BatchLaunchPaneDirection = "vertical" | "horizontal";
 export type DesktopPetSize = DesktopPetSizePercent;
+export type DesktopPetRuntime = "tauri" | "electron";
 export const DESKTOP_PET_WORK_BOUNCE_MIN_PX = 0;
 export const DESKTOP_PET_WORK_BOUNCE_MAX_PX = 5;
 
@@ -198,6 +199,7 @@ export interface DesktopPetPosition {
 
 export interface DesktopPetSettings {
   enabled: boolean;
+  runtime: DesktopPetRuntime;
   petId: string;
   alwaysOnTop: boolean;
   agentSessionsOnly: boolean;
@@ -646,6 +648,7 @@ const DEFAULTS: Settings = {
   workspanEnabled: true,
   desktopPet: {
     enabled: false,
+    runtime: "tauri",
     petId: BUILTIN_DESKTOP_PET_ID,
     alwaysOnTop: true,
     agentSessionsOnly: true,
@@ -1111,6 +1114,9 @@ export function migrateDesktopPetSettings(value: unknown): DesktopPetSettings {
   ));
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : defaults.enabled,
+    runtime: raw.runtime === "electron" || raw.runtime === "tauri"
+      ? raw.runtime
+      : defaults.runtime,
     petId,
     alwaysOnTop: typeof raw.alwaysOnTop === "boolean" ? raw.alwaysOnTop : defaults.alwaysOnTop,
     agentSessionsOnly:

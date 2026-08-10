@@ -1,6 +1,19 @@
 # Changelog
 
-## [TEMP]
+## [Unreleased]
+
+### 桌面宠物与 Pi 桥接
+
+- Windows 桌宠新增可选 Electron 桌面模式：随安装包内置校验过的 Electron 41.10.2 runtime，使用透明渲染窗与独立命中窗改善拖动、混合 DPI、多显示器、透明区点击穿透及菜单/Bubble 输入体验；设置可与原 Tauri 双窗口互斥切换。主 Tauri 进程继续独占状态、Pi broker、事故、托管与设置权限，Electron 只消费带 token/generation 的完整快照并回传白名单动作；启动、握手、写入、renderer 或子进程任一故障都会自动恢复 Tauri 窗口，macOS/Linux 不打包或启动该 runtime。
+- 桌宠改为无装饰自由悬浮状态入口，继续聚合 Claude、Codex、Grok、Pi 等全部 Agent；新增只显示非零项的绿/红/蓝状态轨，并把决策、事故和最新完成摘要移入独立 `desktop-pet-bubble` 窗口。Bubble 按权限、问卷、问题、事故、完成顺序展示完整正文，只在工作区不足时内部滚动，并随宠物跨显示器/DPI 实时定位且不持久化自身坐标；普通任务、远程托管、尺寸位置与 Codex Pets 仍归原宠物菜单。
+- Windows 为宠物与 Bubble 应用各自的多矩形原生命中区域，卡片之间的透明间隙可点击穿透；区域事务失败会恢复完整窗口命中，避免决策入口失效。macOS/Linux 使用完整窗口命中的安全回退，不宣称具备 Windows 等价穿透。Bubble 以无激活方式显示并使用独立最小权限 capability；窗口生命周期由 token、surface epoch 与单调 revision 防止隐藏后迟到请求复现。
+- Pi Extension 新增运行心跳、最终 `error`/`aborted` 中断上报，以及 `question` / `questionnaire` 的桌宠显式回答桥；显式名为 `cli_manager_permission` 的权限生产者也可接入同一决策通道，但桥接本身不注册模型可调用的权限工具、不拦截普通工具。前端与 daemon 都会独立判定 60 秒心跳中断并合并为同一事故；决策卡在桌宠关闭、临时隐藏或全屏自动隐藏时仍会强制可见，后台事故可先恢复 daemon 会话再跳回。broker 会感知前端消费者断开并回退 Pi 原生 UI，乱序终态不会删除更新的决策，任何路径都不自动批准、拒绝或代答。桌宠窗口生命周期仍由 CLI-Manager 管理，Pi 不注册桌宠控制命令。
+
+## [V1.3.5]
+
+### SSH MFA 认证
+
+- 修复保存用户名/密码连接启用 Keyboard-interactive/MFA 的 SSH 主机时，AskPass 对 MFA 提示持续失败并循环输出、终端无法输入的问题；保存密码仍只自动填写普通密码提示，MFA/OTP/PIN 等后续挑战改为在所属交互终端隐藏输入。同步加固后台非交互策略、AskPass 内部环境优先级、broker token 长度和服务端 prompt 控制序列过滤。（Refs #195）
 
 ### 桌面宠物与 Pi 桥接
 
@@ -19,6 +32,7 @@
 ### 终端输出调度
 
 - 修复多个终端持续输出时各自调度 xterm 写入导致同一浏览器帧集中占用主线程的问题；daemon live 输出改为 64 KiB 有界聚合，前端按可见优先且隐藏不饥饿的全局队列每帧只启动一个写入批次，并保持 Replay、Reset 与 write callback 后 ACK 时序不变。
+- 修复普通终端运行 `tail -f` 等持续前台命令时右键“清屏”无效的问题；清屏现在先通过 xterm 解析路径清除当前视口，再保留 Ctrl+L 供 Shell/TUI 重绘，不中断前台进程且继续保留 scrollback。
 
 ### 终端会话恢复
 
@@ -31,9 +45,25 @@
 
 ## [V1.3.5] - 2026-08-06
 
+### Windows 便携版与数据目录
+
+- 新增 Windows x64 便携 ZIP；便携版通过程序旁的 `portable.flag` 识别，默认把 CLI-Manager 自身数据保存在程序目录的 `data` 子目录，解压即可运行和整体迁移。
+- 设置 -> 通用底部新增“数据存储”，安装版与便携版都可选择自定义数据根目录或恢复当前分发的默认目录；用户可选择迁移全部现有数据并重启，或不迁移直接重启使用目标目录。自动迁移只允许空目录，不合并、不覆盖，且运行中的终端或后台任务会阻止切换。
+- 数据根目录统一覆盖数据库及 WAL/SHM、Store、日志、缓存、附件、备份、Provider 和桌宠等原 `%USERPROFILE%\\.cli-manager` 内容；`.claude`、`.codex`、WSL、SSH 与项目目录不受影响。便携版保留更新检查，但只打开 Release 下载新版 ZIP，不调用安装器。（Refs #199）
+- 修复 Windows 启动时规范化路径的 `\\?\\` 前缀被 SQLite URL 当作查询参数解析，导致数据库初始化失败的问题。
+
 ### 设置页面响应式布局
 
 - 修复远程连接设置页面在宽屏下固定最大宽度导致右侧大面积空白的问题；页面内容现在会随可用宽度伸缩，并在窄分辨率下让标题、状态徽标和操作按钮自动换行。
+
+### Tab 图标在 CLI 工具变更后不刷新
+
+- 修复项目的 `cli_tool` 从一种 CLI 切换为另一种（例如 codex 改为 opencode）后，已启动会话的 Tab 厂商图标仍停留在原始工具的问题。Tab 图标现在优先按照项目当前配置的 CLI 工具解析，不再仅依赖会话启动时的命令行推断。
+
+### Tab CLI 工具图标补齐与新增 Kimi
+
+- 修复 OpenCode、Pi、Amp、Aider、Crush、Cline、Goose 等没有厂商归属的 CLI 工具在 Tab 上不显示图标的问题；Tab 图标回退链调整为厂商图标 -> CLI 工具图标 -> 无图标，普通 Tab、Workspan Tab 与拖拽预览使用同一套回退。
+- 新增 Kimi CLI 工具支持：命令为 `kimi`，使用 LobeHub Kimi 彩色图标，`vendor` 为 `kimi`（沿用现有厂商图标）；暂不接入历史记录解析。
 
 ## [V1.3.4] - 2026-08-05
 

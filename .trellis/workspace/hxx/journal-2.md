@@ -600,3 +600,135 @@ Claude、Codex、Pi、Grok 的非强制配置目录解析在已选目录失效�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 77: 修复 Tab 图标在项目 CLI 工具变更后不刷新
+
+**Date**: 2026-08-07
+**Task**: 修复 Tab 图标在项目 CLI 工具变更后不刷新
+**Branch**: `master`
+
+### Summary
+
+项目 cli_tool 从 codex 改为 opencode 后，已启动会话的 Tab 图标不更新——因 inferSessionVendor 只读 session.startupCmd，不参考 project.cli_tool。改为 project 优先 + session 兜底，与 buildTerminalTabHoverInfo 已有模式一致。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9bf48abf` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 78: 支持 Windows 便携版与自定义数据目录
+
+**Date**: 2026-08-07
+**Task**: 支持 Windows 便携版与自定义数据目录
+**Branch**: `master`
+
+### Summary
+
+实现 Windows 便携版、自定义数据根目录、迁移重启和便携更新分流，并修复 Windows verbatim 路径导致 SQLite URL 启动失败。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eafe5da3` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 79: 补齐 Tab CLI 工具图标并新增 Kimi
+
+**Date**: 2026-08-07
+**Task**: 补齐 Tab CLI 工具图标并新增 Kimi
+**Branch**: `master`
+
+### Summary
+
+OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 上不显示图标——Tab 只用 VendorIcon，这些工具 descriptor 的 vendor 为 null。改为厂商图标 -> CLI 工具图标 -> 无 的回退链，新增 cliToolIcon prop 贯穿 SortableTab/SortableWorkspanTab/DragOverlayTab。同时新增 Kimi CLI 工具（命令 kimi，vendor kimi，LobeHub Kimi 彩色图标），暂不接入历史解析。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d6036889` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 80: 同步 master 并发布版本 1.3.5
+
+**Date**: 2026-08-10
+**Task**: 同步 master 并发布版本 1.3.5
+**Branch**: `master`
+
+### Summary
+
+拉取 origin/master，将 package.json、package-lock.json、src-tauri/Cargo.toml、Cargo.lock 和 tauri.conf.json 的应用版本统一更新为 1.3.5；cargo check 通过，版本一致性校验通过，未推送远端。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eabf83fc` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

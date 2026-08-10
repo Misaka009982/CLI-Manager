@@ -2,12 +2,15 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { prepareElectronPetRuntime } from "./prepare-electron-pet-runtime.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const targetRoot = path.join(repoRoot, "src-tauri", "target");
 const profile = process.env.TAURI_ENV_DEBUG === "true" ? "debug" : "release";
 const universalDir = path.join(targetRoot, "universal-apple-darwin", profile);
 const helperBinaryNames = ["cli-manager-daemon", "cli-manager-codex-proxy"];
+
+await prepareElectronPetRuntime();
 
 if (process.env.TAURI_ENV_PLATFORM !== "darwin" || process.env.TAURI_ENV_ARCH !== "universal") {
   process.exit(0);

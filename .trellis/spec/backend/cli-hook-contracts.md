@@ -983,8 +983,8 @@ pi.on("agent_start", reportRunning);
 
 ### 1. Scope / Trigger
 
-- Trigger：修改 `desktop_pet_window_sync`、桌宠/ Bubble bounds 与 hit-region 原生命令、两个静态 WebView 窗口或 Pi 决策卡的前端路由。
-- Applies to：Tauri 窗口生命周期、调用方授权、Windows 原生窗口区域、跨平台回退，以及现有 Pi broker 与 Bubble UI 的边界。
+- Trigger：修改 `desktop_pet_window_sync`、桌宠/ Bubble bounds 与 hit-region 原生命令、`desktop_pet_companion` 子进程命令、两个静态 WebView 窗口、Electron companion 或 Pi 决策卡的前端路由。
+- Applies to：Tauri 窗口生命周期、Electron companion 握手与回退、调用方授权、Windows 原生窗口区域、跨平台回退，以及现有 Pi broker 与 Bubble UI 的边界。
 
 ### 2. Signatures
 
@@ -994,10 +994,15 @@ desktop_pet_window_set_bounds(lifecycleToken, surfaceEpoch, ...)  // caller: des
 desktop_pet_bubble_window_set_bounds(lifecycleToken, surfaceEpoch, ...)
 desktop_pet_window_set_hit_regions(lifecycleToken, surfaceEpoch, ...)
 desktop_pet_window_hide(lifecycleToken, surfaceEpoch)             // caller: desktop-pet
+desktop_pet_companion_status()                                   // caller: main
+desktop_pet_companion_sync(sync { protocolVersion, generation, deliveryRevision, config, snapshot, pet })
+desktop_pet_companion_send_action_result(actionResult { generation, requestId, brokerEpoch, accepted })
+desktop_pet_companion_stop()                                     // caller: main
 
 Window labels: main | desktop-pet | desktop-pet-bubble
 Authorization generation: lifecycleToken + pet/bubble surfaceEpoch
-Ordering: visibility generation > boundsRevision > regionRevision
+Ordering: visibility generation > deliveryRevision > boundsRevision > regionRevision
+Companion protocol: prefixed JSON Lines v1, process token, hello -> sync -> ready
 ```
 
 ### 3. Contracts
@@ -1008,7 +1013,11 @@ Ordering: visibility generation > boundsRevision > regionRevision
 - Windows Bubble 完成 bounds 更新后使用 `SW_SHOWNOACTIVATE` 显示，并重新应用 skip-taskbar 与 always-on-top；显示行为不得改变前台窗口。Windows hit regions 使用新建临时 HRGN 完整合并后一次性交给 `SetWindowRgn`，系统接管成功 region 的所有权。
 - 区域输入有数量、正尺寸、整数范围、窗口边界和表面必需区域约束。验证、创建、合并或应用任一步失败都必须清除 region 并恢复完整矩形命中，不能留下部分可点击窗口。非 Windows 实现验证请求后保留完整窗口命中并返回安全回退状态，不模拟不存在的原生穿透。
 - `desktop-pet-bubble` 使用独立最小权限 capability；不得通过默认 capability 继承 SQL、文件、剪贴板、更新器、进程或通知权限。自定义 Tauri 命令仍在 Rust 边界执行 caller/token/epoch/revision 校验。
-- Bubble 的决策提交只向主窗口发送既有 `desktop-pet-decision-resolve-request`，主窗口继续调用现有 broker 命令。窗口 transport 不新增模型可调用工具、不直接访问 loopback broker、不生成答案、不改变 `allow`/`deny` 校验，也不把决策/事故/完成正文送入 Replay、toast、系统通知或第三方通知。
+- Companion 四个命令只允许真实 caller `main`。Windows runtime 只能从 `BaseDirectory::Resource/resources/electron-pet` 解析固定 `electron.exe` 与 `app/main.cjs`，使用 `CREATE_NO_WINDOW`、piped stdin/stdout 和随机进程 token 启动；不得搜索 PATH、用户目录、工作目录或环境变量中的任意 Electron。非 Windows status 明确返回 unsupported，sync 不创建进程。
+- Companion reader 只解释固定前缀、token 与 `protocolVersion=1` 均匹配的行；其他 stdout 污染忽略，超长行、版本错误、child error 或 EOF 进入 fallback。host sync/actionResult 写入前注入 token 并 flush；sync revision 倒退幂等忽略，actionResult 必须精确匹配当前 generation。启动期 stdin/stdout/reader/write/hello/ready 任一步失败都 kill+wait 回收尚未登记的 child；登记后的 stop 先写 shutdown，短暂等待后 kill+wait。
+- Rust 不把 Electron payload 当作 broker 或窗口授权。child action 先读取当前进程 generation，再校验 `lifecycleToken`、Pet/Bubble `surfaceEpoch`、动作所属表面、有限数值、字符串上限和 handoff 平台白名单，最后只映射到现有 `desktop-pet-open-target`、设置、位置、尺寸、handoff、决策、事故、隐藏和 Bubble empty 事件。Electron 不获得任意 event name、任意 invoke 或 loopback URL。
+- 进程 reader 退出只在 token 仍属于当前登记进程时取走 child、回收并发出 `desktop-pet-companion-status { status: fallback }`；旧 reader 不得杀死新进程。`RunEvent::Exit` 必须调用 state shutdown。前端收到 fallback/不兼容/写失败后先恢复 Tauri 期望可见性；只有 ready/active 才隐藏 Tauri，避免两个 runtime 同时可见或失败后全不可见。
+- Bubble 的决策提交只向主窗口发送既有 `desktop-pet-decision-resolve`，主窗口继续调用现有 broker 命令。窗口 transport 不新增模型可调用工具、不直接访问 loopback broker、不生成答案、不改变 `allow`/`deny` 校验，也不把决策/事故/完成正文送入 Replay、toast、系统通知或第三方通知。Electron 只通过 `actionResult` 得知该次 broker resolve 是否成功，Tauri Bubble 继续收到同一现有 result 事件。
 
 ### 4. Validation & Error Matrix
 
@@ -1023,22 +1032,30 @@ Ordering: visibility generation > boundsRevision > regionRevision
 | Windows region 事务失败 | 尝试清除旧 region 并恢复完整矩形命中；清除成功时返回 `false`，清除本身失败时返回稳定错误，绝不提交部分新 region。 |
 | macOS/Linux region 请求 | 保留完整窗口命中并返回 `false`；窗口与 broker 继续可用。 |
 | Bubble WebView 直接调用 decision broker | 不提供该能力；必须经主窗口现有动作事件。 |
+| 非 `main` 调用 companion 命令 | 返回 `desktop_pet_companion_caller_forbidden`；不启动、写入或停止 child。 |
+| runtime 文件缺失或当前平台不是 Windows | status 返回 unavailable/unsupported；Tauri 继续承担可见表面。 |
+| hello/ready 超时、协议版本错误或 child 提前退出 | 回收 child、记录稳定 reason、发出 fallback；不得隐藏 Tauri。 |
+| active child 写入失败或 stdout EOF | 从 state 原子取走对应 token 的 child并回收，发出 fallback；旧 reader 不影响新 child。 |
+| Electron action token/generation/表面/类型无效 | 拒绝动作且不向主窗口 emit；不修改 broker、设置或窗口状态。 |
+| actionResult 对应旧 generation | 返回 stale；新 generation 的卡片保持可重试，不伪造成功。 |
 
 ### 5. Good/Base/Bad Cases
 
 - Good：宠物拖动产生多次测量，只有当前 token/epoch 的最新 bounds 生效，Bubble 以 inactive show 跟到最终锚点。
 - Good：`SetWindowRgn` 合并失败后整个 Bubble 仍可点击，用户可以继续回答决策。
-- Base：macOS/Linux 显示独立 Bubble，但透明间隙按完整窗口命中，不宣称 Windows 等价能力。
+- Good：Electron child 崩溃后 reader 只回收同 token 进程并发出 fallback，主窗口立即恢复 Tauri Pet/Bubble，Pi 待决策仍可回答。
+- Base：macOS/Linux 显示独立 Tauri Bubble，但透明间隙按完整窗口命中，不打包或启动 Electron。
 - Bad：把 caller label、target label 或 token 当成普通 payload 字段后直接执行 Win32 调用。
-- Bad：Bubble 直接 resolve broker、注册新的 permission 工具，或在窗口隐藏/超时后合成 `allow`/`deny`。
+- Bad：Bubble 或 Electron 直接 resolve broker、注册新的 permission 工具，或在窗口隐藏/超时后合成 `allow`/`deny`。
+- Bad：把 Electron ready 之前的 spawn 成功视为 active，先隐藏 Tauri 再等待握手，导致超时后桌宠完全不可见。
 
 ### 6. Tests Required
 
-- Rust：bounds/token/surface epoch 格式、caller/target 矩阵、可见性与 revision 单调性、region 数量/边界/必需区域及 fail-open 路径测试源。
+- Rust：bounds/token/surface epoch 格式、caller/target 矩阵、可见性与 revision 单调性、region 数量/边界/必需区域及 fail-open 路径测试源；companion 还需覆盖 main caller、generation/revision、握手超时、提前退出、写失败、旧 reader token 隔离、shutdown 与动作白名单。
 - 静态 capability 差集：Bubble 无 SQL、文件、剪贴板、更新器、进程与通知权限。
 - TypeScript/Node：严格 config-before-snapshot、双表面扇出、目标 epoch/delivery revision、layout request/measurement/geometry 迟到拒绝、失败不提交 fingerprint、surface epoch 接受/去重与隐藏清空策略；coordinator-ready/ready 启动握手由定向静态审查和平台冒烟覆盖。
-- 手动 Windows：前台窗口保持、任务栏/Alt+Tab、完整交互区、透明间隙穿透、跨 DPI 跟随和迟到 show 拒绝。
-- 手动 macOS/Linux：独立 Bubble 与完整窗口命中回退可操作，Pi 断连仍回退原生 UI。
+- 手动 Windows：前台窗口保持、任务栏/Alt+Tab、Tauri/Electron 互斥、child 强制结束自动回退、完整交互区、透明间隙穿透、跨 DPI 跟随和迟到 show/action 拒绝。
+- 手动 macOS/Linux：独立 Tauri Bubble 与完整窗口命中回退可操作，Pi 断连仍回退原生 UI，bundle 不含 Electron resource。
 
 ### 7. Wrong vs Correct
 

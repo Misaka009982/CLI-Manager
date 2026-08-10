@@ -108,6 +108,7 @@ const DEFAULT_CONFIG: DesktopPetConfigPayload = {
   lifecycleToken: "",
   settings: {
     enabled: true,
+    runtime: "tauri",
     petId: BUILTIN_DESKTOP_PET_ID,
     alwaysOnTop: true,
     agentSessionsOnly: true,

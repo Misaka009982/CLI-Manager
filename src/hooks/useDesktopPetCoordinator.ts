@@ -36,6 +36,7 @@ import {
   type DesktopPetSizeChangePayload,
   type DesktopPetSnapshot,
   type DesktopPetSurfaceReadyPayload,
+  type InstalledPet,
 } from "../lib/desktopPet";
 import {
   commitDesktopPetDeliveryPlan,
@@ -51,6 +52,15 @@ import {
   type DesktopPetDeliveryFingerprintState,
 } from "../lib/desktopPetTransport";
 import {
+  DESKTOP_PET_COMPANION_PROTOCOL_VERSION,
+  DESKTOP_PET_COMPANION_STATUS_EVENT,
+  type DesktopPetCompanionActionResultMessage,
+  type DesktopPetCompanionGeneration,
+  type DesktopPetCompanionStatus,
+  type DesktopPetCompanionStatusEvent,
+  type DesktopPetCompanionSyncMessage,
+} from "../lib/desktopPetCompanion";
+import {
   deriveDesktopPetBubbleContent,
   updateDesktopPetActiveCompletionId,
 } from "../lib/desktopPetBubble";
@@ -59,7 +69,10 @@ import { useI18n } from "../lib/i18n";
 import { logWarn } from "../lib/logger";
 import { useProjectStore } from "../stores/projectStore";
 import { useSessionStore } from "../stores/sessionStore";
-import { useSettingsStore } from "../stores/settingsStore";
+import {
+  BUILTIN_DESKTOP_PET_ID,
+  useSettingsStore,
+} from "../stores/settingsStore";
 import { useTerminalStore } from "../stores/terminalStore";
 import { useWorktreeStore } from "../stores/worktreeStore";
 import { useRemoteHandoffStore } from "../stores/remoteHandoffStore";
@@ -128,13 +141,22 @@ export function useDesktopPetCoordinator({
   const [activeCompletionId, setActiveCompletionId] = useState<string | null>(null);
   const [temporarilyHidden, setTemporarilyHidden] = useState(false);
   const [lifecycleToken, setLifecycleToken] = useState("");
+  const [companionActive, setCompanionActive] = useState(false);
+  const [companionBlocked, setCompanionBlocked] = useState(false);
+  const [companionPet, setCompanionPet] = useState<InstalledPet | null>(null);
   const decisionRequests = useDesktopPetAlertStore((state) => state.decisionRequests);
   const incidents = useDesktopPetAlertStore((state) => state.incidents);
   const hasActionablePetItem = decisionRequests.length > 0 || incidents.length > 0;
+  const companionRequested = desktopPet.runtime === "electron";
+  const companionShouldRun = appReady
+    && settingsLoaded
+    && companionRequested
+    && (desktopPet.enabled || hasActionablePetItem);
   const petWindowVisible = appReady
     && settingsLoaded
     && (hasActionablePetItem || (desktopPet.enabled && !temporarilyHidden))
     && !(desktopPet.autoHideFullscreen && terminalFullscreen && !hasActionablePetItem);
+  const tauriPetWindowVisible = petWindowVisible && !companionActive;
 
   useEffect(() => {
     if (!desktopPet.enabled) setTemporarilyHidden(false);
@@ -341,20 +363,26 @@ export function useDesktopPetCoordinator({
     petWindowVisible,
   ]);
 
+  const tauriBubbleWindowVisible = bubbleWindowVisible && !companionActive;
   const configPayload = useMemo<DesktopPetConfigPayload>(() => ({
     language,
-    visible: petWindowVisible,
-    bubbleVisible: bubbleWindowVisible,
+    visible: tauriPetWindowVisible,
+    bubbleVisible: tauriBubbleWindowVisible,
     lifecycleToken,
     settings: desktopPet,
     labels: buildDesktopPetLabels(language),
   }), [
-    bubbleWindowVisible,
     desktopPet,
     language,
     lifecycleToken,
-    petWindowVisible,
+    tauriBubbleWindowVisible,
+    tauriPetWindowVisible,
   ]);
+  const companionConfigPayload = useMemo<DesktopPetConfigPayload>(() => ({
+    ...configPayload,
+    visible: petWindowVisible,
+    bubbleVisible: bubbleWindowVisible,
+  }), [bubbleWindowVisible, configPayload, petWindowVisible]);
 
   const configPayloadRef = useRef(configPayload);
   const publicSnapshotRef = useRef(publicSnapshot);
@@ -367,6 +395,10 @@ export function useDesktopPetCoordinator({
   const stateSendForceRef = useRef(false);
   const deliveryStatsRef = useRef({ requests: 0, emitted: 0, skipped: 0, coalesced: 0 });
   const deliveryRevisionRef = useRef(0);
+  const companionDeliveryRevisionRef = useRef(0);
+  const companionActiveRef = useRef(companionActive);
+  const companionRequestedRef = useRef(companionRequested);
+  const companionShouldRunRef = useRef(companionShouldRun);
   const onActivateSessionRef = useRef(onActivateSession);
   const onOpenSettingsRef = useRef(onOpenSettings);
   const updateSettingRef = useRef(updateSetting);
@@ -397,9 +429,12 @@ export function useDesktopPetCoordinator({
   onActivateSessionRef.current = onActivateSession;
   onOpenSettingsRef.current = onOpenSettings;
   updateSettingRef.current = updateSetting;
-  petWindowVisibleRef.current = petWindowVisible;
-  bubbleWindowVisibleRef.current = bubbleWindowVisible;
+  petWindowVisibleRef.current = tauriPetWindowVisible;
+  bubbleWindowVisibleRef.current = tauriBubbleWindowVisible;
   bubbleCompletionIdRef.current = bubbleContent.completion?.id ?? null;
+  companionActiveRef.current = companionActive;
+  companionRequestedRef.current = companionRequested;
+  companionShouldRunRef.current = companionShouldRun;
 
   const synchronizeDesktopPetWindow = useCallback(
     (closeMenu = true): Promise<string | null> => {
@@ -614,6 +649,159 @@ export function useDesktopPetCoordinator({
   }, []);
   sendStateRef.current = sendState;
 
+  useEffect(() => {
+    const unlistenStatus = listen<DesktopPetCompanionStatusEvent>(
+      DESKTOP_PET_COMPANION_STATUS_EVENT,
+      (event) => {
+        if (event.payload.protocolVersion !== DESKTOP_PET_COMPANION_PROTOCOL_VERSION) {
+          setCompanionActive(false);
+          setCompanionBlocked(true);
+          return;
+        }
+        if (event.payload.status === "ready") {
+          if (companionRequestedRef.current && companionShouldRunRef.current) {
+            setCompanionBlocked(false);
+            setCompanionActive(true);
+          } else {
+            setCompanionActive(false);
+            void invoke("desktop_pet_companion_stop").catch((error) => {
+              logWarn("Failed to stop stale desktop pet companion", error);
+            });
+          }
+          return;
+        }
+        setCompanionActive(false);
+        if (event.payload.status === "fallback") {
+          setCompanionBlocked(companionRequestedRef.current);
+        }
+      }
+    );
+    return () => {
+      void unlistenStatus.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (companionRequested) {
+      setCompanionBlocked(false);
+      return;
+    }
+    if (!companionActiveRef.current) {
+      setCompanionActive(false);
+      return;
+    }
+    void invoke("desktop_pet_companion_stop")
+      .then(() => setCompanionActive(false))
+      .catch((error) => {
+        logWarn("Failed to stop desktop pet companion after runtime switch", error);
+      });
+  }, [companionRequested]);
+
+  useEffect(() => {
+    if (!companionRequested || desktopPet.petId === BUILTIN_DESKTOP_PET_ID) {
+      setCompanionPet(null);
+      return;
+    }
+    let disposed = false;
+    setCompanionPet(null);
+    void invoke<InstalledPet | null>("desktop_pet_get_installed", {
+      petId: desktopPet.petId,
+    }).then((pet) => {
+      if (!disposed) setCompanionPet(pet);
+    }).catch((error) => {
+      if (!disposed) setCompanionPet(null);
+      logWarn("Failed to resolve desktop pet companion artwork", error);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [companionRequested, desktopPet.petId]);
+
+  useEffect(() => {
+    if (!appReady || !settingsLoaded || !companionRequested) return;
+    if (!companionShouldRun) {
+      if (companionActiveRef.current) {
+        void invoke("desktop_pet_companion_stop")
+          .then(() => setCompanionActive(false))
+          .catch((error) => {
+            logWarn("Failed to stop idle desktop pet companion", error);
+          });
+      }
+      return;
+    }
+    if (companionBlocked) return;
+    const currentLifecycleToken = lifecycleTokenRef.current;
+    const petSurfaceEpoch = petSurfaceEpochRef.current;
+    const bubbleSurfaceEpoch = bubbleSurfaceEpochRef.current;
+    if (!currentLifecycleToken || !petSurfaceEpoch || !bubbleSurfaceEpoch) return;
+
+    const generation: DesktopPetCompanionGeneration = {
+      lifecycleToken: currentLifecycleToken,
+      petSurfaceEpoch,
+      bubbleSurfaceEpoch,
+    };
+    const deliveryRevision = nextDesktopPetDeliveryRevision(
+      companionDeliveryRevisionRef.current
+    );
+    companionDeliveryRevisionRef.current = deliveryRevision;
+    const request: DesktopPetCompanionSyncMessage = {
+      protocolVersion: DESKTOP_PET_COMPANION_PROTOCOL_VERSION,
+      kind: "sync",
+      generation,
+      deliveryRevision,
+      config: {
+        ...companionConfigPayload,
+        lifecycleToken: currentLifecycleToken,
+      },
+      snapshot: publicSnapshot,
+      pet: companionPet,
+    };
+    let disposed = false;
+    void invoke<DesktopPetCompanionStatus>("desktop_pet_companion_sync", { request })
+      .then((status) => {
+        if (disposed) return;
+        if (
+          status.active
+          && status.protocolVersion === DESKTOP_PET_COMPANION_PROTOCOL_VERSION
+        ) {
+          if (companionRequestedRef.current && companionShouldRunRef.current) {
+            setCompanionBlocked(false);
+            setCompanionActive(true);
+          } else {
+            setCompanionActive(false);
+            void invoke("desktop_pet_companion_stop").catch((error) => {
+              logWarn("Failed to stop stale desktop pet companion synchronization", error);
+            });
+          }
+          return;
+        }
+        setCompanionActive(false);
+        setCompanionBlocked(companionRequestedRef.current);
+        if (status.reason) {
+          logWarn("Desktop pet companion unavailable; using Tauri fallback", status.reason);
+        }
+      })
+      .catch((error) => {
+        if (disposed) return;
+        setCompanionActive(false);
+        setCompanionBlocked(companionRequestedRef.current);
+        logWarn("Desktop pet companion synchronization failed; using Tauri fallback", error);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [
+    appReady,
+    companionBlocked,
+    companionConfigPayload,
+    companionPet,
+    companionRequested,
+    companionShouldRun,
+    lifecycleToken,
+    publicSnapshot,
+    settingsLoaded,
+  ]);
+
   useEffect(() => () => {
     if (nativeSyncRetryTimerRef.current !== null) {
       window.clearTimeout(nativeSyncRetryTimerRef.current);
@@ -659,9 +847,12 @@ export function useDesktopPetCoordinator({
       desktopPet.size,
       desktopPet.position,
       desktopPet.alwaysOnTop,
-      petWindowVisible
+      tauriPetWindowVisible
     );
-    const visibilityKey = desktopPetVisibilityKey(petWindowVisible, bubbleWindowVisible);
+    const visibilityKey = desktopPetVisibilityKey(
+      tauriPetWindowVisible,
+      tauriBubbleWindowVisible
+    );
     const geometryAlreadyApplied = petAppliedWindowConfigKeyRef.current === geometryKey;
     if (geometryAlreadyApplied) {
       petAppliedWindowConfigKeyRef.current = null;
@@ -677,14 +868,14 @@ export function useDesktopPetCoordinator({
     });
   }, [
     appReady,
-    bubbleWindowVisible,
     desktopPet.alwaysOnTop,
     desktopPet.position,
     desktopPet.size,
-    petWindowVisible,
     sendState,
     settingsLoaded,
     synchronizeDesktopPetWindow,
+    tauriBubbleWindowVisible,
+    tauriPetWindowVisible,
   ]);
 
   useEffect(() => {
@@ -896,6 +1087,31 @@ export function useDesktopPetCoordinator({
         });
       }
     );
+    const sendCompanionDecisionResult = (
+      requestId: string,
+      brokerEpoch: string,
+      requestLifecycleToken: string,
+      bubbleSurfaceEpoch: string,
+      accepted: boolean
+    ) => {
+      const petSurfaceEpoch = petSurfaceEpochRef.current;
+      if (!companionActiveRef.current || !petSurfaceEpoch) return Promise.resolve();
+      const request: DesktopPetCompanionActionResultMessage = {
+        protocolVersion: DESKTOP_PET_COMPANION_PROTOCOL_VERSION,
+        kind: "actionResult",
+        generation: {
+          lifecycleToken: requestLifecycleToken,
+          petSurfaceEpoch,
+          bubbleSurfaceEpoch,
+        },
+        requestId,
+        brokerEpoch,
+        accepted,
+      };
+      return invoke("desktop_pet_companion_send_action_result", { request }).catch((error) => {
+        logWarn("Failed to return desktop pet companion decision result", error);
+      });
+    };
     const unlistenDecisionResolve = listen<DesktopPetDecisionResolvePayload>(
       DESKTOP_PET_DECISION_RESOLVE_EVENT,
       (event) => {
@@ -927,16 +1143,32 @@ export function useDesktopPetCoordinator({
           answer,
         }).then(() => {
           useDesktopPetAlertStore.getState().removeDecision(requestId);
-          return emitTo(DESKTOP_PET_BUBBLE_WINDOW_LABEL, DESKTOP_PET_DECISION_RESULT_EVENT, {
+          void emitTo(DESKTOP_PET_BUBBLE_WINDOW_LABEL, DESKTOP_PET_DECISION_RESULT_EVENT, {
             ...resultPayload,
             accepted: true,
+          }).catch((error) => {
+            logWarn("Failed to return Tauri desktop pet decision result", error);
           });
+          void sendCompanionDecisionResult(
+            requestId,
+            brokerEpoch,
+            requestLifecycleToken,
+            bubbleSurfaceEpoch,
+            true
+          );
         }).catch((err) => {
           logWarn("Failed to resolve Pi decision from desktop pet", err);
-          return emitTo(DESKTOP_PET_BUBBLE_WINDOW_LABEL, DESKTOP_PET_DECISION_RESULT_EVENT, {
+          void emitTo(DESKTOP_PET_BUBBLE_WINDOW_LABEL, DESKTOP_PET_DECISION_RESULT_EVENT, {
             ...resultPayload,
             accepted: false,
           }).catch(() => {});
+          void sendCompanionDecisionResult(
+            requestId,
+            brokerEpoch,
+            requestLifecycleToken,
+            bubbleSurfaceEpoch,
+            false
+          );
         });
       }
     );

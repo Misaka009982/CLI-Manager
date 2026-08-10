@@ -6,7 +6,7 @@
 
 ### 1. Scope / Trigger
 
-- Trigger: 修改 `DesktopPetApp`、`DesktopPetBubbleApp`、`DesktopPetAlertCards`、`desktopPet.css`、`desktopPetBubble.css`、`useDesktopPetCoordinator`、`desktopPet.ts`、`desktopPetBubble.ts`、`desktopPetMenu.ts`、`desktopPetTransport.ts`、`terminalStore` 的桌宠状态元数据，或任一桌宠窗口的原生几何、生命周期与命中区域。
+- Trigger: 修改 `DesktopPetApp`、`DesktopPetBubbleApp`、`DesktopPetAlertCards`、`desktopPet.css`、`desktopPetBubble.css`、`useDesktopPetCoordinator`、`desktopPet.ts`、`desktopPetBubble.ts`、`desktopPetMenu.ts`、`desktopPetTransport.ts`、`desktopPetCompanion.ts`、`electron-pet/`、`desktop_pet_companion.rs`、`terminalStore` 的桌宠状态元数据，或任一桌宠窗口的原生几何、生命周期与命中区域。
 - Applies to: Claude、Codex、Grok、Pi、自定义 Agent 终端与 daemon 后台任务；Pi 决策卡和中断事故是通用卡片通道中的 Pi 专属生产源。
 
 ### 2. Signatures
@@ -31,6 +31,12 @@ DesktopPetWindowGeneration = {
   boundsRevision,
   regionRevision
 }
+
+DesktopPetRuntime = tauri | electron
+DesktopPetCompanionProtocol = 1
+DesktopPetCompanionGeneration = lifecycleToken + petSurfaceEpoch + bubbleSurfaceEpoch
+DesktopPetCompanionHostMessage = sync | actionResult | shutdown
+DesktopPetCompanionChildMessage = hello | ready | action | error
 
 DesktopPetSnapshot = {
   statusCounts,
@@ -58,6 +64,14 @@ DesktopPetSnapshot = {
 - 新决策或事故可在用户关闭常规桌宠时临时唤起窗口；新的可操作项还必须重新显示被临时隐藏的原生窗口。双窗口原生隐藏成功后由 Rust 以当前 token/epoch 回报主窗口并记录进程内临时隐藏状态；若两窗已隐藏但该回报本身失败，当前 Pet 只针对稳定的 `pet_window_hidden_event_failed` 清除本地内容并以同一 token/epoch 补发，不能把其他隐藏错误伪装成成功。普通完成到期或快照刷新不得意外重新显示，只有新事故/决策、用户重新启用设置或应用重启解除。待决策期间不得执行“隐藏桌宠”，且决策/事故优先于全屏自动隐藏，避免 Pi 在不可见卡片上永久等待。项目设置仍控制普通桌宠可见性，桌宠生命周期只由 CLI-Manager 应用状态管理。
 - Pi 决策提交只有 Rust broker 返回成功后才移除卡片；失败保留卡片、显示本地化重试提示并记录诊断，绝不把关闭菜单、超时或断开当作回答。仅有决策/事故而没有普通 target 时，不得伪造可跳转的当前 target。事故卡若对应 daemon-only 后台任务，必须携带/推导 `daemonOnly=true`，点击后先 attach 再跳回。
 - Pi 心跳仅更新已有运行态，不进入 Replay、toast、系统通知、第三方通知或无客户端 Hook 缓存；前端与 daemon 各自执行 60 秒看门，并以相同稳定事故 ID 合并最终错误/心跳超时。系统睡眠或看门线程异常漂移恢复后先留出一个新心跳窗口，不把整机暂停误报为中断；主窗口关闭时后台任务仍不会永久停留在绿色。
+- Windows 设置可在 `tauri` 与 `electron` runtime 间互斥选择；旧配置、无效值及非 Windows 首次配置均保持 `tauri`。Tauri 双表面始终保留为基准实现和回退路径，不删除、不动态重建。Electron 是随 Windows 安装包内置的可选 companion，不得在 macOS/Linux 启动或进入对应安装包资源。
+- CLI-Manager 主窗口仍是桌宠 config、snapshot、Pi broker、事故、handoff、持久设置和宠物素材描述的唯一权威。Electron 不直接访问 SQL、终端、Hook、loopback broker、设置文件或宠物目录；主窗口只把 `desktop_pet_get_installed` 已解析的只读 `InstalledPet` 描述随完整 sync 发送，Electron 只解析该根目录内的状态素材。
+- Companion v1 使用 stdin/stdout JSON Lines，固定前缀为 `CLI_MANAGER_DESKTOP_PET `，单行上限 1 MiB。Rust 生成进程 token 并通过命令行传入；双方每条协议消息同时匹配 token 与 `protocolVersion=1`。启动严格执行 `hello → sync → ready`，hello/ready 各 5 秒超时；stdout 其他文本忽略，协议错误、写入失败、进程退出、窗口加载失败、renderer 崩溃或无响应都进入 fallback。
+- Rust 只在 Electron 返回 `ready` 后报告 active；coordinator 仅在 active 时把 Tauri Pet/Bubble 两窗同步为隐藏。fallback 必须先把 active 清零，再按用户期望的 `visible/bubbleVisible` 恢复 Tauri 两窗；同一次 Electron 选择周期失败后停止自动重启，切回 Tauri 再选择 Electron 或重启应用才重试，避免崩溃循环。隐藏、禁用、退出或切换 runtime 时先发送 `shutdown`，最多等待 200 ms 后强制终止；应用退出仍有 Rust 兜底回收。
+- 每次 companion `sync` 携带完整 config/snapshot、只读 pet 描述、单调 `deliveryRevision` 和当前三元 generation。Electron 只接受更新 revision；generation 变化必须清除旧菜单和“提交中”决策状态。Electron action 不得自报授权代际：主进程只接受 preload 白名单动作，再用当前 generation 补齐 token/epoch；Rust 二次校验动作类型、表面、有限数值、字符串长度和 handoff 平台后，映射到现有主窗口事件。Pi `actionResult` 是唯一额外 host 回执，broker 成功/失败语义不由 Electron 推断。
+- Electron 使用同 bounds 的 `renderWin` 与 `hitWin`：前者不可聚焦且始终 `setIgnoreMouseEvents(true)`，只画宠物；后者初始忽略输入，收到 renderer 上报后以 `setShape` 限制为宠物、状态、菜单和 Bubble 交互矩形，并直接绘制需要光标/焦点的控件。两窗透明、无装饰、skip-taskbar、不进 Alt+Tab，窗口展开以宠物屏幕位置为锚点选择空间更充足一侧；拖动使用 Electron 全局 DIP 坐标并通过 `screenToDipPoint`/`dipToScreenPoint` 与持久物理坐标往返。
+- Electron 逻辑上仍保留 Pet 与 Bubble 两个表面：菜单不复制决策/事故/完成，Bubble 不复制快捷操作。决策顺序、事故顺序、8 秒完成摘要及悬停暂停、失败重试、状态筛选、远程托管、隐藏、设置、尺寸、锁定位置、工作动画、`.clipet` 与 Codex sprite 必须与 Tauri 语义等价；为共享几何可显示在同一 panel，不得因此合并状态所有权或绕过 surface epoch。
+- Windows bundle 准备脚本固定 Electron `41.10.2`，从官方 release 下载与同版本 `SHASUMS256.txt` 校验，缓存只位于 `src-tauri/target/electron-runtime-cache`；最终 runtime 与 app 源复制到受管、gitignored 的 `src-tauri/resources/electron-pet`，并写入无时间戳 manifest。`tauri.windows.conf.json` 是唯一添加该 resource 的平台配置；根 `package.json`/`package-lock.json` 不增加 Electron，macOS/Linux bundle 资源保持不变。
 - 现有远程托管、任务跳回、大小/位置/置顶、`.clipet` 与 Codex Pets 能力必须保留。
 
 ### 4. Validation & Error Matrix
@@ -82,6 +96,12 @@ DesktopPetSnapshot = {
 | Heartbeat 在 Stop 后迟到 | 不把 done/failed/attention 重开为 running。 |
 | 旧 Stop/StopFailure 晚于新决策到达 | 拒绝旧时间线副作用，不删除新决策、不新增过时事故。 |
 | daemon-only 事故点击“打开当前会话” | 先恢复后台 daemon 会话，再激活对应终端。 |
+| Electron runtime 缺失、版本不兼容、握手超时或启动失败 | 保持/恢复 Tauri Pet 与 Bubble；本次选择周期不循环重启。 |
+| Electron 已 ready 后 stdin 写入失败、子进程退出或 renderer 故障 | 发送 fallback 状态，Tauri 两窗按当前期望可见性自动恢复。 |
+| Electron action 使用旧 generation、错误表面或非白名单动作 | Rust 拒绝且不触发主窗口动作；新 sync 清除旧提交态。 |
+| 切换到 Tauri、禁用桌宠或应用退出 | 发送受 token 保护的 shutdown，超时后回收子进程；不存在双 runtime 同时可见。 |
+| 非 Windows 读取到 `runtime=electron` | companion 返回 unsupported，Tauri 安全回退；不解析或启动 Electron resource。 |
+| Electron 官方 zip 校验失败或缺少必需文件 | Windows bundle 准备失败，不生成缺少 companion 的安装包。 |
 
 ### 5. Good/Base/Bad Cases
 
@@ -104,9 +124,12 @@ DesktopPetSnapshot = {
 - `desktopPetMenuGeometry.test.mjs`：普通菜单多 DPI 四角/负坐标、内容高度扩窗、工作区压缩和宠物锚点稳定。
 - `desktopPetTransport.test.mjs`：双窗口扇出、严格 config-before-snapshot、目标 epoch/delivery revision、layout request/measurement/geometry 迟到拒绝、完整策略 fingerprint、lifecycle token、surface epoch 接受/去重、隐藏清空和失败重试。
 - `desktopPetStatus.test.mjs`：完成/失败/attention 不被 PTY 输出重开；仅显示非零颜色且筛选颜色归零时清理。
-- Rust 静态/单测：Pi broker 请求与答案验证、heartbeat 事件范围与 daemon 60 秒看门、稳定事故 ID、Tauri 决策命令注册；桌宠窗口还需覆盖 bounds/token/surface epoch/caller-target 矩阵、region 输入与 revision。
+- `desktopPetCompanion` 定向静态检查：协议常量/前缀/1 MiB 上限一致，hello/sync/ready/shutdown、generation、revision、action 白名单、`actionResult` 与 fallback 状态均有结构覆盖。
+- `electron-pet` Node 静态检查：所有 `.cjs`/`.mjs` 通过 `node --check`；检查 `contextIsolation=true`、`nodeIntegration=false`、sandbox、CSP、父进程监控、render/hit 职责、shape 上限、文本转义、素材根路径约束与无 shell/broker/数据库访问。
+- 打包静态检查：`tauri.windows.conf.json` 仅 Windows 引入 `resources/electron-pet/**/*`；workflow runtime 版本与准备脚本一致；下载使用官方 SHASUMS，输出 manifest 含版本、架构、协议、archive/source SHA-256。
+- Rust 静态/单测：Pi broker 请求与答案验证、heartbeat 事件范围与 daemon 60 秒看门、稳定事故 ID、Tauri 决策命令注册；桌宠窗口还需覆盖 bounds/token/surface epoch/caller-target 矩阵、region 输入与 revision；companion 还需覆盖 caller、请求格式、握手失败、进程退出与 action 白名单。
 - TypeScript 静态检查：快照、标签、卡片与协调器类型一致。
-- 手动发布前：Windows 10/11 多显示器/DPI、inactive show 前台保持、透明间隙点击穿透、长中英文问题、多个 Agent 并发、断开回退、Codex Pets 与远程托管回归；macOS/Linux 验证完整窗口命中安全回退。
+- 手动发布前：Windows 10/11 多显示器/DPI、inactive show 前台保持、Tauri/Electron 互斥切换、强制结束 Electron 后自动回退、透明间隙点击穿透、长中英文问题、多个 Agent 并发、断开回退、Codex Pets 与远程托管回归；macOS/Linux 验证完整窗口命中安全回退且安装包不含 Electron runtime。
 
 ### 7. Wrong vs Correct
 

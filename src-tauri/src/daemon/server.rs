@@ -57,6 +57,8 @@ pub const MAX_SESSIONS: usize = 64;
 pub const HOOK_CACHE_MAX: usize = 200;
 const OUTPUT_BUFFERING_DURATION: Duration = Duration::from_millis(5);
 const OUTPUT_BUFFERING_MAX_BYTES: usize = 64 * 1024;
+const CLIENT_OUTPUT_HIGH_WATERMARK: usize = 100_000;
+const CLIENT_OUTPUT_LOW_WATERMARK: usize = 5_000;
 const CLIENT_OUTPUT_QUEUE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const CLIENT_CONTROL_QUEUE_MAX_FRAMES: usize = 256;
 
@@ -663,6 +665,7 @@ struct ClientHandle {
     writer: Arc<ClientWriter>,
     attached: HashSet<String>,
     unacknowledged_chars: HashMap<String, usize>,
+    flow_control_paused: HashSet<String>,
     last_sent_sequence: HashMap<String, u64>,
     last_acknowledged_sequence: HashMap<String, u64>,
     attaching: HashMap<String, Vec<DaemonFrame>>,
@@ -702,6 +705,7 @@ pub struct DaemonHost {
     pty: PtyManager,
     sessions: Mutex<HashMap<String, SharedSession>>,
     clients: Mutex<HashMap<u64, ClientHandle>>,
+    output_flow_control: (Mutex<()>, Condvar),
     last_idle_since: Mutex<Instant>,
     /// 无客户端期间收到的 hook 上报缓存，客户端连上后补发（契约）。
     hook_cache: Mutex<VecDeque<serde_json::Value>>,
@@ -726,6 +730,7 @@ impl DaemonHost {
             pty: PtyManager::new(),
             sessions: Mutex::new(HashMap::new()),
             clients: Mutex::new(HashMap::new()),
+            output_flow_control: (Mutex::new(()), Condvar::new()),
             last_idle_since: Mutex::new(Instant::now()),
             hook_cache: Mutex::new(VecDeque::new()),
             hook_gap_cache: Mutex::new(VecDeque::new()),
@@ -1213,10 +1218,17 @@ impl DaemonHost {
             if !client.attached.contains(session_id) {
                 continue;
             }
-            *client
-                .unacknowledged_chars
-                .entry(session_id.to_string())
-                .or_default() += char_count;
+            let unacknowledged = {
+                let count = client
+                    .unacknowledged_chars
+                    .entry(session_id.to_string())
+                    .or_default();
+                *count += char_count;
+                *count
+            };
+            if unacknowledged >= CLIENT_OUTPUT_HIGH_WATERMARK {
+                client.flow_control_paused.insert(session_id.to_string());
+            }
             client
                 .last_sent_sequence
                 .insert(session_id.to_string(), sequence);
@@ -1226,6 +1238,7 @@ impl DaemonHost {
                 if buffered_bytes > CLIENT_OUTPUT_QUEUE_MAX_BYTES {
                     client.writer.close();
                     client.attached.remove(session_id);
+                    client.flow_control_paused.remove(session_id);
                 }
                 continue;
             }
@@ -1233,6 +1246,7 @@ impl DaemonHost {
                 client.writer.close();
                 client.attached.remove(session_id);
                 client.unacknowledged_chars.remove(session_id);
+                client.flow_control_paused.remove(session_id);
                 client.last_sent_sequence.remove(session_id);
                 client.last_acknowledged_sequence.remove(session_id);
             }
@@ -1253,6 +1267,7 @@ impl DaemonHost {
             if client.writer.send_frame(&frame).is_err() {
                 client.writer.close();
                 client.attached.remove(session_id);
+                client.flow_control_paused.remove(session_id);
                 break;
             }
         }
@@ -1286,9 +1301,13 @@ impl DaemonHost {
                     client
                         .last_acknowledged_sequence
                         .insert(session_id.to_string(), sequence);
+                    if *remaining <= CLIENT_OUTPUT_LOW_WATERMARK {
+                        client.flow_control_paused.remove(session_id);
+                    }
                 }
             }
         }
+        self.notify_output_flow_control();
     }
 
     fn detach_session_from_clients(&self, session_id: &str) {
@@ -1296,11 +1315,13 @@ impl DaemonHost {
             for client in clients.values_mut() {
                 client.attached.remove(session_id);
                 client.unacknowledged_chars.remove(session_id);
+                client.flow_control_paused.remove(session_id);
                 client.last_sent_sequence.remove(session_id);
                 client.last_acknowledged_sequence.remove(session_id);
                 client.attaching.remove(session_id);
             }
         }
+        self.notify_output_flow_control();
     }
 
     fn detach_all_sessions_from_clients(&self) {
@@ -1308,11 +1329,64 @@ impl DaemonHost {
             for client in clients.values_mut() {
                 client.attached.clear();
                 client.unacknowledged_chars.clear();
+                client.flow_control_paused.clear();
                 client.last_sent_sequence.clear();
                 client.last_acknowledged_sequence.clear();
                 client.attaching.clear();
             }
         }
+        self.notify_output_flow_control();
+    }
+
+    fn wait_for_output_capacity(&self, session_id: &str) -> bool {
+        let (lock, changed) = &self.output_flow_control;
+        let mut state = match lock.lock() {
+            Ok(state) => state,
+            Err(_) => return false,
+        };
+        loop {
+            let can_continue = match self.clients.lock() {
+                Ok(mut clients) => {
+                    let mut blocked = false;
+                    for client in clients.values_mut() {
+                        if !client.attached.contains(session_id) {
+                            continue;
+                        }
+                        let unacknowledged = client
+                            .unacknowledged_chars
+                            .get(session_id)
+                            .copied()
+                            .unwrap_or(0);
+                        if client.flow_control_paused.contains(session_id) {
+                            if unacknowledged > CLIENT_OUTPUT_LOW_WATERMARK {
+                                blocked = true;
+                            } else {
+                                client.flow_control_paused.remove(session_id);
+                            }
+                        } else if unacknowledged >= CLIENT_OUTPUT_HIGH_WATERMARK {
+                            client.flow_control_paused.insert(session_id.to_string());
+                            blocked = true;
+                        }
+                    }
+                    !blocked
+                }
+                Err(_) => return false,
+            };
+            if can_continue {
+                return true;
+            }
+            state = match changed.wait(state) {
+                Ok(state) => state,
+                Err(_) => return false,
+            };
+        }
+    }
+
+    fn notify_output_flow_control(&self) {
+        let Ok(_state) = self.output_flow_control.0.lock() else {
+            return;
+        };
+        self.output_flow_control.1.notify_all();
     }
 }
 
@@ -1410,6 +1484,9 @@ fn emit_daemon_output(host: &DaemonHost, session_id: &str, data: &[u8]) {
         }
     }
     if sequence == 0 {
+        return;
+    }
+    if !host.wait_for_output_capacity(session_id) {
         return;
     }
     host.push_output_to_attached(
@@ -1763,6 +1840,7 @@ impl DaemonServer {
                     writer: Arc::clone(&writer),
                     attached: HashSet::new(),
                     unacknowledged_chars: HashMap::new(),
+                    flow_control_paused: HashSet::new(),
                     last_sent_sequence: HashMap::new(),
                     last_acknowledged_sequence: HashMap::new(),
                     attaching: HashMap::new(),
@@ -1797,6 +1875,7 @@ impl DaemonServer {
                 client.writer.close();
             }
         }
+        self.host.notify_output_flow_control();
         log::debug!("daemon client disconnected ({peer}, id={client_id})");
     }
 
@@ -1852,6 +1931,7 @@ impl DaemonServer {
                     writer: Arc::clone(&writer),
                     attached: HashSet::new(),
                     unacknowledged_chars: HashMap::new(),
+                    flow_control_paused: HashSet::new(),
                     last_sent_sequence: HashMap::new(),
                     last_acknowledged_sequence: HashMap::new(),
                     attaching: HashMap::new(),
@@ -1892,6 +1972,7 @@ impl DaemonServer {
                 client.writer.close();
             }
         }
+        self.host.notify_output_flow_control();
         log::debug!("daemon websocket client disconnected ({peer}, id={client_id})");
     }
 
@@ -2167,6 +2248,7 @@ impl DaemonServer {
                     let client = clients.get_mut(&client_id)?;
                     client.attached.insert(session_id.clone());
                     client.unacknowledged_chars.insert(session_id.clone(), 0);
+                    client.flow_control_paused.remove(&session_id);
                     client
                         .last_sent_sequence
                         .insert(session_id.clone(), latest_sequence);
@@ -2336,6 +2418,7 @@ impl DaemonServer {
             let client = clients.get_mut(&client_id)?;
             client.attached.insert(session_id.clone());
             client.unacknowledged_chars.insert(session_id.clone(), 0);
+            client.flow_control_paused.remove(&session_id);
             client.last_sent_sequence.insert(session_id.clone(), 0);
             client
                 .last_acknowledged_sequence
@@ -2386,6 +2469,7 @@ impl DaemonServer {
                     if let Some(client) = clients.get_mut(&client_id) {
                         client.attached.remove(&session_id);
                         client.unacknowledged_chars.remove(&session_id);
+                        client.flow_control_paused.remove(&session_id);
                         client.last_sent_sequence.remove(&session_id);
                         client.last_acknowledged_sequence.remove(&session_id);
                         client.attaching.remove(&session_id);
@@ -2721,6 +2805,7 @@ mod tests {
                 writer: ClientWriter::new(ClientTransport::Ndjson(Mutex::new(server_stream))),
                 attached: HashSet::new(),
                 unacknowledged_chars: HashMap::new(),
+                flow_control_paused: HashSet::new(),
                 last_sent_sequence: HashMap::new(),
                 last_acknowledged_sequence: HashMap::new(),
                 attaching: HashMap::new(),
@@ -2787,6 +2872,7 @@ mod tests {
                 writer: Arc::clone(&writer),
                 attached: HashSet::new(),
                 unacknowledged_chars: HashMap::new(),
+                flow_control_paused: HashSet::new(),
                 last_sent_sequence: HashMap::new(),
                 last_acknowledged_sequence: HashMap::new(),
                 attaching: HashMap::new(),
@@ -2846,6 +2932,7 @@ mod tests {
                 writer: ClientWriter::new(ClientTransport::Ndjson(Mutex::new(server_stream))),
                 attached: HashSet::from([session_id.to_string()]),
                 unacknowledged_chars: HashMap::from([(session_id.to_string(), 10)]),
+                flow_control_paused: HashSet::from([session_id.to_string()]),
                 last_sent_sequence: HashMap::from([(session_id.to_string(), 2)]),
                 last_acknowledged_sequence: HashMap::from([(session_id.to_string(), 1)]),
                 attaching: HashMap::new(),
@@ -2858,8 +2945,64 @@ mod tests {
         let client = clients.get(&1).unwrap();
         assert!(!client.attached.contains(session_id));
         assert!(!client.unacknowledged_chars.contains_key(session_id));
+        assert!(!client.flow_control_paused.contains(session_id));
         assert!(!client.last_sent_sequence.contains_key(session_id));
         assert!(!client.last_acknowledged_sequence.contains_key(session_id));
+        drop(peer);
+    }
+
+    #[test]
+    fn output_flow_control_waits_for_low_watermark() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = TcpStream::connect(address).unwrap();
+        let (server_stream, _) = listener.accept().unwrap();
+        let host = Arc::new(DaemonHost::new());
+        let session_id = "flow-control";
+        host.clients.lock().unwrap().insert(
+            1,
+            ClientHandle {
+                writer: ClientWriter::new(ClientTransport::Ndjson(Mutex::new(server_stream))),
+                attached: HashSet::from([session_id.to_string()]),
+                unacknowledged_chars: HashMap::from([(
+                    session_id.to_string(),
+                    CLIENT_OUTPUT_HIGH_WATERMARK - 1,
+                )]),
+                flow_control_paused: HashSet::new(),
+                last_sent_sequence: HashMap::new(),
+                last_acknowledged_sequence: HashMap::new(),
+                attaching: HashMap::new(),
+            },
+        );
+        let frame = DaemonFrame::Output {
+            session_id: session_id.to_string(),
+            sequence: 1,
+            cols: 80,
+            rows: 24,
+            data_base64: String::new(),
+        };
+        host.push_output_to_attached(session_id, 1, 1, &frame);
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let waiter_host = Arc::clone(&host);
+        let waiter_session = session_id.to_string();
+        std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            done_tx
+                .send(waiter_host.wait_for_output_capacity(&waiter_session))
+                .unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+        host.acknowledge_output(
+            1,
+            session_id,
+            1,
+            CLIENT_OUTPUT_HIGH_WATERMARK - CLIENT_OUTPUT_LOW_WATERMARK,
+        );
+        assert!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
         drop(peer);
     }
 

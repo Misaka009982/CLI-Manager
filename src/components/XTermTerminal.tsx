@@ -700,6 +700,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     scheduleFit,
     scheduleViewportRefresh,
     markViewportRefreshNeeded,
+    enqueueActiveWrite,
     attachPtyOutput,
     attachViewport,
     resetOutputState,
@@ -1837,6 +1838,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     closeContextMenu();
     if (!terminal) return;
     useTerminalStore.getState().markAttentionInputHandled(sessionId);
+    enqueueActiveWrite("\x1b[2J\x1b[H");
     terminalProcessManager.write(sessionId, "\x0c").catch((err) => reportPtyWriteError("clear", err));
     focusTerminalWithCodexCursorPolicy(terminal);
   };

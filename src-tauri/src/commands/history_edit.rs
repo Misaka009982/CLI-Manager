@@ -4,7 +4,7 @@
 //! - 路径复用 `validate_session_file_ref`（canonicalize + history scope 校验）。
 //! - 双守卫：文件指纹（`expected_updated_at`）拦截外部并发改动；目标行 role + 规范文本
 //!   复核拦截行号漂移。守卫失败返回稳定错误码，前端据此重载会话。
-//! - 首次写入某文件前整文件备份到 `.cli-manager/backups/`，支持一键还原。
+//! - 首次写入某文件前整文件备份到当前 CLI-Manager 数据根目录的 `backups/`，支持一键还原。
 //! - 写回 tmp + rename 原子替换；除目标行外其余行原始字节不动。
 //!
 //! 格式语义：

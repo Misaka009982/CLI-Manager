@@ -245,14 +245,9 @@ fn post(port: &str, token: &str, body: &[u8]) -> Result<(), HookNotifyError> {
 }
 
 fn write_failure_diagnostic(source: &str, event: &str, code: &str) {
-    let Some(home) = env::var_os("USERPROFILE")
-        .filter(|value| !value.is_empty())
-        .or_else(|| env::var_os("HOME").filter(|value| !value.is_empty()))
-        .map(PathBuf::from)
-    else {
+    let Ok(log_dir) = crate::app_paths::logs_dir() else {
         return;
     };
-    let log_dir = home.join(".cli-manager").join("logs");
     if fs::create_dir_all(&log_dir).is_err() {
         return;
     }
