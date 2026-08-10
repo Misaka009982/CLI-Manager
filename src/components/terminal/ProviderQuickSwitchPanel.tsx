@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Boxes, Check, CircleAlert, CircleCheck, CircleStop, GripVertical, RefreshCw, Settings, Zap } from "../icons";
+import { ArrowDown, ArrowLeftRight, ArrowUp, Boxes, Check, CircleAlert, GripVertical, RefreshCw, Settings, Zap } from "../icons";
 import { useI18n } from "../../lib/i18n";
 import type { NativeProviderAppType, NativeProviderFailoverProvider } from "../settings/providers/nativeProviderTypes";
 import { useAppConfirm } from "../ui/useAppConfirm";
@@ -118,24 +118,34 @@ function SortableProviderRow({
     isDragging,
   } = useSortable({ id, disabled: !canReorder, transition: DND_SORTABLE_TRANSITION });
 
+  // 独立卡片：每行自带边框 + 12px 圆角。选中态不用 3px 左竖条（那是 Material/VS Code
+  // 的语言），改成淡绿底 + 描边提亮 + 柔光投影，靠"整块抬起"表达选中。
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition: isDragging ? undefined : transition,
-    opacity: isDragging ? 0.55 : 1,
     position: "relative",
     zIndex: isDragging ? 1 : undefined,
-    borderColor: selected ? TERM_PANEL.green : TERM_PANEL.border,
-    borderLeftWidth: selected ? 3 : 1,
-    backgroundColor: selected ? panelColorTint(TERM_PANEL.green, 11) : TERM_PANEL.card,
-    ...(isDragging ? { boxShadow: `0 0 0 1px ${panelColorTint(TERM_PANEL.green, 60)}` } : {}),
+    borderRadius: 12,
+    borderColor: selected ? panelColorTint(TERM_PANEL.green, 42) : TERM_PANEL.border,
+    backgroundColor: isDragging
+      ? TERM_PANEL.cardInner
+      : selected
+        ? panelColorTint(TERM_PANEL.green, 10, TERM_PANEL.card)
+        : TERM_PANEL.card,
+    boxShadow: isDragging
+      ? `0 8px 20px ${panelColorTint("#000000", 50)}`
+      : selected
+        ? `0 0 14px ${panelColorTint(TERM_PANEL.green, 12)}`
+        : "none",
   };
 
-  // 手柄是真实可聚焦 button（旧实现是 aria-hidden 的 span，键盘完全够不到）。
+  // 手柄是真实可聚焦 button（旧实现是 aria-hidden 的 span，键盘完全够不到）；
+  // 排序是低频操作，默认淡出，hover/聚焦/拖拽中才显形，避免右侧排出一列点阵噪声。
   const handle = canReorder ? (
     <button
       ref={setActivatorNodeRef}
       type="button"
-      className="ui-focus-ring flex shrink-0 items-center px-1"
+      className={`ui-focus-ring flex shrink-0 items-center px-1 transition-opacity focus-visible:opacity-100 ${isDragging ? "opacity-100" : "opacity-0 group-hover/row:opacity-60"}`}
       style={{ color: TERM_PANEL.dim, cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
       title={dragLabel}
       aria-label={dragLabel}
@@ -147,7 +157,7 @@ function SortableProviderRow({
   ) : null;
 
   return (
-    <div ref={setNodeRef} className="rounded-lg border transition-colors" style={style}>
+    <div ref={setNodeRef} className="group/row relative border transition-colors" style={style}>
       {children(handle)}
     </div>
   );
@@ -354,10 +364,13 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
     <div className="flex h-full min-h-0 flex-col" style={{ color: TERM_PANEL.fg, backgroundColor: TERM_PANEL.bg }}>
       <div className="shrink-0 border-b px-3 py-3" style={{ borderColor: TERM_PANEL.border }}>
         <div className="mb-2 flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: TERM_PANEL.dim }}>{t("providerQuickSwitch.cliTypes")}</span>
+          <span className="text-[11px] font-semibold" style={{ color: TERM_PANEL.dim }}>{t("providerQuickSwitch.cliTypes")}</span>
           <span className="text-[10px]" style={{ color: TERM_PANEL.dim }}>{t(appTypeLabelKey(appType))}</span>
         </div>
-        <div role="tablist" aria-label={t("providerQuickSwitch.cliTypes")} className="flex gap-1 rounded-lg p-1" style={{ backgroundColor: TERM_PANEL.card }}>
+        {/* 分段控件：灰槽 + 当前项抬升一档的填充块。原实现用绿框描边，
+            绿色在本面板已被「当前供应商」占用，标签再用绿会稀释强调语义。
+            三格等宽（basis-0 + flex-1）避免「Grok Build」被截断成「Grok Build..」。 */}
+        <div role="tablist" aria-label={t("providerQuickSwitch.cliTypes")} className="flex gap-0.5 rounded-[10px] p-0.5" style={{ backgroundColor: TERM_PANEL.track }}>
           {APP_TYPES.map((type, index) => (
             <button
               key={type}
@@ -366,17 +379,18 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
               role="tab"
               aria-selected={appType === type}
               tabIndex={appType === type ? 0 : -1}
-              className="ui-focus-ring min-w-0 flex-1 truncate rounded-md px-2 py-1.5 text-[10px] font-semibold transition-colors"
+              className="ui-focus-ring flex min-w-0 flex-1 basis-0 items-center justify-center gap-1.5 rounded-lg px-1.5 py-1.5 text-[11px] font-semibold transition-colors"
               data-active={appType === type ? "true" : "false"}
               style={{
                 color: appType === type ? TERM_PANEL.fg : TERM_PANEL.dim,
-                backgroundColor: appType === type ? panelColorTint(TERM_PANEL.green, 16) : "transparent",
-                border: `1px solid ${appType === type ? panelColorTint(TERM_PANEL.green, 45) : "transparent"}`,
+                backgroundColor: appType === type ? TERM_PANEL.cardInner : "transparent",
+                boxShadow: appType === type ? `0 1px 2px ${panelColorTint("#000000", 35)}` : "none",
               }}
               onClick={() => selectAppType(type)}
               onKeyDown={(event) => handleTabKeyDown(event, index)}
             >
-              <span className="inline-flex items-center justify-center gap-1.5"><VendorIcon vendor={inferVendor(type)} size={13} /><span>{t(appTypeLabelKey(type))}</span></span>
+              <VendorIcon vendor={inferVendor(type)} size={13} />
+              <span className="min-w-0 truncate">{t(appTypeLabelKey(type))}</span>
             </button>
           ))}
         </div>
@@ -437,7 +451,7 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
         </div>
 
         <div className="mb-2 flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.12em]" style={{ color: TERM_PANEL.dim }}>{t("providerQuickSwitch.providerList")}</span>
+          <span className="text-[11px] font-semibold" style={{ color: TERM_PANEL.dim }}>{t("providerQuickSwitch.providerList")}</span>
           <span className="text-[10px]" style={{ color: TERM_PANEL.dim }}>{rows.length}</span>
         </div>
 
@@ -460,27 +474,17 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
             const selected = provider.id === currentId;
             const circuit = failover?.circuits.find((item) => item.providerId === provider.id)
               ?? (failover?.circuit.providerId === provider.id ? failover.circuit : null);
-            const circuitLabel = circuit?.status === "open"
-              ? t("providerCatalog.failover.circuit.open")
-              : circuit?.status === "halfOpen"
-                ? t("providerCatalog.failover.circuit.halfOpen")
-                : circuit?.status === "closed"
-                  ? t("providerCatalog.failover.healthy")
-                  : provider.ready
-                    ? t("providerCatalog.failover.healthy")
-                    : t("providerCatalog.failover.notReady");
             const vendor = inferVendor(`${provider.name} ${provider.model ?? ""} ${provider.baseUrl ?? ""}`);
-            const ReadyIcon = provider.ready ? CircleCheck : CircleAlert;
-            const CircuitIcon = circuit?.status === "open"
-              ? CircleStop
+            // 旧实现在正常态会渲染两个同义绿徽章（circuitLabel 回落 healthy + ready
+            // 「可入队」），未就绪时更会字面输出两遍「不可入队」。这里收敛成单一状态：
+            // 只有异常才给文字，正常态只留一个中性小点，绿色让位给「当前供应商」。
+            const status = circuit?.status === "open"
+              ? { color: TERM_PANEL.red, label: t("providerCatalog.failover.circuit.open") }
               : circuit?.status === "halfOpen"
-                ? Activity
-                : null;
-            const statusColor = circuit?.status === "open"
-              ? TERM_PANEL.red
-              : provider.ready
-                ? TERM_PANEL.green
-                : TERM_PANEL.yellow;
+                ? { color: TERM_PANEL.yellow, label: t("providerCatalog.failover.circuit.halfOpen") }
+                : provider.ready
+                  ? { color: TERM_PANEL.dim, label: null }
+                  : { color: TERM_PANEL.yellow, label: t("providerCatalog.failover.notReady") };
             return (
               <SortableProviderRow
                 key={provider.id}
@@ -498,7 +502,7 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                     aria-checked={selected}
                     tabIndex={index === 0 ? 0 : -1}
                     disabled={Boolean(quickSwitch.action) || !provider.ready}
-                    className="ui-focus-ring min-w-0 flex-1 px-2.5 py-2 text-left disabled:cursor-not-allowed disabled:opacity-55"
+                    className="ui-focus-ring min-w-0 flex-1 px-2.5 py-2.5 text-left disabled:cursor-not-allowed disabled:opacity-55"
                     onClick={() => void handleGlobalSwitch(provider)}
                     onKeyDown={(event) => handleRowKeyDown(event, index)}
                     title={provider.baseUrl ?? undefined}
@@ -507,14 +511,20 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                       <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md" style={{ backgroundColor: TERM_PANEL.cardInner }}>
                         <VendorIcon vendor={vendor} size={14} fallback={Boxes} />
                       </span>
-                      <span className="min-w-0 truncate text-[11px] font-semibold" style={{ color: TERM_PANEL.fg }}>{provider.name}</span>
+                      <span className="min-w-0 truncate text-[13px] font-semibold tracking-tight" style={{ color: TERM_PANEL.fg }}>{provider.name}</span>
                       {provider.inFailoverQueue && <span className="shrink-0 rounded px-1 text-[9px]" style={{ color: TERM_PANEL.green, backgroundColor: panelColorTint(TERM_PANEL.green, 14) }}>#{(queuePosition.get(provider.id) ?? 0) + 1}</span>}
                       {selected && <span className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-full" style={{ color: TERM_PANEL.green, backgroundColor: panelColorTint(TERM_PANEL.green, 18) }} aria-label={t("providerQuickSwitch.currentProvider")}><Check size={12} /></span>}
                     </span>
-                    <span className="ml-7 flex min-w-0 items-center gap-2.5 text-[10px]" style={{ color: TERM_PANEL.dim }}>
+                    <span className="ml-7 flex min-w-0 items-center gap-2 text-[11px]" style={{ color: TERM_PANEL.dim }}>
                       <span className="min-w-0 flex-1 truncate">{provider.model ?? provider.baseUrl ?? t("providerQuickSwitch.noModel")}</span>
-                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5" style={{ color: statusColor, backgroundColor: panelColorTint(statusColor, 10) }}><ReadyIcon size={11} />{provider.ready ? t("providerCatalog.failover.ready") : t("providerCatalog.failover.notReady")}</span>
-                      <span className="inline-flex shrink-0 items-center gap-1" style={{ color: circuit?.status === "open" ? TERM_PANEL.red : TERM_PANEL.dim }}>{CircuitIcon && <CircuitIcon size={10} />}{circuitLabel}</span>
+                      <span
+                        className="mr-0.5 h-1.5 w-1.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: status.color }}
+                        aria-hidden="true"
+                      />
+                      {status.label && (
+                        <span className="shrink-0" style={{ color: status.color }}>{status.label}</span>
+                      )}
                     </span>
                   </button>
 
