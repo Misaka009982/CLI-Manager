@@ -304,3 +304,7 @@ generic configuration textarea.
   `routing_set_failover_queue`, allowing an active local takeover to hot-switch
   without a global confirmation dialog. Global switches still require the
   existing preview/confirm/apply flow.
+- Provider rows expose a native drag-and-drop reorder affordance. Drop order
+  is submitted as the complete provider ID list through
+  `provider_catalog_reorder`; the existing arrow controls remain available for
+  keyboard and precision adjustments.

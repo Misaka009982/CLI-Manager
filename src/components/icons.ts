@@ -31,6 +31,7 @@ export {
   Folder,
   FolderOpen,
   GitBranch,
+  GripVertical,
   Globe,
   Hash,
   Image,
@@ -61,6 +62,7 @@ export {
   Undo2,
   Upload,
   X,
+  Zap,
 } from "lucide-react";
 
 export { ListClockIcon } from "./ListClockIcon";

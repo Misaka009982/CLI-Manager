@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Boxes, Check, CircleAlert, CircleCheck, CircleStop, RefreshCw, Settings } from "../icons";
+import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Boxes, Check, CircleAlert, CircleCheck, CircleStop, GripVertical, RefreshCw, Settings, Zap } from "../icons";
 import { useI18n } from "../../lib/i18n";
 import type { NativeProviderAppType, NativeProviderFailoverProvider } from "../settings/providers/nativeProviderTypes";
 import { useAppConfirm } from "../ui/useAppConfirm";
@@ -26,10 +26,69 @@ function appTypeLabelKey(appType: NativeProviderAppType): "providerCatalog.appTy
   return `providerCatalog.appType.${appType}` as "providerCatalog.appType.claude" | "providerCatalog.appType.codex" | "providerCatalog.appType.grokbuild";
 }
 
+// 终端皮肤下的紧凑开关行：不引入通用应用控件，配色全部走 TERM_PANEL 变量。
+function RoutingToggleRow({
+  icon,
+  iconColor,
+  label,
+  hint,
+  checked,
+  disabled,
+  busy,
+  onToggle,
+}: {
+  icon: ReactNode;
+  iconColor: string;
+  label: string;
+  hint: string;
+  checked: boolean;
+  disabled: boolean;
+  busy: boolean;
+  onToggle: (next: boolean) => void;
+}) {
+  const trackColor = checked ? panelColorTint(iconColor, 55) : TERM_PANEL.track;
+  return (
+    <div className="flex items-center justify-between gap-2" style={{ opacity: disabled ? 0.55 : 1 }}>
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md" style={{ color: iconColor, backgroundColor: panelColorTint(iconColor, 14) }}>{icon}</span>
+        <div className="min-w-0">
+          <div className="truncate text-[11px] font-semibold" style={{ color: TERM_PANEL.fg }}>{label}</div>
+          <div className="truncate text-[10px]" style={{ color: TERM_PANEL.dim }} title={hint}>{hint}</div>
+        </div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        title={hint}
+        disabled={disabled}
+        className="ui-focus-ring relative shrink-0 rounded-full transition-colors disabled:cursor-not-allowed"
+        style={{ width: 30, height: 16, backgroundColor: trackColor, border: `1px solid ${checked ? panelColorTint(iconColor, 70) : TERM_PANEL.border}` }}
+        onClick={() => onToggle(!checked)}
+      >
+        <span
+          className="absolute top-1/2 rounded-full transition-all"
+          style={{
+            width: 10,
+            height: 10,
+            left: checked ? 16 : 2,
+            transform: "translateY(-50%)",
+            backgroundColor: checked ? iconColor : TERM_PANEL.dim,
+            opacity: busy ? 0.5 : 1,
+          }}
+        />
+      </button>
+    </div>
+  );
+}
+
 export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings }: ProviderQuickSwitchPanelProps) {
   const { t } = useI18n();
   const { confirm, confirmDialog } = useAppConfirm();
   const [appType, setAppType] = useState<NativeProviderAppType>(defaultAppType);
+  const [draggedProviderId, setDraggedProviderId] = useState<string | null>(null);
+  const [dragOverProviderId, setDragOverProviderId] = useState<string | null>(null);
   useEffect(() => setAppType(defaultAppType), [defaultAppType]);
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -41,6 +100,11 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
   const daemon = quickSwitch.routing?.daemon;
   const serviceRunning = Boolean(service?.serviceEnabled && daemon?.status === "running");
   const autoFailover = failover?.config.autoFailoverEnabled ?? false;
+  const localRouting = quickSwitch.hasLocalTakeover;
+  // 自动故障转移要求 daemon 已连接且支持本地路由能力；仅「服务已启用」不足以放行。
+  const runtimeAvailable = Boolean(serviceRunning && daemon?.capabilitySupported && daemon.connected);
+  const busy = Boolean(quickSwitch.action);
+  const appLabel = t(appTypeLabelKey(appType));
 
   const rows = useMemo<ProviderRow[]>(() => {
     const catalogById = new Map(quickSwitch.providers.map((provider) => [provider.id, provider]));
@@ -133,6 +197,26 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
     }
   };
 
+  const handleLocalRoutingToggle = async (next: boolean) => {
+    if (busy) return;
+    try {
+      await quickSwitch.setLocalRouting(next);
+    } catch {
+      toast.error(next
+        ? t("providerQuickSwitch.localRoutingEnableFailed")
+        : t("providerQuickSwitch.localRoutingDisableFailed"));
+    }
+  };
+
+  const handleFailoverToggle = async (next: boolean) => {
+    if (busy) return;
+    try {
+      await quickSwitch.setFailoverEnabled(next);
+    } catch {
+      toast.error(t("providerQuickSwitch.failoverToggleFailed"));
+    }
+  };
+
   const handleQueueToggle = async (provider: ProviderRow) => {
     if (quickSwitch.action || !provider.ready || !failover || !autoFailover) return;
     const next = provider.inFailoverQueue
@@ -165,6 +249,48 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
     } catch {
       toast.error(t("providerQuickSwitch.queueUpdateFailed"));
     }
+  };
+
+  const handleProviderDragStart = (event: DragEvent<HTMLDivElement>, provider: ProviderRow) => {
+    if (!failover || quickSwitch.action || rows.length < 2) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", provider.id);
+    setDraggedProviderId(provider.id);
+    setDragOverProviderId(provider.id);
+  };
+
+  const handleProviderDragOver = (event: DragEvent<HTMLDivElement>, provider: ProviderRow) => {
+    if (!draggedProviderId || draggedProviderId === provider.id) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDragOverProviderId(provider.id);
+  };
+
+  const handleProviderDrop = async (event: DragEvent<HTMLDivElement>, provider: ProviderRow) => {
+    event.preventDefault();
+    const sourceId = draggedProviderId ?? event.dataTransfer.getData("text/plain");
+    setDraggedProviderId(null);
+    setDragOverProviderId(null);
+    if (!sourceId || sourceId === provider.id || !failover || quickSwitch.action) return;
+    const ordered = rows.map((item) => item.id);
+    const sourceIndex = ordered.indexOf(sourceId);
+    const targetIndex = ordered.indexOf(provider.id);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    const [moved] = ordered.splice(sourceIndex, 1);
+    ordered.splice(targetIndex, 0, moved);
+    try {
+      await quickSwitch.reorderFailoverQueue(ordered);
+    } catch {
+      toast.error(t("providerQuickSwitch.queueUpdateFailed"));
+    }
+  };
+
+  const handleProviderDragEnd = () => {
+    setDraggedProviderId(null);
+    setDragOverProviderId(null);
   };
 
   const errorMessage = quickSwitch.errorCode === "routing_provider_not_ready"
@@ -223,6 +349,38 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
             {serviceRunning ? t("providerQuickSwitch.routingRunning") : t("providerQuickSwitch.routingUnavailable")}
           </span>
           </div>
+
+          <div className="mt-2.5 space-y-2 border-t pt-2.5" style={{ borderColor: TERM_PANEL.border }}>
+            <RoutingToggleRow
+              icon={<ArrowLeftRight size={12} />}
+              iconColor={TERM_PANEL.green}
+              label={t("providerQuickSwitch.localRouting")}
+              hint={localRouting
+                ? t("providerQuickSwitch.localRoutingOnHint", { app: appLabel })
+                : t("providerQuickSwitch.localRoutingOffHint", { app: appLabel })}
+              checked={localRouting}
+              disabled={busy || !quickSwitch.routing}
+              busy={quickSwitch.action === "local-routing"}
+              onToggle={(next) => void handleLocalRoutingToggle(next)}
+            />
+            <RoutingToggleRow
+              icon={<Zap size={12} />}
+              iconColor={TERM_PANEL.yellow}
+              label={t("providerQuickSwitch.autoFailover")}
+              hint={!localRouting
+                ? t("providerQuickSwitch.failoverNeedsRouting")
+                : !autoFailover && !runtimeAvailable
+                  ? t("providerQuickSwitch.failoverNeedsRuntime")
+                  : autoFailover
+                    ? t("providerQuickSwitch.failoverOnHint")
+                    : t("providerQuickSwitch.failoverOffHint")}
+              checked={autoFailover}
+              disabled={busy || !localRouting || !failover || (!autoFailover && !runtimeAvailable)}
+              busy={quickSwitch.action === "failover-enabled"}
+              onToggle={(next) => void handleFailoverToggle(next)}
+            />
+          </div>
+
           {failover && <div className="mt-2 flex items-center justify-between border-t pt-2 text-[10px]" style={{ borderColor: TERM_PANEL.border, color: TERM_PANEL.dim }}>
             <span>{t("providerQuickSwitch.currentProvider")}</span>
             <span className="max-w-[60%] truncate text-right" style={{ color: TERM_PANEL.fg }}>
@@ -271,7 +429,16 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                 ? TERM_PANEL.green
                 : TERM_PANEL.yellow;
             return (
-              <div key={provider.id} className="rounded-lg border transition-colors" style={{ borderColor: selected ? TERM_PANEL.green : TERM_PANEL.border, borderLeftWidth: selected ? 3 : 1, backgroundColor: selected ? panelColorTint(TERM_PANEL.green, 11) : TERM_PANEL.card }}>
+              <div
+                key={provider.id}
+                draggable={Boolean(failover) && rows.length > 1 && !quickSwitch.action}
+                onDragStart={(event) => handleProviderDragStart(event, provider)}
+                onDragOver={(event) => handleProviderDragOver(event, provider)}
+                onDrop={(event) => void handleProviderDrop(event, provider)}
+                onDragEnd={handleProviderDragEnd}
+                className={`rounded-lg border transition-colors ${dragOverProviderId === provider.id && draggedProviderId !== provider.id ? "ring-1" : ""}`}
+                style={{ borderColor: selected ? TERM_PANEL.green : TERM_PANEL.border, borderLeftWidth: selected ? 3 : 1, backgroundColor: selected ? panelColorTint(TERM_PANEL.green, 11) : TERM_PANEL.card, ...(dragOverProviderId === provider.id && draggedProviderId !== provider.id ? { boxShadow: `inset 0 2px 0 ${TERM_PANEL.green}` } : {}) }}
+              >
                 <div className="flex items-center gap-1.5">
                   <button
                     ref={(node) => { rowRefs.current[provider.id] = node; }}
@@ -300,15 +467,20 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                     </span>
                   </button>
 
-                  {autoFailover && failover && (
+                  {failover && (
                     <>
-                      <button type="button" className="ui-focus-ring rounded px-1.5 py-1 text-[10px] disabled:opacity-35" style={{ color: provider.inFailoverQueue ? TERM_PANEL.green : TERM_PANEL.dim }} aria-pressed={provider.inFailoverQueue} aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })} disabled={Boolean(quickSwitch.action) || !provider.ready} onClick={() => void handleQueueToggle(provider)}>
-                        {provider.inFailoverQueue ? "✓" : "+"}
-                      </button>
-                      {provider.inFailoverQueue && (
+                      <span className="flex shrink-0 items-center px-1" style={{ color: TERM_PANEL.dim }} title={t("providerQuickSwitch.dragHandle")} aria-hidden="true"><GripVertical size={14} /></span>
+                      {autoFailover && (
                         <>
-                          <button type="button" className="ui-focus-ring rounded p-1 disabled:opacity-35" style={{ color: TERM_PANEL.dim }} aria-label={t("providerCatalog.failover.moveUp", { name: provider.name })} disabled={Boolean(quickSwitch.action) || queuePosition.get(provider.id) === 0} onClick={() => void handleMove(provider, -1)}><ArrowUp size={12} /></button>
-                          <button type="button" className="ui-focus-ring rounded p-1 disabled:opacity-35" style={{ color: TERM_PANEL.dim }} aria-label={t("providerCatalog.failover.moveDown", { name: provider.name })} disabled={Boolean(quickSwitch.action) || queuePosition.get(provider.id) === queuedIds.length - 1} onClick={() => void handleMove(provider, 1)}><ArrowDown size={12} /></button>
+                          <button type="button" className="ui-focus-ring rounded px-1.5 py-1 text-[10px] disabled:opacity-35" style={{ color: provider.inFailoverQueue ? TERM_PANEL.green : TERM_PANEL.dim }} aria-pressed={provider.inFailoverQueue} aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })} disabled={Boolean(quickSwitch.action) || !provider.ready} onClick={() => void handleQueueToggle(provider)}>
+                            {provider.inFailoverQueue ? "✓" : "+"}
+                          </button>
+                          {provider.inFailoverQueue && (
+                            <>
+                              <button type="button" className="ui-focus-ring rounded p-1 disabled:opacity-35" style={{ color: TERM_PANEL.dim }} aria-label={t("providerCatalog.failover.moveUp", { name: provider.name })} disabled={Boolean(quickSwitch.action) || queuePosition.get(provider.id) === 0} onClick={() => void handleMove(provider, -1)}><ArrowUp size={12} /></button>
+                              <button type="button" className="ui-focus-ring rounded p-1 disabled:opacity-35" style={{ color: TERM_PANEL.dim }} aria-label={t("providerCatalog.failover.moveDown", { name: provider.name })} disabled={Boolean(quickSwitch.action) || queuePosition.get(provider.id) === queuedIds.length - 1} onClick={() => void handleMove(provider, 1)}><ArrowDown size={12} /></button>
+                            </>
+                          )}
                         </>
                       )}
                     </>

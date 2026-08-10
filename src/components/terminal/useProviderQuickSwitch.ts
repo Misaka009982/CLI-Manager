@@ -27,6 +27,8 @@ export interface UseProviderQuickSwitchResult extends ProviderQuickSwitchSnapsho
   applyGlobal: (preview: NativeProviderGlobalPreview) => Promise<NativeProviderGlobalApplyResult>;
   setFailoverQueue: (providerIds: string[]) => Promise<void>;
   reorderFailoverQueue: (providerIds: string[]) => Promise<void>;
+  setLocalRouting: (enabled: boolean) => Promise<void>;
+  setFailoverEnabled: (enabled: boolean) => Promise<void>;
 }
 
 function errorCode(error: unknown): string {
@@ -170,6 +172,44 @@ export function useProviderQuickSwitch(
     },
   ), [appType, refreshFailover, runMutation]);
 
+  // 本地路由是两层能力：daemon listener + 当前 CLI Home 接管。侧边栏开关串起整条链路，
+  // 但关闭时只撤当前 CLI 的接管，daemon 保持运行，避免影响其他 CLI 的既有接管。
+  const setLocalRouting = useCallback((enabled: boolean) => runMutation(
+    "local-routing",
+    async () => {
+      if (enabled) {
+        const routingState = await invoke<NativeProviderRoutingState>("routing_get_state");
+        const serviceRunning = routingState.persisted.service.serviceEnabled
+          && routingState.daemon.status === "running";
+        if (!serviceRunning) {
+          await invoke<NativeProviderRoutingState>("routing_set_service_enabled", { enabled: true });
+        }
+        await invoke<NativeProviderRoutingState>("routing_set_takeover", {
+          input: { appType, homeIdentity: LOCAL_PROVIDER_HOME_IDENTITY, enabled: true },
+        });
+      } else {
+        // 后端不允许「无接管却开着自动故障转移」，先降级再撤接管。
+        const failoverState = await invoke<NativeProviderFailoverState>("routing_get_failover_queue", { appType })
+          .catch(() => null);
+        if (failoverState?.config.autoFailoverEnabled) {
+          await invoke<NativeProviderFailoverState>("routing_set_failover_enabled", { appType, enabled: false });
+        }
+        await invoke<NativeProviderRoutingState>("routing_set_takeover", {
+          input: { appType, homeIdentity: LOCAL_PROVIDER_HOME_IDENTITY, enabled: false },
+        });
+      }
+      await refresh();
+    },
+  ), [appType, refresh, runMutation]);
+
+  const setFailoverEnabled = useCallback((enabled: boolean) => runMutation(
+    "failover-enabled",
+    async () => {
+      await invoke<NativeProviderFailoverState>("routing_set_failover_enabled", { appType, enabled });
+      await refresh();
+    },
+  ), [appType, refresh, runMutation]);
+
   const hasLocalTakeover = Boolean(snapshot.routing?.persisted.takeovers.some(
     (takeover) => takeover.appType === appType && takeover.homeIdentity.identity === LOCAL_PROVIDER_HOME_IDENTITY.identity,
   ));
@@ -187,5 +227,7 @@ export function useProviderQuickSwitch(
     applyGlobal,
     setFailoverQueue,
     reorderFailoverQueue,
+    setLocalRouting,
+    setFailoverEnabled,
   };
 }
