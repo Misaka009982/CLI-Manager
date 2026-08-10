@@ -164,10 +164,32 @@ export function useProviderQuickSwitch(
     },
   ), [appType, refresh, runMutation]);
 
+  // 后端 provider_catalog_reorder 会重写该 appType 全量 sort_index 并回吐新顺序的卡片列表。
+  // 这里必须把新顺序同时落到 providers 与 failover.providers：refreshFailover() 只合并
+  // circuit/circuits，不碰 providers，单靠它列表不会重排（需等一次完整 refresh）。
   const reorderFailoverQueue = useCallback((providerIds: string[]) => runMutation(
     "failover-reorder",
     async () => {
-      await invoke("provider_catalog_reorder", { appType, providerIds });
+      const cards = await invoke<NativeProviderCard[]>("provider_catalog_reorder", { appType, providerIds });
+      const ordered = cards.filter((card) => card.appType === appType);
+      const rank = new Map(ordered.map((card, index) => [card.id, index]));
+      const rankOf = (id: string) => rank.get(id) ?? Number.MAX_SAFE_INTEGER;
+      setSnapshot((current) => ({
+        ...current,
+        providers: ordered,
+        failover: current.failover
+          ? {
+              ...current.failover,
+              // sortIndex 同步刷新：handleMove 依赖它算相对位置，留旧值会让箭头按错基准移动。
+              providers: [...current.failover.providers]
+                .sort((a, b) => rankOf(a.id) - rankOf(b.id))
+                .map((provider) => ({
+                  ...provider,
+                  sortIndex: rank.get(provider.id) ?? provider.sortIndex,
+                })),
+            }
+          : current.failover,
+      }));
       await refreshFailover();
     },
   ), [appType, refreshFailover, runMutation]);

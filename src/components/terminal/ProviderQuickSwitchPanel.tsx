@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { toast } from "sonner";
+import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Boxes, Check, CircleAlert, CircleCheck, CircleStop, GripVertical, RefreshCw, Settings, Zap } from "../icons";
 import { useI18n } from "../../lib/i18n";
 import type { NativeProviderAppType, NativeProviderFailoverProvider } from "../settings/providers/nativeProviderTypes";
@@ -7,6 +10,7 @@ import { useAppConfirm } from "../ui/useAppConfirm";
 import { useProviderQuickSwitch } from "./useProviderQuickSwitch";
 import { TERM_PANEL, panelColorTint } from "../stats/termStatsUi";
 import { VendorIcon, inferVendor } from "../VendorIcon";
+import { DND_ACTIVATION_CONSTRAINT, DND_SORTABLE_TRANSITION } from "../../lib/dragInteraction";
 
 const APP_TYPES: readonly NativeProviderAppType[] = ["claude", "codex", "grokbuild"];
 
@@ -83,13 +87,81 @@ function RoutingToggleRow({
   );
 }
 
+/**
+ * 供应商行的拖拽容器。
+ *
+ * 这里刻意走 @dnd-kit 的 pointer/keyboard sensor，而不是 HTML5 原生 draggable：
+ * 本项目内所有可用的拖拽排序（终端标签页、工具栏、统计卡片）都是 dnd-kit，
+ * 原生 draggable 在本应用 webview 里拿不到有效 dropEffect，只会画出禁用光标。
+ * 手柄用 render prop 交回调用方，因为它需要 useSortable 内部的 listeners 与 isDragging。
+ */
+function SortableProviderRow({
+  id,
+  selected,
+  canReorder,
+  dragLabel,
+  children,
+}: {
+  id: string;
+  selected: boolean;
+  canReorder: boolean;
+  dragLabel: string;
+  children: (handle: ReactNode) => ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id, disabled: !canReorder, transition: DND_SORTABLE_TRANSITION });
+
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition: isDragging ? undefined : transition,
+    opacity: isDragging ? 0.55 : 1,
+    position: "relative",
+    zIndex: isDragging ? 1 : undefined,
+    borderColor: selected ? TERM_PANEL.green : TERM_PANEL.border,
+    borderLeftWidth: selected ? 3 : 1,
+    backgroundColor: selected ? panelColorTint(TERM_PANEL.green, 11) : TERM_PANEL.card,
+    ...(isDragging ? { boxShadow: `0 0 0 1px ${panelColorTint(TERM_PANEL.green, 60)}` } : {}),
+  };
+
+  // 手柄是真实可聚焦 button（旧实现是 aria-hidden 的 span，键盘完全够不到）。
+  const handle = canReorder ? (
+    <button
+      ref={setActivatorNodeRef}
+      type="button"
+      className="ui-focus-ring flex shrink-0 items-center px-1"
+      style={{ color: TERM_PANEL.dim, cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
+      title={dragLabel}
+      aria-label={dragLabel}
+      {...attributes}
+      {...listeners}
+    >
+      <GripVertical size={14} />
+    </button>
+  ) : null;
+
+  return (
+    <div ref={setNodeRef} className="rounded-lg border transition-colors" style={style}>
+      {children(handle)}
+    </div>
+  );
+}
+
 export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings }: ProviderQuickSwitchPanelProps) {
   const { t } = useI18n();
   const { confirm, confirmDialog } = useAppConfirm();
   const [appType, setAppType] = useState<NativeProviderAppType>(defaultAppType);
-  const [draggedProviderId, setDraggedProviderId] = useState<string | null>(null);
-  const [dragOverProviderId, setDragOverProviderId] = useState<string | null>(null);
   useEffect(() => setAppType(defaultAppType), [defaultAppType]);
+  const reorderSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: DND_ACTIVATION_CONSTRAINT }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const quickSwitch = useProviderQuickSwitch(appType, open);
@@ -252,46 +324,20 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
     }
   };
 
-  const handleProviderDragStart = (event: DragEvent<HTMLElement>, provider: ProviderRow) => {
-    if (quickSwitch.action || rows.length < 2) {
-      event.preventDefault();
-      return;
-    }
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", provider.id);
-    setDraggedProviderId(provider.id);
-    setDragOverProviderId(provider.id);
-  };
-
-  const handleProviderDragOver = (event: DragEvent<HTMLDivElement>, provider: ProviderRow) => {
-    if (!draggedProviderId || draggedProviderId === provider.id) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    setDragOverProviderId(provider.id);
-  };
-
-  const handleProviderDrop = async (event: DragEvent<HTMLDivElement>, provider: ProviderRow) => {
-    event.preventDefault();
-    const sourceId = draggedProviderId ?? event.dataTransfer.getData("text/plain");
-    setDraggedProviderId(null);
-    setDragOverProviderId(null);
-    if (!sourceId || sourceId === provider.id || quickSwitch.action) return;
+  // 后端 provider_catalog_reorder 要求 ID 覆盖该 appType 全量供应商，否则报
+  // provider_reorder_mismatch；rows 就是全量列表，直接整体重排后提交。
+  const handleReorderDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id || quickSwitch.action) return;
     const ordered = rows.map((item) => item.id);
-    const sourceIndex = ordered.indexOf(sourceId);
-    const targetIndex = ordered.indexOf(provider.id);
+    const sourceIndex = ordered.indexOf(String(active.id));
+    const targetIndex = ordered.indexOf(String(over.id));
     if (sourceIndex < 0 || targetIndex < 0) return;
-    const [moved] = ordered.splice(sourceIndex, 1);
-    ordered.splice(targetIndex, 0, moved);
     try {
-      await quickSwitch.reorderFailoverQueue(ordered);
+      await quickSwitch.reorderFailoverQueue(arrayMove(ordered, sourceIndex, targetIndex));
     } catch {
       toast.error(t("providerQuickSwitch.queueUpdateFailed"));
     }
-  };
-
-  const handleProviderDragEnd = () => {
-    setDraggedProviderId(null);
-    setDragOverProviderId(null);
   };
 
   const errorMessage = quickSwitch.errorCode === "routing_provider_not_ready"
@@ -403,6 +449,12 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
         )}
         {errorMessage && <div className="mb-2 flex items-start gap-1.5 rounded-lg border px-2.5 py-2 text-[10px]" style={{ color: TERM_PANEL.red, borderColor: panelColorTint(TERM_PANEL.red, 45), backgroundColor: panelColorTint(TERM_PANEL.red, 10) }}><CircleAlert size={13} className="mt-0.5 shrink-0" />{errorMessage}</div>}
 
+        <DndContext
+          sensors={reorderSensors}
+          collisionDetection={closestCenter}
+          onDragEnd={(event) => void handleReorderDragEnd(event)}
+        >
+        <SortableContext items={rows.map((provider) => provider.id)} strategy={verticalListSortingStrategy}>
         <div className="space-y-2" role="radiogroup" aria-label={t("providerQuickSwitch.providerList")}>
           {rows.map((provider, index) => {
             const selected = provider.id === currentId;
@@ -430,16 +482,14 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                 ? TERM_PANEL.green
                 : TERM_PANEL.yellow;
             return (
-              <div
+              <SortableProviderRow
                 key={provider.id}
-                draggable={canReorder}
-                onDragStart={(event) => handleProviderDragStart(event, provider)}
-                onDragOver={(event) => handleProviderDragOver(event, provider)}
-                onDrop={(event) => void handleProviderDrop(event, provider)}
-                onDragEnd={handleProviderDragEnd}
-                className={`rounded-lg border transition-colors ${dragOverProviderId === provider.id && draggedProviderId !== provider.id ? "ring-1" : ""}`}
-                style={{ borderColor: selected ? TERM_PANEL.green : TERM_PANEL.border, borderLeftWidth: selected ? 3 : 1, backgroundColor: selected ? panelColorTint(TERM_PANEL.green, 11) : TERM_PANEL.card, ...(dragOverProviderId === provider.id && draggedProviderId !== provider.id ? { boxShadow: `inset 0 2px 0 ${TERM_PANEL.green}` } : {}) }}
+                id={provider.id}
+                selected={selected}
+                canReorder={canReorder}
+                dragLabel={t("providerQuickSwitch.dragHandle")}
               >
+                {(dragHandle) => (
                 <div className="flex items-center gap-1.5">
                   <button
                     ref={(node) => { rowRefs.current[provider.id] = node; }}
@@ -470,12 +520,7 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
 
                   {canReorder && (
                     <>
-                      <span
-                        className="flex shrink-0 cursor-grab touch-none items-center px-1 active:cursor-grabbing"
-                        style={{ color: TERM_PANEL.dim }}
-                        title={t("providerQuickSwitch.dragHandle")}
-                        aria-hidden="true"
-                      ><GripVertical size={14} /></span>
+                      {dragHandle}
                       {failover && (
                         <>
                           {autoFailover && (
@@ -496,10 +541,13 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                     </>
                   )}
                 </div>
-              </div>
+                )}
+              </SortableProviderRow>
             );
           })}
         </div>
+        </SortableContext>
+        </DndContext>
       </div>
 
       <div className="shrink-0 border-t px-3 py-3" style={{ borderColor: TERM_PANEL.border }}>
