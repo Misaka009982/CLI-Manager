@@ -192,6 +192,11 @@ legacy cli-manager.db migration unchanged
   higher priority and must be labelled rather than overwritten.
 - Home preferences are per local/WSL environment identity. Validate root
   directories; do not accept a CLI subdirectory as Home.
+- The local identity `host` is never a WSL distribution. When a WSL Home
+  request omits the environment identity, resolve the default distribution
+  and its real `$HOME` inside WSL, then return the concrete distribution
+  identity and normalized UNC Home. A manual WSL UNC path may supply the
+  distribution identity when the explicit identity is absent.
 - Saving a Home also persists one active Home identity in `providers.db`;
   startup restores that identity so no-explicit-root defaults follow the last
   saved Home. The per-environment preferences remain independent, and this

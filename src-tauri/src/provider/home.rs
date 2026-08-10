@@ -76,6 +76,45 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
+fn parse_default_wsl_context(stdout: &[u8]) -> Result<(String, String), String> {
+    let stdout = String::from_utf8_lossy(stdout);
+    let mut lines = stdout.lines();
+    let distro = lines.next().map(str::trim).unwrap_or_default();
+    let home = lines.next().map(str::trim).unwrap_or_default();
+    if distro.is_empty() || !is_valid_linux_home_path(home) {
+        return Err("provider_wsl_probe_failed".to_string());
+    }
+    Ok((distro.to_string(), home.to_string()))
+}
+
+fn default_wsl_context() -> Result<(String, String), String> {
+    let exe = wsl::find_wsl_exe().ok_or_else(|| "provider_wsl_unavailable".to_string())?;
+    let mut command = shell_resolver::silent_command(exe.to_string_lossy().as_ref());
+    command.args([
+        "--exec",
+        "sh",
+        "-lc",
+        r#"printf '%s\n%s' "$WSL_DISTRO_NAME" "$HOME""#,
+    ]);
+    let output = shell_resolver::output_with_timeout(command, HOME_PROBE_TIMEOUT)
+        .map_err(|_| "provider_wsl_probe_failed".to_string())?;
+    if !output.status.success() {
+        return Err("provider_wsl_probe_failed".to_string());
+    }
+    parse_default_wsl_context(&output.stdout)
+}
+
+fn resolve_wsl_environment_id(input: &HomeSelectInput) -> Result<String, String> {
+    let requested = input.environment_id.as_deref().unwrap_or_default().trim();
+    if !requested.is_empty() && !requested.eq_ignore_ascii_case(LOCAL_ENVIRONMENT_ID) {
+        return Ok(requested.to_string());
+    }
+    if let Some((distro, _)) = input.home_path.as_deref().and_then(wsl::parse_wsl_unc_path) {
+        return Ok(distro);
+    }
+    default_wsl_context().map(|(distro, _)| distro)
+}
+
 fn normalize_input(input: HomeSelectInput) -> Result<NormalizedHomeInput, String> {
     let environment_kind = input.environment_kind.trim().to_ascii_lowercase();
     if environment_kind != "local" && environment_kind != "wsl" {
@@ -84,12 +123,7 @@ fn normalize_input(input: HomeSelectInput) -> Result<NormalizedHomeInput, String
     let environment_id = if environment_kind == "local" {
         LOCAL_ENVIRONMENT_ID.to_string()
     } else {
-        input
-            .environment_id
-            .as_deref()
-            .unwrap_or_default()
-            .trim()
-            .to_string()
+        resolve_wsl_environment_id(&input)?
     };
     if environment_id.is_empty() {
         return Err("provider_environment_id_required".to_string());
@@ -592,6 +626,29 @@ mod tests {
         })
         .unwrap();
         assert_eq!(value.environment_id, LOCAL_ENVIRONMENT_ID);
+    }
+
+    #[test]
+    fn parses_default_wsl_context_from_probe_output() {
+        let (distro, home) = parse_default_wsl_context(b"Ubuntu-22.04\n/home/tester").unwrap();
+        assert_eq!(distro, "Ubuntu-22.04");
+        assert_eq!(home, "/home/tester");
+        assert_eq!(
+            parse_default_wsl_context(b"Ubuntu-22.04\n/"),
+            Err("provider_wsl_probe_failed".to_string())
+        );
+    }
+
+    #[test]
+    fn infers_wsl_environment_from_manual_unc_home() {
+        let value = normalize_input(HomeSelectInput {
+            environment_kind: "wsl".to_string(),
+            environment_id: Some(LOCAL_ENVIRONMENT_ID.to_string()),
+            mode: "manual".to_string(),
+            home_path: Some(r"\\wsl.localhost\Ubuntu-22.04\home\tester".to_string()),
+        })
+        .unwrap();
+        assert_eq!(value.environment_id, "Ubuntu-22.04");
     }
 
     #[test]

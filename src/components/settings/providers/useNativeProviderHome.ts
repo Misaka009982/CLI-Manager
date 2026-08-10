@@ -59,7 +59,7 @@ export function useNativeProviderHome(
   providerId: string | null,
   configuredRoots: NativeProviderRootOverrides,
 ): UseNativeProviderHomeResult {
-  const [environmentKind, setEnvironmentKind] = useState<NativeProviderEnvironmentKind>("local");
+  const [environmentKind, setEnvironmentKindState] = useState<NativeProviderEnvironmentKind>("local");
   const [environmentId, setEnvironmentId] = useState("host");
   const [mode, setMode] = useState<"auto" | "manual">("auto");
   const [homePath, setHomePath] = useState("");
@@ -71,6 +71,11 @@ export function useNativeProviderHome(
   const [loading, setLoading] = useState(false);
   const [action, setAction] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+
+  const setEnvironmentKind = useCallback((kind: NativeProviderEnvironmentKind) => {
+    setEnvironmentKindState(kind);
+    setEnvironmentId(kind === "local" ? "host" : "");
+  }, []);
 
   const identity = useCallback(() => ({
     environmentKind,
@@ -117,6 +122,8 @@ export function useNativeProviderHome(
         environmentId: environmentId.trim() || null,
       });
       setHome(next);
+      setEnvironmentKindState(next.identity.environmentKind);
+      setEnvironmentId(next.identity.environmentId);
       setMode(next.mode);
       setHomePath(next.homePath);
       setPreviewHome(null);
@@ -183,6 +190,8 @@ export function useNativeProviderHome(
     await run("select-home", async () => {
       const next = await invoke<NativeProviderHomeState>("provider_home_select", { input });
       setHome(next);
+      setEnvironmentKindState(next.identity.environmentKind);
+      setEnvironmentId(next.identity.environmentId);
       setHomePath(next.homePath);
       setPreviewHome(null);
       await refreshCurrent();
@@ -198,6 +207,8 @@ export function useNativeProviderHome(
         environmentId: environmentId.trim() || null,
       });
       setHome(next);
+      setEnvironmentKindState(next.identity.environmentKind);
+      setEnvironmentId(next.identity.environmentId);
       setMode(next.mode);
       setHomePath(next.homePath);
       setPreviewHome(null);

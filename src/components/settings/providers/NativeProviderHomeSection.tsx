@@ -148,8 +148,10 @@ export function NativeProviderHomeSection({
         directory: true,
         multiple: false,
         title: t("providerCatalog.home.choosePath"),
+        defaultPath: state.homePath.trim() || undefined,
       });
       if (typeof selected === "string" && selected.trim()) {
+        state.setMode("manual");
         state.setHomePath(selected);
       }
     } catch {
@@ -245,7 +247,7 @@ export function NativeProviderHomeSection({
                 variant="light"
                 color="gray"
                 leftSection={<FolderOpen size={15} />}
-                disabled={busy || state.mode === "auto" || state.environmentKind === "wsl"}
+                disabled={busy}
                 onClick={() => void chooseLocalHome()}
               >
                 {t("providerCatalog.home.choosePath")}

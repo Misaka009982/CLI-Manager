@@ -65,12 +65,21 @@ generic configuration textarea.
 - The project/Worktree selector lists native providers and visibly resolves
   Worktree > project > global. Reset means follow the next lower scope.
 - Home selection offers auto, choose folder, paste absolute path and reset.
+  The chooser remains enabled for local and WSL environments in both modes,
+  and uses the current Home as its initial directory. A successful selection
+  changes the draft to manual mode before storing the selected path;
+  cancelling leaves both mode and path unchanged. Disable the chooser only
+  while a Home action is busy.
   It shows derived Claude/Codex/Grok live/config/history/Hook paths and warns
   if a feature has an explicit root not following Home. It never performs an
   unrequested Hook install/uninstall/move.
 - In WSL auto mode, keep the Home text input editable; the first edit changes
   the draft to manual mode so a WSL UNC path can be pasted without a dead-end
   UI.
+- Switching from local to WSL clears the reserved local `host` identity. When
+  the WSL identity is absent, the backend resolves the default distribution
+  and its real user Home, then the frontend adopts the returned distribution
+  identity together with the normalized UNC path.
 - Home adoption passes the selected CLI config root to the history binding
   synchronizer; Grok derives its single `.grok/sessions` history root there,
   so the UI must not pass an already-derived `sessions` path.
