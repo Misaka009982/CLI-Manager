@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { toast } from "sonner";
-import { ArrowDown, ArrowLeftRight, ArrowUp, Check, CircleAlert, RefreshCw, Settings } from "../icons";
+import { Activity, ArrowDown, ArrowLeftRight, ArrowUp, Boxes, Check, CircleAlert, CircleCheck, CircleStop, RefreshCw, Settings } from "../icons";
 import { useI18n } from "../../lib/i18n";
 import type { NativeProviderAppType, NativeProviderFailoverProvider } from "../settings/providers/nativeProviderTypes";
 import { useAppConfirm } from "../ui/useAppConfirm";
 import { useProviderQuickSwitch } from "./useProviderQuickSwitch";
 import { TERM_PANEL, panelColorTint } from "../stats/termStatsUi";
+import { VendorIcon, inferVendor } from "../VendorIcon";
 
 const APP_TYPES: readonly NativeProviderAppType[] = ["claude", "codex", "grokbuild"];
 
@@ -202,7 +203,7 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
               onClick={() => selectAppType(type)}
               onKeyDown={(event) => handleTabKeyDown(event, index)}
             >
-              {t(appTypeLabelKey(type))}
+              <span className="inline-flex items-center justify-center gap-1.5"><VendorIcon vendor={inferVendor(type)} size={13} /><span>{t(appTypeLabelKey(type))}</span></span>
             </button>
           ))}
         </div>
@@ -257,6 +258,19 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                   : provider.ready
                     ? t("providerCatalog.failover.healthy")
                     : t("providerCatalog.failover.notReady");
+            const vendor = inferVendor(`${provider.name} ${provider.model ?? ""} ${provider.baseUrl ?? ""}`);
+            const StatusIcon = circuit?.status === "open"
+              ? CircleStop
+              : circuit?.status === "halfOpen"
+                ? Activity
+                : provider.ready
+                  ? CircleCheck
+                  : CircleAlert;
+            const statusColor = circuit?.status === "open"
+              ? TERM_PANEL.red
+              : provider.ready
+                ? TERM_PANEL.green
+                : TERM_PANEL.yellow;
             return (
               <div key={provider.id} className="rounded-lg border transition-colors" style={{ borderColor: selected ? TERM_PANEL.green : TERM_PANEL.border, borderLeftWidth: selected ? 3 : 1, backgroundColor: selected ? panelColorTint(TERM_PANEL.green, 11) : TERM_PANEL.card }}>
                 <div className="flex items-center gap-1.5">
@@ -273,13 +287,15 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                     title={provider.baseUrl ?? undefined}
                   >
                     <span className="flex min-w-0 items-center gap-1.5">
-                      {selected ? <Check size={13} className="shrink-0" style={{ color: TERM_PANEL.green }} /> : <span className="w-[13px] shrink-0" />}
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md" style={{ backgroundColor: selected ? panelColorTint(TERM_PANEL.green, 18) : TERM_PANEL.cardInner }}>
+                        {selected ? <Check size={12} style={{ color: TERM_PANEL.green }} /> : <VendorIcon vendor={vendor} size={14} fallback={Boxes} />}
+                      </span>
                       <span className="min-w-0 truncate text-[11px] font-semibold" style={{ color: TERM_PANEL.fg }}>{provider.name}</span>
                       {provider.inFailoverQueue && <span className="shrink-0 rounded px-1 text-[9px]" style={{ color: TERM_PANEL.green, backgroundColor: panelColorTint(TERM_PANEL.green, 14) }}>#{(queuePosition.get(provider.id) ?? 0) + 1}</span>}
                     </span>
                     <span className="ml-[19px] flex min-w-0 items-center gap-1.5 text-[10px]" style={{ color: TERM_PANEL.dim }}>
                       <span className="truncate">{provider.model ?? provider.baseUrl ?? t("providerQuickSwitch.noModel")}</span>
-                      <span style={{ color: provider.ready ? TERM_PANEL.green : TERM_PANEL.yellow }}>{provider.ready ? t("providerCatalog.failover.ready") : t("providerCatalog.failover.notReady")}</span>
+                      <span className="inline-flex shrink-0 items-center gap-1" style={{ color: statusColor }}><StatusIcon size={11} />{provider.ready ? t("providerCatalog.failover.ready") : t("providerCatalog.failover.notReady")}</span>
                       <span style={{ color: circuit?.status === "open" ? TERM_PANEL.red : TERM_PANEL.dim }}>{circuitLabel}</span>
                     </span>
                   </button>
