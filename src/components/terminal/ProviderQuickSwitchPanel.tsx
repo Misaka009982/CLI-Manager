@@ -432,8 +432,11 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
             return (
               <div
                 key={provider.id}
+                draggable={canReorder}
+                onDragStart={(event) => handleProviderDragStart(event, provider)}
                 onDragOver={(event) => handleProviderDragOver(event, provider)}
                 onDrop={(event) => void handleProviderDrop(event, provider)}
+                onDragEnd={handleProviderDragEnd}
                 className={`rounded-lg border transition-colors ${dragOverProviderId === provider.id && draggedProviderId !== provider.id ? "ring-1" : ""}`}
                 style={{ borderColor: selected ? TERM_PANEL.green : TERM_PANEL.border, borderLeftWidth: selected ? 3 : 1, backgroundColor: selected ? panelColorTint(TERM_PANEL.green, 11) : TERM_PANEL.card, ...(dragOverProviderId === provider.id && draggedProviderId !== provider.id ? { boxShadow: `inset 0 2px 0 ${TERM_PANEL.green}` } : {}) }}
               >
@@ -468,9 +471,6 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                   {canReorder && (
                     <>
                       <span
-                        draggable
-                        onDragStart={(event) => handleProviderDragStart(event, provider)}
-                        onDragEnd={handleProviderDragEnd}
                         className="flex shrink-0 cursor-grab touch-none items-center px-1 active:cursor-grabbing"
                         style={{ color: TERM_PANEL.dim }}
                         title={t("providerQuickSwitch.dragHandle")}
