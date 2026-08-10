@@ -259,13 +259,12 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                     ? t("providerCatalog.failover.healthy")
                     : t("providerCatalog.failover.notReady");
             const vendor = inferVendor(`${provider.name} ${provider.model ?? ""} ${provider.baseUrl ?? ""}`);
-            const StatusIcon = circuit?.status === "open"
+            const ReadyIcon = provider.ready ? CircleCheck : CircleAlert;
+            const CircuitIcon = circuit?.status === "open"
               ? CircleStop
               : circuit?.status === "halfOpen"
                 ? Activity
-                : provider.ready
-                  ? CircleCheck
-                  : CircleAlert;
+                : null;
             const statusColor = circuit?.status === "open"
               ? TERM_PANEL.red
               : provider.ready
@@ -286,17 +285,18 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                     onKeyDown={(event) => handleRowKeyDown(event, index)}
                     title={provider.baseUrl ?? undefined}
                   >
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md" style={{ backgroundColor: selected ? panelColorTint(TERM_PANEL.green, 18) : TERM_PANEL.cardInner }}>
-                        {selected ? <Check size={12} style={{ color: TERM_PANEL.green }} /> : <VendorIcon vendor={vendor} size={14} fallback={Boxes} />}
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md" style={{ backgroundColor: TERM_PANEL.cardInner }}>
+                        <VendorIcon vendor={vendor} size={14} fallback={Boxes} />
                       </span>
                       <span className="min-w-0 truncate text-[11px] font-semibold" style={{ color: TERM_PANEL.fg }}>{provider.name}</span>
                       {provider.inFailoverQueue && <span className="shrink-0 rounded px-1 text-[9px]" style={{ color: TERM_PANEL.green, backgroundColor: panelColorTint(TERM_PANEL.green, 14) }}>#{(queuePosition.get(provider.id) ?? 0) + 1}</span>}
+                      {selected && <span className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-full" style={{ color: TERM_PANEL.green, backgroundColor: panelColorTint(TERM_PANEL.green, 18) }} aria-label={t("providerQuickSwitch.currentProvider")}><Check size={12} /></span>}
                     </span>
-                    <span className="ml-[19px] flex min-w-0 items-center gap-1.5 text-[10px]" style={{ color: TERM_PANEL.dim }}>
-                      <span className="truncate">{provider.model ?? provider.baseUrl ?? t("providerQuickSwitch.noModel")}</span>
-                      <span className="inline-flex shrink-0 items-center gap-1" style={{ color: statusColor }}><StatusIcon size={11} />{provider.ready ? t("providerCatalog.failover.ready") : t("providerCatalog.failover.notReady")}</span>
-                      <span style={{ color: circuit?.status === "open" ? TERM_PANEL.red : TERM_PANEL.dim }}>{circuitLabel}</span>
+                    <span className="ml-7 flex min-w-0 items-center gap-2.5 text-[10px]" style={{ color: TERM_PANEL.dim }}>
+                      <span className="min-w-0 flex-1 truncate">{provider.model ?? provider.baseUrl ?? t("providerQuickSwitch.noModel")}</span>
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5" style={{ color: statusColor, backgroundColor: panelColorTint(statusColor, 10) }}><ReadyIcon size={11} />{provider.ready ? t("providerCatalog.failover.ready") : t("providerCatalog.failover.notReady")}</span>
+                      <span className="inline-flex shrink-0 items-center gap-1" style={{ color: circuit?.status === "open" ? TERM_PANEL.red : TERM_PANEL.dim }}>{CircuitIcon && <CircuitIcon size={10} />}{circuitLabel}</span>
                     </span>
                   </button>
 
