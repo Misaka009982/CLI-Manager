@@ -1386,3 +1386,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 42: 修复 WSL CLI Home 自动解析与目录选择
+
+**Date**: 2026-08-11
+**Task**: 修复 WSL CLI Home 自动解析与目录选择
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+修复 Local→WSL 时沿用 host identity 导致 Home 自动解析错误的问题；后端自动探测默认发行版与真实 HOME，前端同步 identity，并启用 Local/WSL 目录选择与手动编辑。类型检查、12 个 Home 单测和 cargo check 均通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `68be1e60` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
