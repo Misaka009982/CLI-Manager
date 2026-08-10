@@ -1353,3 +1353,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 41: 修复 WSL CLI Home 手动输入
+
+**Date**: 2026-08-11
+**Task**: 修复 WSL CLI Home 手动输入
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+修复供应商设置 CLI Home 在 WSL 自动模式下同时禁用目录选择和文本输入的死路；允许直接编辑或粘贴 WSL UNC，并在首次输入时切换为手动模式。完成契约、Changelog、功能清单同步，TypeScript 与 GitNexus staged 影响检查通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ee8b4b98` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
