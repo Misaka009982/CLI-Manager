@@ -36,6 +36,8 @@ import { useSshHostStore } from "./sshHostStore";
 import { useSshAgentIntegrationStore } from "./sshAgentIntegrationStore";
 import { createGitDiffWorkspaceContext, useGitDiffWorkspaceStore } from "./gitDiffWorkspaceStore";
 import { useFileExplorerStore } from "./fileExplorerStore";
+import { useDesktopPetAlertStore } from "./desktopPetAlertStore";
+import type { DesktopPetAttentionKind, DesktopPetDecisionRequest } from "../lib/desktopPet";
 import { resolveCliSessionRebind } from "./terminalCliSession";
 import { inferHookBindingSource, resolveCliHookTarget } from "./terminalHookBinding";
 import { buildSshConnectionSpec, type SshConnectionSpecPayload } from "../lib/ssh";
@@ -129,11 +131,17 @@ interface TabStatusSources {
   shell?: TabNotificationState;
   hookUpdatedAt?: string;
   shellUpdatedAt?: string;
+  hookTitle?: string | null;
+  hookMessage?: string | null;
+  hookAttentionKind?: DesktopPetAttentionKind | null;
 }
 
 export interface TabStatusDetails {
   status: TabNotificationState;
   updatedAt: string | null;
+  title: string | null;
+  message: string | null;
+  attentionKind: DesktopPetAttentionKind | null;
 }
 
 export interface ShellRuntimePayload {
@@ -149,10 +157,10 @@ const SHELL_RUNTIME_MONITORING_ENV = "CLI_MANAGER_SHELL_RUNTIME_MONITORING";
 const PTY_OUTPUT_ACTIVITY_UPDATE_INTERVAL_MS = 1000;
 const TAB_STATUS_PRIORITY: Record<TabNotificationState, number> = {
   none: 0,
-  done: 1,
-  running: 2,
-  failed: 3,
-  attention: 4,
+  running: 1,
+  done: 2,
+  attention: 3,
+  failed: 4,
 };
 const SUBAGENT_TRANSCRIPT_MAX_CHARS = 4 * 1024 * 1024;
 
@@ -203,6 +211,10 @@ export interface CliHookPayload {
   remoteAgentTranscriptRef?: string | null;
   remoteEventId?: string | null;
   remoteSequence?: number | null;
+  heartbeat?: boolean | null;
+  sourceInstanceId?: string | null;
+  piDecision?: DesktopPetDecisionRequest | null;
+  piDecisionClosedRequestId?: string | null;
 }
 
 /** 子 Agent 转录面板的实时内容（按订阅 key=伪会话 id 存放）。 */
@@ -981,6 +993,16 @@ function mapCliHookEvent(event: CliHookEventName): TabNotificationState | null {
   return null;
 }
 
+function getHookAttentionKind(payload: CliHookPayload): DesktopPetAttentionKind | null {
+  if (payload.piDecision?.kind === "permission" || payload.event === "PermissionRequest") {
+    return "permission";
+  }
+  if (payload.piDecision?.kind === "questionnaire") return "questionnaire";
+  if (payload.piDecision?.kind === "question") return "question";
+  if (payload.event === "Notification") return "attention";
+  return null;
+}
+
 function mapShellRuntimeEvent(event: ShellRuntimeEventName, exitCode?: number | null): TabNotificationState {
   if (event === "command_started") return "running";
   if (event === "command_finished") {
@@ -1004,13 +1026,33 @@ function getTabStatusEntry(state: TabStatusSources | undefined): TabNotification
 }
 
 function getTabStatusDetails(state: TabStatusSources | undefined): TabStatusDetails {
-  if (!state) return { status: "none", updatedAt: null };
+  if (!state) {
+    return { status: "none", updatedAt: null, title: null, message: null, attentionKind: null };
+  }
   const hookScore = state.hook ? TAB_STATUS_PRIORITY[state.hook] : -1;
   const shellScore = state.shell ? TAB_STATUS_PRIORITY[state.shell] : -1;
   if (hookScore >= shellScore) {
-    return { status: state.hook ?? "none", updatedAt: state.hookUpdatedAt ?? null };
+    return {
+      status: state.hook ?? "none",
+      updatedAt: state.hookUpdatedAt ?? null,
+      title: state.hookTitle ?? null,
+      message: state.hookMessage ?? null,
+      attentionKind: state.hookAttentionKind ?? null,
+    };
   }
-  return { status: state.shell ?? "none", updatedAt: state.shellUpdatedAt ?? null };
+  return {
+    status: state.shell ?? "none",
+    updatedAt: state.shellUpdatedAt ?? null,
+    title: null,
+    message: null,
+    attentionKind: null,
+  };
+}
+
+interface HookStatusMetadata {
+  title: string | null;
+  message: string | null;
+  attentionKind: DesktopPetAttentionKind | null;
 }
 
 function buildTabStatusUpdate(
@@ -1018,13 +1060,21 @@ function buildTabStatusUpdate(
   sessionId: string,
   source: TabStatusSourceName,
   status: TabNotificationState,
-  updatedAt: string
+  updatedAt: string,
+  metadata?: HookStatusMetadata
 ): Pick<TerminalStore, "tabStatuses" | "tabNotifications" | "tabStatusDetails"> {
   const previous = state.tabStatuses[sessionId] ?? {};
   const next: TabStatusSources = {
     ...previous,
     [source]: status,
     [source === "hook" ? "hookUpdatedAt" : "shellUpdatedAt"]: updatedAt,
+    ...(source === "hook" && metadata
+      ? {
+          hookTitle: metadata.title,
+          hookMessage: metadata.message,
+          hookAttentionKind: metadata.attentionKind,
+        }
+      : {}),
   };
   return {
     tabStatuses: {
@@ -1265,10 +1315,11 @@ interface ResolvedPtyLaunch {
   };
 }
 
-// hook running 超时回退：Stop/StopFailure 丢失（hook 脚本失败、bridge 不可达）
-// 时 Tab 会永久停留 running，超时后回退为 none（未知）。阈值取宽（Claude 长任务
-// 可合法运行很久），只兜底明显异常的滞留。
+// Pi 扩展只在 Agent 回合运行期间发送心跳。心跳丢失是最终中断证据；
+// 其他 CLI 继续沿用原有的长超时与未知态回退。
 const HOOK_RUNNING_TIMEOUT_MS = 30 * 60 * 1000;
+const PI_HEARTBEAT_TIMEOUT_MS = 60 * 1000;
+const PI_HEARTBEAT_TIMER_DRIFT_GRACE_MS = 5 * 1000;
 const hookRunningTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
 function clearHookRunningTimeout(tabId: string) {
@@ -1278,16 +1329,68 @@ function clearHookRunningTimeout(tabId: string) {
   hookRunningTimeouts.delete(tabId);
 }
 
-function scheduleHookRunningTimeout(tabId: string, updatedAt: string) {
+function scheduleHookRunningTimeout(
+  tabId: string,
+  updatedAt: string,
+  source: CliHookSource | null | undefined = null,
+  sourceInstanceId: string | null | undefined = null
+) {
   clearHookRunningTimeout(tabId);
+  const isPi = source === "pi";
+  const timeoutMs = isPi ? PI_HEARTBEAT_TIMEOUT_MS : HOOK_RUNNING_TIMEOUT_MS;
+  const scheduledAt = Date.now();
   const timer = setTimeout(() => {
     hookRunningTimeouts.delete(tabId);
+    if (
+      isPi
+      && Date.now() - scheduledAt > timeoutMs + PI_HEARTBEAT_TIMER_DRIFT_GRACE_MS
+    ) {
+      // 系统睡眠或长事件循环暂停不等于 Agent 中断；恢复后留出一个完整
+      // 心跳窗口，若 Pi 仍存活会在该窗口内刷新此看门。
+      scheduleHookRunningTimeout(tabId, updatedAt, source, sourceInstanceId);
+      return;
+    }
     const store = useTerminalStore.getState();
-    if (!store.sessions.some((session) => session.id === tabId)) return;
+    const session = store.sessions.find((item) => item.id === tabId);
     const current = store.tabStatuses[tabId];
     if (current?.hook !== "running" || current.hookUpdatedAt !== updatedAt) return;
-    useTerminalStore.setState((state) => buildTabStatusUpdate(state, tabId, "hook", "none", new Date().toISOString()));
-  }, HOOK_RUNNING_TIMEOUT_MS);
+    const failedAt = new Date().toISOString();
+    if (isPi) {
+      const title = translateCurrent("desktopPet.incident.piInterruptedTitle");
+      const message = translateCurrent("desktopPet.incident.piHeartbeatMessage");
+      const heartbeatAtMs = Date.parse(updatedAt);
+      const heartbeatIncidentId = `pi-heartbeat:${sourceInstanceId?.trim() || tabId}:${
+        Number.isFinite(heartbeatAtMs) ? heartbeatAtMs : updatedAt
+      }`;
+      useDesktopPetAlertStore.getState().addIncident({
+        id: heartbeatIncidentId,
+        tabId,
+        sessionId: session?.cliSessionId?.trim() || null,
+        daemonOnly: false,
+        title,
+        message,
+        createdAt: Date.now(),
+      });
+      useTerminalStore.setState((state) => buildTabStatusUpdate(
+        state,
+        tabId,
+        "hook",
+        "failed",
+        failedAt,
+        { title, message, attentionKind: null }
+      ));
+      return;
+    }
+    if (!session) return;
+    useTerminalStore.setState((state) => buildTabStatusUpdate(
+      state,
+      tabId,
+      "hook",
+      "none",
+      failedAt,
+      { title: null, message: null, attentionKind: null }
+    ));
+  }, timeoutMs);
   hookRunningTimeouts.set(tabId, timer);
 }
 
@@ -2284,7 +2387,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     if (get().tabStatuses[tabId]?.hook !== "attention") return;
     const updatedAt = new Date().toISOString();
     scheduleHookRunningTimeout(tabId, updatedAt);
-    set((state) => buildTabStatusUpdate(state, tabId, "hook", "running", updatedAt));
+    set((state) => buildTabStatusUpdate(
+      state,
+      tabId,
+      "hook",
+      "running",
+      updatedAt,
+      { title: null, message: null, attentionKind: null }
+    ));
   },
 
   handleCliHookEvent: (payload) => {
@@ -2333,6 +2443,17 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       });
       return null;
     }
+    // 乱序防御必须在会话身份绑定与刷新副作用之前完成；Pi 决策重放也不得
+    // 用旧时间戳覆盖较新的终端上下文。
+    const updatedAt = payload.timestamp ?? new Date().toISOString();
+    const previousAt = get().tabStatuses[tabId]?.hookUpdatedAt;
+    if (previousAt) {
+      const incoming = Date.parse(updatedAt);
+      const existing = Date.parse(previousAt);
+      if (Number.isFinite(incoming) && Number.isFinite(existing) && incoming < existing) {
+        return tabId;
+      }
+    }
     if (resolution.reason !== "exact" && resolution.reason !== "legacy") {
       logInfo("CLI hook target recovered", {
         source: payload.source ?? null,
@@ -2378,33 +2499,49 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         });
       }
     }
-    const updatedAt = payload.timestamp ?? new Date().toISOString();
     const status = mapCliHookEvent(payload.event);
     // SessionStart 绑定 id、回合结束/失败时立刻踢侧栏重拉用量，避免等 10s 轮询才「闪一下」出来。
     if (
       boundNewCliSessionId ||
       payload.event === "Stop" ||
       payload.event === "StopFailure" ||
-      payload.event === "UserPromptSubmit"
+      (payload.event === "UserPromptSubmit" && !payload.heartbeat)
     ) {
       set((state) => ({ statsPanelRefreshSeq: state.statsPanelRefreshSeq + 1 }));
     }
     if (!status) return tabId;
-    // 乱序防御：各 hook 事件由独立进程上报，到达顺序不保证；丢弃比已记录
-    // 状态更旧的事件（如 Stop 之后才迟到的 UserPromptSubmit）。
-    const previousAt = get().tabStatuses[tabId]?.hookUpdatedAt;
-    if (previousAt) {
-      const incoming = Date.parse(updatedAt);
-      const existing = Date.parse(previousAt);
-      if (Number.isFinite(incoming) && Number.isFinite(existing) && incoming < existing) return tabId;
+    if (payload.heartbeat && (payload.source !== "pi" || status !== "running")) {
+      return tabId;
+    }
+    if (payload.heartbeat && get().tabStatuses[tabId]?.hook !== "running") {
+      // 迟到的心跳不能让已完成、失败或待决策的回合重新进入运行态。
+      return tabId;
+    }
+    if (payload.piDecision) {
+      // 决策由独立 alert store/card 承载；保留原 running 状态与心跳超时，
+      // 避免问题等待期被普通 Hook 状态机误改写。
+      return tabId;
     }
     if (status === "running") {
-      scheduleHookRunningTimeout(tabId, updatedAt);
+      scheduleHookRunningTimeout(tabId, updatedAt, payload.source, payload.sourceInstanceId);
     } else {
       clearHookRunningTimeout(tabId);
     }
     set((state) => {
-      const next = buildTabStatusUpdate(state, tabId, "hook", status, updatedAt);
+      const next = buildTabStatusUpdate(
+        state,
+        tabId,
+        "hook",
+        status,
+        updatedAt,
+        payload.heartbeat
+          ? undefined
+          : {
+              title: payload.title?.trim() || null,
+              message: payload.message?.trim() || null,
+              attentionKind: getHookAttentionKind(payload),
+            }
+      );
       const terminalOutputStopped = status === "done" || status === "failed";
       const ptyOutputActivityAt = terminalOutputStopped
         ? { ...state.ptyOutputActivityAt }

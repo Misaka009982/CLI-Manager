@@ -359,6 +359,7 @@ fn title_for(source: &str, event: &str) -> &'static str {
         ("pi", "SessionStart") => "Pi Agent session started",
         ("pi", "UserPromptSubmit") => "Pi Agent running",
         ("pi", "Stop") => "Pi Agent done",
+        ("pi", "StopFailure") => "Pi Agent interrupted",
         ("pi", _) => "Pi Agent needs attention",
         ("grok", "SessionStart") => "Grok Build session started",
         ("grok", "UserPromptSubmit") => "Grok Build running",

@@ -933,6 +933,8 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .manage(PendingBackgroundSession::default())
+        .manage(commands::desktop_pet::DesktopPetWindowState::default())
+        .manage(commands::desktop_pet_companion::DesktopPetCompanionState::default())
         .manage(daemon::client::DaemonBridge::new())
         .manage(file_watcher::FileWatcherBridge::new())
         .manage(git_watcher::GitWatcherBridge::new())
@@ -984,10 +986,17 @@ pub fn run() {
             commands::desktop_pet::desktop_pet_install,
             commands::desktop_pet::desktop_pet_import,
             commands::desktop_pet::desktop_pet_uninstall,
+            commands::desktop_pet::desktop_pet_resolve_pi_decision,
             commands::desktop_pet::desktop_pet_window_sync,
             commands::desktop_pet::desktop_pet_window_set_bounds,
+            commands::desktop_pet::desktop_pet_bubble_window_set_bounds,
+            commands::desktop_pet::desktop_pet_window_set_hit_regions,
             commands::desktop_pet::desktop_pet_window_hide,
             commands::desktop_pet::desktop_pet_window_reset_position,
+            commands::desktop_pet_companion::desktop_pet_companion_status,
+            commands::desktop_pet_companion::desktop_pet_companion_sync,
+            commands::desktop_pet_companion::desktop_pet_companion_send_action_result,
+            commands::desktop_pet_companion::desktop_pet_companion_stop,
             commands::terminal_shell::terminal_shell_scan,
             commands::terminal_shell::terminal_shell_icon,
             commands::ssh::ssh_client_status,
@@ -1234,6 +1243,8 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = &event {
+                app.state::<commands::desktop_pet_companion::DesktopPetCompanionState>()
+                    .shutdown();
                 app.state::<commands::cc_connect::CcConnectManager>()
                     .shutdown();
                 crash_reporter::mark_graceful_exit();

@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   Group,
+  SegmentedControl,
   SimpleGrid,
   Skeleton,
   Slider,
@@ -22,6 +23,7 @@ import {
   Download,
   HardDrive,
   Info,
+  MonitorCog,
   RefreshCw,
   RotateCcw,
   Trash2,
@@ -40,6 +42,7 @@ import {
 } from "../../../lib/desktopPet";
 import { formatFileSize } from "../../../lib/utils";
 import { getCliManagerDataPaths } from "../../../lib/appPaths";
+import { getOsPlatform, type OsPlatform } from "../../../lib/shell";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import {
   BUILTIN_DESKTOP_PET_ID,
@@ -381,6 +384,7 @@ export function DesktopPetSettingsPage() {
   const [importing, setImporting] = useState(false);
   const [busyPetId, setBusyPetId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [osPlatform, setOsPlatform] = useState<OsPlatform>("unknown");
   const [sizeDraft, setSizeDraft] = useState(desktopPet.size);
   const [workingBounceDistanceDraft, setWorkingBounceDistanceDraft] = useState(
     desktopPet.workingBounceDistancePx
@@ -392,6 +396,16 @@ export function DesktopPetSettingsPage() {
     const current = useSettingsStore.getState().desktopPet;
     await updateSetting("desktopPet", { ...current, ...delta });
   }, [updateSetting]);
+
+  useEffect(() => {
+    let disposed = false;
+    void getOsPlatform().then((platform) => {
+      if (!disposed) setOsPlatform(platform);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   useEffect(() => {
     setSizeDraft(desktopPet.size);
@@ -653,6 +667,43 @@ export function DesktopPetSettingsPage() {
               onChange={(event) => void patch({ enabled: event.currentTarget.checked })}
             />
           </Group>
+
+          {osPlatform === "windows" ? (
+            <Stack gap={8}>
+              <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+                <Box className="min-w-0 flex-1">
+                  <Text size="sm" fw={500} c="var(--on-surface)">
+                    {t("desktopPet.settings.runtime")}
+                  </Text>
+                  <Text mt={2} size="xs" c="var(--on-surface-variant)">
+                    {desktopPet.runtime === "electron"
+                      ? t("desktopPet.settings.runtimeElectronDescription")
+                      : t("desktopPet.settings.runtimeTauriDescription")}
+                  </Text>
+                </Box>
+                <MonitorCog size={17} color="var(--primary)" aria-hidden="true" />
+              </Group>
+              <SegmentedControl
+                fullWidth
+                color="cliPrimary"
+                value={desktopPet.runtime}
+                data={[
+                  {
+                    value: "tauri",
+                    label: t("desktopPet.settings.runtimeTauri"),
+                  },
+                  {
+                    value: "electron",
+                    label: t("desktopPet.settings.runtimeElectron"),
+                  },
+                ]}
+                aria-label={t("desktopPet.settings.runtime")}
+                onChange={(value) => void patch({
+                  runtime: value as DesktopPetSettings["runtime"],
+                })}
+              />
+            </Stack>
+          ) : null}
 
           {selectedMissing ? (
             <Alert

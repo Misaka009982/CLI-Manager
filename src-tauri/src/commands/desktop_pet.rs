@@ -1,4 +1,6 @@
 use crate::app_paths;
+use crate::claude_hook::{resolve_pi_decision, PiDecisionAnswer};
+use crate::daemon::client::DaemonBridge;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -7,13 +9,19 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Runtime, State};
 use uuid::Uuid;
 use zip::ZipArchive;
 
 const PET_SCHEMA_VERSION: u32 = 1;
 const PET_WINDOW_LABEL: &str = "desktop-pet";
+const PET_BUBBLE_WINDOW_LABEL: &str = "desktop-pet-bubble";
+const MAIN_WINDOW_LABEL: &str = "main";
+const PET_HIDDEN_EVENT: &str = "desktop-pet-hidden";
+const MAX_LIFECYCLE_TOKEN_BYTES: usize = 128;
+const MAX_HIT_REGIONS: usize = 64;
 const PET_WINDOW_BASE_WIDTH: f64 = 190.0;
 const PET_WINDOW_BASE_HEIGHT: f64 = 210.0;
 const PET_WINDOW_MIN_SCALE: f64 = 0.4;
@@ -164,9 +172,21 @@ pub struct PetPosition {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopPetWindowConfig {
     pub enabled: bool,
+    pub bubble_enabled: bool,
     pub always_on_top: bool,
+    pub sync_pet_geometry: bool,
     pub scale: f64,
     pub position: Option<PetPosition>,
+    pub lifecycle_token: String,
+    pub pet_surface_epoch: Option<String>,
+    pub bubble_surface_epoch: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopPetHiddenEventPayload {
+    lifecycle_token: String,
+    pet_surface_epoch: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -176,6 +196,254 @@ pub struct DesktopPetWindowBounds {
     pub y: i32,
     pub width: u32,
     pub height: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DesktopPetHitRegionKind {
+    Stage,
+    Panel,
+    Control,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopPetHitRegion {
+    pub kind: DesktopPetHitRegionKind,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DesktopPetSurface {
+    Pet,
+    Bubble,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DesktopPetWindowOperation {
+    Bounds,
+    HitRegions,
+}
+
+#[derive(Default)]
+struct DesktopPetSurfaceLayoutState {
+    bounds_revision: u64,
+    region_revision: u64,
+}
+
+#[derive(Default)]
+struct DesktopPetLifecycleState {
+    lifecycle_token: Option<String>,
+    pet_surface_epoch: Option<String>,
+    bubble_surface_epoch: Option<String>,
+    pet_expected_visible: bool,
+    bubble_expected_visible: bool,
+    pet_layout: DesktopPetSurfaceLayoutState,
+    bubble_layout: DesktopPetSurfaceLayoutState,
+}
+
+impl DesktopPetLifecycleState {
+    fn replace(
+        &mut self,
+        lifecycle_token: String,
+        pet_surface_epoch: Option<String>,
+        bubble_surface_epoch: Option<String>,
+        pet_visible: bool,
+        bubble_visible: bool,
+    ) {
+        self.lifecycle_token = Some(lifecycle_token);
+        self.pet_surface_epoch = pet_surface_epoch;
+        self.bubble_surface_epoch = bubble_surface_epoch;
+        self.pet_expected_visible = pet_visible;
+        self.bubble_expected_visible = pet_visible && bubble_visible;
+        self.pet_layout = DesktopPetSurfaceLayoutState::default();
+        self.bubble_layout = DesktopPetSurfaceLayoutState::default();
+    }
+
+    fn expected_visible(&self, surface: DesktopPetSurface) -> bool {
+        match surface {
+            DesktopPetSurface::Pet => self.pet_expected_visible,
+            DesktopPetSurface::Bubble => self.bubble_expected_visible,
+        }
+    }
+
+    fn surface_epoch(&self, surface: DesktopPetSurface) -> Option<&str> {
+        match surface {
+            DesktopPetSurface::Pet => self.pet_surface_epoch.as_deref(),
+            DesktopPetSurface::Bubble => self.bubble_surface_epoch.as_deref(),
+        }
+    }
+
+    fn layout(&self, surface: DesktopPetSurface) -> &DesktopPetSurfaceLayoutState {
+        match surface {
+            DesktopPetSurface::Pet => &self.pet_layout,
+            DesktopPetSurface::Bubble => &self.bubble_layout,
+        }
+    }
+
+    fn layout_mut(&mut self, surface: DesktopPetSurface) -> &mut DesktopPetSurfaceLayoutState {
+        match surface {
+            DesktopPetSurface::Pet => &mut self.pet_layout,
+            DesktopPetSurface::Bubble => &mut self.bubble_layout,
+        }
+    }
+}
+
+pub struct DesktopPetWindowState {
+    lifecycle: Mutex<DesktopPetLifecycleState>,
+}
+
+impl Default for DesktopPetWindowState {
+    fn default() -> Self {
+        Self {
+            lifecycle: Mutex::new(DesktopPetLifecycleState::default()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ValidatedHitRegion {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+fn validate_lifecycle_token(value: &str) -> Result<(), String> {
+    if value.len() < 16
+        || value.len() > MAX_LIFECYCLE_TOKEN_BYTES
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("pet_window_lifecycle_token_invalid".to_string());
+    }
+    Ok(())
+}
+
+fn validate_surface_epoch(value: &str) -> Result<(), String> {
+    if value.len() < 16
+        || value.len() > MAX_LIFECYCLE_TOKEN_BYTES
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("pet_window_surface_epoch_invalid".to_string());
+    }
+    Ok(())
+}
+
+fn surface_from_label(label: &str) -> Option<DesktopPetSurface> {
+    match label {
+        PET_WINDOW_LABEL => Some(DesktopPetSurface::Pet),
+        PET_BUBBLE_WINDOW_LABEL => Some(DesktopPetSurface::Bubble),
+        _ => None,
+    }
+}
+
+fn caller_authorized(
+    caller_label: &str,
+    target: DesktopPetSurface,
+    operation: DesktopPetWindowOperation,
+) -> bool {
+    match operation {
+        DesktopPetWindowOperation::Bounds => {
+            caller_label == PET_WINDOW_LABEL
+                && matches!(target, DesktopPetSurface::Pet | DesktopPetSurface::Bubble)
+        }
+        DesktopPetWindowOperation::HitRegions => {
+            surface_from_label(caller_label) == Some(target)
+        }
+    }
+}
+
+fn authorize_surface_request(
+    lifecycle: &DesktopPetLifecycleState,
+    caller_label: &str,
+    caller_surface_epoch: &str,
+    target: DesktopPetSurface,
+    operation: DesktopPetWindowOperation,
+    lifecycle_token: &str,
+) -> Result<(), String> {
+    if !caller_authorized(caller_label, target, operation) {
+        return Err("pet_window_caller_forbidden".to_string());
+    }
+    let caller_surface = surface_from_label(caller_label)
+        .ok_or_else(|| "pet_window_caller_forbidden".to_string())?;
+    if lifecycle.surface_epoch(caller_surface) != Some(caller_surface_epoch) {
+        return Err("pet_window_surface_epoch_stale".to_string());
+    }
+    if lifecycle.lifecycle_token.as_deref() != Some(lifecycle_token) {
+        return Err("pet_window_lifecycle_stale".to_string());
+    }
+    if !lifecycle.expected_visible(target) {
+        return Err("pet_window_visibility_stale".to_string());
+    }
+    Ok(())
+}
+
+fn required_region_kind(surface: DesktopPetSurface) -> DesktopPetHitRegionKind {
+    match surface {
+        DesktopPetSurface::Pet => DesktopPetHitRegionKind::Stage,
+        DesktopPetSurface::Bubble => DesktopPetHitRegionKind::Panel,
+    }
+}
+
+fn validate_hit_regions(
+    regions: &[DesktopPetHitRegion],
+    window_size: (u32, u32),
+    required_kind: DesktopPetHitRegionKind,
+) -> Result<Vec<ValidatedHitRegion>, String> {
+    if regions.is_empty() || regions.len() > MAX_HIT_REGIONS {
+        return Err("pet_window_hit_regions_count_invalid".to_string());
+    }
+    let window_width =
+        i32::try_from(window_size.0).map_err(|_| "pet_window_hit_region_invalid".to_string())?;
+    let window_height =
+        i32::try_from(window_size.1).map_err(|_| "pet_window_hit_region_invalid".to_string())?;
+    if window_width <= 0 || window_height <= 0 {
+        return Err("pet_window_hit_region_invalid".to_string());
+    }
+
+    let mut has_required_region = false;
+    let mut validated = Vec::with_capacity(regions.len());
+    for region in regions {
+        let width =
+            i32::try_from(region.width).map_err(|_| "pet_window_hit_region_invalid".to_string())?;
+        let height = i32::try_from(region.height)
+            .map_err(|_| "pet_window_hit_region_invalid".to_string())?;
+        let right = region
+            .x
+            .checked_add(width)
+            .ok_or_else(|| "pet_window_hit_region_invalid".to_string())?;
+        let bottom = region
+            .y
+            .checked_add(height)
+            .ok_or_else(|| "pet_window_hit_region_invalid".to_string())?;
+        if region.x < 0
+            || region.y < 0
+            || width <= 0
+            || height <= 0
+            || right > window_width
+            || bottom > window_height
+        {
+            return Err("pet_window_hit_region_invalid".to_string());
+        }
+        has_required_region |= region.kind == required_kind;
+        validated.push(ValidatedHitRegion {
+            left: region.x,
+            top: region.y,
+            right,
+            bottom,
+        });
+    }
+    if !has_required_region {
+        return Err("pet_window_hit_region_required_missing".to_string());
+    }
+    Ok(validated)
 }
 
 fn pets_root() -> Result<PathBuf, String> {
@@ -1262,49 +1530,115 @@ fn place_default<R: Runtime>(window: &tauri::WebviewWindow<R>) {
 }
 
 #[tauri::command]
+pub async fn desktop_pet_resolve_pi_decision(
+    window: tauri::WebviewWindow,
+    request_id: String,
+    broker_epoch: String,
+    answer: PiDecisionAnswer,
+    daemon: State<'_, DaemonBridge>,
+) -> Result<(), String> {
+    if window.label() != MAIN_WINDOW_LABEL {
+        return Err("pet_window_caller_forbidden".to_string());
+    }
+    let client = daemon
+        .get()
+        .ok_or_else(|| "pi_decision_bridge_unavailable".to_string())?;
+    let hook_port = client.info().hook_port;
+    let token = client.info().token.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        resolve_pi_decision(hook_port, &token, request_id, broker_epoch, answer)
+    })
+    .await
+    .map_err(|err| format!("pi_decision_resolve_task_failed: {err}"))?
+}
+
+#[tauri::command]
 pub fn desktop_pet_window_sync(
     app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPetWindowState>,
     config: DesktopPetWindowConfig,
 ) -> Result<(), String> {
-    let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) else {
-        return if config.enabled {
-            Err("pet_window_missing".to_string())
+    if window.label() != MAIN_WINDOW_LABEL {
+        return Err("pet_window_caller_forbidden".to_string());
+    }
+    validate_lifecycle_token(&config.lifecycle_token)?;
+    if let Some(epoch) = config.pet_surface_epoch.as_deref() {
+        validate_surface_epoch(epoch)?;
+    }
+    if let Some(epoch) = config.bubble_surface_epoch.as_deref() {
+        validate_surface_epoch(epoch)?;
+    }
+    let pet_window = app.get_webview_window(PET_WINDOW_LABEL);
+    let bubble_window = app.get_webview_window(PET_BUBBLE_WINDOW_LABEL);
+    if config.enabled && pet_window.is_none() {
+        return Err("pet_window_missing".to_string());
+    }
+    if config.enabled && config.bubble_enabled && bubble_window.is_none() {
+        return Err("pet_bubble_window_missing".to_string());
+    }
+
+    let mut lifecycle = state
+        .lifecycle
+        .lock()
+        .map_err(|_| "pet_window_state_unavailable".to_string())?;
+    lifecycle.replace(
+        config.lifecycle_token.clone(),
+        config.pet_surface_epoch.clone(),
+        config.bubble_surface_epoch.clone(),
+        config.enabled,
+        config.bubble_enabled,
+    );
+
+    // 每个新代际都先隐藏 Bubble，随后由宠物表面测量并定位。
+    let bubble_hide_result = if let Some(bubble) = bubble_window.as_ref() {
+        hide_window_with_full_hit_region(bubble, "pet_bubble_window_hide_failed")
+    } else {
+        Ok(())
+    };
+    bubble_hide_result?;
+
+    if !config.enabled {
+        let pet_hide_result = if let Some(pet) = pet_window.as_ref() {
+            hide_window_with_full_hit_region(pet, "pet_window_hide_failed")
         } else {
             Ok(())
         };
-    };
-    if !config.enabled {
-        window
-            .hide()
-            .map_err(|err| format!("pet_window_hide_failed: {err}"))?;
-        return Ok(());
+        return pet_hide_result;
     }
 
-    // Pet scaling is application-controlled; persisted WebView2 zoom must not shrink its viewport.
-    #[cfg(target_os = "windows")]
-    let _ = window.set_zoom(1.0);
+    let pet = pet_window.expect("enabled pet window checked above");
+    let pet_sync_result = (|| -> Result<(), String> {
+        clear_window_hit_region(&pet)?;
 
-    let (size, position) = desired_window_geometry(&window, &config);
-    apply_window_geometry(&window, size, position)?;
-    window
-        .set_always_on_top(config.always_on_top)
-        .map_err(|err| format!("pet_window_topmost_failed: {err}"))?;
-    window
-        .show()
-        .map_err(|err| format!("pet_window_show_failed: {err}"))?;
+        // 宠物缩放由应用控制；持久化的 WebView2 缩放不得压缩其 viewport。
+        #[cfg(target_os = "windows")]
+        let _ = pet.set_zoom(1.0);
 
-    #[cfg(target_os = "windows")]
-    window
-        .set_zoom(1.0)
-        .map_err(|err| format!("pet_window_zoom_reset_failed: {err}"))?;
-    ensure_window_geometry(&window, size, position)?;
+        let (size, position) = desired_window_geometry(&pet, &config);
+        if config.sync_pet_geometry {
+            apply_window_geometry(&pet, size, position)?;
+        }
+        pet.set_always_on_top(config.always_on_top)
+            .map_err(|err| format!("pet_window_topmost_failed: {err}"))?;
+        show_window_inactive(&pet, "pet_window_show_failed")?;
 
-    #[cfg(target_os = "windows")]
-    window
-        .set_skip_taskbar(true)
-        .map_err(|err| format!("pet_window_skip_taskbar_failed: {err}"))?;
+        #[cfg(target_os = "windows")]
+        pet.set_zoom(1.0)
+            .map_err(|err| format!("pet_window_zoom_reset_failed: {err}"))?;
+        if config.sync_pet_geometry {
+            ensure_window_geometry(&pet, size, position)?;
+        }
+        pet.set_always_on_top(config.always_on_top)
+            .map_err(|err| format!("pet_window_topmost_failed: {err}"))?;
 
-    Ok(())
+        #[cfg(target_os = "windows")]
+        pet.set_skip_taskbar(true)
+            .map_err(|err| format!("pet_window_skip_taskbar_failed: {err}"))?;
+
+        Ok(())
+    })();
+    pet_sync_result
 }
 
 fn validated_window_size(bounds: DesktopPetWindowBounds) -> Result<(i32, i32), String> {
@@ -1315,6 +1649,141 @@ fn validated_window_size(bounds: DesktopPetWindowBounds) -> Result<(i32, i32), S
         return Err("pet_window_bounds_invalid".to_string());
     }
     Ok((width, height))
+}
+
+#[cfg(target_os = "windows")]
+fn clear_window_hit_region<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Result<(), String> {
+    use windows_sys::Win32::Graphics::Gdi::SetWindowRgn;
+
+    let hwnd = window
+        .hwnd()
+        .map_err(|err| format!("pet_window_handle_failed: {err}"))?;
+    let cleared = unsafe { SetWindowRgn(hwnd.0 as _, std::ptr::null_mut(), 1) };
+    if cleared == 0 {
+        Err(format!(
+            "pet_window_region_clear_failed: {}",
+            std::io::Error::last_os_error()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn clear_window_hit_region<R: Runtime>(_window: &tauri::WebviewWindow<R>) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn apply_window_hit_regions<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    regions: &[ValidatedHitRegion],
+) -> Result<bool, String> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_OR,
+    };
+
+    let first = regions
+        .first()
+        .ok_or_else(|| "pet_window_hit_regions_count_invalid".to_string())?;
+    let combined = unsafe { CreateRectRgn(first.left, first.top, first.right, first.bottom) };
+    if combined.is_null() {
+        return Err(format!(
+            "pet_window_region_create_failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    for region in &regions[1..] {
+        let next = unsafe { CreateRectRgn(region.left, region.top, region.right, region.bottom) };
+        if next.is_null() {
+            unsafe {
+                let _ = DeleteObject(combined as _);
+            }
+            return Err(format!(
+                "pet_window_region_create_failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let combined_result = unsafe { CombineRgn(combined, combined, next, RGN_OR) };
+        unsafe {
+            let _ = DeleteObject(next as _);
+        }
+        if combined_result == 0 {
+            unsafe {
+                let _ = DeleteObject(combined as _);
+            }
+            return Err(format!(
+                "pet_window_region_combine_failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+
+    let hwnd = window
+        .hwnd()
+        .map_err(|err| {
+            unsafe {
+                let _ = DeleteObject(combined as _);
+            }
+            format!("pet_window_handle_failed: {err}")
+        })?;
+    let applied = unsafe { SetWindowRgn(hwnd.0 as _, combined, 1) };
+    if applied == 0 {
+        unsafe {
+            let _ = DeleteObject(combined as _);
+        }
+        Err(format!(
+            "pet_window_region_apply_failed: {}",
+            std::io::Error::last_os_error()
+        ))
+    } else {
+        // `SetWindowRgn` 成功后由系统接管 `combined` 的所有权。
+        Ok(true)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_window_hit_regions<R: Runtime>(
+    _window: &tauri::WebviewWindow<R>,
+    _regions: &[ValidatedHitRegion],
+) -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(target_os = "windows")]
+fn show_window_inactive<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    _error_code: &str,
+) -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
+
+    let hwnd = window
+        .hwnd()
+        .map_err(|err| format!("pet_window_handle_failed: {err}"))?;
+    unsafe {
+        // `ShowWindow` 返回此前的可见状态而非成功标记，因此无需检查返回值。
+        let _ = ShowWindow(hwnd.0 as _, SW_SHOWNOACTIVATE);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn show_window_inactive<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    error_code: &str,
+) -> Result<(), String> {
+    window.show().map_err(|err| format!("{error_code}: {err}"))
+}
+
+fn hide_window_with_full_hit_region<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    error_code: &str,
+) -> Result<(), String> {
+    let region_result = clear_window_hit_region(window);
+    let hide_result = window.hide().map_err(|err| format!("{error_code}: {err}"));
+    region_result?;
+    hide_result
 }
 
 #[cfg(target_os = "windows")]
@@ -1363,34 +1832,237 @@ fn apply_window_bounds<R: Runtime>(
         .map_err(|err| format!("pet_window_position_failed: {err}"))
 }
 
-#[tauri::command]
-pub fn desktop_pet_window_set_bounds(
-    app: AppHandle,
+fn apply_bubble_window_bounds<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
     bounds: DesktopPetWindowBounds,
 ) -> Result<(), String> {
-    let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) else {
-        return Err("pet_window_missing".to_string());
-    };
-    apply_window_bounds(&window, bounds)
-}
+    clear_window_hit_region(window)?;
+    apply_window_bounds(window, bounds)?;
+    window
+        .set_always_on_top(true)
+        .map_err(|err| format!("pet_bubble_window_topmost_failed: {err}"))?;
+    show_window_inactive(window, "pet_bubble_window_show_failed")?;
 
-#[tauri::command]
-pub fn desktop_pet_window_reset_position(app: AppHandle) -> Result<(), String> {
-    let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) else {
-        return Err("pet_window_missing".to_string());
-    };
-    place_default(&window);
+    #[cfg(target_os = "windows")]
+    window
+        .set_zoom(1.0)
+        .map_err(|err| format!("pet_bubble_window_zoom_reset_failed: {err}"))?;
+
+    apply_window_bounds(window, bounds)?;
+    window
+        .set_always_on_top(true)
+        .map_err(|err| format!("pet_bubble_window_topmost_failed: {err}"))?;
+
+    #[cfg(target_os = "windows")]
+    window
+        .set_skip_taskbar(true)
+        .map_err(|err| format!("pet_bubble_window_skip_taskbar_failed: {err}"))?;
+
     Ok(())
 }
 
 #[tauri::command]
-pub fn desktop_pet_window_hide(app: AppHandle) -> Result<(), String> {
-    let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) else {
-        return Ok(());
+pub fn desktop_pet_window_set_bounds(
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPetWindowState>,
+    lifecycle_token: String,
+    surface_epoch: String,
+    revision: u64,
+    bounds: DesktopPetWindowBounds,
+) -> Result<(), String> {
+    validate_lifecycle_token(&lifecycle_token)?;
+    validate_surface_epoch(&surface_epoch)?;
+    validated_window_size(bounds)?;
+    let caller_label = window.label().to_string();
+    let mut lifecycle = state
+        .lifecycle
+        .lock()
+        .map_err(|_| "pet_window_state_unavailable".to_string())?;
+    authorize_surface_request(
+        &lifecycle,
+        &caller_label,
+        &surface_epoch,
+        DesktopPetSurface::Pet,
+        DesktopPetWindowOperation::Bounds,
+        &lifecycle_token,
+    )?;
+    if revision == 0 || revision <= lifecycle.pet_layout.bounds_revision {
+        return Err("pet_window_layout_stale".to_string());
+    }
+
+    clear_window_hit_region(&window)?;
+    apply_window_bounds(&window, bounds)?;
+    let layout = lifecycle.layout_mut(DesktopPetSurface::Pet);
+    layout.bounds_revision = revision;
+    layout.region_revision = 0;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn desktop_pet_bubble_window_set_bounds(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPetWindowState>,
+    lifecycle_token: String,
+    surface_epoch: String,
+    revision: u64,
+    bounds: DesktopPetWindowBounds,
+) -> Result<(), String> {
+    validate_lifecycle_token(&lifecycle_token)?;
+    validate_surface_epoch(&surface_epoch)?;
+    validated_window_size(bounds)?;
+    let caller_label = window.label().to_string();
+    let mut lifecycle = state
+        .lifecycle
+        .lock()
+        .map_err(|_| "pet_window_state_unavailable".to_string())?;
+    authorize_surface_request(
+        &lifecycle,
+        &caller_label,
+        &surface_epoch,
+        DesktopPetSurface::Bubble,
+        DesktopPetWindowOperation::Bounds,
+        &lifecycle_token,
+    )?;
+    if revision == 0 || revision <= lifecycle.bubble_layout.bounds_revision {
+        return Err("pet_window_layout_stale".to_string());
+    }
+    let bubble = app
+        .get_webview_window(PET_BUBBLE_WINDOW_LABEL)
+        .ok_or_else(|| "pet_bubble_window_missing".to_string())?;
+
+    apply_bubble_window_bounds(&bubble, bounds)?;
+    let layout = lifecycle.layout_mut(DesktopPetSurface::Bubble);
+    layout.bounds_revision = revision;
+    layout.region_revision = 0;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn desktop_pet_window_set_hit_regions(
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPetWindowState>,
+    lifecycle_token: String,
+    surface_epoch: String,
+    bounds_revision: u64,
+    region_revision: u64,
+    regions: Vec<DesktopPetHitRegion>,
+) -> Result<bool, String> {
+    validate_lifecycle_token(&lifecycle_token)?;
+    validate_surface_epoch(&surface_epoch)?;
+    let caller_label = window.label().to_string();
+    let surface = surface_from_label(&caller_label)
+        .ok_or_else(|| "pet_window_caller_forbidden".to_string())?;
+    let mut lifecycle = state
+        .lifecycle
+        .lock()
+        .map_err(|_| "pet_window_state_unavailable".to_string())?;
+    authorize_surface_request(
+        &lifecycle,
+        &caller_label,
+        &surface_epoch,
+        surface,
+        DesktopPetWindowOperation::HitRegions,
+        &lifecycle_token,
+    )?;
+    let current_layout = lifecycle.layout(surface);
+    if bounds_revision == 0
+        || bounds_revision != current_layout.bounds_revision
+        || region_revision == 0
+        || region_revision <= current_layout.region_revision
+    {
+        return Err("pet_window_region_revision_stale".to_string());
+    }
+
+    let window_size = window
+        .inner_size()
+        .map_err(|err| format!("pet_window_size_failed: {err}"))?;
+    let validation = validate_hit_regions(
+        &regions,
+        (window_size.width, window_size.height),
+        required_region_kind(surface),
+    );
+    lifecycle.layout_mut(surface).region_revision = region_revision;
+    let validated = match validation {
+        Ok(validated) => validated,
+        Err(_) => {
+            clear_window_hit_region(&window)?;
+            return Ok(false);
+        }
     };
-    window
-        .hide()
-        .map_err(|err| format!("pet_window_hide_failed: {err}"))
+
+    match apply_window_hit_regions(&window, &validated) {
+        Ok(applied) => Ok(applied),
+        Err(err) => {
+            clear_window_hit_region(&window)?;
+            log::warn!("desktop pet hit region fell back to full window: {err}");
+            Ok(false)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn desktop_pet_window_reset_position(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    if window.label() != MAIN_WINDOW_LABEL {
+        return Err("pet_window_caller_forbidden".to_string());
+    }
+    let Some(pet) = app.get_webview_window(PET_WINDOW_LABEL) else {
+        return Err("pet_window_missing".to_string());
+    };
+    place_default(&pet);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn desktop_pet_window_hide(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopPetWindowState>,
+    lifecycle_token: String,
+    surface_epoch: String,
+) -> Result<(), String> {
+    validate_lifecycle_token(&lifecycle_token)?;
+    validate_surface_epoch(&surface_epoch)?;
+    if window.label() != PET_WINDOW_LABEL {
+        return Err("pet_window_caller_forbidden".to_string());
+    }
+    let mut lifecycle = state
+        .lifecycle
+        .lock()
+        .map_err(|_| "pet_window_state_unavailable".to_string())?;
+    if lifecycle.pet_surface_epoch.as_deref() != Some(surface_epoch.as_str()) {
+        return Err("pet_window_surface_epoch_stale".to_string());
+    }
+    if lifecycle.lifecycle_token.as_deref() != Some(lifecycle_token.as_str()) {
+        return Err("pet_window_lifecycle_stale".to_string());
+    }
+    lifecycle.pet_expected_visible = false;
+    lifecycle.bubble_expected_visible = false;
+
+    let pet_result = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .map(|pet| hide_window_with_full_hit_region(&pet, "pet_window_hide_failed"))
+        .unwrap_or(Ok(()));
+    let bubble_result = app
+        .get_webview_window(PET_BUBBLE_WINDOW_LABEL)
+        .map(|bubble| {
+            hide_window_with_full_hit_region(&bubble, "pet_bubble_window_hide_failed")
+        })
+        .unwrap_or(Ok(()));
+    pet_result?;
+    bubble_result?;
+    app.emit_to(
+        MAIN_WINDOW_LABEL,
+        PET_HIDDEN_EVENT,
+        DesktopPetHiddenEventPayload {
+            lifecycle_token,
+            pet_surface_epoch: surface_epoch,
+        },
+    )
+    .map_err(|err| format!("pet_window_hidden_event_failed: {err}"))
 }
 
 #[cfg(test)]
@@ -1422,6 +2094,241 @@ mod tests {
             width: i32::MAX as u32 + 1,
             height: 480,
         })
+        .is_err());
+    }
+
+    #[test]
+    fn desktop_pet_window_config_preserves_geometry_when_requested() {
+        let config: DesktopPetWindowConfig = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "bubbleEnabled": true,
+            "alwaysOnTop": true,
+            "syncPetGeometry": false,
+            "scale": 1.0,
+            "position": null,
+            "lifecycleToken": "01234567-89ab-cdef",
+            "petSurfaceEpoch": "pet-surface-epoch-1",
+            "bubbleSurfaceEpoch": "bubble-surface-1"
+        }))
+        .unwrap();
+        assert!(!config.sync_pet_geometry);
+    }
+
+    #[test]
+    fn desktop_pet_lifecycle_tokens_are_bounded_and_opaque() {
+        assert!(validate_lifecycle_token("01234567-89ab-cdef").is_ok());
+        assert!(validate_lifecycle_token("").is_err());
+        assert!(validate_lifecycle_token("too-short").is_err());
+        assert!(validate_lifecycle_token("contains spaces 123456").is_err());
+        assert!(validate_lifecycle_token(&"a".repeat(MAX_LIFECYCLE_TOKEN_BYTES + 1)).is_err());
+        assert!(validate_surface_epoch("pet-surface-epoch-1").is_ok());
+        assert!(validate_surface_epoch("short").is_err());
+        assert!(validate_surface_epoch("invalid surface epoch").is_err());
+    }
+
+    #[test]
+    fn desktop_pet_caller_target_matrix_is_minimal() {
+        assert!(caller_authorized(
+            PET_WINDOW_LABEL,
+            DesktopPetSurface::Pet,
+            DesktopPetWindowOperation::Bounds,
+        ));
+        assert!(caller_authorized(
+            PET_WINDOW_LABEL,
+            DesktopPetSurface::Bubble,
+            DesktopPetWindowOperation::Bounds,
+        ));
+        assert!(!caller_authorized(
+            PET_BUBBLE_WINDOW_LABEL,
+            DesktopPetSurface::Bubble,
+            DesktopPetWindowOperation::Bounds,
+        ));
+        assert!(caller_authorized(
+            PET_WINDOW_LABEL,
+            DesktopPetSurface::Pet,
+            DesktopPetWindowOperation::HitRegions,
+        ));
+        assert!(caller_authorized(
+            PET_BUBBLE_WINDOW_LABEL,
+            DesktopPetSurface::Bubble,
+            DesktopPetWindowOperation::HitRegions,
+        ));
+        assert!(!caller_authorized(
+            PET_WINDOW_LABEL,
+            DesktopPetSurface::Bubble,
+            DesktopPetWindowOperation::HitRegions,
+        ));
+        assert!(!caller_authorized(
+            "unknown",
+            DesktopPetSurface::Pet,
+            DesktopPetWindowOperation::HitRegions,
+        ));
+    }
+
+    #[test]
+    fn desktop_pet_lifecycle_rejects_old_or_hidden_surface_requests() {
+        let mut lifecycle = DesktopPetLifecycleState::default();
+        lifecycle.replace(
+            "01234567-89ab-cdef".to_string(),
+            Some("pet-surface-epoch-1".to_string()),
+            Some("bubble-surface-1".to_string()),
+            true,
+            true,
+        );
+        assert!(authorize_surface_request(
+            &lifecycle,
+            PET_WINDOW_LABEL,
+            "pet-surface-epoch-1",
+            DesktopPetSurface::Bubble,
+            DesktopPetWindowOperation::Bounds,
+            "01234567-89ab-cdef",
+        )
+        .is_ok());
+        assert_eq!(
+            authorize_surface_request(
+                &lifecycle,
+                PET_WINDOW_LABEL,
+                "pet-surface-epoch-1",
+                DesktopPetSurface::Bubble,
+                DesktopPetWindowOperation::Bounds,
+                "fedcba98-7654-3210",
+            )
+            .unwrap_err(),
+            "pet_window_lifecycle_stale"
+        );
+        assert_eq!(
+            authorize_surface_request(
+                &lifecycle,
+                PET_WINDOW_LABEL,
+                "older-pet-surface",
+                DesktopPetSurface::Bubble,
+                DesktopPetWindowOperation::Bounds,
+                "01234567-89ab-cdef",
+            )
+            .unwrap_err(),
+            "pet_window_surface_epoch_stale"
+        );
+
+        lifecycle.replace(
+            "fedcba98-7654-3210".to_string(),
+            Some("pet-surface-epoch-1".to_string()),
+            Some("bubble-surface-1".to_string()),
+            true,
+            false,
+        );
+        assert_eq!(
+            authorize_surface_request(
+                &lifecycle,
+                PET_WINDOW_LABEL,
+                "pet-surface-epoch-1",
+                DesktopPetSurface::Bubble,
+                DesktopPetWindowOperation::Bounds,
+                "fedcba98-7654-3210",
+            )
+            .unwrap_err(),
+            "pet_window_visibility_stale"
+        );
+        assert_eq!(lifecycle.bubble_layout.bounds_revision, 0);
+        assert_eq!(lifecycle.bubble_layout.region_revision, 0);
+    }
+
+    fn hit_region(
+        kind: DesktopPetHitRegionKind,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    ) -> DesktopPetHitRegion {
+        DesktopPetHitRegion {
+            kind,
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn desktop_pet_hit_regions_preserve_separate_interactive_rectangles() {
+        let regions = [
+            hit_region(DesktopPetHitRegionKind::Stage, 0, 0, 190, 180),
+            hit_region(DesktopPetHitRegionKind::Control, 10, 190, 20, 20),
+            hit_region(DesktopPetHitRegionKind::Control, 160, 190, 20, 20),
+        ];
+        assert_eq!(
+            validate_hit_regions(
+                &regions,
+                (190, 210),
+                DesktopPetHitRegionKind::Stage,
+            ),
+            Ok(vec![
+                ValidatedHitRegion {
+                    left: 0,
+                    top: 0,
+                    right: 190,
+                    bottom: 180,
+                },
+                ValidatedHitRegion {
+                    left: 10,
+                    top: 190,
+                    right: 30,
+                    bottom: 210,
+                },
+                ValidatedHitRegion {
+                    left: 160,
+                    top: 190,
+                    right: 180,
+                    bottom: 210,
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn desktop_pet_hit_regions_fail_open_on_invalid_payloads() {
+        let valid = hit_region(DesktopPetHitRegionKind::Panel, 0, 0, 100, 100);
+        assert!(validate_hit_regions(&[], (100, 100), DesktopPetHitRegionKind::Panel).is_err());
+        assert!(validate_hit_regions(
+            &vec![valid; MAX_HIT_REGIONS + 1],
+            (100, 100),
+            DesktopPetHitRegionKind::Panel,
+        )
+        .is_err());
+        assert!(validate_hit_regions(
+            &[hit_region(DesktopPetHitRegionKind::Panel, -1, 0, 10, 10)],
+            (100, 100),
+            DesktopPetHitRegionKind::Panel,
+        )
+        .is_err());
+        assert!(validate_hit_regions(
+            &[hit_region(DesktopPetHitRegionKind::Panel, 0, 0, 0, 10)],
+            (100, 100),
+            DesktopPetHitRegionKind::Panel,
+        )
+        .is_err());
+        assert!(validate_hit_regions(
+            &[hit_region(DesktopPetHitRegionKind::Panel, 90, 0, 11, 10)],
+            (100, 100),
+            DesktopPetHitRegionKind::Panel,
+        )
+        .is_err());
+        assert!(validate_hit_regions(
+            &[hit_region(
+                DesktopPetHitRegionKind::Panel,
+                i32::MAX,
+                0,
+                2,
+                10,
+            )],
+            (100, 100),
+            DesktopPetHitRegionKind::Panel,
+        )
+        .is_err());
+        assert!(validate_hit_regions(
+            &[hit_region(DesktopPetHitRegionKind::Control, 0, 0, 10, 10)],
+            (100, 100),
+            DesktopPetHitRegionKind::Panel,
+        )
         .is_err());
     }
 

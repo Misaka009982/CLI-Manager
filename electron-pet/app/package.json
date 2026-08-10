@@ -1,0 +1,8 @@
+{
+  "name": "cli-manager-desktop-pet",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.cjs",
+  "type": "commonjs",
+  "license": "AGPL-3.0-or-later"
+}

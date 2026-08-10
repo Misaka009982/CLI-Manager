@@ -126,12 +126,28 @@ test("task-only menus remove the quick-action gap and empty menus stay collapsed
     { showActionMenu: false }
   );
   assert.ok(taskOnly.panelWidth < fullMenu.panelWidth);
-  assert.equal(taskOnly.panelWidth, 280);
+  assert.equal(taskOnly.panelWidth, 410);
   assert.equal(empty.panelWidth, 0);
   assert.deepEqual(
     { width: empty.physicalWidth, height: empty.physicalHeight },
     { width: collapsed.width, height: collapsed.height }
   );
+});
+
+test("explicit card content height expands the free-floating menu without clipping", () => {
+  const collapsed = { x: 900, y: 600, width: 190, height: 210 };
+  const estimated = menu.calculateDesktopPetMenuWindowGeometry(collapsed, 1, 1);
+  const expanded = menu.calculateDesktopPetMenuWindowGeometry(
+    collapsed,
+    1,
+    1,
+    null,
+    0,
+    { contentHeight: 520 }
+  );
+  assert.ok(expanded.targetListHeight > estimated.targetListHeight);
+  assert.equal(expanded.targetListHeight, 520);
+  assert.equal(expanded.logicalHeight, 548);
 });
 
 test("platform selection can retain five visible entries", () => {

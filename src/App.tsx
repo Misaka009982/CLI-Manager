@@ -42,6 +42,7 @@ import { useDesktopPetCoordinator } from "./hooks/useDesktopPetCoordinator";
 import { useRemoteHandoffCoordinator } from "./hooks/useRemoteHandoffCoordinator";
 import { useUpdateStore } from "./stores/updateStore";
 import { useReplayStore } from "./stores/replayStore";
+import { useDesktopPetAlertStore } from "./stores/desktopPetAlertStore";
 import { useTerminalStore, type CliHookPayload } from "./stores/terminalStore";
 import { useModelPricingStore } from "./stores/modelPricingStore";
 import { useWorktreeStore } from "./stores/worktreeStore";
@@ -809,7 +810,11 @@ function App() {
   useEffect(() => {
     if (!IN_TAURI) return;
     const unlistenHook = listen<CliHookPayload>("claude-hook-notification", (event) => {
-      void useReplayStore.getState().recordCliHookEvent(event.payload);
+      useDesktopPetAlertStore.getState().recordHookPayload(event.payload);
+      if (event.payload.piDecisionClosedRequestId) return;
+      if (!event.payload.heartbeat && !event.payload.piDecision) {
+        void useReplayStore.getState().recordCliHookEvent(event.payload);
+      }
       const isClaudeToolSubagentEvent =
         event.payload.source === "claude" &&
         (event.payload.event === "ToolStart" || event.payload.event === "ToolStop") &&
@@ -836,6 +841,7 @@ function App() {
         return;
       }
       const boundTabId = useTerminalStore.getState().handleCliHookEvent(event.payload);
+      if (event.payload.heartbeat || event.payload.piDecision) return;
       // 任务栏提醒独立于 Tab 绑定和系统 Toast；外部 Hook 也可以提醒。
       void sendTaskbarAttention(event.payload);
       // External hooks (no PTY tab env) still carry a synthetic tabId like external:grok:<session>.

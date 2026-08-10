@@ -6,6 +6,7 @@ pub mod ccusage;
 pub mod command_suggestion;
 pub mod db_repair;
 pub mod desktop_pet;
+pub mod desktop_pet_companion;
 pub mod fonts;
 pub mod fs;
 pub mod git;

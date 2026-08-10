@@ -14,6 +14,7 @@ import {
   convertChineseForLanguage,
   isEnglishLanguage,
   resolveLanguagePreference,
+  translate,
   type AppLanguage,
 } from "./i18n";
 import type {
@@ -50,9 +51,18 @@ export {
 } from "./desktopPetSize";
 
 export const DESKTOP_PET_WINDOW_LABEL = "desktop-pet";
+export const DESKTOP_PET_BUBBLE_WINDOW_LABEL = "desktop-pet-bubble";
 export const DESKTOP_PET_CONFIG_EVENT = "desktop-pet-config";
 export const DESKTOP_PET_SNAPSHOT_EVENT = "desktop-pet-snapshot";
 export const DESKTOP_PET_READY_EVENT = "desktop-pet-ready";
+export const DESKTOP_PET_BUBBLE_READY_EVENT = "desktop-pet-bubble-ready";
+export const DESKTOP_PET_COORDINATOR_READY_EVENT = "desktop-pet-coordinator-ready";
+export const DESKTOP_PET_BUBBLE_LAYOUT_REQUEST_EVENT = "desktop-pet-bubble-layout-request";
+export const DESKTOP_PET_BUBBLE_MEASURE_EVENT = "desktop-pet-bubble-measure";
+export const DESKTOP_PET_BUBBLE_GEOMETRY_EVENT = "desktop-pet-bubble-geometry";
+export const DESKTOP_PET_BUBBLE_EMPTY_EVENT = "desktop-pet-bubble-empty";
+export const DESKTOP_PET_BUBBLE_FOCUS_EVENT = "desktop-pet-bubble-focus";
+export const DESKTOP_PET_HIDDEN_EVENT = "desktop-pet-hidden";
 export const DESKTOP_PET_OPEN_TARGET_EVENT = "desktop-pet-open-target";
 export const DESKTOP_PET_OPEN_SETTINGS_EVENT = "desktop-pet-open-settings";
 export const DESKTOP_PET_CLOSE_MENU_EVENT = "desktop-pet-close-menu";
@@ -60,8 +70,74 @@ export const DESKTOP_PET_POSITION_EVENT = "desktop-pet-position";
 export const DESKTOP_PET_SIZE_CHANGE_EVENT = "desktop-pet-size-change";
 export const DESKTOP_PET_HANDOFF_START_EVENT = "remote-handoff-start-request";
 export const DESKTOP_PET_HANDOFF_CANCEL_EVENT = "remote-handoff-cancel-request";
+export const DESKTOP_PET_DECISION_RESOLVE_EVENT = "desktop-pet-decision-resolve";
+export const DESKTOP_PET_DECISION_RESULT_EVENT = "desktop-pet-decision-result";
+export const DESKTOP_PET_INCIDENT_ACK_EVENT = "desktop-pet-incident-ack";
 
 export type DesktopPetMood = "idle" | "working" | "waiting" | "success" | "error" | "sleeping";
+export type DesktopPetStatusColor = "green" | "red" | "blue";
+export type DesktopPetAttentionKind = "permission" | "question" | "questionnaire" | "attention";
+
+export interface DesktopPetStatusCounts {
+  green: number;
+  red: number;
+  blue: number;
+}
+
+export interface PiDecisionOption {
+  value: string;
+  label: string;
+  description?: string | null;
+}
+
+export interface PiDecisionQuestion {
+  id: string;
+  label: string;
+  prompt: string;
+  allowOther: boolean;
+  options: PiDecisionOption[];
+}
+
+export interface DesktopPetDecisionRequest {
+  requestId: string;
+  brokerEpoch: string;
+  sourceInstanceId: string;
+  tabId: string;
+  sessionId: string | null;
+  kind: "question" | "questionnaire" | "permission";
+  title: string;
+  message: string | null;
+  questions: PiDecisionQuestion[];
+  createdAt: number;
+}
+
+export interface DesktopPetDecisionAnswerItem {
+  questionId: string;
+  value: string;
+  wasCustom: boolean;
+}
+
+export interface DesktopPetDecisionAnswer {
+  answers: DesktopPetDecisionAnswerItem[];
+}
+
+export interface DesktopPetDecisionResult {
+  requestId: string;
+  brokerEpoch: string;
+  lifecycleToken: string;
+  bubbleSurfaceEpoch: string;
+  accepted: boolean;
+}
+
+export interface DesktopPetIncident {
+  id: string;
+  tabId: string;
+  sessionId: string | null;
+  daemonOnly: boolean;
+  title: string;
+  message: string | null;
+  createdAt: number;
+}
 
 export interface PetLocalizedText {
   "zh-CN": string;
@@ -132,6 +208,8 @@ export interface DesktopPetTarget {
   sessionTitle: string | null;
   projectName: string | null;
   status: TabNotificationState;
+  attentionKind: DesktopPetAttentionKind | null;
+  message: string | null;
   active: boolean;
   updatedAt: number;
   handoffCandidate: boolean;
@@ -150,16 +228,29 @@ export interface DesktopPetSnapshot {
   projectName: string | null;
   runningCount: number;
   attentionCount: number;
+  statusCounts: DesktopPetStatusCounts;
   updatedAt: number;
   targets: DesktopPetTarget[];
+  decisionRequests: DesktopPetDecisionRequest[];
+  incidents: DesktopPetIncident[];
   handoff: CcConnectHandoffInfo | null;
   handoffPlatforms: CcConnectHandoffPlatformTarget[];
   handoffBusy: boolean;
 }
 
+export interface DesktopPetSurfaceDeliveryMeta {
+  lifecycleToken: string;
+  surfaceEpoch: string;
+  deliveryRevision: number;
+}
+
+export type DesktopPetSnapshotEventPayload = DesktopPetSnapshot & DesktopPetSurfaceDeliveryMeta;
+
 export interface DesktopPetConfigPayload {
   language: AppLanguage;
   visible: boolean;
+  bubbleVisible: boolean;
+  lifecycleToken: string;
   settings: DesktopPetSettings;
   labels: {
     openMain: string;
@@ -202,31 +293,163 @@ export interface DesktopPetConfigPayload {
     handoffTaskRunning: string;
     handoffStateUnknown: string;
     handoffUnavailable: string;
+    acknowledge: string;
+    submit: string;
+    customAnswer: string;
+    sendAnswer: string;
+    permissionRequest: string;
+    questionRequest: string;
+    questionnaireRequest: string;
+    decisionSubmitFailed: string;
   };
 }
+
+export type DesktopPetConfigEventPayload = DesktopPetConfigPayload & DesktopPetSurfaceDeliveryMeta;
 
 export interface DesktopPetPositionPayload {
   x: number;
   y: number;
+  lifecycleToken: string;
+  petSurfaceEpoch: string;
+}
+
+export function buildDesktopPetLabels(
+  language: DesktopPetConfigPayload["language"]
+): DesktopPetConfigPayload["labels"] {
+  return {
+    openMain: translate(language, "desktopPet.actions.openMain"),
+    openSettings: translate(language, "desktopPet.actions.openSettings"),
+    size: translate(language, "desktopPet.settings.size"),
+    hide: translate(language, "desktopPet.actions.hide"),
+    idle: translate(language, "desktopPet.mood.idle"),
+    working: translate(language, "desktopPet.mood.working"),
+    waiting: translate(language, "desktopPet.mood.waiting"),
+    success: translate(language, "desktopPet.mood.success"),
+    error: translate(language, "desktopPet.mood.error"),
+    sleeping: translate(language, "desktopPet.mood.sleeping"),
+    runningCount: translate(language, "desktopPet.mood.runningCount"),
+    taskList: translate(language, "desktopPet.actions.taskList"),
+    currentTask: translate(language, "desktopPet.actions.currentTask"),
+    unnamedTask: translate(language, "desktopPet.actions.unnamedTask"),
+    openCurrent: translate(language, "desktopPet.actions.openCurrent"),
+    remoteHandoff: translate(language, "desktopPet.actions.remoteHandoff"),
+    cancelHandoff: translate(language, "desktopPet.actions.cancelHandoff"),
+    handoffPlatforms: translate(language, "desktopPet.actions.handoffPlatforms"),
+    handoffSessions: translate(language, "desktopPet.actions.handoffSessions"),
+    handoffBack: translate(language, "desktopPet.actions.handoffBack"),
+    platformReady: translate(language, "desktopPet.actions.platformReady"),
+    platformNotRunning: translate(language, "desktopPet.actions.platformNotRunning"),
+    platformCredentialsMissing: translate(
+      language,
+      "desktopPet.actions.platformCredentialsMissing"
+    ),
+    platformUserMissing: translate(language, "desktopPet.actions.platformUserMissing"),
+    platformSessionMissing: translate(language, "desktopPet.actions.platformSessionMissing"),
+    platformUnavailable: translate(language, "desktopPet.actions.platformUnavailable"),
+    platformTelegram: translate(language, "settings.ccConnect.platformTelegram"),
+    platformFeishu: translate(language, "settings.ccConnect.platformFeishu"),
+    platformWeixin: translate(language, "settings.ccConnect.platformWeixin"),
+    platformWecom: translate(language, "settings.ccConnect.platformWecom"),
+    handoffPending: translate(language, "remoteHandoff.overlay.pending"),
+    handoffCancelling: translate(language, "remoteHandoff.overlay.cancelling"),
+    handedOff: translate(language, "desktopPet.actions.handedOff"),
+    handoffRecoveryFailed: translate(language, "desktopPet.actions.handoffRecoveryFailed"),
+    noHandoffSessions: translate(language, "desktopPet.actions.noHandoffSessions"),
+    handoffReady: translate(language, "desktopPet.actions.handoffReady"),
+    handoffResolveRemoteSession: translate(
+      language,
+      "desktopPet.actions.handoffResolveRemoteSession"
+    ),
+    handoffTaskRunning: translate(language, "desktopPet.actions.handoffTaskRunning"),
+    handoffStateUnknown: translate(language, "desktopPet.actions.handoffStateUnknown"),
+    handoffUnavailable: translate(language, "desktopPet.actions.handoffUnavailable"),
+    acknowledge: translate(language, "desktopPet.actions.acknowledge"),
+    submit: translate(language, "desktopPet.actions.submit"),
+    customAnswer: translate(language, "desktopPet.actions.customAnswer"),
+    sendAnswer: translate(language, "desktopPet.actions.sendAnswer"),
+    permissionRequest: translate(language, "desktopPet.decision.permission"),
+    questionRequest: translate(language, "desktopPet.decision.question"),
+    questionnaireRequest: translate(language, "desktopPet.decision.questionnaire"),
+    decisionSubmitFailed: translate(language, "desktopPet.decision.submitFailed"),
+  };
 }
 
 export interface DesktopPetSizeChangePayload extends DesktopPetPositionPayload {
   size: number;
 }
 
-export interface DesktopPetOpenTargetPayload {
+export interface DesktopPetSurfaceReadyPayload {
+  surfaceEpoch: string;
+}
+
+export interface DesktopPetBubbleLayoutRequestPayload {
+  lifecycleToken: string;
+  petSurfaceEpoch: string;
+  revision: number;
+}
+
+export interface DesktopPetBubbleMeasurementPayload extends DesktopPetBubbleLayoutRequestPayload {
+  bubbleSurfaceEpoch: string;
+  measurementRevision: number;
+  contentFingerprint: string;
+  naturalWidth: number;
+  naturalHeight: number;
+}
+
+export interface DesktopPetBubbleGeometryPayload extends DesktopPetBubbleLayoutRequestPayload {
+  bubbleSurfaceEpoch: string;
+  measurementRevision: number;
+  geometryRevision: number;
+  placement: "above" | "below" | "left" | "right";
+  logicalWidth: number;
+  logicalHeight: number;
+  arrowOffset: number;
+}
+
+export interface DesktopPetBubbleEmptyPayload {
+  lifecycleToken: string;
+  bubbleSurfaceEpoch: string;
+  completionId: string | null;
+}
+
+export interface DesktopPetBubbleFocusPayload {
+  lifecycleToken: string;
+  color: DesktopPetStatusColor;
+}
+
+export interface DesktopPetHiddenPayload {
+  lifecycleToken: string;
+  petSurfaceEpoch: string;
+}
+
+export interface DesktopPetHitRegion {
+  kind: "stage" | "panel" | "control";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface DesktopPetSurfaceActionPayload {
+  lifecycleToken: string;
+  surfaceEpoch: string;
+}
+
+export interface DesktopPetOpenTargetPayload extends DesktopPetSurfaceActionPayload {
   sessionId: string | null;
   daemonOnly: boolean;
 }
+
+export type DesktopPetOpenSettingsPayload = DesktopPetSurfaceActionPayload;
 
 export { DESKTOP_PET_OUTPUT_ACTIVITY_TTL_MS } from "./desktopPetStatus";
 
 const STATUS_PRIORITY: Record<TabNotificationState, number> = {
   none: 0,
-  done: 1,
-  running: 2,
-  failed: 3,
-  attention: 4,
+  running: 1,
+  done: 2,
+  attention: 3,
+  failed: 4,
 };
 
 function moodFromStatus(status: TabNotificationState): DesktopPetMood {
@@ -302,8 +525,11 @@ function snapshotFromTargets(
       projectName: null,
       runningCount: 0,
       attentionCount: 0,
+      statusCounts: { green: 0, red: 0, blue: 0 },
       updatedAt: now,
       targets: [],
+      decisionRequests: [],
+      incidents: [],
       handoff,
       handoffPlatforms: [],
       handoffBusy,
@@ -320,8 +546,15 @@ function snapshotFromTargets(
     projectName: selected.projectName,
     runningCount: candidates.filter((candidate) => candidate.status === "running").length,
     attentionCount: candidates.filter((candidate) => candidate.status === "attention").length,
+    statusCounts: {
+      green: candidates.filter((candidate) => candidate.status === "running").length,
+      red: candidates.filter((candidate) => candidate.status === "failed").length,
+      blue: candidates.filter((candidate) => candidate.status === "attention" || candidate.status === "done").length,
+    },
     updatedAt: selected.updatedAt || now,
     targets: candidates,
+    decisionRequests: [],
+    incidents: [],
     handoff,
     handoffPlatforms: [],
     handoffBusy,
@@ -345,9 +578,10 @@ export function deriveDesktopPetSnapshot(input: DeriveDesktopPetSnapshotInput): 
     )
   ));
   const candidates: DesktopPetTarget[] = openPtySessions.map((session) => {
+    const frontendDetails = input.tabStatusDetails[session.id];
     const { status, updatedAt } = resolveDesktopPetOpenSessionStatus({
       frontendStatus: input.tabNotifications[session.id] ?? "none",
-      frontendDetails: input.tabStatusDetails[session.id],
+      frontendDetails,
       daemonTask: backgroundById.get(session.id),
       outputActivityAt: input.ptyOutputActivityAt[session.id] ?? 0,
       now,
@@ -374,6 +608,8 @@ export function deriveDesktopPetSnapshot(input: DeriveDesktopPetSnapshotInput): 
       sessionId: session.id,
       daemonOnly: false,
       status,
+      attentionKind: frontendDetails?.attentionKind ?? null,
+      message: frontendDetails?.message ?? null,
       updatedAt,
       sessionTitle: session.title || null,
       projectName: project?.name ?? null,
@@ -395,6 +631,8 @@ export function deriveDesktopPetSnapshot(input: DeriveDesktopPetSnapshotInput): 
       sessionId: task.sessionId,
       daemonOnly: true,
       status: daemonTaskStatus(task),
+      attentionKind: null,
+      message: null,
       updatedAt: daemonTaskUpdatedAt(task),
       sessionTitle: persisted?.title || task.cwd || null,
       projectName: project?.name ?? null,
@@ -415,6 +653,8 @@ export function deriveDesktopPetSnapshot(input: DeriveDesktopPetSnapshotInput): 
       sessionId: input.activeHandoff.localSessionId,
       daemonOnly: false,
       status: "none",
+      attentionKind: null,
+      message: null,
       updatedAt: input.activeHandoff.startedAtMs,
       sessionTitle: null,
       projectName: input.activeHandoff.projectName,

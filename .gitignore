@@ -34,6 +34,7 @@ data/
 
 # Tauri
 src-tauri/target/
+src-tauri/resources/electron-pet/
 src-tauri/ssh-agent/target/
 src-tauri/history-core/target/
 src-tauri/history-core/Cargo.lock

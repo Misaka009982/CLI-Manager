@@ -43,6 +43,25 @@
         "shadow": false,
         "visible": false,
         "dragDropEnabled": false
+      },
+      {
+        "label": "desktop-pet-bubble",
+        "title": "CLI-Manager Pet Bubble",
+        "url": "index.html",
+        "width": 410,
+        "height": 240,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "focus": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {
