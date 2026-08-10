@@ -234,9 +234,12 @@ export function NativeProviderHomeSection({
                 label={t("providerCatalog.home.path")}
                 description={t("providerCatalog.home.pathDescription")}
                 value={state.homePath}
-                disabled={busy || state.mode === "auto"}
+                disabled={busy || (state.mode === "auto" && state.environmentKind !== "wsl")}
                 placeholder={t("providerCatalog.home.pathPlaceholder")}
-                onChange={(event) => state.setHomePath(event.currentTarget.value)}
+                onChange={(event) => {
+                  if (state.mode === "auto") state.setMode("manual");
+                  state.setHomePath(event.currentTarget.value);
+                }}
               />
               <Button
                 variant="light"

@@ -68,6 +68,9 @@ generic configuration textarea.
   It shows derived Claude/Codex/Grok live/config/history/Hook paths and warns
   if a feature has an explicit root not following Home. It never performs an
   unrequested Hook install/uninstall/move.
+- In WSL auto mode, keep the Home text input editable; the first edit changes
+  the draft to manual mode so a WSL UNC path can be pasted without a dead-end
+  UI.
 - Home adoption passes the selected CLI config root to the history binding
   synchronizer; Grok derives its single `.grok/sessions` history root there,
   so the UI must not pass an already-derived `sessions` path.
