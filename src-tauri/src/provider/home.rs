@@ -8,7 +8,8 @@ use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LOCAL_ENVIRONMENT_ID: &str = "host";
-const HOME_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const WSL_HOME_DETECT_TIMEOUT: Duration = Duration::from_secs(30);
+const WSL_HOME_VALIDATION_TIMEOUT: Duration = Duration::from_secs(5);
 const ACTIVE_HOME_IDENTITY_SETTING: &str = "active_provider_home_identity";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -96,7 +97,7 @@ fn default_wsl_context() -> Result<(String, String), String> {
         "-lc",
         r#"printf '%s\n%s' "$WSL_DISTRO_NAME" "$HOME""#,
     ]);
-    let output = shell_resolver::output_with_timeout(command, HOME_PROBE_TIMEOUT)
+    let output = shell_resolver::output_with_timeout(command, WSL_HOME_DETECT_TIMEOUT)
         .map_err(|_| "provider_wsl_probe_failed".to_string())?;
     if !output.status.success() {
         return Err("provider_wsl_probe_failed".to_string());
@@ -207,7 +208,13 @@ fn wsl_command(
 
 fn run_wsl(distro: &str, program: &str, args: &[&str]) -> Result<std::process::Output, String> {
     let command = wsl_command(distro, program, args)?;
-    shell_resolver::output_with_timeout(command, HOME_PROBE_TIMEOUT)
+    shell_resolver::output_with_timeout(command, WSL_HOME_VALIDATION_TIMEOUT)
+        .map_err(|_| "provider_wsl_probe_failed".to_string())
+}
+
+fn probe_wsl_home(distro: &str) -> Result<std::process::Output, String> {
+    let command = wsl_command(distro, "sh", &["-lc", "printf '%s' \"$HOME\""])?;
+    shell_resolver::output_with_timeout(command, WSL_HOME_DETECT_TIMEOUT)
         .map_err(|_| "provider_wsl_probe_failed".to_string())
 }
 
@@ -272,7 +279,7 @@ fn auto_local_home() -> Result<PathBuf, String> {
 }
 
 fn auto_wsl_home(distro: &str) -> Result<String, String> {
-    let output = run_wsl(distro, "sh", &["-lc", "printf '%s' \"$HOME\""])?;
+    let output = probe_wsl_home(distro)?;
     if !output.status.success() {
         return Err("provider_home_invalid".to_string());
     }
@@ -637,6 +644,12 @@ mod tests {
             parse_default_wsl_context(b"Ubuntu-22.04\n/"),
             Err("provider_wsl_probe_failed".to_string())
         );
+    }
+
+    #[test]
+    fn keeps_cold_start_detection_separate_from_fast_validation() {
+        assert!(WSL_HOME_DETECT_TIMEOUT >= Duration::from_secs(15));
+        assert!(WSL_HOME_VALIDATION_TIMEOUT < WSL_HOME_DETECT_TIMEOUT);
     }
 
     #[test]
