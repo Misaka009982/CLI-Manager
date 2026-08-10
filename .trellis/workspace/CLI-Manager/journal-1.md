@@ -1320,3 +1320,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 40: 对齐供应商快捷侧边栏
+
+**Date**: 2026-08-10
+**Task**: 对齐供应商快捷侧边栏
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+统一供应商面板标题栏，简化路由与状态展示，并同步规范、文档和国际化文案。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `16e7b9e8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
