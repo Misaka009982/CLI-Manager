@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "目标稳定版本（例如 1.3.5；留空则递增仓库补丁版本）"
+        description: "构建版本（例如 1.3.5；留空则使用仓库当前版本）"
         required: false
         type: string
 
@@ -94,11 +94,7 @@ jobs:
 
           const repositoryParts = repositoryVersion.split(".").map(Number);
           const requested = process.env.REQUESTED_VERSION?.trim();
-          let targetVersion = requested;
-          if (!targetVersion) {
-            const [major, minor, patch] = repositoryParts;
-            targetVersion = `${major}.${minor}.${patch + 1}`;
-          }
+          const targetVersion = requested || repositoryVersion;
           if (!stableVersionPattern.test(targetVersion)) {
             throw new Error(
               "The requested version must use major.minor.patch format without leading zeros",
@@ -109,10 +105,10 @@ jobs:
             (value, index) => value !== repositoryParts[index],
           );
           if (
-            firstDifference < 0
-            || targetParts[firstDifference] < repositoryParts[firstDifference]
+            firstDifference >= 0
+            && targetParts[firstDifference] < repositoryParts[firstDifference]
           ) {
-            throw new Error("The alpha target version must be newer than the repository version");
+            throw new Error("The alpha build version must not be older than the repository version");
           }
 
           const runNumber = process.env.GITHUB_RUN_NUMBER;
@@ -226,6 +222,7 @@ jobs:
             - Debug 安装包文件名带 `-debug`，用于验证和诊断
             - Debug 验证通过后可直接安装同次运行中不带 `-debug` 的 Release 安装包，无需重新打包
             - 安装包内部版本：`${{ steps.version.outputs.bundle_version }}`；Alpha 身份以 Release tag 为准
+            - 构建版本可以与仓库当前版本相同；若本机已安装同版本稳定版，Windows 安装器可能要求先卸载稳定版
             - 不包含 `latest.json` 或 updater 签名资产，不能通过应用内更新安装本 Alpha
             - 不包含内置 SSH Agent bundle；需要 Agent 时会联网获取并验证稳定版 manifest
             - 不会写入稳定版 R2/`latest` 更新通道
