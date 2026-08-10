@@ -1419,3 +1419,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 43: Fix WSL Home cold-start detection
+
+**Date**: 2026-08-11
+**Task**: Fix WSL Home cold-start detection
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+Reproduced default WSL Home detection taking 12.3 seconds, separated 30-second cold-start detection from 5-second directory validation, added timeout policy coverage, and verified 13 focused Rust tests plus cargo check.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cd1930b6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

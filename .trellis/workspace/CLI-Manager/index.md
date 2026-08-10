@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 42
+- **Total Sessions**: 43
 - **Last Active**: 2026-08-11
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1421 | Active |
+| `journal-1.md` | ~1454 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 43 | 2026-08-11 | Fix WSL Home cold-start detection | `cd1930b6` | `feat/native-provider-management` |
 | 42 | 2026-08-11 | 修复 WSL CLI Home 自动解析与目录选择 | `68be1e60` | `feat/native-provider-management` |
 | 41 | 2026-08-11 | 修复 WSL CLI Home 手动输入 | `ee8b4b98` | `feat/native-provider-management` |
 | 40 | 2026-08-10 | 对齐供应商快捷侧边栏 | `16e7b9e8` | `feat/native-provider-management` |
