@@ -134,6 +134,7 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
       settingsValid: provider.settingsValid,
     }));
   }, [failover, quickSwitch.providers]);
+  const canReorder = rows.length > 1 && !quickSwitch.action;
 
   const queuedIds = useMemo(
     () => rows.filter((provider) => provider.inFailoverQueue).map((provider) => provider.id),
@@ -251,8 +252,8 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
     }
   };
 
-  const handleProviderDragStart = (event: DragEvent<HTMLDivElement>, provider: ProviderRow) => {
-    if (!failover || quickSwitch.action || rows.length < 2) {
+  const handleProviderDragStart = (event: DragEvent<HTMLElement>, provider: ProviderRow) => {
+    if (quickSwitch.action || rows.length < 2) {
       event.preventDefault();
       return;
     }
@@ -274,7 +275,7 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
     const sourceId = draggedProviderId ?? event.dataTransfer.getData("text/plain");
     setDraggedProviderId(null);
     setDragOverProviderId(null);
-    if (!sourceId || sourceId === provider.id || !failover || quickSwitch.action) return;
+    if (!sourceId || sourceId === provider.id || quickSwitch.action) return;
     const ordered = rows.map((item) => item.id);
     const sourceIndex = ordered.indexOf(sourceId);
     const targetIndex = ordered.indexOf(provider.id);
@@ -431,11 +432,8 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
             return (
               <div
                 key={provider.id}
-                draggable={Boolean(failover) && rows.length > 1 && !quickSwitch.action}
-                onDragStart={(event) => handleProviderDragStart(event, provider)}
                 onDragOver={(event) => handleProviderDragOver(event, provider)}
                 onDrop={(event) => void handleProviderDrop(event, provider)}
-                onDragEnd={handleProviderDragEnd}
                 className={`rounded-lg border transition-colors ${dragOverProviderId === provider.id && draggedProviderId !== provider.id ? "ring-1" : ""}`}
                 style={{ borderColor: selected ? TERM_PANEL.green : TERM_PANEL.border, borderLeftWidth: selected ? 3 : 1, backgroundColor: selected ? panelColorTint(TERM_PANEL.green, 11) : TERM_PANEL.card, ...(dragOverProviderId === provider.id && draggedProviderId !== provider.id ? { boxShadow: `inset 0 2px 0 ${TERM_PANEL.green}` } : {}) }}
               >
@@ -467,18 +465,30 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                     </span>
                   </button>
 
-                  {failover && (
+                  {canReorder && (
                     <>
-                      <span className="flex shrink-0 items-center px-1" style={{ color: TERM_PANEL.dim }} title={t("providerQuickSwitch.dragHandle")} aria-hidden="true"><GripVertical size={14} /></span>
-                      {autoFailover && (
+                      <span
+                        draggable
+                        onDragStart={(event) => handleProviderDragStart(event, provider)}
+                        onDragEnd={handleProviderDragEnd}
+                        className="flex shrink-0 cursor-grab touch-none items-center px-1 active:cursor-grabbing"
+                        style={{ color: TERM_PANEL.dim }}
+                        title={t("providerQuickSwitch.dragHandle")}
+                        aria-hidden="true"
+                      ><GripVertical size={14} /></span>
+                      {failover && (
                         <>
-                          <button type="button" className="ui-focus-ring rounded px-1.5 py-1 text-[10px] disabled:opacity-35" style={{ color: provider.inFailoverQueue ? TERM_PANEL.green : TERM_PANEL.dim }} aria-pressed={provider.inFailoverQueue} aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })} disabled={Boolean(quickSwitch.action) || !provider.ready} onClick={() => void handleQueueToggle(provider)}>
-                            {provider.inFailoverQueue ? "✓" : "+"}
-                          </button>
-                          {provider.inFailoverQueue && (
+                          {autoFailover && (
                             <>
-                              <button type="button" className="ui-focus-ring rounded p-1 disabled:opacity-35" style={{ color: TERM_PANEL.dim }} aria-label={t("providerCatalog.failover.moveUp", { name: provider.name })} disabled={Boolean(quickSwitch.action) || queuePosition.get(provider.id) === 0} onClick={() => void handleMove(provider, -1)}><ArrowUp size={12} /></button>
-                              <button type="button" className="ui-focus-ring rounded p-1 disabled:opacity-35" style={{ color: TERM_PANEL.dim }} aria-label={t("providerCatalog.failover.moveDown", { name: provider.name })} disabled={Boolean(quickSwitch.action) || queuePosition.get(provider.id) === queuedIds.length - 1} onClick={() => void handleMove(provider, 1)}><ArrowDown size={12} /></button>
+                              <button type="button" className="ui-focus-ring rounded px-1.5 py-1 text-[10px] disabled:opacity-35" style={{ color: provider.inFailoverQueue ? TERM_PANEL.green : TERM_PANEL.dim }} aria-pressed={provider.inFailoverQueue} aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })} disabled={Boolean(quickSwitch.action) || !provider.ready} onClick={() => void handleQueueToggle(provider)}>
+                                {provider.inFailoverQueue ? "✓" : "+"}
+                              </button>
+                              {provider.inFailoverQueue && (
+                                <>
+                                  <button type="button" className="ui-focus-ring rounded p-1 disabled:opacity-35" style={{ color: TERM_PANEL.dim }} aria-label={t("providerCatalog.failover.moveUp", { name: provider.name })} disabled={Boolean(quickSwitch.action) || queuePosition.get(provider.id) === 0} onClick={() => void handleMove(provider, -1)}><ArrowUp size={12} /></button>
+                                  <button type="button" className="ui-focus-ring rounded p-1 disabled:opacity-35" style={{ color: TERM_PANEL.dim }} aria-label={t("providerCatalog.failover.moveDown", { name: provider.name })} disabled={Boolean(quickSwitch.action) || queuePosition.get(provider.id) === queuedIds.length - 1} onClick={() => void handleMove(provider, 1)}><ArrowDown size={12} /></button>
+                                </>
+                              )}
                             </>
                           )}
                         </>
