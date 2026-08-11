@@ -1,13 +1,72 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { Accordion, ActionIcon, Alert, Button, Group, NumberInput, Radio, Stack, Switch, Text, Badge } from "@mantine/core";
-import { ArrowDown, ArrowLeftRight, ArrowUp, RotateCcw, Save } from "lucide-react";
+import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { ArrowDown, ArrowLeftRight, ArrowUp, GripVertical, RotateCcw, Save } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
-import type { NativeProviderAppType, NativeProviderFailoverConfig } from "./nativeProviderTypes";
+import { DND_ACTIVATION_CONSTRAINT, DND_SORTABLE_TRANSITION } from "@/lib/dragInteraction";
+import type { NativeProviderAppType, NativeProviderFailoverConfig, NativeProviderFailoverProvider } from "./nativeProviderTypes";
+import { orderFailoverProviders } from "./providerFailoverOrder";
 import type { UseNativeProviderRoutingResult } from "./useNativeProviderRouting";
 
 interface NativeProviderFailoverSectionProps {
   appType: NativeProviderAppType;
   state: UseNativeProviderRoutingResult;
+}
+
+function SortableFailoverProviderRow({
+  provider,
+  canReorder,
+  dragLabel,
+  children,
+}: {
+  provider: NativeProviderFailoverProvider;
+  canReorder: boolean;
+  dragLabel: string;
+  children: (dragHandle: ReactNode) => ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: provider.id,
+    disabled: !canReorder,
+    transition: DND_SORTABLE_TRANSITION,
+  });
+  const style: CSSProperties = {
+    position: "relative",
+    zIndex: isDragging ? 1 : undefined,
+    transform: CSS.Transform.toString(transform),
+    transition: isDragging ? undefined : transition,
+  };
+  const dragHandle = canReorder ? (
+    <ActionIcon
+      ref={setActivatorNodeRef}
+      aria-label={dragLabel}
+      title={dragLabel}
+      variant="subtle"
+      color="gray"
+      size="sm"
+      className="opacity-60 transition-opacity group-hover/failover-row:opacity-100 focus-visible:opacity-100"
+      style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
+      {...attributes}
+      {...listeners}
+    >
+      <GripVertical size={14} />
+    </ActionIcon>
+  ) : null;
+
+  return (
+    <div ref={setNodeRef} className="group/failover-row" style={style}>
+      {children(dragHandle)}
+    </div>
+  );
 }
 
 export function NativeProviderFailoverSection({ appType, state }: NativeProviderFailoverSectionProps) {
@@ -23,6 +82,23 @@ export function NativeProviderFailoverSection({ appType, state }: NativeProvider
   const serviceRunning = Boolean(service?.serviceEnabled && routing?.daemon.status === "running");
   const runtimeAvailable = Boolean(serviceRunning && routing?.daemon.capabilitySupported && routing.daemon.connected);
   const manualSwitch = Boolean(failover && !failover.config.autoFailoverEnabled);
+  const reorderSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: DND_ACTIVATION_CONSTRAINT }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const orderedProviders = useMemo(
+    () => failover ? orderFailoverProviders(failover.providers, !manualSwitch) : [],
+    [failover, manualSwitch],
+  );
+  const queuedProviders = useMemo(
+    () => orderedProviders.filter((provider) => provider.inFailoverQueue),
+    [orderedProviders],
+  );
+  const queuePosition = useMemo(
+    () => new Map(queuedProviders.map((provider, index) => [provider.id, index])),
+    [queuedProviders],
+  );
+  const canReorder = Boolean(failover?.config.autoFailoverEnabled && orderedProviders.length > 1 && !busy);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -43,7 +119,7 @@ export function NativeProviderFailoverSection({ appType, state }: NativeProvider
       await state.setFailoverQueue(appType, [providerId]);
       return;
     }
-    const providerIds = failover.providers
+    const providerIds = orderedProviders
       .filter((provider) => provider.id === providerId ? enabled : provider.inFailoverQueue)
       .map((provider) => provider.id);
     await state.setFailoverQueue(appType, providerIds);
@@ -51,17 +127,27 @@ export function NativeProviderFailoverSection({ appType, state }: NativeProvider
 
   const moveQueuedProvider = async (providerId: string, direction: -1 | 1) => {
     if (!failover) return;
-    const queueIndexes = failover.providers
+    const queueIndexes = orderedProviders
       .map((provider, index) => provider.inFailoverQueue ? index : -1)
       .filter((index) => index >= 0);
-    const currentIndex = failover.providers.findIndex((provider) => provider.id === providerId);
+    const currentIndex = orderedProviders.findIndex((provider) => provider.id === providerId);
     const queuePosition = queueIndexes.indexOf(currentIndex);
     const targetPosition = queuePosition + direction;
     if (queuePosition < 0 || targetPosition < 0 || targetPosition >= queueIndexes.length) return;
-    const next = [...failover.providers];
+    const next = [...orderedProviders];
     const targetIndex = queueIndexes[targetPosition];
     [next[currentIndex], next[targetIndex]] = [next[targetIndex], next[currentIndex]];
     await state.reorderFailoverQueue(appType, next.map((provider) => provider.id));
+  };
+
+  const handleReorderDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!canReorder || !over || active.id === over.id) return;
+    const providerIds = orderedProviders.map((provider) => provider.id);
+    const sourceIndex = providerIds.indexOf(String(active.id));
+    const targetIndex = providerIds.indexOf(String(over.id));
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    await state.reorderFailoverQueue(appType, arrayMove(providerIds, sourceIndex, targetIndex));
   };
 
   const saveConfig = async () => {
@@ -122,74 +208,94 @@ export function NativeProviderFailoverSection({ appType, state }: NativeProvider
                   ? t("providerCatalog.failover.manualSwitchDescription")
                   : t("providerCatalog.failover.statusPolling")}
               </Text>
-              <Stack gap="xs">
-                {failover.providers.map((provider) => {
-                  const circuit = circuitByProvider.get(provider.id);
-                  const circuitStatus = circuit?.status;
-                  const circuitLabel = circuitStatus === "open"
-                    ? t("providerCatalog.failover.circuit.open")
-                    : circuitStatus === "halfOpen"
-                      ? t("providerCatalog.failover.circuit.halfOpen")
-                      : circuitStatus === "closed"
-                        ? t("providerCatalog.failover.healthy")
-                        : circuit
-                          ? t("providerCatalog.failover.circuit.unknown")
-                          : routing?.daemon.status === "degraded"
-                            ? t("providerCatalog.failover.degraded")
-                            : t("providerCatalog.failover.healthy");
-                  const circuitColor = circuitStatus === "open"
-                    ? "red"
-                    : circuitStatus === "halfOpen"
-                      ? "yellow"
-                      : circuitStatus === "closed"
-                        ? "green"
-                        : routing?.daemon.status === "degraded" ? "yellow" : "green";
-                  return (
-                    <Group key={provider.id} justify="space-between" wrap="nowrap" className="min-h-9 rounded-md px-2 py-1 hover:bg-gray-50">
-                      <Group gap="xs" wrap="wrap">
-                        <Text size="xs" c="dimmed" w={18}>{provider.inFailoverQueue ? `${failover.providers.filter((item) => item.inFailoverQueue).indexOf(provider) + 1}` : "—"}</Text>
-                        <Text size="sm">{provider.name}</Text>
-                        {provider.isCurrent && <Badge color="cliPrimary" variant="filled" size="sm" fw={700}>{t("providerCatalog.failover.current")}</Badge>}
-                        <Badge color={provider.inFailoverQueue ? "blue" : provider.ready ? "green" : "gray"} variant="light">
-                          {provider.inFailoverQueue
-                            ? t("providerCatalog.failover.inQueue")
-                            : provider.ready
-                              ? t("providerCatalog.failover.ready")
-                              : t("providerCatalog.failover.notReady")}
-                        </Badge>
-                        <Badge color={circuitColor} variant="light">{circuitLabel}</Badge>
-                      </Group>
-                      <Group gap={2} wrap="nowrap">
-                        {provider.inFailoverQueue && !manualSwitch && (
-                          <>
-                            <ActionIcon aria-label={t("providerCatalog.failover.moveUp", { name: provider.name })} variant="subtle" size="sm" disabled={busy || failover.providers.filter((item) => item.inFailoverQueue)[0]?.id === provider.id} onClick={() => void moveQueuedProvider(provider.id, -1)}>
-                              <ArrowUp size={14} />
-                            </ActionIcon>
-                            <ActionIcon aria-label={t("providerCatalog.failover.moveDown", { name: provider.name })} variant="subtle" size="sm" disabled={busy || failover.providers.filter((item) => item.inFailoverQueue).slice(-1)[0]?.id === provider.id} onClick={() => void moveQueuedProvider(provider.id, 1)}>
-                              <ArrowDown size={14} />
-                            </ActionIcon>
-                          </>
-                        )}
-                        {manualSwitch ? (
-                          <Radio
-                            aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })}
-                            checked={provider.inFailoverQueue}
-                            disabled={busy || !provider.ready}
-                            onChange={() => void updateQueue(provider.id, true)}
-                          />
-                        ) : (
-                          <Switch
-                            aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })}
-                            checked={provider.inFailoverQueue}
-                            disabled={busy || !provider.ready}
-                            onChange={(event) => void updateQueue(provider.id, event.currentTarget.checked)}
-                          />
-                        )}
-                      </Group>
-                    </Group>
-                  );
-                })}
-              </Stack>
+              <DndContext
+                sensors={reorderSensors}
+                collisionDetection={closestCenter}
+                onDragEnd={(event) => void handleReorderDragEnd(event)}
+              >
+                <SortableContext items={orderedProviders.map((provider) => provider.id)} strategy={verticalListSortingStrategy}>
+                  <Stack gap="xs">
+                    {orderedProviders.map((provider) => {
+                      const circuit = circuitByProvider.get(provider.id);
+                      const circuitStatus = circuit?.status;
+                      const circuitLabel = circuitStatus === "open"
+                        ? t("providerCatalog.failover.circuit.open")
+                        : circuitStatus === "halfOpen"
+                          ? t("providerCatalog.failover.circuit.halfOpen")
+                          : circuitStatus === "closed"
+                            ? t("providerCatalog.failover.healthy")
+                            : circuit
+                              ? t("providerCatalog.failover.circuit.unknown")
+                              : routing?.daemon.status === "degraded"
+                                ? t("providerCatalog.failover.degraded")
+                                : t("providerCatalog.failover.healthy");
+                      const circuitColor = circuitStatus === "open"
+                        ? "red"
+                        : circuitStatus === "halfOpen"
+                          ? "yellow"
+                          : circuitStatus === "closed"
+                            ? "green"
+                            : routing?.daemon.status === "degraded" ? "yellow" : "green";
+                      return (
+                    <SortableFailoverProviderRow
+                      key={provider.id}
+                      provider={provider}
+                      canReorder={canReorder}
+                      dragLabel={t("providerQuickSwitch.dragHandle")}
+                    >
+                      {(dragHandle) => (
+                        <Group justify="space-between" wrap="nowrap" className="min-h-9 rounded-md px-2 py-1 hover:bg-gray-50">
+                          <Group gap="xs" wrap="wrap">
+                            <Text size="sm">{provider.name}</Text>
+                            {!manualSwitch && provider.inFailoverQueue && (
+                              <Badge color="green" variant="light" size="xs">#{(queuePosition.get(provider.id) ?? 0) + 1}</Badge>
+                            )}
+                            {provider.isCurrent && <Badge color="cliPrimary" variant="filled" size="sm" fw={700}>{t("providerCatalog.failover.current")}</Badge>}
+                            <Badge color={provider.inFailoverQueue ? "blue" : provider.ready ? "green" : "gray"} variant="light">
+                              {provider.inFailoverQueue
+                                ? t("providerCatalog.failover.inQueue")
+                                : provider.ready
+                                  ? t("providerCatalog.failover.ready")
+                                  : t("providerCatalog.failover.notReady")}
+                            </Badge>
+                            <Badge color={circuitColor} variant="light">{circuitLabel}</Badge>
+                          </Group>
+                          <Group gap={2} wrap="nowrap">
+                            {provider.inFailoverQueue && !manualSwitch && (
+                              <>
+                                <ActionIcon aria-label={t("providerCatalog.failover.moveUp", { name: provider.name })} variant="subtle" size="sm" disabled={busy || queuedProviders[0]?.id === provider.id} onClick={() => void moveQueuedProvider(provider.id, -1)}>
+                                  <ArrowUp size={14} />
+                                </ActionIcon>
+                                <ActionIcon aria-label={t("providerCatalog.failover.moveDown", { name: provider.name })} variant="subtle" size="sm" disabled={busy || queuedProviders[queuedProviders.length - 1]?.id === provider.id} onClick={() => void moveQueuedProvider(provider.id, 1)}>
+                                  <ArrowDown size={14} />
+                                </ActionIcon>
+                              </>
+                            )}
+                            {manualSwitch ? (
+                              <Radio
+                                aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })}
+                                checked={provider.inFailoverQueue}
+                                disabled={busy || !provider.ready}
+                                onChange={() => void updateQueue(provider.id, true)}
+                              />
+                            ) : (
+                              <Switch
+                                aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })}
+                                checked={provider.inFailoverQueue}
+                                disabled={busy || !provider.ready}
+                                onChange={(event) => void updateQueue(provider.id, event.currentTarget.checked)}
+                              />
+                            )}
+                            {dragHandle}
+                          </Group>
+                        </Group>
+                      )}
+                    </SortableFailoverProviderRow>
+                      );
+                    })}
+                  </Stack>
+                </SortableContext>
+              </DndContext>
 
               <Stack gap="xs">
                 <Text fw={600} size="sm">{t("providerCatalog.failover.parameters")}</Text>

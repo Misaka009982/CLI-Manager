@@ -6,6 +6,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { ArrowDown, ArrowLeftRight, ArrowUp, Boxes, CircleAlert, GripVertical, RefreshCw, Settings } from "../icons";
 import { useI18n } from "../../lib/i18n";
 import type { NativeProviderAppType, NativeProviderFailoverProvider } from "../settings/providers/nativeProviderTypes";
+import { orderFailoverProviders } from "../settings/providers/providerFailoverOrder";
 import { useAppConfirm } from "../ui/useAppConfirm";
 import { useProviderQuickSwitch } from "./useProviderQuickSwitch";
 import { TerminalPanelHeader } from "./TerminalPanelHeader";
@@ -171,7 +172,10 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
   const quickSwitch = useProviderQuickSwitch(appType, open);
   const failover = quickSwitch.failover;
   const routeCurrentId = failover?.providers.find((provider) => provider.isCurrent)?.id ?? null;
-  const currentId = quickSwitch.hasLocalTakeover ? routeCurrentId : quickSwitch.current?.providerId ?? null;
+  const catalogCurrentId = quickSwitch.providers.find((provider) => provider.isCurrent)?.id ?? null;
+  const currentId = quickSwitch.hasLocalTakeover
+    ? routeCurrentId
+    : quickSwitch.current?.providerId ?? catalogCurrentId;
   const service = quickSwitch.routing?.persisted.service;
   const daemon = quickSwitch.routing?.daemon;
   const serviceRunning = Boolean(service?.serviceEnabled && daemon?.status === "running");
@@ -186,32 +190,35 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
   const rows = useMemo<ProviderRow[]>(() => {
     const catalogById = new Map(quickSwitch.providers.map((provider) => [provider.id, provider]));
     if (failover) {
-      return failover.providers.map((provider) => {
-        const card = catalogById.get(provider.id);
-        return {
-          ...provider,
-          model: card?.model ?? null,
-          baseUrl: card?.baseUrl ?? null,
-          settingsValid: card?.settingsValid ?? provider.ready,
-        };
-      });
+      return orderFailoverProviders(failover.providers, autoFailover)
+        .map((provider) => {
+          const card = catalogById.get(provider.id);
+          return {
+            ...provider,
+            model: card?.model ?? null,
+            baseUrl: card?.baseUrl ?? null,
+            settingsValid: card?.settingsValid ?? provider.ready,
+          };
+        });
     }
-    return quickSwitch.providers.map((provider) => ({
-      id: provider.id,
-      name: provider.name,
-      sortIndex: provider.sortIndex,
-      isCurrent: provider.isCurrent,
-      enabled: provider.enabled,
-      ready: provider.enabled && provider.settingsValid && Boolean(provider.activeKeyLabel),
-      inFailoverQueue: false,
-      keyCount: provider.keyCount,
-      activeKeyPresent: Boolean(provider.activeKeyLabel),
-      model: provider.model,
-      baseUrl: provider.baseUrl,
-      settingsValid: provider.settingsValid,
-    }));
-  }, [failover, quickSwitch.providers]);
-  const canReorder = rows.length > 1 && !quickSwitch.action;
+    return [...quickSwitch.providers]
+      .sort((left, right) => left.sortIndex - right.sortIndex)
+      .map((provider) => ({
+        id: provider.id,
+        name: provider.name,
+        sortIndex: provider.sortIndex,
+        isCurrent: provider.isCurrent,
+        enabled: provider.enabled,
+        ready: provider.enabled && provider.settingsValid && Boolean(provider.activeKeyLabel),
+        inFailoverQueue: false,
+        keyCount: provider.keyCount,
+        activeKeyPresent: Boolean(provider.activeKeyLabel),
+        model: provider.model,
+        baseUrl: provider.baseUrl,
+        settingsValid: provider.settingsValid,
+      }));
+  }, [autoFailover, failover, quickSwitch.providers]);
+  const canReorder = autoFailover && rows.length > 1 && !quickSwitch.action;
 
   const queuedIds = useMemo(
     () => rows.filter((provider) => provider.inFailoverQueue).map((provider) => provider.id),
@@ -249,6 +256,9 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
 
   const handleGlobalSwitch = async (provider: ProviderRow) => {
     if (quickSwitch.action || !provider.ready || provider.id === currentId) return;
+    // Automatic failover owns provider selection through its queue controls.
+    // A row click must not bypass that policy by applying a global provider.
+    if (autoFailover) return;
     if (quickSwitch.hasLocalTakeover && failover && !autoFailover) {
       try {
         await quickSwitch.setFailoverQueue([provider.id]);
@@ -333,7 +343,7 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
   // provider_reorder_mismatch；rows 就是全量列表，直接整体重排后提交。
   const handleReorderDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-    if (!over || active.id === over.id || quickSwitch.action) return;
+    if (!autoFailover || !over || active.id === over.id || quickSwitch.action) return;
     const ordered = rows.map((item) => item.id);
     const sourceIndex = ordered.indexOf(String(active.id));
     const targetIndex = ordered.indexOf(String(over.id));
@@ -495,12 +505,13 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                     type="button"
                     role="radio"
                     aria-checked={selected}
+                    aria-disabled={autoFailover}
                     tabIndex={index === 0 ? 0 : -1}
                     disabled={Boolean(quickSwitch.action) || !provider.ready}
-                    className="ui-focus-ring relative min-w-0 flex-1 px-2.5 py-2.5 text-left disabled:cursor-not-allowed disabled:opacity-55"
+                    className={`ui-focus-ring relative min-w-0 flex-1 px-2.5 py-2.5 text-left disabled:cursor-not-allowed disabled:opacity-55 ${autoFailover ? "cursor-default" : ""}`}
                     onClick={() => void handleGlobalSwitch(provider)}
                     onKeyDown={(event) => handleRowKeyDown(event, index)}
-                    title={provider.baseUrl ?? undefined}
+                    title={autoFailover ? t("providerQuickSwitch.failoverOnHint") : provider.baseUrl ?? undefined}
                   >
                     <span className="absolute left-2.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md" style={{ backgroundColor: TERM_PANEL.cardInner }}>
                         <VendorIcon vendor={vendor} size={14} fallback={Boxes} />
@@ -508,7 +519,7 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                     <span className={`block min-w-0 pl-7 ${status.showLabel ? "pr-20" : "pr-5"}`}>
                       <span className="flex min-w-0 items-center gap-2">
                         <span className="min-w-0 truncate text-[13px] font-semibold tracking-tight" style={{ color: TERM_PANEL.fg }}>{provider.name}</span>
-                        {provider.inFailoverQueue && <span className="shrink-0 rounded px-1 text-[9px]" style={{ color: TERM_PANEL.green, backgroundColor: panelColorTint(TERM_PANEL.green, 14) }}>#{(queuePosition.get(provider.id) ?? 0) + 1}</span>}
+                        {autoFailover && provider.inFailoverQueue && <span className="shrink-0 rounded px-1 text-[9px]" style={{ color: TERM_PANEL.green, backgroundColor: panelColorTint(TERM_PANEL.green, 14) }}>#{(queuePosition.get(provider.id) ?? 0) + 1}</span>}
                       </span>
                       <span className="mt-0.5 block min-w-0 truncate text-[11px]" style={{ color: TERM_PANEL.dim }}>
                         {provider.model ?? provider.baseUrl ?? t("providerQuickSwitch.noModel")}

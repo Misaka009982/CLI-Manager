@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { providerErrorCode } from "./nativeProviderTypes";
+import { publishProviderFailoverState, subscribeProviderFailoverState } from "./providerFailoverSync";
 import type {
   NativeProviderAppType,
   NativeProviderFailoverConfig,
@@ -86,12 +87,20 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
     setFailoverLoading((current) => ({ ...current, [appType]: true }));
     try {
       const next = await invoke<NativeProviderFailoverState>("routing_get_failover_queue", { appType });
+      publishProviderFailoverState(next);
       setFailoverState((current) => {
         const previous = current[appType];
         return {
           ...current,
           [appType]: previous
-            ? { ...previous, circuit: next.circuit, circuits: next.circuits }
+            ? {
+                ...previous,
+                // 排序以服务端 provider.sort_index 为真源；保留本地 config，避免
+                // 参数草稿编辑期间的后台轮询覆盖输入，仅同步顺序与运行态。
+                providers: next.providers,
+                circuit: next.circuit,
+                circuits: next.circuits,
+              }
             : next,
         };
       });
@@ -105,6 +114,10 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => subscribeProviderFailoverState((next) => {
+    setFailoverState((current) => ({ ...current, [next.appType]: next }));
+  }), []);
 
   const run = useCallback(async (name: string, work: () => Promise<NativeProviderRoutingState>) => {
     setAction(name);
@@ -162,6 +175,7 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
     "failover-enabled",
     async () => {
       const next = await invoke<NativeProviderFailoverState>("routing_set_failover_enabled", { appType, enabled });
+      publishProviderFailoverState(next);
       setFailoverState((current) => ({ ...current, [appType]: next }));
     },
   ), [runFailover]);
@@ -192,6 +206,7 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
         const next = await invoke<NativeProviderFailoverState>("routing_set_failover_queue", {
           input: { appType, providerIds },
         });
+        publishProviderFailoverState(next);
         setFailoverState((current) => ({ ...current, [appType]: next }));
       } catch (error) {
         if (previous) setFailoverState((current) => ({ ...current, [appType]: previous }));
@@ -205,6 +220,7 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
     async () => {
       await invoke("provider_catalog_reorder", { appType, providerIds });
       const next = await invoke<NativeProviderFailoverState>("routing_get_failover_queue", { appType });
+      publishProviderFailoverState(next);
       setFailoverState((current) => ({ ...current, [appType]: next }));
     },
   ), [runFailover]);
@@ -215,6 +231,7 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
       const next = await invoke<NativeProviderFailoverState>("routing_update_failover_config", {
         input: { appType, config },
       });
+      publishProviderFailoverState(next);
       setFailoverState((current) => ({ ...current, [appType]: next }));
     },
   ), [runFailover]);
@@ -223,6 +240,7 @@ export function useNativeProviderRouting(): UseNativeProviderRoutingResult {
     "circuit-reset",
     async () => {
       const next = await invoke<NativeProviderFailoverState>("routing_reset_circuit", { appType });
+      publishProviderFailoverState(next);
       setFailoverState((current) => ({ ...current, [appType]: next }));
     },
   ), [runFailover]);

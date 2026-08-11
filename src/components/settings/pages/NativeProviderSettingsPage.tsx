@@ -13,6 +13,7 @@ import { NativeProviderHomeSection } from "../providers/NativeProviderHomeSectio
 import { NativeProviderRoutingSection } from "../providers/NativeProviderRoutingSection";
 import { NativeProviderImportSection } from "../providers/NativeProviderImportSection";
 import { NativeProviderTypeTabs } from "../providers/NativeProviderTypeTabs";
+import { orderFailoverProviders } from "../providers/providerFailoverOrder";
 import {
   DEFAULT_NATIVE_PROVIDER_DETAIL_VIEW,
   type NativeProviderDetailView,
@@ -96,6 +97,7 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
   const pageRef = useRef<HTMLDivElement | null>(null);
   const catalog = useNativeProviderCatalog(appType);
   const commonConfig = useNativeProviderCommonConfig(appType);
+  const routingState = useNativeProviderRouting();
   const claudeHookConfigDir = useSettingsStore((settings) => settings.claudeHookConfigDir);
   const codexHookConfigDir = useSettingsStore((settings) => settings.codexHookConfigDir);
   const grokHookConfigDir = useSettingsStore((settings) => settings.grokHookConfigDir);
@@ -116,10 +118,22 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
     }
   }, [catalog.selectedProviderId]);
 
+  const failover = routingState.failoverState[appType] ?? null;
+  const autoFailover = failover?.config.autoFailoverEnabled ?? false;
+  const orderedCatalogProviders = useMemo(() => {
+    if (!autoFailover || !failover) return catalog.providers;
+    const catalogById = new Map(catalog.providers.map((provider) => [provider.id, provider]));
+    const ordered = orderFailoverProviders(failover.providers, true)
+      .map((provider) => catalogById.get(provider.id))
+      .filter((provider): provider is NonNullable<typeof provider> => Boolean(provider));
+    const included = new Set(ordered.map((provider) => provider.id));
+    return [...ordered, ...catalog.providers.filter((provider) => !included.has(provider.id))];
+  }, [autoFailover, catalog.providers, failover]);
+
   const query = searchValue.trim().toLocaleLowerCase();
   const filteredProviders = useMemo(() => {
-    if (!query) return catalog.providers;
-    return catalog.providers.filter((provider) => [
+    if (!query) return orderedCatalogProviders;
+    return orderedCatalogProviders.filter((provider) => [
       provider.name,
       provider.category,
       provider.baseUrl,
@@ -127,7 +141,7 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
       provider.activeKeyLabel,
       provider.notes,
     ].some((value) => value?.toLocaleLowerCase().includes(query)));
-  }, [catalog.providers, query]);
+  }, [orderedCatalogProviders, query]);
 
   const selectedProvider = catalog.detail?.card ?? catalog.providers.find(
     (provider) => provider.id === catalog.selectedProviderId
@@ -138,7 +152,18 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
     selectedDetail?.card.id ?? null,
     configuredRoots,
   );
-  const routingState = useNativeProviderRouting();
+  useEffect(() => {
+    if (surface !== "catalog") return;
+    let refreshing = false;
+    const refresh = () => {
+      if (refreshing) return;
+      refreshing = true;
+      void routingState.refreshFailover(appType).finally(() => { refreshing = false; });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 1_000);
+    return () => window.clearInterval(timer);
+  }, [appType, routingState.refreshFailover, surface]);
   useEffect(() => {
     pageCache.selectedProviderId = catalog.selectedProviderId;
     setDetailViewState(readCachedDetailView(catalog.selectedProviderId));
@@ -263,6 +288,23 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
     setDetailOpened(true);
   };
 
+  const handleFailoverQueueChange = async (providerId: string, enabled: boolean) => {
+    if (!failover || !autoFailover) return;
+    const providerIds = orderFailoverProviders(failover.providers, true)
+      .filter((provider) => provider.id === providerId ? enabled : provider.inFailoverQueue)
+      .map((provider) => provider.id);
+    try {
+      await routingState.setFailoverQueue(appType, providerIds);
+    } catch {
+      toast.error(t("providerQuickSwitch.queueUpdateFailed"));
+    }
+  };
+
+  const handleCatalogReorder = async (providerIds: string[]) => {
+    await catalog.reorderProviders(providerIds);
+    if (autoFailover) await routingState.refreshFailover(appType);
+  };
+
   // 弹窗关闭会卸载 Monaco，未保存的完整配置编辑会随之丢失，所以先确认。
   const handleDetailClose = () => {
     void confirmDiscardDocument().then((confirmed) => {
@@ -313,7 +355,9 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
 
           <NativeProviderCatalog
             providers={filteredProviders}
-            allProviders={catalog.providers}
+            allProviders={orderedCatalogProviders}
+            failover={autoFailover ? failover : null}
+            failoverBusy={Boolean(routingState.action)}
             selectedProviderId={catalog.selectedProviderId}
             loading={catalog.loading}
             hasSearchQuery={Boolean(query)}
@@ -325,7 +369,8 @@ export function NativeProviderSettingsPage({ searchValue }: NativeProviderSettin
             onDuplicate={(providerId) => ignoreProviderError(catalog.duplicateProvider(providerId))}
             onDelete={(providerId) => ignoreProviderError(handleDeleteProvider(providerId))}
             onEnabledChange={(providerId, enabled) => ignoreProviderError(catalog.setProviderEnabled(providerId, enabled))}
-            onReorder={(providerIds) => ignoreProviderError(catalog.reorderProviders(providerIds))}
+            onFailoverQueueChange={(providerId, enabled) => void handleFailoverQueueChange(providerId, enabled)}
+            onReorder={(providerIds) => ignoreProviderError(handleCatalogReorder(providerIds))}
           />
 
           <NativeProviderDetailModal

@@ -338,10 +338,17 @@ form must not hide URL, key or model in a generic configuration textarea.
 - When automatic failover is disabled, present the queue as a single-selection
   control. Selecting a ready provider calls `routing_set_failover_queue` with
   one provider ID and uses the backend result to update the In use indicator.
-- Hide reorder controls in manual mode; automatic mode keeps switches and
-  priority arrows.
-- Background polling replaces only circuit state (`circuit` / `circuits`) and
-  preserves provider membership, configuration drafts, and control affordances.
+- Hide priority badges and every reorder affordance in manual mode; automatic
+  mode keeps queue switches, priority arrows, and dnd-kit drag handles.
+- `routing_get_failover_queue` polling treats `providers` as server-owned state:
+  both Settings and the terminal quick panel accept the latest provider array so
+  `sortIndex` and queue membership synchronize across surfaces. Settings merges
+  `providers`, `circuit`, and `circuits` into the previous snapshot while
+  preserving its local `config` draft; the quick panel may replace the complete
+  failover snapshot because it has no editable parameter draft.
+- Bad: merge only `circuit` / `circuits`; a reorder from the other surface then
+  remains stale indefinitely. Good: preserve only locally editable config while
+  accepting the server's ordered provider array.
 
 ## Terminal provider quick-switch panel (2026-08-10)
 
@@ -366,9 +373,27 @@ form must not hide URL, key or model in a generic configuration textarea.
 - Automatic failover renders queue membership and priority arrows; manual
   failover renders a single-select queue and sends exactly one provider ID to
   `routing_set_failover_queue`, allowing an active local takeover to hot-switch
-  without a global confirmation dialog. Global switches still require the
-  existing preview/confirm/apply flow.
-- Provider rows expose a native drag-and-drop reorder affordance. Drop order
-  is submitted as the complete provider ID list through
-  `provider_catalog_reorder`; the existing arrow controls remain available for
-  keyboard and precision adjustments.
+  without a global confirmation dialog. While automatic failover is enabled,
+  provider-row activation is non-switching: queue membership and priority
+  controls are the only provider-selection path, and row activation must never
+  enter global preview/confirm/apply. Outside automatic mode, global switches
+  still require the existing preview/confirm/apply flow.
+- In automatic mode, provider rows in both the quick panel and Settings expose
+  the same dnd-kit drag-and-drop reorder affordance. Drop order is submitted as
+  the complete app-type provider ID list through `provider_catalog_reorder`;
+  the existing arrow controls remain available for keyboard and precision
+  adjustments. Both surfaces derive the same display order: queued providers
+  first, ordered by `sortIndex`, followed by non-queued providers ordered by
+  `sortIndex`. Manual mode renders the ungrouped catalog order. This grouping is
+  display-only and must not become a second persisted failover-order array.
+- The Settings Catalog surface is also a failover consumer while automatic
+  failover is enabled. It polls `routing_get_failover_queue`, renders queued
+  providers first with `#N`, and exposes queue toggle plus priority up/down
+  actions on each catalog card. When automatic failover is disabled, those
+  queue affordances disappear and the catalog returns to its normal presentation.
+- Settings and the terminal quick panel are independent Hook instances. Every
+  successful failover read or mutation publishes the returned
+  `NativeProviderFailoverState` through the module-local failover sync channel;
+  subscribers immediately apply it, and newly mounted subscribers replay the
+  latest successful snapshot. Polling remains the authoritative backend
+  reconciliation path rather than the only cross-surface synchronization path.

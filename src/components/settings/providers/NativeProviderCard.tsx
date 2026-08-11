@@ -2,11 +2,19 @@ import { ActionIcon, Badge, Group, Menu, Stack, Switch, Text, Tooltip } from "@m
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useState, type CSSProperties } from "react";
-import { Boxes, ChevronDown, ChevronUp, Copy, GripVertical, MoreHorizontal, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Boxes, Check, ChevronDown, ChevronUp, Copy, GripVertical, MoreHorizontal, Plus, Trash2 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { DND_SORTABLE_TRANSITION } from "@/lib/dragInteraction";
 import { VendorIcon, inferVendor } from "../../VendorIcon";
-import type { NativeProviderCard as NativeProviderCardData } from "./nativeProviderTypes";
+import type { NativeProviderCard as NativeProviderCardData, NativeProviderFailoverProvider } from "./nativeProviderTypes";
+
+interface NativeProviderCardFailoverState {
+  provider: NativeProviderFailoverProvider | null;
+  position: number | null;
+  busy: boolean;
+  isFirst: boolean;
+  isLast: boolean;
+}
 
 interface NativeProviderCardProps {
   provider: NativeProviderCardData;
@@ -15,10 +23,14 @@ interface NativeProviderCardProps {
   isFirst: boolean;
   isLast: boolean;
   canReorder: boolean;
+  failover: NativeProviderCardFailoverState | null;
   onSelect: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onEnabledChange: (enabled: boolean) => void;
+  onFailoverQueueChange: (enabled: boolean) => void;
+  onFailoverMoveUp: () => void;
+  onFailoverMoveDown: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
 }
@@ -39,10 +51,14 @@ export function NativeProviderCard({
   isFirst,
   isLast,
   canReorder,
+  failover,
   onSelect,
   onDuplicate,
   onDelete,
   onEnabledChange,
+  onFailoverQueueChange,
+  onFailoverMoveUp,
+  onFailoverMoveDown,
   onMoveUp,
   onMoveDown,
 }: NativeProviderCardProps) {
@@ -78,6 +94,8 @@ export function NativeProviderCard({
         : { color: "var(--mantine-color-green-6)", label: t("providerCatalog.enabled") };
   // 副行只放一条最有信息量的摘要：优先模型，退到 endpoint，都没有才提示未配置。
   const summary = provider.model || provider.baseUrl || t("providerCatalog.notConfigured");
+  const failoverProvider = failover?.provider ?? null;
+  const failoverPosition = failover?.position ?? null;
 
   return (
     <div
@@ -116,8 +134,13 @@ export function NativeProviderCard({
         <Stack gap={0} className="min-w-0 flex-1">
           <Group gap={6} wrap="nowrap" className="min-w-0">
             <Text size="sm" fw={600} truncate className="min-w-0" title={provider.name}>{provider.name}</Text>
-            {provider.isCurrent && (
+            {failoverProvider?.isCurrent ? (
+              <Badge size="xs" color="cliPrimary" variant="filled" className="shrink-0">{t("providerCatalog.failover.current")}</Badge>
+            ) : provider.isCurrent && (
               <Badge size="xs" color="cliPrimary" className="shrink-0">{t("providerCatalog.current")}</Badge>
+            )}
+            {failoverProvider?.inFailoverQueue && failoverPosition !== null && (
+              <Badge size="xs" color="green" variant="light" className="shrink-0">#{failoverPosition + 1}</Badge>
             )}
           </Group>
           <Text size="xs" c="dimmed" truncate title={summary}>{summary}</Text>
@@ -131,6 +154,48 @@ export function NativeProviderCard({
           />
         </Tooltip>
       </button>
+
+      {failoverProvider && failover && (
+        <Group gap={2} wrap="nowrap" className="shrink-0">
+          <Tooltip label={t("providerCatalog.failover.queueToggle", { name: provider.name })} withArrow>
+            <ActionIcon
+              variant="subtle"
+              color={failoverProvider.inFailoverQueue ? "green" : "gray"}
+              size="sm"
+              aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })}
+              aria-pressed={failoverProvider.inFailoverQueue}
+              disabled={busy || failover.busy || !failoverProvider.ready}
+              onClick={() => onFailoverQueueChange(!failoverProvider.inFailoverQueue)}
+            >
+              {failoverProvider.inFailoverQueue ? <Check size={14} /> : <Plus size={14} />}
+            </ActionIcon>
+          </Tooltip>
+          {failoverProvider.inFailoverQueue && (
+            <>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                size="sm"
+                aria-label={t("providerCatalog.failover.moveUp", { name: provider.name })}
+                disabled={busy || failover.busy || failover.isFirst}
+                onClick={onFailoverMoveUp}
+              >
+                <ArrowUp size={14} />
+              </ActionIcon>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                size="sm"
+                aria-label={t("providerCatalog.failover.moveDown", { name: provider.name })}
+                disabled={busy || failover.busy || failover.isLast}
+                onClick={onFailoverMoveDown}
+              >
+                <ArrowDown size={14} />
+              </ActionIcon>
+            </>
+          )}
+        </Group>
+      )}
 
       {/* 更多操作默认淡出，hover / 键盘聚焦 / 菜单展开时才显形。拖拽手柄已常驻行首。 */}
       <Group

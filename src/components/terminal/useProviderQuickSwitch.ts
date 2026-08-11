@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { providerErrorCode, type NativeProviderAppType, type NativeProviderCard, type NativeProviderFailoverState, type NativeProviderGlobalCurrent, type NativeProviderGlobalPreview, type NativeProviderGlobalApplyResult, type NativeProviderRoutingState } from "../settings/providers/nativeProviderTypes";
-
-export const LOCAL_PROVIDER_HOME_IDENTITY = {
-  environmentKind: "local" as const,
-  environmentId: "host",
-  identity: "local:host",
-};
+import { providerErrorCode, type NativeProviderAppType, type NativeProviderCard, type NativeProviderFailoverState, type NativeProviderGlobalCurrent, type NativeProviderGlobalPreview, type NativeProviderGlobalApplyResult, type NativeProviderHomeState, type NativeProviderRoutingState } from "../settings/providers/nativeProviderTypes";
+import { publishProviderFailoverState, subscribeProviderFailoverState } from "../settings/providers/providerFailoverSync";
 
 export interface ProviderQuickSwitchSnapshot {
   providers: NativeProviderCard[];
@@ -52,6 +47,7 @@ export function useProviderQuickSwitch(
   const [failoverLoading, setFailoverLoading] = useState(false);
   const [action, setAction] = useState<string | null>(null);
   const [errorCodeState, setErrorCodeState] = useState<string | null>(null);
+  const [activeHome, setActiveHome] = useState<NativeProviderHomeState | null>(null);
   const requestVersionRef = useRef(0);
 
   const refreshFailover = useCallback(async () => {
@@ -60,11 +56,12 @@ export function useProviderQuickSwitch(
     try {
       const next = await invoke<NativeProviderFailoverState>("routing_get_failover_queue", { appType });
       if (version !== requestVersionRef.current) return;
+      publishProviderFailoverState(next);
       setSnapshot((current) => ({
         ...current,
-        failover: current.failover
-          ? { ...current.failover, circuit: next.circuit, circuits: next.circuits }
-          : next,
+        // 接收服务端完整快照：设置页与侧边栏共用 provider.sort_index，若只合并
+        // circuit，设置页重排后侧边栏会永久保留旧 providers 顺序。
+        failover: next,
       }));
     } catch (error) {
       if (version === requestVersionRef.current) setErrorCodeState(errorCode(error));
@@ -78,24 +75,25 @@ export function useProviderQuickSwitch(
     setLoading(true);
     setErrorCodeState(null);
     try {
-      const [providersResult, currentResult, routingResult, failoverResult] = await Promise.allSettled([
+      const [providersResult, homeResult, routingResult, failoverResult] = await Promise.allSettled([
         invoke<NativeProviderCard[]>("provider_catalog_list", { appType }),
-        invoke<NativeProviderGlobalCurrent>("provider_global_current", {
-          input: { appType, homeIdentity: LOCAL_PROVIDER_HOME_IDENTITY },
-        }),
+        invoke<NativeProviderHomeState>("provider_home_active_get"),
         invoke<NativeProviderRoutingState>("routing_get_state"),
         invoke<NativeProviderFailoverState>("routing_get_failover_queue", { appType }),
       ]);
       if (version !== requestVersionRef.current) return;
       if (providersResult.status === "rejected") throw providersResult.reason;
+      const activeHome = homeResult.status === "fulfilled" ? homeResult.value : null;
+      if (failoverResult.status === "fulfilled") publishProviderFailoverState(failoverResult.value);
       setSnapshot({
         providers: providersResult.value.filter((provider) => provider.appType === appType),
-        current: currentResult.status === "fulfilled" ? currentResult.value : null,
+        current: null,
         routing: routingResult.status === "fulfilled" ? routingResult.value : null,
         failover: failoverResult.status === "fulfilled" ? failoverResult.value : null,
       });
-      if (currentResult.status === "rejected" && failoverResult.status === "rejected") {
-        setErrorCodeState(errorCode(currentResult.reason));
+      setActiveHome(activeHome);
+      if (homeResult.status === "rejected" && failoverResult.status === "rejected") {
+        setErrorCodeState(errorCode(homeResult.reason));
       }
     } catch (error) {
       if (version === requestVersionRef.current) setErrorCodeState(errorCode(error));
@@ -109,6 +107,11 @@ export function useProviderQuickSwitch(
     if (!open) return;
     void refresh();
   }, [appType, open, refresh]);
+
+  useEffect(() => subscribeProviderFailoverState((next) => {
+    if (next.appType !== appType) return;
+    setSnapshot((current) => ({ ...current, failover: next }));
+  }), [appType]);
 
   useEffect(() => {
     if (!open) return;
@@ -133,33 +136,39 @@ export function useProviderQuickSwitch(
 
   const previewGlobal = useCallback((providerId: string) => runMutation(
     "preview-global",
-    () => invoke<NativeProviderGlobalPreview>("provider_global_preview", {
-      input: { appType, providerId, homeIdentity: LOCAL_PROVIDER_HOME_IDENTITY },
-    }),
-  ), [appType, runMutation]);
+    async () => {
+      if (!activeHome) throw new Error("provider_home_active_unavailable");
+      return invoke<NativeProviderGlobalPreview>("provider_global_preview", {
+        input: { appType, providerId, homeIdentity: activeHome.identity },
+      });
+    },
+  ), [activeHome, appType, runMutation]);
 
   const applyGlobal = useCallback((preview: NativeProviderGlobalPreview) => runMutation(
     "apply-global",
     async () => {
+      if (!activeHome) throw new Error("provider_home_active_unavailable");
       const result = await invoke<NativeProviderGlobalApplyResult>("provider_global_apply", {
         input: {
           appType,
           providerId: preview.providerId,
-          homeIdentity: LOCAL_PROVIDER_HOME_IDENTITY,
+          homeIdentity: activeHome.identity,
           previewFingerprint: preview.fingerprint,
         },
       });
       await refresh();
       return result;
     },
-  ), [appType, refresh, runMutation]);
+  ), [activeHome, appType, refresh, runMutation]);
 
   const setFailoverQueue = useCallback((providerIds: string[]) => runMutation(
     "failover-queue",
     async () => {
-      await invoke<NativeProviderFailoverState>("routing_set_failover_queue", {
+      const next = await invoke<NativeProviderFailoverState>("routing_set_failover_queue", {
         input: { appType, providerIds },
       });
+      publishProviderFailoverState(next);
+      setSnapshot((current) => ({ ...current, failover: next }));
       await refresh();
     },
   ), [appType, refresh, runMutation]);
@@ -199,6 +208,7 @@ export function useProviderQuickSwitch(
   const setLocalRouting = useCallback((enabled: boolean) => runMutation(
     "local-routing",
     async () => {
+      if (!activeHome) throw new Error("provider_home_active_unavailable");
       if (enabled) {
         const routingState = await invoke<NativeProviderRoutingState>("routing_get_state");
         const serviceRunning = routingState.persisted.service.serviceEnabled
@@ -207,33 +217,36 @@ export function useProviderQuickSwitch(
           await invoke<NativeProviderRoutingState>("routing_set_service_enabled", { enabled: true });
         }
         await invoke<NativeProviderRoutingState>("routing_set_takeover", {
-          input: { appType, homeIdentity: LOCAL_PROVIDER_HOME_IDENTITY, enabled: true },
+          input: { appType, homeIdentity: activeHome.identity, enabled: true },
         });
       } else {
         // 后端不允许「无接管却开着自动故障转移」，先降级再撤接管。
         const failoverState = await invoke<NativeProviderFailoverState>("routing_get_failover_queue", { appType })
           .catch(() => null);
         if (failoverState?.config.autoFailoverEnabled) {
-          await invoke<NativeProviderFailoverState>("routing_set_failover_enabled", { appType, enabled: false });
+          const next = await invoke<NativeProviderFailoverState>("routing_set_failover_enabled", { appType, enabled: false });
+          publishProviderFailoverState(next);
         }
         await invoke<NativeProviderRoutingState>("routing_set_takeover", {
-          input: { appType, homeIdentity: LOCAL_PROVIDER_HOME_IDENTITY, enabled: false },
+          input: { appType, homeIdentity: activeHome.identity, enabled: false },
         });
       }
       await refresh();
     },
-  ), [appType, refresh, runMutation]);
+  ), [activeHome, appType, refresh, runMutation]);
 
   const setFailoverEnabled = useCallback((enabled: boolean) => runMutation(
     "failover-enabled",
     async () => {
-      await invoke<NativeProviderFailoverState>("routing_set_failover_enabled", { appType, enabled });
+      const next = await invoke<NativeProviderFailoverState>("routing_set_failover_enabled", { appType, enabled });
+      publishProviderFailoverState(next);
+      setSnapshot((current) => ({ ...current, failover: next }));
       await refresh();
     },
   ), [appType, refresh, runMutation]);
 
   const hasLocalTakeover = Boolean(snapshot.routing?.persisted.takeovers.some(
-    (takeover) => takeover.appType === appType && takeover.homeIdentity.identity === LOCAL_PROVIDER_HOME_IDENTITY.identity,
+    (takeover) => takeover.appType === appType && takeover.homeIdentity.identity === activeHome?.identity.identity,
   ));
 
   return {
