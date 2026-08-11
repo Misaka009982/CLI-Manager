@@ -1,11 +1,18 @@
-interface TerminalFileDragPayload {
+import { formatAbsoluteProjectFilePath, formatTerminalDragPath } from "./aiPathFormatter";
+import type { Project, ProjectFileEntry } from "./types";
+
+export const TERMINAL_FILE_DRAG_MIME = "application/x-cli-manager-file-drag";
+
+export interface TerminalFileDragPayload {
   text: string;
+  absolutePath: string;
+  source: Pick<Project, "id" | "path" | "remote_path" | "environment_type" | "ssh_host_id">;
 }
 
 interface TerminalDropZone {
   id: string;
   getRect: () => DOMRect | null;
-  paste: (text: string) => void;
+  paste: (payload: TerminalFileDragPayload) => void;
   focus: () => void;
 }
 
@@ -40,8 +47,26 @@ function getDropZoneAtPoint(x: number, y: number): TerminalDropZone | null {
   return null;
 }
 
-export function beginTerminalFileDrag(text: string) {
-  currentDrag = text ? { text } : null;
+export function createTerminalFileDragPayload(
+  project: Pick<Project, "id" | "name" | "path" | "remote_path" | "environment_type" | "ssh_host_id" | "cli_tool">,
+  relativePath: string,
+  kind: ProjectFileEntry["kind"] = "file",
+): TerminalFileDragPayload {
+  return {
+    text: formatTerminalDragPath(project, relativePath, kind),
+    absolutePath: formatAbsoluteProjectFilePath(project, relativePath, kind),
+    source: {
+      id: project.id,
+      path: project.path,
+      remote_path: project.remote_path,
+      environment_type: project.environment_type,
+      ssh_host_id: project.ssh_host_id,
+    },
+  };
+}
+
+export function beginTerminalFileDrag(payload: TerminalFileDragPayload) {
+  currentDrag = payload.text ? payload : null;
   lastPoint = null;
 }
 
@@ -52,6 +77,32 @@ export function endTerminalFileDrag() {
 
 export function getTerminalFileDragText(): string {
   return currentDrag?.text ?? "";
+}
+
+export function getTerminalFileDragPayload(): TerminalFileDragPayload | null {
+  return currentDrag;
+}
+
+export function parseTerminalFileDragPayload(value: string | null | undefined): TerminalFileDragPayload | null {
+  if (!value) return null;
+  try {
+    const payload = JSON.parse(value) as Partial<TerminalFileDragPayload>;
+    if (
+      typeof payload.text !== "string"
+      || typeof payload.absolutePath !== "string"
+      || !payload.source
+      || typeof payload.source.id !== "string"
+      || typeof payload.source.path !== "string"
+      || typeof payload.source.remote_path !== "string"
+      || (payload.source.environment_type !== "local" && payload.source.environment_type !== "wsl" && payload.source.environment_type !== "ssh")
+      || (payload.source.ssh_host_id !== null && typeof payload.source.ssh_host_id !== "string")
+    ) {
+      return null;
+    }
+    return payload as TerminalFileDragPayload;
+  } catch {
+    return null;
+  }
 }
 
 export function updateTerminalFileDragPoint(x: number, y: number) {
@@ -94,7 +145,7 @@ export function commitTerminalFileDragDrop(): boolean {
 
   const zone = getDropZoneAtPoint(lastPoint.x, lastPoint.y);
   if (zone) {
-    zone.paste(currentDrag.text);
+    zone.paste(currentDrag);
     zone.focus();
     endTerminalFileDrag();
     return true;
