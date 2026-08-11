@@ -148,6 +148,36 @@ function GitChangesPanel() {
 - Relative paths use `/` internally and the root is represented as `.`.
 - AI paths continue through `formatAiPathBlock`; directory trailing-slash behavior remains unchanged.
 - Absolute path copy uses `project.path` for local/WSL projects and `project.remote_path` for SSH projects.
+
+### Convention: Path format choices replace the parent menu in place
+
+**What**: Selecting `Copy path as` must switch the existing context-menu content to a two-item format menu. Do not use a Radix `ContextMenuSub` for this interaction, because the default submenu keeps the parent menu visible beside the child.
+
+**Why**: The file-panel requirement is a single replacement menu, not a persistent parent/child menu pair. A Portal can solve clipping but cannot change that interaction model.
+
+**Correct**:
+
+```tsx
+<ContextMenuItem
+  onSelect={(event) => {
+    event.preventDefault();
+    setShowFormats(true);
+  }}
+>
+  <Copy /> <span>Copy path as</span> <ChevronRight />
+</ContextMenuItem>
+```
+
+The replacement keeps `context-menu file-explorer-menu`, removes the old sibling items from layout, and focuses its first item after the branch swap. AI and relative choices use distinct existing semantic icons.
+
+**Wrong**:
+
+```tsx
+<ContextMenuSub>
+  <ContextMenuSubTrigger>复制路径为</ContextMenuSubTrigger>
+  <ContextMenuSubContent>...</ContextMenuSubContent>
+</ContextMenuSub>
+```
 - Clipboard success and failure messages must use i18n keys in both supported UI languages.
 - Radix submenus must render through `ContextMenuPrimitive.Portal`; custom sidebar menu containers may have `overflow-x-hidden` and must not clip nested menus.
 

@@ -4101,6 +4101,31 @@
   background-color: color-mix(in srgb, var(--border) 48%, transparent);
 }
 
+/* Path format choices replace the parent menu in-place instead of opening a
+   second menu beside it. Remove the old siblings from layout so the parent
+   surface collapses to the replacement's height. */
+.context-menu:has(> .path-copy-menu-replacement) {
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  outline: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.context-menu:has(> .path-copy-menu-replacement) > :not(.path-copy-menu-replacement) {
+  display: none;
+}
+
+.context-menu.path-copy-menu-replacement {
+  position: static;
+  min-width: 148px;
+  width: 100%;
+  padding: 4px;
+  animation: none;
+}
+
 .ui-search-focus-shell {
   transition:
     box-shadow var(--animate-duration-fast),
