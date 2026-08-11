@@ -492,7 +492,10 @@ function reportShape() {
           height: rect.height,
         };
       });
-    api.reportShape([...hitElements, ...scrollbars]);
+    const scaleFactor = Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+      ? window.devicePixelRatio
+      : 1;
+    api.reportShape({ rects: [...hitElements, ...scrollbars], scaleFactor });
   });
 }
 

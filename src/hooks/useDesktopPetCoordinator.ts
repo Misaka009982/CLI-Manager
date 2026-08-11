@@ -143,6 +143,7 @@ export function useDesktopPetCoordinator({
   const [lifecycleToken, setLifecycleToken] = useState("");
   const [companionActive, setCompanionActive] = useState(false);
   const [companionBlocked, setCompanionBlocked] = useState(false);
+  const [companionStatusListening, setCompanionStatusListening] = useState(false);
   const [companionPet, setCompanionPet] = useState<InstalledPet | null>(null);
   const decisionRequests = useDesktopPetAlertStore((state) => state.decisionRequests);
   const incidents = useDesktopPetAlertStore((state) => state.incidents);
@@ -650,6 +651,7 @@ export function useDesktopPetCoordinator({
   sendStateRef.current = sendState;
 
   useEffect(() => {
+    let disposed = false;
     const unlistenStatus = listen<DesktopPetCompanionStatusEvent>(
       DESKTOP_PET_COMPANION_STATUS_EVENT,
       (event) => {
@@ -675,9 +677,22 @@ export function useDesktopPetCoordinator({
           setCompanionBlocked(companionRequestedRef.current);
         }
       }
-    );
+    ).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+        return null;
+      }
+      setCompanionStatusListening(true);
+      return unlisten;
+    }).catch((error) => {
+      if (!disposed) {
+        logWarn("Failed to listen for desktop pet companion status", error);
+      }
+      return null;
+    });
     return () => {
-      void unlistenStatus.then((unlisten) => unlisten());
+      disposed = true;
+      void unlistenStatus.then((unlisten) => unlisten?.());
     };
   }, []);
 
@@ -718,7 +733,8 @@ export function useDesktopPetCoordinator({
   }, [companionRequested, desktopPet.petId]);
 
   useEffect(() => {
-    if (!appReady || !settingsLoaded || !companionRequested) return;
+    // 先建立状态监听，避免快速启动的 companion 在监听注册完成前发出唯一的 ready 事件。
+    if (!appReady || !settingsLoaded || !companionRequested || !companionStatusListening) return;
     if (!companionShouldRun) {
       if (companionActiveRef.current) {
         void invoke("desktop_pet_companion_stop")
@@ -797,6 +813,7 @@ export function useDesktopPetCoordinator({
     companionPet,
     companionRequested,
     companionShouldRun,
+    companionStatusListening,
     lifecycleToken,
     publicSnapshot,
     settingsLoaded,

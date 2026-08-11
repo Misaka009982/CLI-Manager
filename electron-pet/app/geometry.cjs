@@ -132,15 +132,18 @@ function computeWindowLayout(options) {
   };
 }
 
-function normalizeShapeRects(rects, bounds) {
+function normalizeShapeRects(rects, bounds, scaleFactor = 1) {
   if (!Array.isArray(rects)) return [];
+  const scale = Number.isFinite(scaleFactor) && scaleFactor > 0
+    ? Math.min(scaleFactor, 8)
+    : 1;
   const normalized = [];
   for (const rect of rects.slice(0, 64)) {
     if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)) continue;
-    const x = Math.floor(clamp(rect.x, 0, bounds.width));
-    const y = Math.floor(clamp(rect.y, 0, bounds.height));
-    const right = Math.ceil(clamp(rect.x + rect.width, 0, bounds.width));
-    const bottom = Math.ceil(clamp(rect.y + rect.height, 0, bounds.height));
+    const x = Math.floor(clamp(rect.x, 0, bounds.width) * scale);
+    const y = Math.floor(clamp(rect.y, 0, bounds.height) * scale);
+    const right = Math.ceil(clamp(rect.x + rect.width, 0, bounds.width) * scale);
+    const bottom = Math.ceil(clamp(rect.y + rect.height, 0, bounds.height) * scale);
     if (right <= x || bottom <= y) continue;
     normalized.push({ x, y, width: right - x, height: bottom - y });
   }

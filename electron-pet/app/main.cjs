@@ -641,9 +641,11 @@ function registerIpc() {
     syncWindows();
     emitPositionAction("sizeChanged", size);
   });
-  ipcMain.on("desktop-pet-hit-shape", (event, rects) => {
+  ipcMain.on("desktop-pet-hit-shape", (event, report) => {
     if (!isHitSender(event) || !hitWin || hitWin.isDestroyed() || !currentLayout) return;
-    const shape = normalizeShapeRects(rects, currentLayout.bounds);
+    const rects = Array.isArray(report) ? report : report?.rects;
+    const scaleFactor = Array.isArray(report) ? 1 : report?.scaleFactor;
+    const shape = normalizeShapeRects(rects, currentLayout.bounds, scaleFactor);
     hitWin.setShape(shape);
     hitWin.setIgnoreMouseEvents(shape.length === 0, { forward: false });
   });

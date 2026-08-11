@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld("cliManagerPet", {
   patchUi: (patch) => ipcRenderer.send("desktop-pet-ui-patch", patch),
   previewSize: (size) => ipcRenderer.send("desktop-pet-size-preview", size),
   commitSize: (size) => ipcRenderer.send("desktop-pet-size-commit", size),
-  reportShape: (rects) => ipcRenderer.send("desktop-pet-hit-shape", rects),
+  reportShape: (shape) => ipcRenderer.send("desktop-pet-hit-shape", shape),
   dragStart: () => ipcRenderer.send("desktop-pet-drag-start"),
   dragMove: () => ipcRenderer.send("desktop-pet-drag-move"),
   dragEnd: (moved) => ipcRenderer.send("desktop-pet-drag-end", Boolean(moved)),
