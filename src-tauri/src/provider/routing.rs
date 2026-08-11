@@ -6,9 +6,10 @@ use crate::provider::repository::{
 use crate::{shell_resolver, wsl};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqliteConnection};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::ERROR_BUFFER_OVERFLOW;
@@ -34,6 +35,16 @@ const ROUTING_LOG_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
 #[allow(dead_code)]
 const ROUTING_LOG_MAX_ROWS: i64 = 100_000;
 const WSL_MIRRORED_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const WSL_PROBE_CACHE_TTL: Duration = Duration::from_millis(1_500);
+
+#[derive(Debug, Clone)]
+struct WslProbeCacheEntry {
+    host: String,
+    port: u16,
+    checked_at: Instant,
+}
+
+static WSL_PROBE_CACHE: OnceLock<Mutex<HashMap<String, WslProbeCacheEntry>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -1010,6 +1021,20 @@ pub(crate) fn probe_wsl_gateway(distro: &str, gateway: Ipv4Addr, port: u16) -> R
 }
 
 fn probe_wsl_endpoint(distro: &str, host: &str, port: u16) -> Result<(), String> {
+    let cache = WSL_PROBE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut entries) = cache.lock() {
+        let now = Instant::now();
+        entries.retain(|_, entry| {
+            now.saturating_duration_since(entry.checked_at) <= WSL_PROBE_CACHE_TTL
+        });
+        if entries.get(distro).is_some_and(|entry| {
+            entry.host == host
+                && entry.port == port
+                && now.saturating_duration_since(entry.checked_at) <= WSL_PROBE_CACHE_TTL
+        }) {
+            return Ok(());
+        }
+    }
     let exe =
         wsl::find_wsl_exe().ok_or_else(|| "routing_wsl_probe_tool_unavailable".to_string())?;
     let script = format!(
@@ -1026,6 +1051,16 @@ fn probe_wsl_endpoint(distro: &str, host: &str, port: u16) -> Result<(), String>
     let output = shell_resolver::output_with_timeout(command, WSL_MIRRORED_PROBE_TIMEOUT)
         .map_err(|_| "routing_wsl_probe_failed".to_string())?;
     if output.status.success() {
+        if let Ok(mut entries) = cache.lock() {
+            entries.insert(
+                distro.to_string(),
+                WslProbeCacheEntry {
+                    host: host.to_string(),
+                    port,
+                    checked_at: Instant::now(),
+                },
+            );
+        }
         Ok(())
     } else if output.status.code() == Some(127) {
         Err("routing_wsl_probe_tool_unavailable".to_string())
@@ -1042,9 +1077,29 @@ pub(crate) struct WslNatGateway {
 }
 
 pub(crate) fn resolve_wsl_nat_gateway(distro: &str) -> Result<WslNatGateway, String> {
-    let route = run_wsl_output(distro, &["ip", "-4", "route", "show", "default"])?;
-    let (gateway, device) = parse_default_route(&route)?;
-    let addresses = run_wsl_output(distro, &["ip", "-4", "addr", "show", "dev", &device])?;
+    let route_and_addresses = run_wsl_script_output(
+        distro,
+        r#"
+route=$(ip -4 route show default) || exit 1
+gateway=
+device=
+set -- $route
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    via) gateway=$2; shift 2 ;;
+    dev) device=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$gateway" ] && [ -n "$device" ] || exit 1
+printf 'default via %s dev %s\n' "$gateway" "$device"
+ip -4 addr show dev "$device" || exit 1
+"#,
+    )?;
+    let (route, addresses) = route_and_addresses
+        .split_once('\n')
+        .ok_or_else(|| "routing_wsl_route_failed".to_string())?;
+    let (gateway, _device) = parse_default_route(&route)?;
     let (network, prefix_length) = parse_interface_cidr(&addresses)?;
     if !ipv4_in_cidr(gateway, network, prefix_length) {
         return Err("routing_wsl_gateway_outside_interface".to_string());
@@ -1059,11 +1114,17 @@ pub(crate) fn resolve_wsl_nat_gateway(distro: &str) -> Result<WslNatGateway, Str
     })
 }
 
-fn run_wsl_output(distro: &str, args: &[&str]) -> Result<String, String> {
+fn run_wsl_script_output(distro: &str, script: &str) -> Result<String, String> {
     let exe =
         wsl::find_wsl_exe().ok_or_else(|| "routing_wsl_route_tool_unavailable".to_string())?;
     let mut command = shell_resolver::silent_command(exe.to_string_lossy().as_ref());
-    command.arg("-d").arg(distro).arg("--exec").args(args);
+    command
+        .arg("-d")
+        .arg(distro)
+        .arg("--exec")
+        .arg("sh")
+        .arg("-lc")
+        .arg(script);
     let output = shell_resolver::output_with_timeout(command, WSL_MIRRORED_PROBE_TIMEOUT)
         .map_err(|_| "routing_wsl_route_failed".to_string())?;
     if !output.status.success() {

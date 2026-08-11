@@ -532,6 +532,9 @@ pub(crate) async fn initialize_cache() -> Result<(), String> {
 
 pub(crate) async fn get(input: HomeSelectInput) -> Result<ProviderHomeState, String> {
     let normalized = normalize_input(input)?;
+    if let Some(state) = cached_state(&normalized.environment_kind, &normalized.environment_id) {
+        return Ok(state);
+    }
     let state = state_for(
         normalized.environment_kind.clone(),
         normalized.environment_id.clone(),

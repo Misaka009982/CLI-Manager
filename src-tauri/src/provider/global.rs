@@ -11,7 +11,7 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use toml_edit::{DocumentMut, Item, Table, Value as TomlValue};
 use uuid::Uuid;
 
@@ -147,8 +147,17 @@ struct ProviderPlan {
     app_type: String,
     provider_id: String,
     provider_name: String,
+    source_signature: String,
     home: ProviderHomeState,
     targets: Vec<PlannedTarget>,
+}
+
+#[derive(Debug, Clone)]
+struct PreviewPlanCacheEntry {
+    key: String,
+    fingerprint: String,
+    plan: ProviderPlan,
+    created_at: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +191,8 @@ struct ApplyLock {
 }
 
 static APPLY_LOCKS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static PREVIEW_PLAN_CACHE: OnceLock<Mutex<Vec<PreviewPlanCacheEntry>>> = OnceLock::new();
+const PREVIEW_PLAN_CACHE_TTL: Duration = Duration::from_secs(30);
 
 fn acquire_apply_lock(app_type: &str, home_identity: &str) -> Result<ApplyLock, String> {
     let locks = APPLY_LOCKS.get_or_init(|| Mutex::new(HashSet::new()));
@@ -260,6 +271,83 @@ fn run_wsl(distro: &str, program: &str, args: &[&str]) -> Result<std::process::O
         .map_err(|_| "provider_wsl_operation_failed".to_string())
 }
 
+fn run_wsl_script(
+    distro: &str,
+    script: &str,
+    args: &[String],
+) -> Result<std::process::Output, String> {
+    let mut command = wsl_command(distro, "sh", &["-lc", script, "cli-manager"])?;
+    command.args(args);
+    shell_resolver::output_with_timeout(command, WSL_OPERATION_TIMEOUT)
+        .map_err(|_| "provider_wsl_operation_failed".to_string())
+}
+
+fn run_wsl_script_with_input(
+    distro: &str,
+    script: &str,
+    args: &[String],
+    input: &[u8],
+) -> Result<(), String> {
+    let mut command = wsl_command(distro, "sh", &["-lc", script, "cli-manager"])?;
+    command
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .map_err(|_| "provider_wsl_operation_failed".to_string())?;
+    if let Some(mut stdin) = child.stdin.take() {
+        if stdin.write_all(input).is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("provider_wsl_operation_failed".to_string());
+        }
+    }
+    let deadline = Instant::now() + WSL_OPERATION_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err("provider_wsl_operation_failed".to_string())
+                };
+            }
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("provider_wsl_operation_timeout".to_string());
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("provider_wsl_operation_failed".to_string());
+            }
+        }
+    }
+}
+
+fn wsl_batch_group(paths: &[String]) -> Option<(String, Vec<String>)> {
+    let mut distro: Option<String> = None;
+    let mut linux_paths = Vec::with_capacity(paths.len());
+    for path in paths {
+        let (path_distro, linux_path) = wsl::parse_wsl_unc_path(path)?;
+        if distro
+            .as_deref()
+            .is_some_and(|current| !current.eq_ignore_ascii_case(&path_distro))
+        {
+            return None;
+        }
+        distro = Some(path_distro);
+        linux_paths.push(linux_path);
+    }
+    Some((distro?, linux_paths))
+}
+
 fn run_wsl_with_input(
     distro: &str,
     program: &str,
@@ -328,6 +416,76 @@ pub(crate) fn read_live(path: &str) -> Result<Option<Vec<u8>>, String> {
             Ok(Some(output.stdout))
         }
     }
+}
+
+const WSL_BATCH_READ_SCRIPT: &str = r#"
+for path do
+  if [ -e "$path" ]; then
+    size=$(wc -c < "$path") || exit 1
+    printf '1 %s\n' "$size"
+    cat -- "$path" || exit 1
+    printf '\n'
+  else
+    printf '0 0\n'
+  fi
+done
+"#;
+
+fn parse_wsl_batch_reads(stdout: &[u8], expected: usize) -> Result<Vec<Option<Vec<u8>>>, String> {
+    let mut offset = 0;
+    let mut values = Vec::with_capacity(expected);
+    for _ in 0..expected {
+        let header_end = stdout[offset..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|index| offset + index)
+            .ok_or_else(|| "provider_target_read_failed".to_string())?;
+        let header = std::str::from_utf8(&stdout[offset..header_end])
+            .map_err(|_| "provider_target_read_failed".to_string())?;
+        let mut fields = header.split_whitespace();
+        let exists = fields.next() == Some("1");
+        let length = fields
+            .next()
+            .and_then(|value| value.parse::<usize>().ok())
+            .ok_or_else(|| "provider_target_read_failed".to_string())?;
+        if fields.next().is_some() {
+            return Err("provider_target_read_failed".to_string());
+        }
+        offset = header_end + 1;
+        if !exists {
+            if length != 0 {
+                return Err("provider_target_read_failed".to_string());
+            }
+            values.push(None);
+            continue;
+        }
+        let end = offset
+            .checked_add(length)
+            .ok_or_else(|| "provider_target_read_failed".to_string())?;
+        if end >= stdout.len() || stdout[end] != b'\n' {
+            return Err("provider_target_read_failed".to_string());
+        }
+        values.push(Some(stdout[offset..end].to_vec()));
+        offset = end + 1;
+    }
+    if offset != stdout.len() {
+        return Err("provider_target_read_failed".to_string());
+    }
+    Ok(values)
+}
+
+fn read_live_many(paths: &[String]) -> Result<Vec<Option<Vec<u8>>>, String> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    if let Some((distro, linux_paths)) = wsl_batch_group(paths) {
+        let output = run_wsl_script(&distro, WSL_BATCH_READ_SCRIPT, &linux_paths)?;
+        if !output.status.success() {
+            return Err("provider_target_read_failed".to_string());
+        }
+        return parse_wsl_batch_reads(&output.stdout, paths.len());
+    }
+    paths.iter().map(|path| read_live(path)).collect()
 }
 
 pub(crate) fn live_is_file(path: &str) -> bool {
@@ -401,6 +559,46 @@ pub(crate) fn target_writable(path: &str) -> bool {
     }
 }
 
+const WSL_BATCH_WRITABLE_SCRIPT: &str = r#"
+for path do
+  if [ -e "$path" ]; then
+    if [ -f "$path" ] && [ -w "$path" ]; then printf '1\n'; else printf '0\n'; fi
+    continue
+  fi
+  parent=${path%/*}
+  [ -z "$parent" ] && parent=/
+  while [ ! -d "$parent" ] && [ "$parent" != "/" ]; do
+    next=${parent%/*}
+    [ -z "$next" ] && next=/
+    [ "$next" = "$parent" ] && parent=/ || parent=$next
+  done
+  if [ -d "$parent" ] && [ -w "$parent" ]; then printf '1\n'; else printf '0\n'; fi
+done
+"#;
+
+fn target_writable_many(paths: &[String]) -> Vec<bool> {
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    if let Some((distro, linux_paths)) = wsl_batch_group(paths) {
+        let Ok(output) = run_wsl_script(&distro, WSL_BATCH_WRITABLE_SCRIPT, &linux_paths) else {
+            return vec![false; paths.len()];
+        };
+        if !output.status.success() {
+            return vec![false; paths.len()];
+        }
+        let Ok(stdout) = String::from_utf8(output.stdout) else {
+            return vec![false; paths.len()];
+        };
+        let values = stdout.lines().map(|line| line == "1").collect::<Vec<_>>();
+        if values.len() == paths.len() {
+            return values;
+        }
+        return vec![false; paths.len()];
+    }
+    paths.iter().map(|path| target_writable(path)).collect()
+}
+
 fn wsl_writable_parent(distro: &str, linux_path: &str) -> bool {
     let mut current = linux_path
         .rsplit_once('/')
@@ -464,6 +662,40 @@ pub(crate) fn write_live(path: &str, bytes: &[u8]) -> Result<(), String> {
             bytes,
         ),
     }
+}
+
+const WSL_BATCH_WRITE_SCRIPT: &str = r#"
+for path do
+  parent=${path%/*}
+  [ -n "$parent" ] && mkdir -p "$parent" || exit 1
+  IFS= read -r length || exit 1
+  case "$length" in
+    ''|*[!0-9]*) exit 1 ;;
+  esac
+  head -c "$length" > "$path" || exit 1
+done
+"#;
+
+fn write_live_many(paths: &[String], payloads: &[Vec<u8>]) -> Result<(), String> {
+    if paths.len() != payloads.len() {
+        return Err("provider_target_write_failed".to_string());
+    }
+    if paths.is_empty() {
+        return Ok(());
+    }
+    if let Some((distro, linux_paths)) = wsl_batch_group(paths) {
+        let mut input = Vec::new();
+        for payload in payloads {
+            input.extend_from_slice(payload.len().to_string().as_bytes());
+            input.push(b'\n');
+            input.extend_from_slice(payload);
+        }
+        return run_wsl_script_with_input(&distro, WSL_BATCH_WRITE_SCRIPT, &linux_paths, &input);
+    }
+    for (path, payload) in paths.iter().zip(payloads) {
+        write_live(path, payload)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn remove_live(path: &str) -> Result<(), String> {
@@ -916,6 +1148,19 @@ async fn effective_settings(
     settings_config(&projected)
 }
 
+fn source_signature(source: &ProviderSource, effective: &Value) -> String {
+    let raw = serde_json::to_vec(&(
+        &source.id,
+        &source.name,
+        &source.settings_config,
+        &source.meta,
+        &source.active_key,
+        effective,
+    ))
+    .unwrap_or_default();
+    format!("sha256:{:x}", Sha256::digest(raw))
+}
+
 async fn build_plan(input: &GlobalPreviewInput) -> Result<ProviderPlan, String> {
     build_plan_with_mode(input, projection_mode(input.projection.as_ref())).await
 }
@@ -943,11 +1188,18 @@ async fn build_plan_with_mode(
         "grokbuild" => vec![("grokbuild.config", GROK_CONFIG_FILE)],
         _ => return Err("provider_invalid_app_type".to_string()),
     };
-    let mut targets = Vec::with_capacity(specs.len());
-    for (target, name) in specs {
-        let path = target_path(&home, &app_type, name);
-        let before = read_live(&path)?;
-        let (desired, owned_fields) = match (app_type.as_str(), target) {
+    let target_specs = specs
+        .into_iter()
+        .map(|(target, name)| (target.to_string(), target_path(&home, &app_type, name)))
+        .collect::<Vec<_>>();
+    let paths = target_specs
+        .iter()
+        .map(|(_, path)| path.clone())
+        .collect::<Vec<_>>();
+    let before_values = read_live_many(&paths)?;
+    let mut targets = Vec::with_capacity(target_specs.len());
+    for ((target, path), before) in target_specs.into_iter().zip(before_values) {
+        let (desired, owned_fields) = match (app_type.as_str(), target.as_str()) {
             ("claude", _) => materialize_claude(before.as_deref(), &effective, &source.active_key)?,
             ("codex", "codex.auth") => {
                 materialize_codex_auth(before.as_deref(), &effective, &source.active_key)?
@@ -966,10 +1218,12 @@ async fn build_plan_with_mode(
             owned_fields,
         });
     }
+    let source_signature = source_signature(&source, &effective);
     let mut plan = ProviderPlan {
         app_type,
         provider_id: source.id,
         provider_name: source.name,
+        source_signature,
         home,
         targets,
     };
@@ -1136,6 +1390,95 @@ fn plan_preview(plan: &ProviderPlan) -> GlobalPreview {
     }
 }
 
+fn preview_plan_cache_key(
+    app_type: &str,
+    provider_id: &str,
+    home_identity: &HomeIdentityInput,
+    projection: Option<&LocalRouteProjection>,
+) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        app_type.trim().to_ascii_lowercase(),
+        provider_id.trim(),
+        home_identity.environment_kind.trim().to_ascii_lowercase(),
+        home_identity.environment_id.as_deref().unwrap_or_default(),
+        projection
+            .map(|value| value.endpoint.trim())
+            .unwrap_or_default(),
+    )
+}
+
+fn cache_preview_plan(input: &GlobalPreviewInput, plan: &ProviderPlan, fingerprint: &str) {
+    let key = preview_plan_cache_key(
+        &input.app_type,
+        &input.provider_id,
+        &input.home_identity,
+        input.projection.as_ref(),
+    );
+    let cache = PREVIEW_PLAN_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    let Ok(mut entries) = cache.lock() else {
+        return;
+    };
+    let now = Instant::now();
+    entries
+        .retain(|entry| now.saturating_duration_since(entry.created_at) <= PREVIEW_PLAN_CACHE_TTL);
+    entries.retain(|entry| entry.key != key);
+    entries.push(PreviewPlanCacheEntry {
+        key,
+        fingerprint: fingerprint.to_string(),
+        plan: plan.clone(),
+        created_at: now,
+    });
+    if entries.len() > 16 {
+        entries.remove(0);
+    }
+}
+
+fn take_cached_preview_plan(input: &GlobalApplyInput) -> Option<ProviderPlan> {
+    let key = preview_plan_cache_key(
+        &input.app_type,
+        &input.provider_id,
+        &input.home_identity,
+        input.projection.as_ref(),
+    );
+    let cache = PREVIEW_PLAN_CACHE.get()?;
+    let mut entries = cache.lock().ok()?;
+    let now = Instant::now();
+    entries
+        .retain(|entry| now.saturating_duration_since(entry.created_at) <= PREVIEW_PLAN_CACHE_TTL);
+    let index = entries.iter().position(|entry| {
+        entry.key == key && entry.fingerprint == input.preview_fingerprint.trim()
+    })?;
+    Some(entries.remove(index).plan)
+}
+
+async fn validate_cached_plan(plan: &ProviderPlan, input: &GlobalApplyInput) -> Result<(), String> {
+    let current_home = home::get(home_input(&input.home_identity)).await?;
+    if serde_json::to_vec(&current_home).ok() != serde_json::to_vec(&plan.home).ok() {
+        return Err("provider_apply_conflict".to_string());
+    }
+    let source = load_source(&plan.app_type, &plan.provider_id).await?;
+    let mut connection = crate::provider::database::open_connection().await?;
+    let effective = effective_settings(&mut connection, &plan.app_type, &source).await?;
+    if source_signature(&source, &effective) != plan.source_signature {
+        return Err("provider_apply_conflict".to_string());
+    }
+    let paths = plan
+        .targets
+        .iter()
+        .map(|target| target.path.clone())
+        .collect::<Vec<_>>();
+    let current = read_live_many(&paths)?;
+    if current
+        .iter()
+        .zip(&plan.targets)
+        .any(|(current, target)| current.as_deref() != target.before.as_deref())
+    {
+        return Err("provider_apply_conflict".to_string());
+    }
+    Ok(())
+}
+
 fn plan_matches_live(plan: &ProviderPlan) -> bool {
     !plan.targets.is_empty()
         && plan
@@ -1268,14 +1611,26 @@ fn stage_plan(plan: &ProviderPlan, journal_targets: &[JournalTarget]) -> Result<
         fs::create_dir_all(backup_parent)
             .map_err(|_| "provider_apply_backup_failed".to_string())?;
     }
+    let stage_paths = journal_targets
+        .iter()
+        .map(|target| target.stage_path.clone())
+        .collect::<Vec<_>>();
+    let desired = plan
+        .targets
+        .iter()
+        .map(|target| target.desired.clone())
+        .collect::<Vec<_>>();
+    write_live_many(&stage_paths, &desired)
+        .map_err(|_| "provider_apply_stage_failed".to_string())?;
+    let staged =
+        read_live_many(&stage_paths).map_err(|_| "provider_apply_stage_failed".to_string())?;
     for (index, target) in plan.targets.iter().enumerate() {
         let journal_target = journal_targets
             .get(index)
             .ok_or_else(|| "provider_apply_stage_failed".to_string())?;
-        write_live(&journal_target.stage_path, &target.desired)
-            .map_err(|_| "provider_apply_stage_failed".to_string())?;
-        let staged = read_live(&journal_target.stage_path)
-            .map_err(|_| "provider_apply_stage_failed".to_string())?
+        let staged = staged
+            .get(index)
+            .and_then(|bytes| bytes.as_deref())
             .ok_or_else(|| "provider_apply_stage_failed".to_string())?;
         parse_staged_target(target, &staged)?;
         if let (Some(before), Some(backup_path)) = (&target.before, &journal_target.backup_path) {
@@ -1528,7 +1883,9 @@ fn restore_targets(plan: &ProviderPlan, changed_paths: &[String]) -> Result<(), 
 
 pub(crate) async fn preview(input: GlobalPreviewInput) -> Result<GlobalPreview, String> {
     let plan = build_plan(&input).await?;
-    Ok(plan_preview(&plan))
+    let preview = plan_preview(&plan);
+    cache_preview_plan(&input, &plan, &preview.fingerprint);
+    Ok(preview)
 }
 
 pub(crate) async fn current(input: GlobalCurrentInput) -> Result<GlobalCurrent, String> {
@@ -1612,6 +1969,7 @@ pub(crate) async fn current(input: GlobalCurrentInput) -> Result<GlobalCurrent, 
                         app_type: app_type.clone(),
                         provider_id: String::new(),
                         provider_name: String::new(),
+                        source_signature: String::new(),
                         home: home.clone(),
                         targets: Vec::new(),
                     },
@@ -1681,7 +2039,13 @@ async fn apply_internal(
         home_identity: input.home_identity.clone(),
         projection: input.projection.clone(),
     };
-    let plan = build_plan(&preview_input).await?;
+    let cached_plan = take_cached_preview_plan(&input);
+    let plan = if let Some(plan) = cached_plan {
+        validate_cached_plan(&plan, &input).await?;
+        plan
+    } else {
+        build_plan(&preview_input).await?
+    };
     let _lock = acquire_apply_lock(&plan.app_type, &plan.home.identity.identity)?;
     if pending_journal(&plan.app_type, &plan.home.identity.identity).await? {
         return Err("provider_recovery_required".to_string());
@@ -1697,7 +2061,10 @@ async fn apply_internal(
         .filter(|target| target.before.as_deref() != Some(target.desired.as_slice()))
         .map(|target| target.path.clone())
         .collect::<Vec<_>>();
-    if changed_paths.iter().any(|path| !target_writable(path)) {
+    if target_writable_many(&changed_paths)
+        .iter()
+        .any(|writable| !writable)
+    {
         return Err("provider_target_write_failed".to_string());
     }
 
@@ -1724,12 +2091,21 @@ async fn apply_internal(
     }
     let mut replaced_paths = Vec::new();
     let replacement_result = (|| -> Result<(), String> {
+        let current = read_live_many(&changed_paths)?;
         for (index, target) in plan.targets.iter().enumerate() {
             if !changed_paths.iter().any(|path| path == &target.path) {
                 continue;
             }
-            let current = read_live(&target.path)?;
-            if fingerprint(current.as_deref()) != fingerprint(target.before.as_deref()) {
+            let changed_index = changed_paths
+                .iter()
+                .position(|path| path == &target.path)
+                .ok_or_else(|| "provider_apply_conflict".to_string())?;
+            if fingerprint(
+                current
+                    .get(changed_index)
+                    .and_then(|value| value.as_deref()),
+            ) != fingerprint(target.before.as_deref())
+            {
                 return Err("provider_apply_conflict".to_string());
             }
             let journal_target = journal_targets
@@ -1775,8 +2151,13 @@ async fn apply_internal(
     }
     let mut verified = BTreeMap::new();
     let verification_result = (|| -> Result<(), String> {
-        for target in &plan.targets {
-            let current = read_live(&target.path)?;
+        let paths = plan
+            .targets
+            .iter()
+            .map(|target| target.path.clone())
+            .collect::<Vec<_>>();
+        let current = read_live_many(&paths)?;
+        for (target, current) in plan.targets.iter().zip(current) {
             let actual = fingerprint(current.as_deref());
             let expected = fingerprint(Some(&target.desired));
             if actual != expected {
@@ -2329,6 +2710,7 @@ mod tests {
             app_type: "claude".to_string(),
             provider_id: "provider".to_string(),
             provider_name: "Provider".to_string(),
+            source_signature: String::new(),
             home: ProviderHomeState {
                 identity: HomeIdentity {
                     environment_kind: "local".to_string(),
@@ -2379,6 +2761,7 @@ mod tests {
             app_type: "codex".to_string(),
             provider_id: "provider".to_string(),
             provider_name: "Provider".to_string(),
+            source_signature: String::new(),
             home: matching_home(),
             targets: vec![
                 PlannedTarget {
@@ -2432,6 +2815,7 @@ command = "demo"
             app_type: "grokbuild".to_string(),
             provider_id: "provider".to_string(),
             provider_name: "Provider".to_string(),
+            source_signature: String::new(),
             home: matching_home(),
             targets: vec![PlannedTarget {
                 target: "grokbuild.config".to_string(),
@@ -2601,6 +2985,19 @@ wire_api = "responses"
     }
 
     #[test]
+    fn parses_wsl_batch_reads_with_binary_payloads_and_missing_files() {
+        let stdout = b"1 5\nhello\n0 0\n1 4\n\x00\xff\n\n\n";
+        assert_eq!(
+            parse_wsl_batch_reads(stdout, 3).unwrap(),
+            vec![
+                Some(b"hello".to_vec()),
+                None,
+                Some(vec![0, 255, b'\n', b'\n']),
+            ]
+        );
+    }
+
+    #[test]
     fn apply_lock_serializes_same_home_and_app_type() {
         let first = acquire_apply_lock("claude", "test:recovery-lock").unwrap();
         assert!(matches!(
@@ -2654,6 +3051,7 @@ wire_api = "responses"
             app_type: "codex".to_string(),
             provider_id: "provider".to_string(),
             provider_name: "Provider".to_string(),
+            source_signature: String::new(),
             home: matching_home(),
             targets: vec![matching],
         };
@@ -2758,6 +3156,7 @@ wire_api = "responses"
             app_type: "codex".to_string(),
             provider_id: "provider".to_string(),
             provider_name: "Provider".to_string(),
+            source_signature: String::new(),
             home: ProviderHomeState {
                 identity: HomeIdentity {
                     environment_kind: "local".to_string(),
