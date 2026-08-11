@@ -3315,6 +3315,7 @@ export function TerminalTabs({
           codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
           piSelectedDir: settings.piHookConfigDir?.trim() || null,
           grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
+          ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
           autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
         }
         ),

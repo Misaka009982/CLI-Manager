@@ -1,4 +1,6 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 
 use uuid::Uuid;
@@ -12,6 +14,38 @@ try:
 finally:
     target.close()
     source.close()
+"#;
+
+const WRITE_SETTING_SCRIPT: &str = r#"
+import json, sqlite3, sys
+request = json.load(sys.stdin)
+connection = sqlite3.connect(sys.argv[1], timeout=15)
+try:
+    connection.execute("BEGIN IMMEDIATE")
+    if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'").fetchone() is None:
+        connection.rollback()
+        print("settings_table_missing")
+        raise SystemExit(0)
+    row = connection.execute("SELECT value FROM settings WHERE key = ?", (request["key"],)).fetchone()
+    current = None if row is None else row[0]
+    if current != request["expected"]:
+        connection.rollback()
+        print("conflict")
+        raise SystemExit(0)
+    if request["upsert"]:
+        connection.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (request["key"], request["value"]),
+        )
+    elif row is not None:
+        connection.execute("UPDATE settings SET value = ? WHERE key = ?", (request["value"], request["key"]))
+    connection.commit()
+    print("ok")
+except Exception:
+    connection.rollback()
+    raise
+finally:
+    connection.close()
 "#;
 
 pub(crate) struct PreparedReadPath {
@@ -76,6 +110,45 @@ fn run_wsl_python(distro: &str, script: &str, args: &[&str]) -> Result<String, S
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn run_wsl_python_with_stdin(
+    distro: &str,
+    script: &str,
+    args: &[&str],
+    stdin: &[u8],
+) -> Result<String, String> {
+    let wsl = crate::wsl::find_wsl_exe().ok_or_else(|| "wsl_unavailable".to_string())?;
+    let mut command = crate::shell_resolver::silent_command(wsl.to_string_lossy().as_ref());
+    command
+        .arg("-d")
+        .arg(distro)
+        .args(["--exec", "python3", "-c", script])
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|_| "wsl_sqlite_runtime_unavailable".to_string())?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| "wsl_sqlite_stdin_unavailable".to_string())?
+        .write_all(stdin)
+        .map_err(|_| "wsl_sqlite_stdin_failed".to_string())?;
+    let output = child
+        .wait_with_output()
+        .map_err(|_| "wsl_sqlite_failed".to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "wsl_sqlite_failed".to_string()
+        } else {
+            format!("wsl_sqlite_failed: {stderr}")
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 pub(crate) async fn prepare_read_path(path: &Path) -> Result<PreparedReadPath, String> {
     if !crate::wsl::is_wsl_config_dir(&path.to_string_lossy()) {
         return Ok(PreparedReadPath {
@@ -101,6 +174,42 @@ pub(crate) async fn prepare_read_path(path: &Path) -> Result<PreparedReadPath, S
         path: snapshot,
         temporary: true,
     })
+}
+
+#[derive(serde::Serialize)]
+struct SettingWriteRequest<'a> {
+    key: &'a str,
+    expected: Option<&'a str>,
+    value: &'a str,
+    upsert: bool,
+}
+
+pub(crate) async fn write_wsl_setting(
+    path: &Path,
+    key: &str,
+    expected: Option<&str>,
+    value: &str,
+    upsert: bool,
+) -> Result<bool, String> {
+    let (distro, linux_path) = wsl_target(path)?;
+    let request = serde_json::to_vec(&SettingWriteRequest {
+        key,
+        expected,
+        value,
+        upsert,
+    })
+    .map_err(|error| format!("wsl_sqlite_request_failed: {error}"))?;
+    let result = tokio::task::spawn_blocking(move || {
+        run_wsl_python_with_stdin(&distro, WRITE_SETTING_SCRIPT, &[&linux_path], &request)
+    })
+    .await
+    .map_err(|error| format!("wsl_sqlite_failed: {error}"))??;
+    match result.as_str() {
+        "ok" => Ok(true),
+        "settings_table_missing" => Ok(false),
+        "conflict" => Err("db_write_conflict".to_string()),
+        _ => Err(format!("wsl_sqlite_invalid_response: {result}")),
+    }
 }
 
 #[cfg(all(test, target_os = "windows"))]

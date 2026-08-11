@@ -724,6 +724,7 @@ interface HookSettingsStatus {
 - Installing Codex Hook writes normal Codex `hooks.json` commands and `config.toml` feature flags first, then best-effort merges the TOML `[features].hooks = true` flag plus any current CLI-Manager-owned Codex `[hooks.state.*]` trust blocks into `settings.common_config_codex`. Codex hook commands remain in `hooks.json`; `common_config_codex` is not JSON.
 - Hook settings UI shows the cc-switch protection card once, above system notification settings. Do not duplicate it in both Claude and Codex sections.
 - Claude common-config merge may remove/replace only CLI-Manager-owned hook commands (`__hook` marker or known legacy scripts); it must preserve non-hook fields and non-CLI-Manager hook entries. Codex common-config merge may only add or replace the TOML `features.hooks` flag and marker-owned `[hooks.state.*]` trust blocks for the current user-level Codex `hooks.json`; it must preserve other TOML fields and unrelated hook state.
+- Full uninstall strips all CLI-Manager-owned common-config entries. Module uninstall must instead rebuild the owned portion from the post-operation local `settings.json` / `hooks.json` and preserve still-installed CLI-Manager modules; a partial local status must never be treated as permission to delete every owned common-config entry.
 - `settings.value` is nullable in cc-switch DBs. A `NULL` value for `common_config_<tool>` is treated as missing config, not as `db_query_failed`.
 - When `common_config_codex` has no `[features]` table, insert the `[features]` block before the first existing TOML table header; append only when the snippet has top-level keys and no tables. This avoids leaking later text-concatenated provider keys into `[features]` while preserving tables such as `[projects.'\\?\F:\...']`, `[windows]`, and `[tui]`.
 - Common-config writes use `sqlx` and an explicit transaction. Do not add `rusqlite`.
@@ -778,6 +779,7 @@ interface HookSettingsStatus {
 - Rust regression tests for copying only current user-level CLI-Manager Codex `hooks.state` blocks into `common_config_codex`, replacing stale marker-owned hashes, and excluding project-local `.codex/hooks.json` state.
 - Rust regression tests for trust repair covering missing, disabled, and stale hashes; assert unrelated state is preserved and missing required events remain `partialInstalled` without repair.
 - Rust unit tests for strip/uninstall preserving non-CLI-Manager hooks.
+- Rust SQLite regression tests must cover full uninstall and module uninstall separately: the former removes all owned entries, while the latter keeps the remaining local CLI-Manager Hook entries and preserves user-owned content.
 - Rust regression test that Claude common-config status requires every installed event, including Claude `Notification`; Codex common-config status requires `[features].hooks = true`.
 - Rust unit test that invalid Claude common-config JSON returns `common_config_parse_failed`.
 - TypeScript type-check after adding payload fields or new frontend status states.

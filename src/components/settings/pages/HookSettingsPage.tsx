@@ -371,6 +371,7 @@ export function HookSettingsPage() {
   const text = (zh: string, en: string) => pickText(language, zh, en);
   const claudeHookConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
   const codexHookConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
+  const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
   const piHookConfigDir = useSettingsStore((s) => s.piHookConfigDir);
   const grokHookConfigDir = useSettingsStore((s) => s.grokHookConfigDir);
   const [status, setStatus] = useState<HookSettingsStatus | null>(null);
@@ -457,6 +458,7 @@ export function HookSettingsPage() {
         codexSelectedDir: codexDir,
         piSelectedDir: piDir,
         grokSelectedDir: grokDir,
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
         autoRepair: claudeHookBridgeEnabled && claudeHookAutoRepairKnownInstalled,
       });
       setStatus(nextStatus);
@@ -544,6 +546,7 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       await updateSetting("claudeHookAutoRepairKnownInstalled", true);
@@ -564,6 +567,7 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       await updateSetting("claudeHookAutoRepairKnownInstalled", false);
@@ -584,6 +588,7 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       toast.success(text("Codex Hook 已安装", "Codex Hook installed"));
@@ -602,6 +607,7 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       toast.success(text("Codex Hook 已删除", "Codex Hook removed"));
@@ -774,6 +780,7 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
         module,
       });
       syncStatusAfterMutation(nextStatus);
