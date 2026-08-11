@@ -79,6 +79,6 @@ test("opening the same file location preserves the loaded tree", () => {
   assert.match(openProject, /}\s+return;\s+}/);
 });
 
-test("question Hook Agent has a new immutable release identity", () => {
-  assert.match(sshAgentManifestSource, /^version = "0\.1\.7"$/m);
+test("Agent capability diagnostics have a new immutable release identity", () => {
+  assert.match(sshAgentManifestSource, /^version = "0\.1\.8"$/m);
 });

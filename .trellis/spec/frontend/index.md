@@ -26,6 +26,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Statusline Editor Contracts](./statusline-editor-contracts.md) | Claude/Codex 独立编辑状态、共享终端主题预览与响应式布局 | Active |
 | [Git Diff Viewer Contracts](./git-diff-viewer-contracts.md) | Shared snapshot/live data sources, target identity, and viewer responsibility boundaries | Active |
 | [CCS-Compatible Provider Domain Contracts](./ccs-provider-domain-contracts.md) | Planned complete supplier list/editor, multi-key, type common config, Home/global apply, import, i18n and accessibility contract | Planned |
+| [Agent Capability Diagnostics Contracts](../backend/agent-capability-diagnostics-contracts.md) | Session-bound MCP/Skill card, stale-result protection, OpenCode setup, and local/WSL/SSH diagnostic contract | Active |
 
 ---
 

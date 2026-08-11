@@ -98,7 +98,7 @@ import {
 } from "./terminalWorkspan";
 
 export type SessionStatus = "running" | "exited" | "error";
-export type CliHookSource = "claude" | "codex" | "pi" | "grok";
+export type CliHookSource = "claude" | "codex" | "pi" | "grok" | "opencode";
 export type CliHookEventName =
   | "SessionStart"
   | "UserPromptSubmit"
@@ -255,6 +255,10 @@ interface HookSettingsStatusPayload {
   pi: HookToolStatus;
   grok: HookToolStatus;
   claudeAutoRepaired?: boolean;
+}
+
+interface OpenCodeHookStatusPayload {
+  status: "notInstalled" | "installed" | "conflict";
 }
 
 interface PtyStatusPayload {
@@ -1303,13 +1307,20 @@ function scheduleHookRunningTimeout(tabId: string, updatedAt: string) {
 
 async function shouldEnableHookEnv(): Promise<boolean> {
   const settings = useSettingsStore.getState();
+  let openCodeInstalled = false;
+  try {
+    const openCodeStatus = await invoke<OpenCodeHookStatusPayload>("opencode_hook_status");
+    openCodeInstalled = openCodeStatus.status === "installed";
+  } catch (err) {
+    logError("opencode_hook_status failed while deciding terminal hook env", { err });
+  }
   if (
     !settings.claudeHookBridgeEnabled &&
     !settings.codexHookBridgeEnabled &&
     !settings.piHookBridgeEnabled &&
     !settings.grokHookBridgeEnabled
   ) {
-    return false;
+    return openCodeInstalled;
   }
   try {
     const status = await invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
@@ -1319,7 +1330,7 @@ async function shouldEnableHookEnv(): Promise<boolean> {
       grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
       autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
     });
-    return (
+    return openCodeInstalled || (
       (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
       (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
       (settings.piHookBridgeEnabled && status.pi.status === "installed") ||
@@ -1327,7 +1338,7 @@ async function shouldEnableHookEnv(): Promise<boolean> {
     );
   } catch (err) {
     logError("hook_settings_get_status failed while deciding terminal hook env", { err });
-    return false;
+    return openCodeInstalled;
   }
 }
 

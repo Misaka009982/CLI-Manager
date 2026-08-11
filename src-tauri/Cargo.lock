@@ -716,6 +716,7 @@ dependencies = [
  "bytes",
  "chardetng",
  "chrono",
+ "cli-manager-agent-capabilities",
  "cli-manager-history-core",
  "cli-manager-hook-schema",
  "encoding_rs",
@@ -768,6 +769,16 @@ dependencies = [
  "windows-sys 0.61.2",
  "zbus-secret-service-keyring-store",
  "zip 0.6.6",
+]
+
+[[package]]
+name = "cli-manager-agent-capabilities"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]

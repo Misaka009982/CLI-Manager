@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Badge, Button, Card, Collapse, Group, Stack, Text } from "@mantine/core";
+import { Alert, Badge, Button, Card, Collapse, Group, Stack, Text, UnstyledButton } from "@mantine/core";
 import { AlertTriangle, Check, ChevronDown, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
 import type { NativeProviderAppType } from "./nativeProviderTypes";
@@ -70,14 +70,27 @@ export function NativeProviderCommonConfigSection({ appType, state }: NativeProv
     : "providerCatalog.commonConfig.editorLabelToml");
 
   return (
-    <Card withBorder radius="lg" padding="md" className="min-w-0 overflow-hidden border-border/70 bg-surface-container-low">
+    <Card withBorder radius="lg" padding="sm" className="min-w-0 overflow-hidden border-border/70 bg-surface-container-low">
       <Stack gap="sm">
-        <Group justify="space-between" align="flex-start" wrap="wrap">
-          <Stack gap={2} miw={0}>
-            <Text fw={600}>{t("providerCatalog.commonConfig.title", { appType: appTypeLabel(appType, t) })}</Text>
-            <Text size="xs" c="dimmed">{t("providerCatalog.commonConfig.description")}</Text>
-          </Stack>
-          <Group gap={4} wrap="wrap">
+        {/* 收成单行：折叠态只占一行高度。标题区整体作为展开触发器，
+            说明与优先级文案移入展开内容，避免收起时仍堆三行文字。 */}
+        <Group justify="space-between" align="center" wrap="nowrap" gap="xs" className="min-w-0">
+          <UnstyledButton
+            className="ui-focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-md py-0.5 text-left"
+            aria-expanded={opened}
+            aria-controls={`provider-common-config-editor-${appType}`}
+            onClick={() => setOpened((current) => !current)}
+          >
+            <ChevronDown
+              size={16}
+              className={`shrink-0 text-text-muted transition-transform ${opened ? "rotate-180" : ""}`}
+            />
+            <Text size="sm" fw={600} truncate className="min-w-0">
+              {t("providerCatalog.commonConfig.title", { appType: appTypeLabel(appType, t) })}
+            </Text>
+            <Badge size="xs" variant="light" color="gray" className="shrink-0">{format.toUpperCase()}</Badge>
+          </UnstyledButton>
+          <Group gap={4} wrap="nowrap" className="shrink-0">
             <Button
               size="compact-sm"
               variant="subtle"
@@ -104,22 +117,6 @@ export function NativeProviderCommonConfigSection({ appType, state }: NativeProv
           </Group>
         </Group>
 
-        <Button
-          variant="subtle"
-          color="gray"
-          fullWidth
-          className="justify-start"
-          leftSection={<ChevronDown size={16} className={opened ? "rotate-180 transition-transform" : "transition-transform"} />}
-          aria-expanded={opened}
-          aria-controls={`provider-common-config-editor-${appType}`}
-          onClick={() => setOpened((current) => !current)}
-        >
-          {t(opened
-            ? "providerCatalog.commonConfig.editorToggleOpen"
-            : "providerCatalog.commonConfig.editorToggleClosed")}
-          <Badge size="sm" variant="light" color="gray" ml="auto">{format.toUpperCase()}</Badge>
-        </Button>
-
         {serverError && (
           <Alert id={serverErrorId} color="red" variant="light" icon={<AlertTriangle size={16} />} withCloseButton onClose={state.clearError}>
             {serverError}
@@ -131,6 +128,7 @@ export function NativeProviderCommonConfigSection({ appType, state }: NativeProv
             展开时会对已销毁实例调用 setModel 并抛 InstantiationService has been disposed。 */}
         <Collapse expanded={opened} keepMounted={false} id={`provider-common-config-editor-${appType}`}>
           <Stack gap="xs">
+            <Text size="xs" c="dimmed">{t("providerCatalog.commonConfig.description")}</Text>
             <div aria-describedby={describedBy}>
               <NativeProviderCodeEditor
                 format={format === "json" ? "json" : "toml"}
@@ -168,9 +166,9 @@ export function NativeProviderCommonConfigSection({ appType, state }: NativeProv
                 </Button>
               </Group>
             </Group>
+            <Text size="xs" c="dimmed">{t("providerCatalog.commonConfig.precedence", { appType: appTypeLabel(appType, t) })}</Text>
           </Stack>
         </Collapse>
-        <Text size="xs" c="dimmed">{t("providerCatalog.commonConfig.precedence", { appType: appTypeLabel(appType, t) })}</Text>
       </Stack>
     </Card>
   );

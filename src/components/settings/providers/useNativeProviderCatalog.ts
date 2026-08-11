@@ -13,7 +13,7 @@ import {
   type NativeProviderUpdateInput,
 } from "./nativeProviderTypes";
 
-interface UseNativeProviderCatalogResult {
+export interface UseNativeProviderCatalogResult {
   providers: NativeProviderCard[];
   detail: NativeProviderDetail | null;
   selectedProviderId: string | null;

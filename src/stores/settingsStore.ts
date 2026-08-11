@@ -106,6 +106,7 @@ export type TerminalStatsCardKey =
   | "tokenTrend"
   | "modelContext"
   | "tools"
+  | "agentCapabilities"
   | "latestChanges"
   | "todayUsage";
 export type SystemResourceCardKey =
@@ -268,6 +269,7 @@ export const TERMINAL_STATS_CARD_KEYS: readonly TerminalStatsCardKey[] = [
   "tokenTrend",
   "modelContext",
   "tools",
+  "agentCapabilities",
   "latestChanges",
   "todayUsage",
 ];
@@ -547,6 +549,7 @@ const DEFAULTS: Settings = {
     tokenTrend: true,
     modelContext: true,
     tools: true,
+    agentCapabilities: true,
     latestChanges: true,
     todayUsage: true,
   },

@@ -13,10 +13,21 @@ import {
 import { useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
-import { AlertTriangle, FolderOpen, RefreshCw, RotateCcw, Save } from "lucide-react";
+import {
+  AlertTriangle,
+  FileCog,
+  Folder,
+  FolderClock,
+  FolderOpen,
+  KeyRound,
+  RefreshCw,
+  RotateCcw,
+  Save,
+} from "lucide-react";
 import { useI18n, type TranslationKey } from "@/lib/i18n";
 import { useHistorySourceSettingsStore } from "@/stores/historySourceSettingsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { CliToolIcon } from "../../CliToolIcon";
 import { NativeProviderEnvironmentSection } from "./NativeProviderEnvironmentSection";
 import { NativeProviderGlobalSection } from "./NativeProviderGlobalSection";
 import { PathItem } from "./NativeProviderPathItem";
@@ -301,28 +312,66 @@ export function NativeProviderHomeSection({
             {currentHome && (
               <Stack gap="xs">
                 <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
-                  <PathItem label={t("providerCatalog.home.claude")} path={currentHome.targets.claudeConfigDir} />
-                  <PathItem label={t("providerCatalog.home.codex")} path={currentHome.targets.codexConfigDir} />
-                  <PathItem label={t("providerCatalog.home.grok")} path={currentHome.targets.grokConfigDir} />
                   <PathItem
+                    agentIcon={<CliToolIcon icon="claude-code" size={15} />}
+                    icon={<Folder className="text-blue-500" size={14} />}
+                    label={t("providerCatalog.home.claude")}
+                    path={currentHome.targets.claudeConfigDir}
+                  />
+                  <PathItem
+                    agentIcon={<CliToolIcon icon="codex" size={15} />}
+                    icon={<Folder className="text-blue-500" size={14} />}
+                    label={t("providerCatalog.home.codex")}
+                    path={currentHome.targets.codexConfigDir}
+                  />
+                  <PathItem
+                    agentIcon={<CliToolIcon icon="grok" size={15} />}
+                    icon={<Folder className="text-blue-500" size={14} />}
+                    label={t("providerCatalog.home.grok")}
+                    path={currentHome.targets.grokConfigDir}
+                  />
+                  <PathItem
+                    agentIcon={<CliToolIcon icon="claude-code" size={15} />}
+                    icon={<FileCog className="text-violet-500" size={14} />}
                     label={t("providerCatalog.home.claudeSettings")}
                     path={appendPath(currentHome.targets.claudeConfigDir, "settings.json")}
                   />
                   <PathItem
+                    agentIcon={<CliToolIcon icon="codex" size={15} />}
+                    icon={<KeyRound className="text-amber-500" size={14} />}
                     label={t("providerCatalog.home.codexAuth")}
                     path={appendPath(currentHome.targets.codexConfigDir, "auth.json")}
                   />
                   <PathItem
+                    agentIcon={<CliToolIcon icon="codex" size={15} />}
+                    icon={<FileCog className="text-violet-500" size={14} />}
                     label={t("providerCatalog.home.codexConfig")}
                     path={appendPath(currentHome.targets.codexConfigDir, "config.toml")}
                   />
                   <PathItem
+                    agentIcon={<CliToolIcon icon="grok" size={15} />}
+                    icon={<FileCog className="text-violet-500" size={14} />}
                     label={t("providerCatalog.home.grokConfig")}
                     path={appendPath(currentHome.targets.grokConfigDir, "config.toml")}
                   />
-                  <PathItem label={t("providerCatalog.home.claudeHistory")} path={currentHome.targets.claudeHistoryRoot} />
-                  <PathItem label={t("providerCatalog.home.codexHistory")} path={currentHome.targets.codexHistoryRoot} />
-                  <PathItem label={t("providerCatalog.home.grokHistory")} path={currentHome.targets.grokHistoryRoot} />
+                  <PathItem
+                    agentIcon={<CliToolIcon icon="claude-code" size={15} />}
+                    icon={<FolderClock className="text-teal-500" size={14} />}
+                    label={t("providerCatalog.home.claudeHistory")}
+                    path={currentHome.targets.claudeHistoryRoot}
+                  />
+                  <PathItem
+                    agentIcon={<CliToolIcon icon="codex" size={15} />}
+                    icon={<FolderClock className="text-teal-500" size={14} />}
+                    label={t("providerCatalog.home.codexHistory")}
+                    path={currentHome.targets.codexHistoryRoot}
+                  />
+                  <PathItem
+                    agentIcon={<CliToolIcon icon="grok" size={15} />}
+                    icon={<FolderClock className="text-teal-500" size={14} />}
+                    label={t("providerCatalog.home.grokHistory")}
+                    path={currentHome.targets.grokHistoryRoot}
+                  />
                 </SimpleGrid>
                 <Button
                   size="xs"

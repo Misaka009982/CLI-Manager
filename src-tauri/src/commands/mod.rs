@@ -1,3 +1,4 @@
+pub mod agent_capabilities;
 pub mod app_data;
 pub mod background;
 pub mod cc_connect;
@@ -18,6 +19,7 @@ pub mod history_sources;
 pub mod hook_settings;
 pub mod logging;
 pub mod model_pricing;
+pub mod opencode_hook;
 pub mod provider;
 pub mod routing;
 pub mod shell;

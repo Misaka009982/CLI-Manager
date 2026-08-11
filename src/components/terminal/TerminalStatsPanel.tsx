@@ -50,6 +50,8 @@ import {
 } from "../../lib/historyProjectPaths";
 import { TerminalSquare } from "../icons";
 import { TerminalPanelHeader } from "./TerminalPanelHeader";
+import { AgentCapabilitiesCard } from "./AgentCapabilitiesCard";
+import { useAgentCapabilities } from "../../hooks/useAgentCapabilities";
 
 interface TerminalStatsPanelProps {
   activeSessionId: string | null;
@@ -86,6 +88,7 @@ function inferHistorySource(haystack: string): HistorySource | null {
   const lower = haystack.toLowerCase();
   if (/\bcodex\b/.test(lower)) return "codex";
   if (/\bclaude\b/.test(lower)) return "claude";
+  if (/\bopencode\b/.test(lower)) return "opencode";
   if (/\bgrok\b/.test(lower)) return "grok";
   if (/(?:^|\s)pi(?:\s|$)/.test(lower) || /\bpi[-_ ]?agent\b/.test(lower)) return "pi";
   return null;
@@ -524,6 +527,16 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const waitingForBoundSessionId = Boolean(sourceFilter) && !boundCliSessionId;
   const waitingForRemoteSessionId = isSshProject && !terminalSession?.cliSessionId?.trim();
   const panelActive = open && visible;
+  const boundSession = tokensBound ? latestSession : null;
+  const agentCapabilities = useAgentCapabilities({
+    terminalSession,
+    project,
+    boundSession,
+    projectPath: lookupProjectPath,
+    active: panelActive,
+    enabled: terminalStatsCardVisibility.agentCapabilities,
+    refreshSeq: `${refreshSeq}:${statsPanelRefreshSeq}`,
+  });
 
   // 首次打开侧栏时再触发一次刷新，避开面板激活与历史源初始化同帧完成导致的空态停留。
   useEffect(() => {
@@ -676,7 +689,8 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     freshDetailRef.current = true;
     latestRef.current = null;
     setRefreshSeq((prev) => prev + 1);
-  }, []);
+    void agentCapabilities.refresh();
+  }, [agentCapabilities.refresh]);
 
   // 只有绑定了 cliSessionId 的 Tab 才显示保存按钮；kind 无法解析（非 claude/codex）时按钮 disabled
   const hasBoundCliSessionId = Boolean(terminalSession?.cliSessionId);
@@ -696,7 +710,6 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   );
 
   // 未绑定 hook 会话时，会话级卡片照常渲染但数据置空（保留图形骨架）
-  const boundSession = tokensBound ? latestSession : null;
   const boundStats = tokensBound ? stats : EMPTY_TOKEN_STATS;
   const latestChangesSummary = useMemo(() => buildLatestChangesSummary(boundSession), [boundSession]);
   const diffText = useMemo(
@@ -771,6 +784,25 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
         );
       case "tools":
         return <ToolsCard key={cardKey} session={boundSession} />;
+      case "agentCapabilities":
+        return (
+          <AgentCapabilitiesCard
+            key={cardKey}
+            agent={agentCapabilities.agent}
+            environment={agentCapabilities.environment}
+            cliSessionId={agentCapabilities.cliSessionId}
+            snapshot={agentCapabilities.snapshot}
+            loading={agentCapabilities.loading}
+            probing={agentCapabilities.probing}
+            errorCode={agentCapabilities.errorCode}
+            openCodeHookStatus={agentCapabilities.openCodeHookStatus}
+            openCodeHookLoading={agentCapabilities.openCodeHookLoading}
+            openCodeHookError={agentCapabilities.openCodeHookError}
+            onInstallOpenCodeHook={agentCapabilities.installOpenCodeHook}
+            onRefresh={agentCapabilities.refresh}
+            onProbe={agentCapabilities.probe}
+          />
+        );
       case "latestChanges":
         return (
           <LatestChangesCard

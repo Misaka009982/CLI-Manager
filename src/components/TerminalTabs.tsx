@@ -65,6 +65,7 @@ import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from
 import { projectSupportsCapability, resolveProjectCapabilities, type ProjectCapability } from "../lib/projectCapabilities";
 import { resolveCliToolHistorySourceId, resolveCliToolIconKey, type CliToolIconKey } from "../lib/cliTools";
 import { resolveHistoryProjectPath } from "../lib/historyProjectPaths";
+import { resolveAgentRuntimeKind } from "../lib/agentCapabilities";
 import { parseProjectEnvVars, resolveProviderSwitchAppType } from "../lib/providerSwitching";
 import { Activity, ArrowLeftRight, Terminal, TerminalSquare, Sparkles, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, FolderOpen, Hash, Check, Cpu, Cloud, Undo2 } from "./icons";
 import { WorktreeIcon } from "./WorktreeIcon";
@@ -3301,12 +3302,13 @@ export function TerminalTabs({
   const ensureStatsPanelAllowed = useCallback(async () => {
     try {
       const settings = useSettingsStore.getState();
-      const status = await invoke<{
+      const [hookStatus, openCodeStatus] = await Promise.all([
+        invoke<{
         claude: { status: string };
         codex: { status: string };
         pi: { status: string };
         grok: { status: string };
-      }>(
+        }>(
         "hook_settings_get_status",
         {
           selectedDir: settings.claudeHookConfigDir?.trim() || null,
@@ -3315,13 +3317,21 @@ export function TerminalTabs({
           grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
           autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
         }
-      );
+        ),
+        invoke<{ status: string }>("opencode_hook_status"),
+      ]);
       const hasEnabledInstalledHook =
-        (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
-        (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
-        (settings.piHookBridgeEnabled && status.pi.status === "installed") ||
-        (settings.grokHookBridgeEnabled && status.grok.status === "installed");
+        openCodeStatus.status === "installed" ||
+        (settings.claudeHookBridgeEnabled && hookStatus.claude.status === "installed") ||
+        (settings.codexHookBridgeEnabled && hookStatus.codex.status === "installed") ||
+        (settings.piHookBridgeEnabled && hookStatus.pi.status === "installed") ||
+        (settings.grokHookBridgeEnabled && hookStatus.grok.status === "installed");
       if (!hasEnabledInstalledHook) {
+        const currentProject = panelSession?.projectId ? projectById.get(panelSession.projectId) : null;
+        const currentAgent = resolveAgentRuntimeKind(
+          `${panelSession?.cliTool ?? ""} ${panelSession?.startupCmd ?? ""} ${panelSession?.title ?? ""} ${currentProject?.cli_tool ?? ""}`
+        );
+        if (currentAgent === "opencode") return true;
         toast.warning(t("notifications.stats.needHook"), {
           description: t("notifications.stats.needHookDescription"),
         });
@@ -3331,7 +3341,7 @@ export function TerminalTabs({
       logError("Failed to check hook status before opening terminal stats panel", err);
     }
     return true;
-  }, [t]);
+  }, [panelSession, projectById, t]);
 
   const handleToggleStatsPanel = useCallback(async () => {
     if (statsPanelActive) {

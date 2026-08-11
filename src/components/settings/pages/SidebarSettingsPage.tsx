@@ -93,6 +93,7 @@ const STATS_CARD_OPTIONS: { key: TerminalStatsCardKey; labelKey: TranslationKey 
   { key: "tokenTrend", labelKey: "termStats.tokenTrend" },
   { key: "modelContext", labelKey: "termStats.modelContext" },
   { key: "tools", labelKey: "termStats.tools" },
+  { key: "agentCapabilities", labelKey: "termStats.agentCapabilities.title" },
   { key: "latestChanges", labelKey: "termStats.latestChanges" },
   { key: "todayUsage", labelKey: "termStats.todayUsage" },
 ];
@@ -600,6 +601,7 @@ export function SidebarSettingsPage() {
                 tokenTrend: true,
                 modelContext: true,
                 tools: true,
+                agentCapabilities: true,
                 latestChanges: true,
                 todayUsage: true,
               })}

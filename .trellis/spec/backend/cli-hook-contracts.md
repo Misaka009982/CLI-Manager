@@ -1,6 +1,6 @@
 # CLI Hook Contracts
 
-Concrete contracts for Claude/Codex/Pi/Grok hook integration.
+Concrete contracts for Claude/Codex/Pi/Grok/OpenCode hook integration.
 
 ## Scenario: Local Hook Source Admission
 
@@ -12,7 +12,7 @@ Concrete contracts for Claude/Codex/Pi/Grok hook integration.
 ### 2. Signatures
 
 ```text
-<cli-manager-exe> __hook --source <claude|codex|pi|grok> --event <event>
+<cli-manager-exe> __hook --source <claude|codex|pi|grok|opencode> --event <event>
 normalize_source(source: Option<&str>) -> &str
 is_valid_payload(payload: &ClaudeHookRequest) -> bool
 ```
@@ -26,6 +26,7 @@ is_valid_payload(payload: &ClaudeHookRequest) -> bool
 - Grok `permissionMode=bypassPermissions` suppresses the synthetic approval notification; `auto` does not, because dangerous tools may still require approval.
 - Grok hook stdin may use camelCase `sessionId` and `transcriptPath`; shared hook normalization must preserve them.
 - Invalid source/event pairs return HTTP 400 and never reach frontend or third-party notification sinks. The hidden Hook process still exits successfully so a bridge failure cannot interrupt the CLI.
+- OpenCode uses a marker-owned global plugin instead of the hidden `__hook` command. It posts only `SessionStart`, `UserPromptSubmit`, `Stop`, and `StopFailure` with the native OpenCode session ID; missing callback environment is a no-op and an unowned same-name plugin is never overwritten.
 
 ### 4. Validation & Error Matrix
 
@@ -36,6 +37,8 @@ is_valid_payload(payload: &ClaudeHookRequest) -> bool
 | Unknown explicit source | Normalize to empty, HTTP 400. |
 | Missing source | Preserve the legacy Claude default. |
 | Grok camelCase session id | Bind the normalized session id when present. |
+| OpenCode marker-owned plugin event | Accept only the four session lifecycle events and bind its exact native session ID. |
+| OpenCode same-name unowned plugin | Return `opencode_hook_conflict` and preserve existing bytes. |
 
 ### 5. Good/Base/Bad Cases
 
@@ -46,6 +49,7 @@ is_valid_payload(payload: &ClaudeHookRequest) -> bool
 ### 6. Tests Required
 
 - Rust unit test that every installed Grok event passes `is_valid_payload` and an unknown event fails.
+- Rust unit test that OpenCode lifecycle events pass source admission and that generated plugin source contains no embedded credentials.
 - Hook-schema unit test that Grok camelCase `sessionId` is normalized.
 - Run `cargo check` after changing source admission or payload fields.
 - Manual desktop check: start an internal Grok terminal, confirm SessionStart binds the session, then confirm Stop and an approved dangerous-tool `PermissionRequest` reach CLI-Manager.

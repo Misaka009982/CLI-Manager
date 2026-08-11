@@ -977,6 +977,11 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            commands::agent_capabilities::agent_capabilities_inspect,
+            commands::agent_capabilities::agent_capabilities_probe,
+            commands::opencode_hook::opencode_hook_status,
+            commands::opencode_hook::opencode_hook_install,
+            commands::opencode_hook::opencode_hook_uninstall,
             commands::terminal::pty_prepare_create,
             commands::terminal::pty_reconcile_active_sessions,
             commands::terminal::pty_status,

@@ -18,8 +18,9 @@ The Provider Settings page is a master/detail workspace:
    effective/live diff, advanced panels and save/apply actions.
 
 Provider cards always show provider name, base URL, selected model, key count/
-active label and state. The initial form must not hide URL, key or model in a
-generic configuration textarea.
+active label and state. The drag handle is the first control in each row and
+remains visible; only secondary actions use hover/focus reveal. The initial
+form must not hide URL, key or model in a generic configuration textarea.
 
 ## Complete editor contract
 
