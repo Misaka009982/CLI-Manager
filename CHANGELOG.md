@@ -4,10 +4,11 @@
 
 ### 桌面宠物与 Pi 桥接
 
-- Windows 桌宠新增可选 Electron 桌面模式：随安装包内置校验过的 Electron 41.10.2 runtime，使用透明渲染窗与独立命中窗改善拖动、混合 DPI、多显示器、透明区点击穿透及菜单/Bubble 输入体验；设置可与原 Tauri 双窗口互斥切换。主 Tauri 进程继续独占状态、Pi broker、事故、托管与设置权限，Electron 只消费带 token/generation 的完整快照并回传白名单动作；启动、握手、写入、renderer 或子进程任一故障时保持桌宠隐藏，只有显式切回 Tauri 才恢复显示，macOS/Linux 不打包或启动该 runtime。
+- Windows 桌宠新增可选 Electron 桌面模式：随安装包内置校验过的 Electron 41.10.2 runtime，使用透明渲染窗与独立命中窗改善拖动、混合 DPI、多显示器、透明区点击穿透及菜单/Bubble 输入体验；设置可与原 Tauri 双窗口互斥切换，并为 Tauri/Electron 分别保存宠物、尺寸、位置与交互档案，旧单档案会无损复制为两份初始档案。主 Tauri 进程继续独占状态、Pi broker、事故、托管与设置权限，Electron 只消费带 token/generation 的完整快照并回传白名单动作；启动、握手、写入、renderer 或子进程任一故障时保持桌宠隐藏，只有显式切回 Tauri 才恢复显示，macOS/Linux 不打包或启动该 runtime。
 - 桌宠改为无装饰自由悬浮状态入口，继续聚合 Claude、Codex、Grok、Pi 等全部 Agent；新增只显示非零项的绿/红/蓝状态轨，并把决策、事故和最新完成摘要移入独立 `desktop-pet-bubble` 窗口。Bubble 按权限、问卷、问题、事故、完成顺序展示完整正文，只在工作区不足时内部滚动，并随宠物跨显示器/DPI 实时定位且不持久化自身坐标；普通任务、远程托管、尺寸位置与 Codex Pets 仍归原宠物菜单。
 - Windows 为宠物与 Bubble 应用各自的多矩形原生命中区域，卡片之间的透明间隙可点击穿透；区域事务失败会恢复完整窗口命中，避免决策入口失效。macOS/Linux 使用完整窗口命中的安全回退，不宣称具备 Windows 等价穿透。Bubble 以无激活方式显示并使用独立最小权限 capability；窗口生命周期由 token、surface epoch 与单调 revision 防止隐藏后迟到请求复现。
 - Pi Extension 新增运行心跳、最终 `error`/`aborted` 中断上报，以及 `question` / `questionnaire` 的桌宠显式回答桥；显式名为 `cli_manager_permission` 的权限生产者也可接入同一决策通道，但桥接本身不注册模型可调用的权限工具、不拦截普通工具。前端与 daemon 都会独立判定 60 秒心跳中断并合并为同一事故；决策卡在桌宠关闭、临时隐藏或全屏自动隐藏时仍会强制可见，后台事故可先恢复 daemon 会话再跳回。broker 会感知前端消费者断开并回退 Pi 原生 UI，乱序终态不会删除更新的决策，任何路径都不自动批准、拒绝或代答。桌宠窗口生命周期仍由 CLI-Manager 管理，Pi 不注册桌宠控制命令。
+- 修复旧版 CLI-Manager 自有 Pi Extension 缺少 `sourceInstanceId`、被新版 Hook 入口拒绝后所有 Pi 会话显示“无运行状态”的问题；安装状态现在会识别扩展资源是否与当前协议兼容，Pi 桥接启用时会保留原模块选择并自动升级自有旧扩展，第三方同名文件仍不会被覆盖。
 
 ## [V1.3.5]
 

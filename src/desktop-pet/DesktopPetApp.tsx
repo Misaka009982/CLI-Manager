@@ -1029,6 +1029,7 @@ export default function DesktopPetApp() {
         void emitTo("main", DESKTOP_PET_POSITION_EVENT, {
           x: payload.x,
           y: payload.y,
+          runtime: "tauri",
           lifecycleToken: current.lifecycleToken,
           petSurfaceEpoch: surfaceEpochRef.current,
         });
@@ -1312,6 +1313,7 @@ export default function DesktopPetApp() {
           size,
           x: collapsed.bounds.x,
           y: collapsed.bounds.y,
+          runtime: "tauri",
           lifecycleToken: configRef.current.lifecycleToken,
           petSurfaceEpoch: surfaceEpochRef.current,
         }).catch((err) => logWarn("Failed to persist desktop pet size", err));

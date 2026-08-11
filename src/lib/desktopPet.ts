@@ -22,7 +22,12 @@ import type {
   TabNotificationState,
   TabStatusDetails,
 } from "../stores/terminalStore";
-import type { DesktopPetSettings, LanguagePreference } from "../stores/settingsStore";
+import type {
+  DesktopPetRuntime,
+  DesktopPetRuntimeProfile,
+  LanguagePreference,
+  ResolvedDesktopPetSettings,
+} from "../stores/settingsStore";
 import { shouldIncludeAgentTerminal } from "./agentTerminal";
 import { desktopPetScaleFromPercent } from "./desktopPetSize";
 import { resolveDesktopPetOpenSessionStatus } from "./desktopPetStatus";
@@ -251,7 +256,7 @@ export interface DesktopPetConfigPayload {
   visible: boolean;
   bubbleVisible: boolean;
   lifecycleToken: string;
-  settings: DesktopPetSettings;
+  settings: ResolvedDesktopPetSettings;
   labels: {
     openMain: string;
     openSettings: string;
@@ -309,6 +314,7 @@ export type DesktopPetConfigEventPayload = DesktopPetConfigPayload & DesktopPetS
 export interface DesktopPetPositionPayload {
   x: number;
   y: number;
+  runtime: DesktopPetRuntime;
   lifecycleToken: string;
   petSurfaceEpoch: string;
 }
@@ -671,7 +677,7 @@ export function deriveDesktopPetSnapshot(input: DeriveDesktopPetSnapshotInput): 
   return snapshotFromTargets(candidates, now, input.activeHandoff, input.handoffBusy);
 }
 
-export function desktopPetScale(size: DesktopPetSettings["size"]): number {
+export function desktopPetScale(size: DesktopPetRuntimeProfile["size"]): number {
   return desktopPetScaleFromPercent(size);
 }
 

@@ -197,9 +197,7 @@ export interface DesktopPetPosition {
   y: number;
 }
 
-export interface DesktopPetSettings {
-  enabled: boolean;
-  runtime: DesktopPetRuntime;
+export interface DesktopPetRuntimeProfile {
   petId: string;
   alwaysOnTop: boolean;
   agentSessionsOnly: boolean;
@@ -213,6 +211,17 @@ export interface DesktopPetSettings {
   autoHideFullscreen: boolean;
   lockPosition: boolean;
   position: DesktopPetPosition | null;
+}
+
+export interface DesktopPetSettings {
+  enabled: boolean;
+  runtime: DesktopPetRuntime;
+  profiles: Record<DesktopPetRuntime, DesktopPetRuntimeProfile>;
+}
+
+export interface ResolvedDesktopPetSettings extends DesktopPetRuntimeProfile {
+  enabled: boolean;
+  runtime: DesktopPetRuntime;
 }
 
 export const BUILTIN_DESKTOP_PET_ID = "builtin.cli-cat";
@@ -649,19 +658,38 @@ const DEFAULTS: Settings = {
   desktopPet: {
     enabled: false,
     runtime: "tauri",
-    petId: BUILTIN_DESKTOP_PET_ID,
-    alwaysOnTop: true,
-    agentSessionsOnly: true,
-    size: DESKTOP_PET_SIZE_DEFAULT_PERCENT,
-    showActionMenu: true,
-    openOnHover: true,
-    workingBounceEnabled: false,
-    workingBounceDistancePx: 5,
-    showStatus: true,
-    showSessionName: false,
-    autoHideFullscreen: true,
-    lockPosition: false,
-    position: null,
+    profiles: {
+      tauri: {
+        petId: BUILTIN_DESKTOP_PET_ID,
+        alwaysOnTop: true,
+        agentSessionsOnly: true,
+        size: DESKTOP_PET_SIZE_DEFAULT_PERCENT,
+        showActionMenu: true,
+        openOnHover: true,
+        workingBounceEnabled: false,
+        workingBounceDistancePx: 5,
+        showStatus: true,
+        showSessionName: false,
+        autoHideFullscreen: true,
+        lockPosition: false,
+        position: null,
+      },
+      electron: {
+        petId: BUILTIN_DESKTOP_PET_ID,
+        alwaysOnTop: true,
+        agentSessionsOnly: true,
+        size: DESKTOP_PET_SIZE_DEFAULT_PERCENT,
+        showActionMenu: true,
+        openOnHover: true,
+        workingBounceEnabled: false,
+        workingBounceDistancePx: 5,
+        showStatus: true,
+        showSessionName: false,
+        autoHideFullscreen: true,
+        lockPosition: false,
+        position: null,
+      },
+    },
   },
 };
 
@@ -1078,12 +1106,22 @@ export function migrateTerminalBackground(value: unknown): TerminalBackgroundSet
   return { enabled, imagePath, imageSizeBytes, opacity, fit, position, blur, overlayDarken };
 }
 
-export function migrateDesktopPetSettings(value: unknown): DesktopPetSettings {
-  const defaults = DEFAULTS.desktopPet;
-  if (!value || typeof value !== "object") {
-    return { ...defaults, position: null };
-  }
-  const raw = value as Record<string, unknown>;
+function cloneDesktopPetRuntimeProfile(
+  profile: DesktopPetRuntimeProfile
+): DesktopPetRuntimeProfile {
+  return {
+    ...profile,
+    position: profile.position ? { ...profile.position } : null,
+  };
+}
+
+function migrateDesktopPetRuntimeProfile(
+  value: unknown,
+  defaults: DesktopPetRuntimeProfile
+): DesktopPetRuntimeProfile {
+  const raw = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
   const rawPosition = raw.position;
   const position = rawPosition && typeof rawPosition === "object"
     ? (() => {
@@ -1113,10 +1151,6 @@ export function migrateDesktopPetSettings(value: unknown): DesktopPetSettings {
     defaults.workingBounceDistancePx
   ));
   return {
-    enabled: typeof raw.enabled === "boolean" ? raw.enabled : defaults.enabled,
-    runtime: raw.runtime === "electron" || raw.runtime === "tauri"
-      ? raw.runtime
-      : defaults.runtime,
     petId,
     alwaysOnTop: typeof raw.alwaysOnTop === "boolean" ? raw.alwaysOnTop : defaults.alwaysOnTop,
     agentSessionsOnly:
@@ -1138,6 +1172,45 @@ export function migrateDesktopPetSettings(value: unknown): DesktopPetSettings {
       typeof raw.autoHideFullscreen === "boolean" ? raw.autoHideFullscreen : defaults.autoHideFullscreen,
     lockPosition: typeof raw.lockPosition === "boolean" ? raw.lockPosition : defaults.lockPosition,
     position,
+  };
+}
+
+function hasDesktopPetRuntimeProfiles(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const profiles = (value as Record<string, unknown>).profiles;
+  if (!profiles || typeof profiles !== "object") return false;
+  const raw = profiles as Record<string, unknown>;
+  return Boolean(
+    raw.tauri && typeof raw.tauri === "object"
+    && raw.electron && typeof raw.electron === "object"
+  );
+}
+
+export function migrateDesktopPetSettings(value: unknown): DesktopPetSettings {
+  const defaults = DEFAULTS.desktopPet;
+  if (!value || typeof value !== "object") {
+    return {
+      ...defaults,
+      profiles: {
+        tauri: cloneDesktopPetRuntimeProfile(defaults.profiles.tauri),
+        electron: cloneDesktopPetRuntimeProfile(defaults.profiles.electron),
+      },
+    };
+  }
+  const raw = value as Record<string, unknown>;
+  const legacyProfile = migrateDesktopPetRuntimeProfile(raw, defaults.profiles.tauri);
+  const rawProfiles = raw.profiles && typeof raw.profiles === "object"
+    ? raw.profiles as Record<string, unknown>
+    : null;
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : defaults.enabled,
+    runtime: raw.runtime === "electron" || raw.runtime === "tauri"
+      ? raw.runtime
+      : defaults.runtime,
+    profiles: {
+      tauri: migrateDesktopPetRuntimeProfile(rawProfiles?.tauri, legacyProfile),
+      electron: migrateDesktopPetRuntimeProfile(rawProfiles?.electron, legacyProfile),
+    },
   };
 }
 
@@ -1319,7 +1392,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.systemResourceCardVisibility = migrateSystemResourceCardVisibility(entries.systemResourceCardVisibility);
     entries.systemResourceCardOrder = migrateSystemResourceCardOrder(entries.systemResourceCardOrder);
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
-    entries.desktopPet = migrateDesktopPetSettings(entries.desktopPet);
+    const storedDesktopPet = entries.desktopPet as unknown;
+    const migratedDesktopPet = migrateDesktopPetSettings(storedDesktopPet);
+    entries.desktopPet = migratedDesktopPet;
+    if (storedDesktopPet !== undefined && !hasDesktopPetRuntimeProfiles(storedDesktopPet)) {
+      persistSetting("desktopPet", migratedDesktopPet);
+    }
     entries.terminalShellProfiles = migrateTerminalShellProfiles(entries.terminalShellProfiles);
     entries.terminalSettingsSectionsExpanded = migrateTerminalSettingsSectionsExpanded(
       entries.terminalSettingsSectionsExpanded

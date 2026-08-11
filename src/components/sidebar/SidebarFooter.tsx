@@ -105,6 +105,7 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
         grokSelectedDir,
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
         autoRepair: claudeHookBridgeEnabled && claudeHookAutoRepairKnownInstalled,
+        piAutoRepair: piHookBridgeEnabled,
       });
       setStatus(nextStatus);
       if (nextStatus.claudeAutoRepaired && !claudeHookAutoRepairNoticeShown) {
@@ -125,6 +126,7 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
     claudeHookAutoRepairNoticeShown,
     codexSelectedDir,
     grokSelectedDir,
+    piHookBridgeEnabled,
     piSelectedDir,
     selectedDir,
     t,

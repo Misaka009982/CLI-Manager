@@ -1412,6 +1412,7 @@ async function shouldEnableHookEnv(): Promise<boolean> {
       grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
       ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
       autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
+      piAutoRepair: settings.piHookBridgeEnabled,
     });
     return (
       (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||

@@ -66,6 +66,10 @@ import {
   deriveDesktopPetBubbleContent,
   updateDesktopPetActiveCompletionId,
 } from "../lib/desktopPetBubble";
+import {
+  patchDesktopPetRuntimeProfile,
+  resolveDesktopPetSettings,
+} from "../lib/desktopPetSettings";
 import { debugConsoleInfo } from "../lib/debugConsole";
 import { getOsPlatform, type OsPlatform } from "../lib/shell";
 import { useI18n } from "../lib/i18n";
@@ -110,7 +114,7 @@ export function useDesktopPetCoordinator({
   onActivateSession,
 }: UseDesktopPetCoordinatorOptions) {
   const { language } = useI18n();
-  const desktopPet = useSettingsStore((state) => state.desktopPet);
+  const desktopPetSettings = useSettingsStore((state) => state.desktopPet);
   const settingsLoaded = useSettingsStore((state) => state.loaded);
   const updateSetting = useSettingsStore((state) => state.update);
   const projects = useProjectStore((state) => state.projects);
@@ -156,7 +160,16 @@ export function useDesktopPetCoordinator({
   const decisionRequests = useDesktopPetAlertStore((state) => state.decisionRequests);
   const incidents = useDesktopPetAlertStore((state) => state.incidents);
   const hasActionablePetItem = decisionRequests.length > 0 || incidents.length > 0;
-  const companionRequested = shouldUseElectronDesktopPet(desktopPet.runtime, osPlatform);
+  const companionRequested = shouldUseElectronDesktopPet(desktopPetSettings.runtime, osPlatform);
+  const tauriDesktopPet = useMemo(
+    () => resolveDesktopPetSettings(desktopPetSettings, "tauri"),
+    [desktopPetSettings]
+  );
+  const electronDesktopPet = useMemo(
+    () => resolveDesktopPetSettings(desktopPetSettings, "electron"),
+    [desktopPetSettings]
+  );
+  const desktopPet = companionRequested ? electronDesktopPet : tauriDesktopPet;
   const companionShouldRun = appReady
     && settingsLoaded
     && companionRequested
@@ -397,20 +410,21 @@ export function useDesktopPetCoordinator({
     visible: tauriPetWindowVisible,
     bubbleVisible: tauriBubbleWindowVisible,
     lifecycleToken,
-    settings: desktopPet,
+    settings: tauriDesktopPet,
     labels: buildDesktopPetLabels(language),
   }), [
-    desktopPet,
     language,
     lifecycleToken,
     tauriBubbleWindowVisible,
+    tauriDesktopPet,
     tauriPetWindowVisible,
   ]);
   const companionConfigPayload = useMemo<DesktopPetConfigPayload>(() => ({
     ...configPayload,
+    settings: electronDesktopPet,
     visible: petWindowVisible,
     bubbleVisible: bubbleWindowVisible,
-  }), [bubbleWindowVisible, configPayload, petWindowVisible]);
+  }), [bubbleWindowVisible, configPayload, electronDesktopPet, petWindowVisible]);
 
   const configPayloadRef = useRef(configPayload);
   const publicSnapshotRef = useRef(publicSnapshot);
@@ -469,7 +483,7 @@ export function useDesktopPetCoordinator({
       const run = windowSyncQueueRef.current.catch(() => {}).then(async () => {
         const settingsState = useSettingsStore.getState();
         if (!settingsState.loaded) return null;
-        const current = settingsState.desktopPet;
+        const current = resolveDesktopPetSettings(settingsState.desktopPet, "tauri");
         const token = createDesktopPetLifecycleToken();
         const petVisible = petWindowVisibleRef.current;
         const bubbleVisible = bubbleWindowVisibleRef.current;
@@ -889,9 +903,9 @@ export function useDesktopPetCoordinator({
   useEffect(() => {
     if (!appReady || !settingsLoaded) return;
     const geometryKey = desktopPetNativeGeometryKey(
-      desktopPet.size,
-      desktopPet.position,
-      desktopPet.alwaysOnTop,
+      tauriDesktopPet.size,
+      tauriDesktopPet.position,
+      tauriDesktopPet.alwaysOnTop,
       tauriPetWindowVisible
     );
     const visibilityKey = desktopPetVisibilityKey(
@@ -913,13 +927,13 @@ export function useDesktopPetCoordinator({
     });
   }, [
     appReady,
-    desktopPet.alwaysOnTop,
-    desktopPet.position,
-    desktopPet.size,
     sendState,
     settingsLoaded,
     synchronizeDesktopPetWindow,
     tauriBubbleWindowVisible,
+    tauriDesktopPet.alwaysOnTop,
+    tauriDesktopPet.position,
+    tauriDesktopPet.size,
     tauriPetWindowVisible,
   ]);
 
@@ -1067,7 +1081,10 @@ export function useDesktopPetCoordinator({
       ) {
         return;
       }
-      const current = useSettingsStore.getState().desktopPet;
+      const runtime = event.payload.runtime;
+      if (runtime !== "tauri" && runtime !== "electron") return;
+      const currentSettings = useSettingsStore.getState().desktopPet;
+      const current = resolveDesktopPetSettings(currentSettings, runtime);
       if (current.lockPosition) return;
       const nextPosition = { x: Math.round(event.payload.x), y: Math.round(event.payload.y) };
       if (current.position?.x === nextPosition.x && current.position?.y === nextPosition.y) return;
@@ -1077,9 +1094,12 @@ export function useDesktopPetCoordinator({
         current.alwaysOnTop,
         petWindowVisibleRef.current
       );
-      petAppliedWindowConfigKeyRef.current = key;
-      void updateSettingRef.current("desktopPet", { ...current, position: nextPosition }).catch((err) => {
-        if (petAppliedWindowConfigKeyRef.current === key) {
+      if (runtime === "tauri") petAppliedWindowConfigKeyRef.current = key;
+      void updateSettingRef.current(
+        "desktopPet",
+        patchDesktopPetRuntimeProfile(currentSettings, runtime, { position: nextPosition })
+      ).catch((err) => {
+        if (runtime === "tauri" && petAppliedWindowConfigKeyRef.current === key) {
           petAppliedWindowConfigKeyRef.current = null;
         }
         logWarn("Failed to persist desktop pet position", err);
@@ -1104,7 +1124,10 @@ export function useDesktopPetCoordinator({
         ) {
           return;
         }
-        const current = useSettingsStore.getState().desktopPet;
+        const runtime = event.payload.runtime;
+        if (runtime !== "tauri" && runtime !== "electron") return;
+        const currentSettings = useSettingsStore.getState().desktopPet;
+        const current = resolveDesktopPetSettings(currentSettings, runtime);
         const size = normalizeDesktopPetSizePercent(event.payload.size, current.size);
         const position = {
           x: Math.round(event.payload.x),
@@ -1123,9 +1146,12 @@ export function useDesktopPetCoordinator({
           current.alwaysOnTop,
           petWindowVisibleRef.current
         );
-        petAppliedWindowConfigKeyRef.current = key;
-        void updateSettingRef.current("desktopPet", { ...current, size, position }).catch((err) => {
-          if (petAppliedWindowConfigKeyRef.current === key) {
+        if (runtime === "tauri") petAppliedWindowConfigKeyRef.current = key;
+        void updateSettingRef.current(
+          "desktopPet",
+          patchDesktopPetRuntimeProfile(currentSettings, runtime, { size, position })
+        ).catch((err) => {
+          if (runtime === "tauri" && petAppliedWindowConfigKeyRef.current === key) {
             petAppliedWindowConfigKeyRef.current = null;
           }
           logWarn("Failed to persist desktop pet size", err);

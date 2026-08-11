@@ -593,6 +593,7 @@ export function HookSettingsPage() {
         grokSelectedDir: grokDir,
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
         autoRepair: claudeHookBridgeEnabled && claudeHookAutoRepairKnownInstalled,
+        piAutoRepair: piHookBridgeEnabled,
       });
       setStatus(nextStatus);
       if (nextStatus.claude.configDir) {

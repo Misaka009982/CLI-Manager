@@ -52,8 +52,14 @@ import {
   DESKTOP_PET_WORK_BOUNCE_MAX_PX,
   DESKTOP_PET_WORK_BOUNCE_MIN_PX,
   useSettingsStore,
+  type DesktopPetRuntime,
+  type DesktopPetRuntimeProfile,
   type DesktopPetSettings,
 } from "../../../stores/settingsStore";
+import {
+  patchDesktopPetRuntimeProfile,
+  resolveDesktopPetSettings,
+} from "../../../lib/desktopPetSettings";
 
 type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
@@ -374,7 +380,7 @@ function upsertInstalled(pets: InstalledPet[], next: InstalledPet): InstalledPet
 export function DesktopPetSettingsPage() {
   const { language, t } = useI18n();
   const { confirm, confirmDialog } = useAppConfirm();
-  const desktopPet = useSettingsStore((state) => state.desktopPet);
+  const desktopPetSettings = useSettingsStore((state) => state.desktopPet);
   const updateSetting = useSettingsStore((state) => state.update);
   const [catalog, setCatalog] = useState<PetCatalogResponse | null>(null);
   const [installedPets, setInstalledPets] = useState<InstalledPet[]>([]);
@@ -384,7 +390,18 @@ export function DesktopPetSettingsPage() {
   const [importing, setImporting] = useState(false);
   const [busyPetId, setBusyPetId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [osPlatform, setOsPlatform] = useState<OsPlatform>("unknown");
+  const [osPlatform, setOsPlatform] = useState<OsPlatform>(() => (
+    typeof navigator !== "undefined" && /win/i.test(navigator.platform)
+      ? "windows"
+      : "unknown"
+  ));
+  const activeRuntime: DesktopPetRuntime = osPlatform === "windows"
+    ? desktopPetSettings.runtime
+    : "tauri";
+  const desktopPet = useMemo(
+    () => resolveDesktopPetSettings(desktopPetSettings, activeRuntime),
+    [activeRuntime, desktopPetSettings]
+  );
   const [sizeDraft, setSizeDraft] = useState(desktopPet.size);
   const [workingBounceDistanceDraft, setWorkingBounceDistanceDraft] = useState(
     desktopPet.workingBounceDistancePx
@@ -392,7 +409,13 @@ export function DesktopPetSettingsPage() {
   const [managedPetsPath, setManagedPetsPath] = useState<string | null>(null);
   const [managedPetsPathUnavailable, setManagedPetsPathUnavailable] = useState(false);
 
-  const patch = useCallback(async (delta: Partial<DesktopPetSettings>) => {
+  const patch = useCallback(async (delta: Partial<DesktopPetRuntimeProfile>) => {
+    const current = useSettingsStore.getState().desktopPet;
+    await updateSetting("desktopPet", patchDesktopPetRuntimeProfile(current, activeRuntime, delta));
+  }, [activeRuntime, updateSetting]);
+  const patchShared = useCallback(async (
+    delta: Partial<Pick<DesktopPetSettings, "enabled" | "runtime">>
+  ) => {
     const current = useSettingsStore.getState().desktopPet;
     await updateSetting("desktopPet", { ...current, ...delta });
   }, [updateSetting]);
@@ -400,7 +423,7 @@ export function DesktopPetSettingsPage() {
   useEffect(() => {
     let disposed = false;
     void getOsPlatform().then((platform) => {
-      if (!disposed) setOsPlatform(platform);
+      if (!disposed && platform !== "unknown") setOsPlatform(platform);
     });
     return () => {
       disposed = true;
@@ -554,11 +577,17 @@ export function DesktopPetSettingsPage() {
       const replacementAvailable = remaining.some(
         (item) => item.manifest.id === pet.manifest.id
       );
-      if (
-        useSettingsStore.getState().desktopPet.petId === pet.manifest.id &&
-        !replacementAvailable
-      ) {
-        await patch({ petId: BUILTIN_DESKTOP_PET_ID });
+      const current = useSettingsStore.getState().desktopPet;
+      if (!replacementAvailable) {
+        let next = current;
+        for (const runtime of ["tauri", "electron"] as const) {
+          if (next.profiles[runtime].petId === pet.manifest.id) {
+            next = patchDesktopPetRuntimeProfile(next, runtime, {
+              petId: BUILTIN_DESKTOP_PET_ID,
+            });
+          }
+        }
+        if (next !== current) await updateSetting("desktopPet", next);
       }
       toast.success(t("desktopPet.settings.uninstallSuccess", { name }));
     } catch (error) {
@@ -610,7 +639,9 @@ export function DesktopPetSettingsPage() {
   const handleResetPosition = async () => {
     try {
       await patch({ position: null });
-      await invoke("desktop_pet_window_reset_position");
+      if (activeRuntime === "tauri") {
+        await invoke("desktop_pet_window_reset_position");
+      }
       toast.success(t("desktopPet.settings.resetPositionSuccess"));
     } catch (error) {
       toast.error(t("desktopPet.settings.operationFailed"), {
@@ -664,7 +695,7 @@ export function DesktopPetSettingsPage() {
                   ? t("desktopPet.settings.disableAria")
                   : t("desktopPet.settings.enableAria")
               }
-              onChange={(event) => void patch({ enabled: event.currentTarget.checked })}
+              onChange={(event) => void patchShared({ enabled: event.currentTarget.checked })}
             />
           </Group>
 
@@ -698,7 +729,7 @@ export function DesktopPetSettingsPage() {
                   },
                 ]}
                 aria-label={t("desktopPet.settings.runtime")}
-                onChange={(value) => void patch({
+                onChange={(value) => void patchShared({
                   runtime: value as DesktopPetSettings["runtime"],
                 })}
               />

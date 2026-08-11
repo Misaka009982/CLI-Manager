@@ -163,6 +163,7 @@ async function hasInstalledCliHook(): Promise<boolean> {
     grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
     ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
     autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
+    piAutoRepair: settings.piHookBridgeEnabled,
   });
   if (status.claudeAutoRepaired && !settings.claudeHookAutoRepairNoticeShown) {
     toast.info(translateCurrent("notifications.hook.autoRepaired.title"), {

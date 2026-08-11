@@ -165,6 +165,7 @@ pub async fn hook_settings_get_status(
     grok_selected_dir: Option<String>,
     cc_switch_db_path: Option<String>,
     auto_repair: Option<bool>,
+    pi_auto_repair: Option<bool>,
 ) -> Result<HookSettingsStatus, String> {
     let claude_dir = resolve_claude_dir(selected_dir, false)?;
     let codex_dir = resolve_codex_dir(codex_selected_dir, false)?;
@@ -186,6 +187,17 @@ pub async fn hook_settings_get_status(
                 )
                 .await;
                 claude_auto_repaired = true;
+            }
+        }
+    }
+
+    if pi_auto_repair.unwrap_or(false) {
+        if let Some(dir) = pi_dir.as_ref() {
+            if repair_stale_pi_extension(dir)? {
+                log::info!(
+                    "Upgraded stale CLI-Manager Pi extension: {}",
+                    path_to_string(&pi_extension_path(dir))
+                );
             }
         }
     }
@@ -3201,6 +3213,28 @@ fn install_pi_modules(pi_dir: &Path, modules: &[PiHookModule]) -> Result<(), Str
     Ok(())
 }
 
+fn pi_extension_is_current(content: &str, modules: &[PiHookModule]) -> bool {
+    content == pi_extension_source(modules)
+}
+
+fn repair_stale_pi_extension(pi_dir: &Path) -> Result<bool, String> {
+    let path = pi_extension_path(pi_dir);
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("读取 {} 失败: {error}", path_to_string(&path))),
+    };
+    if !content.contains(PI_EXTENSION_MARKER) {
+        return Ok(false);
+    }
+    let modules = read_pi_modules(&content);
+    if modules.is_empty() || pi_extension_is_current(&content, &modules) {
+        return Ok(false);
+    }
+    install_pi_modules(pi_dir, &modules)?;
+    Ok(true)
+}
+
 fn ensure_pi_extension_writable(path: &Path) -> Result<(), String> {
     match fs::read_to_string(path) {
         Ok(content) if !content.contains(PI_EXTENSION_MARKER) => {
@@ -3231,6 +3265,7 @@ fn build_pi_status(pi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus, St
     } else {
         Vec::new()
     };
+    let current = owned && pi_extension_is_current(&content, &modules);
     let session_start = modules
         .iter()
         .any(|module| matches!(module, PiHookModule::SessionStart));
@@ -3242,8 +3277,8 @@ fn build_pi_status(pi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus, St
         .any(|module| matches!(module, PiHookModule::Stop));
 
     let checks = ToolChecks {
-        attention_script_installed: owned,
-        finished_script_installed: owned,
+        attention_script_installed: current,
+        finished_script_installed: current,
         session_start_hook_installed: session_start,
         running_hook_installed: running,
         attention_hook_installed: false,
@@ -3253,8 +3288,8 @@ fn build_pi_status(pi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus, St
         failure_hook_required: false,
         subagent_start_hook_installed: false,
         subagent_start_hook_required: false,
-        hooks_feature_installed: true,
-        hooks_trusted: true,
+        hooks_feature_installed: owned,
+        hooks_trusted: current,
     };
 
     Ok(status_from_checks(
@@ -5209,6 +5244,29 @@ model_instructions_file = "./instruction.md"
         assert!(!pi_extension_path(&pi_dir).is_file());
     }
 
+    #[test]
+    fn stale_owned_pi_extension_is_repaired_without_changing_modules() {
+        let tmp = TempDir::new().unwrap();
+        let pi_dir = tmp.path().join("pi-agent");
+        let extensions_dir = pi_dir.join(PI_EXTENSION_DIR_NAME);
+        fs::create_dir_all(&extensions_dir).unwrap();
+        let extension_path = pi_extension_path(&pi_dir);
+        let stale = format!(
+            "// {PI_EXTENSION_MARKER}\nconst payload = {{ source: \"pi\" }};\n// {PI_MODULE_RUNNING}\n"
+        );
+        fs::write(&extension_path, stale).unwrap();
+
+        let before = build_pi_status(Some(pi_dir.clone())).unwrap();
+        assert!(matches!(before.status, HookInstallStatus::PartialInstalled));
+        assert!(repair_stale_pi_extension(&pi_dir).unwrap());
+
+        let upgraded = fs::read_to_string(&extension_path).unwrap();
+        assert_eq!(upgraded, pi_extension_source(&[PiHookModule::Running]));
+        assert!(upgraded.contains("sourceInstanceId"));
+        assert!(upgraded.contains("remoteEventId"));
+        assert!(!repair_stale_pi_extension(&pi_dir).unwrap());
+    }
+
     #[tokio::test]
     async fn install_pi_single_module_only_enables_requested_event() {
         let tmp = TempDir::new().unwrap();
@@ -5233,6 +5291,7 @@ model_instructions_file = "./instruction.md"
         let user_content = "export default function userExtension() {}\n";
         fs::write(&extension_path, user_content).unwrap();
 
+        assert!(!repair_stale_pi_extension(&pi_dir).unwrap());
         let error = install_pi_hooks(&pi_dir).unwrap_err();
 
         assert_eq!(error, PI_EXTENSION_CONFLICT_ERROR);

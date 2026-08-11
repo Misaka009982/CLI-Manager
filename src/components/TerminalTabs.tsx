@@ -3307,6 +3307,7 @@ export function TerminalTabs({
           grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
           ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
           autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
+          piAutoRepair: settings.piHookBridgeEnabled,
         }
       );
       const hasEnabledInstalledHook =

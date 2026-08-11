@@ -705,6 +705,7 @@ fn forward_action(app: &AppHandle, token: &str, action: &Value) -> Result<(), St
             json!({
                 "lifecycleToken": lifecycle_token,
                 "petSurfaceEpoch": surface_epoch,
+                "runtime": "electron",
                 "x": finite_number_in_range(action, "x", i32::MIN as f64, i32::MAX as f64)?,
                 "y": finite_number_in_range(action, "y", i32::MIN as f64, i32::MAX as f64)?,
             }),
@@ -714,6 +715,7 @@ fn forward_action(app: &AppHandle, token: &str, action: &Value) -> Result<(), St
             json!({
                 "lifecycleToken": lifecycle_token,
                 "petSurfaceEpoch": surface_epoch,
+                "runtime": "electron",
                 "x": finite_number_in_range(action, "x", i32::MIN as f64, i32::MAX as f64)?,
                 "y": finite_number_in_range(action, "y", i32::MIN as f64, i32::MAX as f64)?,
                 "size": finite_number_in_range(action, "size", 40.0, 150.0)?,
