@@ -322,8 +322,6 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
   const applyProvider = async (provider: NativeProviderCard) => {
     if (applyingId || !appType) return;
     setApplyingId(provider.id);
-    const previousOverrides = targetProviderOverrides;
-    const hadOverride = Boolean(getOverride(targetProject, appType));
     try {
       if (!home) throw new Error("provider_home_active_unavailable");
       const preview = await invoke<NativeProviderGlobalPreview>("provider_global_preview", {
@@ -344,25 +342,14 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
       });
       if (!confirmed) return;
 
-      if (hadOverride) {
-        await updateTargetProviderOverrides(withOverride(previousOverrides, appType, null));
-      }
-      let result: NativeProviderGlobalApplyResult;
-      try {
-        result = await invoke<NativeProviderGlobalApplyResult>("provider_global_apply", {
-          input: {
-            appType,
-            providerId: provider.id,
-            homeIdentity: home.identity,
-            previewFingerprint: preview.fingerprint,
-          },
-        });
-      } catch (applyError) {
-        if (hadOverride) {
-          await updateTargetProviderOverrides(previousOverrides).catch(() => undefined);
-        }
-        throw applyError;
-      }
+      const result = await invoke<NativeProviderGlobalApplyResult>("provider_global_apply", {
+        input: {
+          appType,
+          providerId: provider.id,
+          homeIdentity: home.identity,
+          previewFingerprint: preview.fingerprint,
+        },
+      });
       setProbe({ appType, providerId: result.providerId, providerName: provider.name, source: "global" });
       setGlobalCurrent((current) => current
         ? { ...current, providerId: result.providerId, providerName: provider.name, state: "applied" }

@@ -64,10 +64,11 @@ form must not hide URL, key or model in a generic configuration textarea.
   result flow. It tells users it writes the selected Home’s real CLI files and
   applies to new CLI processes only.
 - The sidebar provider quick-switch uses the same global preview -> confirmation
-  -> apply flow against the active CLI Home. It must not create a project or
-  Worktree override; when an older override exists, successful global apply
-  clears it, and a failed apply restores it. The quick-switch header shows a
-  localized local/WSL icon and, for WSL, the selected distribution.
+  -> apply flow against the active CLI Home. It must not create or mutate a
+  project or Worktree override. Existing overrides are intentionally left
+  untouched because this pre-release product does not require migration or
+  cleanup of those records. The quick-switch header shows a localized local/WSL
+  icon and, for WSL, the selected distribution.
 - The project/Worktree selector lists native providers and visibly resolves
   Worktree > project > global. Reset means follow the next lower scope.
 - Home selection offers auto, choose folder, paste absolute path and reset.
