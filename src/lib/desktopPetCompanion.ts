@@ -10,6 +10,18 @@ export const DESKTOP_PET_COMPANION_PROTOCOL_VERSION = 1 as const;
 export const DESKTOP_PET_COMPANION_EVENT = "desktop-pet-companion-action";
 export const DESKTOP_PET_COMPANION_STATUS_EVENT = "desktop-pet-companion-status";
 
+export function shouldUseElectronDesktopPet(runtime: string, platform: string): boolean {
+  return runtime === "electron" && platform === "windows";
+}
+
+export function shouldShowTauriDesktopPetSurface(
+  surfaceVisible: boolean,
+  companionRequested: boolean,
+  companionActive: boolean
+): boolean {
+  return surfaceVisible && !companionRequested && !companionActive;
+}
+
 export interface DesktopPetCompanionStatus {
   supported: boolean;
   available: boolean;

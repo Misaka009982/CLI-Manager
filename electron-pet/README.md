@@ -5,8 +5,8 @@
 ## 运行边界
 
 - CLI-Manager 主 Tauri 进程是 config、snapshot、generation 和所有动作结果的唯一权威。
-- Windows 设置可在 `tauri` 与 `electron` 之间切换；Electron 只有完成 `hello -> sync -> ready` 后才成为 active，Tauri Pet/Bubble 随后隐藏。
-- 启动失败、协议不兼容、stdin 写入失败、子进程退出、窗口加载失败、renderer 崩溃或无响应都会触发 Tauri 自动回退。
+- Windows 设置可在 `tauri` 与 `electron` 之间切换；选择 `electron` 后立即隐藏 Tauri Pet/Bubble，Electron 完成 `hello -> sync -> ready` 后成为 active。若 Electron 启动或运行失败，Tauri Pet/Bubble 仍保持隐藏，只有切回 `tauri` 才重新显示。
+- 启动失败、协议不兼容、stdin 写入失败、子进程退出、窗口加载失败、renderer 崩溃或无响应都会停止 Electron companion 并保持桌宠隐藏，直到用户切回 Tauri。
 - macOS/Linux 不准备、不打包也不启动 Electron runtime。
 
 ## 目录
@@ -39,7 +39,7 @@ Child 到 host：
 
 - `hello` / `ready`：两阶段启动握手。
 - `action`：经过 preload、Electron main 与 Rust 三层白名单校验的用户动作。
-- `error`：不可恢复的 runtime 错误，主程序收到后回退 Tauri。
+- `error`：不可恢复的 runtime 错误；主程序保持桌宠隐藏，只有用户切回 `tauri` 后才恢复 Tauri 窗口。
 
 ## Windows Bundle
 

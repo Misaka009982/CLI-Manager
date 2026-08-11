@@ -54,6 +54,8 @@ import {
 import {
   DESKTOP_PET_COMPANION_PROTOCOL_VERSION,
   DESKTOP_PET_COMPANION_STATUS_EVENT,
+  shouldShowTauriDesktopPetSurface,
+  shouldUseElectronDesktopPet,
   type DesktopPetCompanionActionResultMessage,
   type DesktopPetCompanionGeneration,
   type DesktopPetCompanionStatus,
@@ -65,6 +67,7 @@ import {
   updateDesktopPetActiveCompletionId,
 } from "../lib/desktopPetBubble";
 import { debugConsoleInfo } from "../lib/debugConsole";
+import { getOsPlatform, type OsPlatform } from "../lib/shell";
 import { useI18n } from "../lib/i18n";
 import { logWarn } from "../lib/logger";
 import { useProjectStore } from "../stores/projectStore";
@@ -145,10 +148,15 @@ export function useDesktopPetCoordinator({
   const [companionBlocked, setCompanionBlocked] = useState(false);
   const [companionStatusListening, setCompanionStatusListening] = useState(false);
   const [companionPet, setCompanionPet] = useState<InstalledPet | null>(null);
+  const [osPlatform, setOsPlatform] = useState<OsPlatform>(() => (
+    typeof navigator !== "undefined" && /win/i.test(navigator.platform)
+      ? "windows"
+      : "unknown"
+  ));
   const decisionRequests = useDesktopPetAlertStore((state) => state.decisionRequests);
   const incidents = useDesktopPetAlertStore((state) => state.incidents);
   const hasActionablePetItem = decisionRequests.length > 0 || incidents.length > 0;
-  const companionRequested = desktopPet.runtime === "electron";
+  const companionRequested = shouldUseElectronDesktopPet(desktopPet.runtime, osPlatform);
   const companionShouldRun = appReady
     && settingsLoaded
     && companionRequested
@@ -157,7 +165,22 @@ export function useDesktopPetCoordinator({
     && settingsLoaded
     && (hasActionablePetItem || (desktopPet.enabled && !temporarilyHidden))
     && !(desktopPet.autoHideFullscreen && terminalFullscreen && !hasActionablePetItem);
-  const tauriPetWindowVisible = petWindowVisible && !companionActive;
+  // 选择 Electron 后立即隐藏 Tauri；Electron 失败时保持隐藏，切回 Tauri 后才恢复。
+  const tauriPetWindowVisible = shouldShowTauriDesktopPetSurface(
+    petWindowVisible,
+    companionRequested,
+    companionActive
+  );
+
+  useEffect(() => {
+    let disposed = false;
+    void getOsPlatform().then((platform) => {
+      if (!disposed && platform !== "unknown") setOsPlatform(platform);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!desktopPet.enabled) setTemporarilyHidden(false);
@@ -364,7 +387,11 @@ export function useDesktopPetCoordinator({
     petWindowVisible,
   ]);
 
-  const tauriBubbleWindowVisible = bubbleWindowVisible && !companionActive;
+  const tauriBubbleWindowVisible = shouldShowTauriDesktopPetSurface(
+    bubbleWindowVisible,
+    companionRequested,
+    companionActive
+  );
   const configPayload = useMemo<DesktopPetConfigPayload>(() => ({
     language,
     visible: tauriPetWindowVisible,
@@ -746,6 +773,7 @@ export function useDesktopPetCoordinator({
       return;
     }
     if (companionBlocked) return;
+    if (nativeVisibilityKeyRef.current !== desktopPetVisibilityKey(false, false)) return;
     const currentLifecycleToken = lifecycleTokenRef.current;
     const petSurfaceEpoch = petSurfaceEpochRef.current;
     const bubbleSurfaceEpoch = bubbleSurfaceEpochRef.current;
@@ -794,14 +822,14 @@ export function useDesktopPetCoordinator({
         setCompanionActive(false);
         setCompanionBlocked(companionRequestedRef.current);
         if (status.reason) {
-          logWarn("Desktop pet companion unavailable; using Tauri fallback", status.reason);
+          logWarn("Desktop pet companion unavailable; keeping the pet hidden", status.reason);
         }
       })
       .catch((error) => {
         if (disposed) return;
         setCompanionActive(false);
         setCompanionBlocked(companionRequestedRef.current);
-        logWarn("Desktop pet companion synchronization failed; using Tauri fallback", error);
+        logWarn("Desktop pet companion synchronization failed; keeping the pet hidden", error);
       });
     return () => {
       disposed = true;
