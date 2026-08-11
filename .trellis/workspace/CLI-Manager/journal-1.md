@@ -1485,3 +1485,36 @@ Reproduced default WSL Home detection taking 12.3 seconds, separated 30-second c
 ### Next Steps
 
 - None - task complete
+
+
+## Session 45: Unify sidebar provider switching with CLI Home
+
+**Date**: 2026-08-11
+**Task**: Unify sidebar provider switching with CLI Home
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+Aligned sidebar provider switching with settings global CLI Home apply flow, added local/WSL mode indicators, recorded bilingual UI/docs/contracts, and archived the task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `22c8b8b6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 44
+- **Total Sessions**: 45
 - **Last Active**: 2026-08-11
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1487 | Active |
+| `journal-1.md` | ~1520 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 45 | 2026-08-11 | Unify sidebar provider switching with CLI Home | `22c8b8b6` | `feat/native-provider-management` |
 | 44 | 2026-08-11 | 修复 Codex 历史 sub-agent 层级 | `c266572a` | `feat/native-provider-management` |
 | 43 | 2026-08-11 | Fix WSL Home cold-start detection | `cd1930b6` | `feat/native-provider-management` |
 | 42 | 2026-08-11 | 修复 WSL CLI Home 自动解析与目录选择 | `68be1e60` | `feat/native-provider-management` |
