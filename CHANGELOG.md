@@ -1,5 +1,11 @@
 # Changelog
 
+## [V1.3.6]
+
+### SSH MFA 认证
+
+- 修复 Windows 内置 ConPTY 终端中，输入 SSH MFA/OTP 验证码后连接立即关闭的问题；AskPass 现在复用所属 SSH 进程继承的标准输入/错误输出，避免重新打开 `CONIN$`/`CONOUT$` 导致验证码未正确交给 OpenSSH。新增不含密码、Token、验证码和 prompt 内容的 `ssh-askpass.log` 诊断日志，便于继续分析认证失败。（Refs #195）
+
 ## [V1.3.5]
 
 ### SSH MFA 认证
