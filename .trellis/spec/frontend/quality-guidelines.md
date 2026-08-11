@@ -123,6 +123,34 @@ function GitChangesPanel() {
 
 **Required check**: Verify the header, title, maximum summary line count, metadata row, gaps, and vertical padding fit without flex shrink at every supported canvas zoom level.
 
+### Convention: File and Git path copy menus share one formatter
+
+**What**: File explorer and Git change tree context menus must expose absolute-path copy as the primary action and put AI-path and project-relative formats under the shared `PathCopyMenu` component. Absolute paths use the active local project root or SSH `remote_path`; nested Git repositories use the active repository root.
+
+**Why**: The same relative file path can be displayed by the file tree, search results, or Git tree. Duplicating path joining in each menu causes local/SSH and nested-repository paths to diverge.
+
+**Correct**:
+
+```tsx
+<PathCopyMenu project={project} relativePath={entry.path} kind={entry.kind} />
+```
+
+**Wrong**:
+
+```tsx
+<ContextMenuItem onSelect={() => navigator.clipboard.writeText(project.path + entry.path)}>
+  Copy path
+</ContextMenuItem>
+```
+
+**Contracts**:
+
+- Relative paths use `/` internally and the root is represented as `.`.
+- AI paths continue through `formatAiPathBlock`; directory trailing-slash behavior remains unchanged.
+- Absolute path copy uses `project.path` for local/WSL projects and `project.remote_path` for SSH projects.
+- Clipboard success and failure messages must use i18n keys in both supported UI languages.
+- Radix submenus must render through `ContextMenuPrimitive.Portal`; custom sidebar menu containers may have `overflow-x-hidden` and must not clip nested menus.
+
 ---
 
 ## Testing Requirements
