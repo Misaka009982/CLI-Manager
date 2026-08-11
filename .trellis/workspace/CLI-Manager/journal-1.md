@@ -1551,3 +1551,36 @@ Aligned sidebar provider switching with settings global CLI Home apply flow, add
 ### Next Steps
 
 - None - task complete
+
+
+## Session 47: 修复路径复制菜单交互与图标
+
+**Date**: 2026-08-12
+**Task**: 修复路径复制菜单交互与图标
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+将路径复制 Radix 旁侧子菜单改为原位替换菜单，隐藏一级菜单项，统一文件菜单样式，使用 Sparkles/Link2 语义图标并恢复切换后的键盘焦点；补充 TEMP 变更记录、功能清单与前端菜单契约。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `72538d0d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
