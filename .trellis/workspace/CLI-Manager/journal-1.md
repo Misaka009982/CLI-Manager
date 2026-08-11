@@ -1452,3 +1452,36 @@ Reproduced default WSL Home detection taking 12.3 seconds, separated 30-second c
 ### Next Steps
 
 - None - task complete
+
+
+## Session 44: 修复 Codex 历史 sub-agent 层级
+
+**Date**: 2026-08-11
+**Task**: 修复 Codex 历史 sub-agent 层级
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+贯通 Codex session_meta 的 parent_thread_id/forked_from_id，从 Rust 历史解析、SQLite catalog 到前端层级树；保留 Claude 路径兼容并补充回归测试。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c266572a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
