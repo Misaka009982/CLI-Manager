@@ -1518,3 +1518,36 @@ Aligned sidebar provider switching with settings global CLI Home apply flow, add
 ### Next Steps
 
 - None - task complete
+
+
+## Session 46: 修复文件面板路径复制二级菜单裁剪
+
+**Date**: 2026-08-12
+**Task**: 修复文件面板路径复制二级菜单裁剪
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+实现文件面板与 Git 变更面板的绝对路径、AI 路径和相对路径复制；修复窄侧栏中二级菜单被 overflow-x-hidden 裁剪的问题，统一通过 ContextMenu Portal 渲染子菜单。npx tsc --noEmit 通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `af5403f7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
