@@ -1494,6 +1494,13 @@
   background-color: color-mix(in srgb, var(--surface-container-highest) 28%, transparent);
 }
 
+.ui-project-tree-root .ui-tree-leading-icon {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background-color: transparent;
+}
+
 .ui-tree-chevron {
   display: inline-flex;
   width: 14px;

@@ -243,6 +243,9 @@ provider_global_preview(providerId, appType, homeIdentity) -> ApplyPreview
 provider_global_apply(providerId, appType, homeIdentity, previewFingerprint) -> ApplyResult
 provider_scope_resolve(projectId, worktreeId?, appType) -> ResolvedProvider
 provider_home_select(environment, mode, homePath?) -> DerivedCliTargets
+provider_home_active_get() -> DerivedCliTargets
+provider_home_cached_get(environment) -> DerivedCliTargets | null
+provider_wsl_list_distros() -> string[]
 provider_environment_inspect(homeIdentity) -> EnvironmentReport
 provider_import_preview(source) -> ImportPreview
 provider_import_commit(previewId, options) -> ImportResult
@@ -265,6 +268,12 @@ provider_import_commit(previewId, options) -> ImportResult
   full key content.
 - `DerivedCliTargets` is produced only by `CliHomeResolver`; it includes
   local/WSL identity and derived Claude/Codex/Grok config/history/Hook roots.
+- `provider_wsl_list_distros` is a read-only bounded probe using `wsl.exe -l -q`;
+  it returns trimmed non-empty distribution names and never resolves a Home.
+- Manual WSL Home validation must use one bounded WSL command to validate
+  directory, readable and writable status together, while preserving the
+  stable validation error mapping. It must not launch one WSL process per
+  predicate.
 
 ### 4. Validation & Error Matrix
 
@@ -276,6 +285,8 @@ provider_import_commit(previewId, options) -> ImportResult
 | More than one active key | database unique-index failure mapped to `provider_key_active_conflict` |
 | Referenced provider disable/delete | `provider_referenced` with scope summary |
 | Bad/readonly/unreachable Home | `provider_home_invalid` / `provider_home_not_writable` |
+| WSL executable unavailable while listing distributions | `provider_wsl_unavailable` |
+| WSL distribution list command times out or exits unsuccessfully | `provider_wsl_list_failed` |
 | Live file changed after preview | `provider_apply_conflict` |
 | Stage/replace/verify/restore failure | `provider_apply_failed` / `provider_recovery_required` |
 | CCS source missing/corrupt/unsupported | `provider_import_source_invalid` |
@@ -331,6 +342,81 @@ preview + lock + stage + parse + backup + replace all targets + verify
   -> commit current state and journal
   -> otherwise compensate files and retain recovery journal
 ```
+
+## Scenario: Persisted active Home is restored when the settings page remounts
+
+### 1. Scope / Trigger
+
+- Trigger: the CLI Home settings surface is opened again after the user saved a
+  local or WSL Home selection.
+- Goal: restore the persisted active Home identity and derived targets without
+  treating the initial page mount as an explicit Home re-detection request.
+
+### 2. Signature
+
+```text
+provider_home_active_get() -> ProviderHomeState
+```
+
+### 3. Contracts
+
+- The command is read-only and returns the active state restored by
+  `initialize_cache`, including environment kind/id, mode, Home path and all
+  derived CLI targets.
+- It reads the existing active Home identity/cache and does not invoke a WSL
+  `$HOME` probe or change the persisted preference.
+- Explicit `provider_home_get`, `provider_home_select` and
+  `provider_home_reset` semantics remain unchanged; only the initial settings
+  page load uses the active-state read.
+- `provider_home_cached_get` is read-only and returns only an already cached
+  environment state. A cache miss returns `null`; it must never invoke local or
+  WSL Home detection or fall back to another environment's state.
+
+### 4. Validation & Error Matrix
+
+| Condition | Error code / result |
+| --- | --- |
+| Active identity/cache is unavailable | `provider_home_active_unavailable` |
+| Active WSL state was persisted previously | return the cached WSL state; do not silently fall back to local `host` |
+| No prior active preference exists | initialization provides the local `host` state |
+
+### 5. Good / Base / Bad Cases
+
+- Good: save WSL distro A with a manual UNC Home, close settings, reopen, and
+  receive WSL distro A plus the same manual path.
+- Base: save local Home, reopen settings, and receive the local `host` state.
+- Bad: remount the page by calling `provider_home_get(local, host)` and
+  overwrite the displayed saved WSL state.
+
+### 6. Tests Required
+
+- Command registration and TypeScript invoke contract compile successfully.
+- Home focused tests continue to cover local/WSL state derivation and active
+  cache behavior.
+- Manual runtime check: save WSL manual Home, close/reopen settings, and
+  verify environment, distro, mode and path all remain unchanged.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+settings_mount -> provider_home_get(local, host)
+```
+
+This discards the selected active identity in the settings UI even though the
+backend preference was persisted.
+
+#### Correct
+
+```text
+settings_mount -> provider_home_active_get()
+explicit_refresh -> provider_home_get(current_draft_environment)
+save -> provider_home_select(current_draft)
+```
+
+The initial read restores persisted state; only explicit actions perform the
+corresponding detection or persistence transition.
 
 ## Required implementation verification
 
@@ -1118,3 +1204,70 @@ stop routing + remove takeovers
 - Wrong: manual mode stores `[A, B]`, leaving the active route ambiguous.
 - Correct: manual mode stores `[B]` and hot-switches to B; automatic mode stores
   `[A, B]` and lets failover traverse it.
+
+## Scenario: WSL distribution enumeration with deferred Home detection (2026-08-11)
+
+### 1. Scope / Trigger
+
+- Trigger: the CLI Home UI enters WSL or changes the selected WSL distribution.
+- Goal: make installed distribution selection responsive without running the
+  slower WSL `$HOME` probe during draft editing.
+
+### 2. Signatures
+
+```text
+provider_wsl_list_distros() -> Result<Vec<String>, String>
+provider_home_get(environmentKind, environmentId?) -> ProviderHomeState
+provider_environment_inspect(input) -> EnvironmentReport
+```
+
+### 3. Contracts
+
+- `provider_wsl_list_distros` runs `wsl.exe -l -q` through the shared bounded
+  subprocess helper with a 5-second timeout, decodes UTF-8/UTF-16LE output,
+  trims empty lines, and returns distribution names only.
+- The list command does not call `provider_home_get`, `$HOME` probing, path
+  validation, or environment inspection.
+- Home/diagnostic snapshots remain unchanged until an explicit refresh, save,
+  or reset action invokes the existing Home/inspection commands.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| `wsl.exe` cannot be located | `provider_wsl_unavailable` |
+| List command times out or exits unsuccessfully | `provider_wsl_list_failed` |
+| List succeeds with no installed distributions | `Ok([])` |
+| Distribution output contains blank/duplicate lines | Trim blanks; frontend de-duplicates before selection |
+
+### 5. Good / Base / Bad Cases
+
+- Good: WSL entry lists installed distributions, preserves the selected name
+  when present, and does not start Home recognition.
+- Base: the selected distribution was removed; the frontend selects the first
+  returned distribution and waits for explicit refresh before resolving Home.
+- Bad: a list timeout is converted into a Home probe or silently selects the
+  Windows `host` identity.
+
+### 6. Tests Required
+
+- Parse UTF-8 and UTF-16LE list output, including CRLF, BOM, blanks and names
+  containing spaces.
+- Assert list command timeout/failure maps to stable error codes.
+- Frontend: assert environment changes do not invoke Home/inspection commands;
+  explicit refresh invokes them with the selected distribution.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+environment select change -> provider_home_get -> wsl.exe probe $HOME
+```
+
+#### Correct
+
+```text
+environment select change -> provider_wsl_list_distros (enumeration only)
+explicit refresh/save/reset -> provider_home_get/select/reset -> inspect
+```

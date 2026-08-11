@@ -11,7 +11,7 @@ import { Copy, FolderOpen, Wrench } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useI18n } from "@/lib/i18n";
-import type { NativeProviderEnvironmentReport } from "./nativeProviderTypes";
+import type { NativeProviderAppType, NativeProviderEnvironmentReport } from "./nativeProviderTypes";
 import type { UseNativeProviderHomeResult } from "./useNativeProviderHome";
 import { PathItem } from "./NativeProviderPathItem";
 
@@ -21,15 +21,43 @@ type EnvironmentState = Pick<
 >;
 
 interface NativeProviderEnvironmentSectionProps {
+  appType: NativeProviderAppType;
   state: EnvironmentState;
 }
 
 export function NativeProviderEnvironmentSection({
+  appType,
   state,
 }: NativeProviderEnvironmentSectionProps) {
   const { t } = useI18n();
   const report = state.report;
   const busy = Boolean(state.action) || state.loading;
+  const appCliName = appType === "grokbuild" ? "grok" : appType;
+  const cli = report?.cli.filter((item) => item.name === appCliName) ?? [];
+  const targetPrefix = appType === "grokbuild" ? "grokbuild" : appType;
+  const targets = report?.targets.filter((target) => target.name.startsWith(`${targetPrefix}.`)) ?? [];
+  const conflictVariable = appType === "claude"
+    ? "CLAUDE_CONFIG_DIR"
+    : appType === "codex"
+      ? "CODEX_HOME"
+      : "GROK_HOME";
+  const conflicts = report?.conflicts.filter((conflict) => conflict.variable === conflictVariable) ?? [];
+  const alignmentRoots = report
+    ? appType === "claude"
+      ? [
+          ["claudeHook", t("providerCatalog.environment.claudeHook"), report.alignment.claudeHookRoot],
+          ["claudeHistory", t("providerCatalog.environment.claudeHistory"), report.alignment.claudeHistoryRoot],
+        ]
+      : appType === "codex"
+        ? [
+            ["codexHook", t("providerCatalog.environment.codexHook"), report.alignment.codexHookRoot],
+            ["codexHistory", t("providerCatalog.environment.codexHistory"), report.alignment.codexHistoryRoot],
+          ]
+        : [
+            ["grokHook", t("providerCatalog.environment.grokHook"), report.alignment.grokHookRoot],
+            ["grokHistory", t("providerCatalog.environment.grokHistory"), report.alignment.grokHistoryRoot],
+          ]
+    : [];
 
   const openTarget = async (path: string) => {
     try {
@@ -94,119 +122,140 @@ export function NativeProviderEnvironmentSection({
           </Group>
         </Group>
         {report && (
-          <Stack gap="xs">
-            <Text size="xs" c="dimmed">
-              {t("providerCatalog.environment.homeSource", {
-                source: report.home.source === "manual"
-                  ? t("providerCatalog.home.sourceManual")
-                  : t("providerCatalog.home.sourceAuto"),
-              })}
-            </Text>
-            <Group justify="space-between" wrap="nowrap">
-              <Text size="xs" c="dimmed">{t("providerCatalog.environment.currentProvider")}</Text>
-              <Group gap="xs" wrap="nowrap">
-                <Text size="xs" truncate>
-                  {report.currentProvider.providerName ?? t("providerCatalog.environment.notSet")}
+          <Stack gap="sm">
+            <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="xs">
+              <Card withBorder radius="md" padding="xs" className="border-border/50 bg-surface-container-lowest">
+                <Text size="xs" c="dimmed">{t("providerCatalog.environment.homeSourceLabel")}</Text>
+                <Text size="sm" fw={600} mt={2}>
+                  {report.home.source === "manual"
+                    ? t("providerCatalog.home.sourceManual")
+                    : t("providerCatalog.home.sourceAuto")}
                 </Text>
-                <Badge color={report.currentProvider.activeKeyPresent ? "green" : "yellow"}>
-                  {report.currentProvider.activeKeyPresent
-                    ? t("providerCatalog.environment.keyReady")
-                    : t("providerCatalog.environment.keyMissing")}
-                </Badge>
-              </Group>
-            </Group>
-            <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="xs">
-              {report.cli.map((cli) => (
+              </Card>
+              <Card withBorder radius="md" padding="xs" className="border-border/50 bg-surface-container-lowest">
+                <Text size="xs" c="dimmed">{t("providerCatalog.environment.currentProvider")}</Text>
+                <Group gap="xs" mt={2} wrap="nowrap">
+                  <Text size="sm" fw={600} truncate className="min-w-0">
+                    {report.currentProvider.providerName ?? t("providerCatalog.environment.notSet")}
+                  </Text>
+                  <Badge size="sm" color={report.currentProvider.activeKeyPresent ? "green" : "yellow"}>
+                    {report.currentProvider.activeKeyPresent
+                      ? t("providerCatalog.environment.keyReady")
+                      : t("providerCatalog.environment.keyMissing")}
+                  </Badge>
+                </Group>
+              </Card>
+              <Card withBorder radius="md" padding="xs" className="border-border/50 bg-surface-container-lowest">
+                <Text size="xs" c="dimmed">{t("providerCatalog.environment.cliVersions")}</Text>
+                <Text size="sm" fw={600} mt={2}>{cli.filter((item) => item.available).length}/{cli.length}</Text>
+              </Card>
+            </SimpleGrid>
+
+            <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="xs">
+              {cli.map((item) => (
                 <PathItem
-                  key={cli.name}
-                  label={cli.name}
-                  path={cli.available
-                    ? [cli.executable ?? "", cli.version ?? ""].filter(Boolean).join(" · ")
+                  key={item.name}
+                  label={item.name}
+                  path={item.available
+                    ? [item.executable ?? "", item.version ?? ""].filter(Boolean).join(" · ")
                     : t("providerCatalog.environment.unavailable")}
                 />
               ))}
             </SimpleGrid>
-            {report.targets.map((target) => (
-              <Group key={target.name} justify="space-between" wrap="nowrap" className="rounded-md border border-border/50 px-2 py-1">
-                <Stack gap={0} miw={0}>
-                  <Text size="xs" truncate>{target.name}</Text>
-                  <Text size="xs" c="dimmed" truncate title={target.path}>{target.path}</Text>
-                </Stack>
-                <Group gap={4} wrap="nowrap">
-                  <Button
-                    size="compact-xs"
-                    variant="subtle"
-                    color="gray"
-                    leftSection={<FolderOpen size={13} />}
-                    disabled={!target.exists}
-                    aria-label={t("providerCatalog.environment.openTarget")}
-                    onClick={() => void openTarget(target.path)}
-                  >
-                    {t("providerCatalog.environment.openTarget")}
-                  </Button>
-                  <Badge color={target.syntax === "valid" ? "green" : "yellow"}>
-                    {target.syntax === "valid"
-                      ? t("providerCatalog.environment.valid")
-                      : target.syntax === "missing"
-                        ? t("providerCatalog.environment.missing")
-                        : t("providerCatalog.environment.invalid")}
-                  </Badge>
-                  <Badge color={target.readable ? "green" : "red"}>
-                    {target.readable
-                      ? t("providerCatalog.environment.readable")
-                      : t("providerCatalog.environment.notReadable")}
-                  </Badge>
-                  <Badge color={target.writable ? "green" : "red"}>
-                    {target.writable
-                      ? t("providerCatalog.environment.writable")
-                      : t("providerCatalog.environment.notWritable")}
-                  </Badge>
-                </Group>
-              </Group>
-            ))}
-            <Stack gap={4}>
+
+            <Stack gap="xs">
+              <Text size="xs" fw={600}>{t("providerCatalog.environment.targetsTitle")}</Text>
+              <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xs">
+                {targets.map((target) => (
+                  <Card key={target.name} withBorder radius="md" padding="xs" className="border-border/50 bg-surface-container-lowest">
+                    <Group justify="space-between" align="flex-start" gap="xs" wrap="nowrap">
+                      <Stack gap={2} miw={0}>
+                        <Text size="xs" fw={600} truncate>{target.name}</Text>
+                        <Text size="xs" c="dimmed" truncate title={target.path}>{target.path}</Text>
+                      </Stack>
+                      <Badge size="sm" color={target.syntax === "valid" ? "green" : "yellow"}>
+                        {target.syntax === "valid"
+                          ? t("providerCatalog.environment.valid")
+                          : target.syntax === "missing"
+                            ? t("providerCatalog.environment.missing")
+                            : t("providerCatalog.environment.invalid")}
+                      </Badge>
+                    </Group>
+                    <Group justify="space-between" gap="xs" mt="xs" wrap="wrap">
+                      <Group gap={4} wrap="wrap">
+                        <Badge size="sm" color={target.readable ? "green" : "red"}>
+                          {target.readable
+                            ? t("providerCatalog.environment.readable")
+                            : t("providerCatalog.environment.notReadable")}
+                        </Badge>
+                        <Badge size="sm" color={target.writable ? "green" : "red"}>
+                          {target.writable
+                            ? t("providerCatalog.environment.writable")
+                            : t("providerCatalog.environment.notWritable")}
+                        </Badge>
+                      </Group>
+                      <Button
+                        size="compact-xs"
+                        variant="subtle"
+                        color="gray"
+                        leftSection={<FolderOpen size={13} />}
+                        disabled={!target.exists}
+                        aria-label={t("providerCatalog.environment.openTarget")}
+                        onClick={() => void openTarget(target.path)}
+                      >
+                        {t("providerCatalog.environment.openTarget")}
+                      </Button>
+                    </Group>
+                  </Card>
+                ))}
+              </SimpleGrid>
+            </Stack>
+
+            <Stack gap="xs">
               <Group justify="space-between" wrap="nowrap">
                 <Text size="xs" fw={600}>{t("providerCatalog.environment.roots")}</Text>
-                <Badge color={report.alignment.automaticRootsAligned ? "green" : "yellow"}>
+                <Badge size="sm" color={report.alignment.automaticRootsAligned ? "green" : "yellow"}>
                   {report.alignment.automaticRootsAligned
                     ? t("providerCatalog.environment.rootsAligned")
                     : t("providerCatalog.environment.rootsExplicit")}
                 </Badge>
               </Group>
-              {[
-                ["claudeHook", t("providerCatalog.environment.claudeHook"), report.alignment.claudeHookRoot],
-                ["codexHook", t("providerCatalog.environment.codexHook"), report.alignment.codexHookRoot],
-                ["grokHook", t("providerCatalog.environment.grokHook"), report.alignment.grokHookRoot],
-                ["claudeHistory", t("providerCatalog.environment.claudeHistory"), report.alignment.claudeHistoryRoot],
-                ["codexHistory", t("providerCatalog.environment.codexHistory"), report.alignment.codexHistoryRoot],
-                ["grokHistory", t("providerCatalog.environment.grokHistory"), report.alignment.grokHistoryRoot],
-              ].map(([id, label, path]) => (
-                <Group key={id} justify="space-between" wrap="nowrap">
-                  <Text size="xs" c="dimmed">{label}</Text>
-                  <Group gap={4} wrap="nowrap" miw={0}>
-                    <Text size="xs" truncate title={path}>{path}</Text>
-                    {report.alignment.explicitRoots.includes(id) && (
-                      <Badge color="yellow">{t("providerCatalog.environment.explicit")}</Badge>
-                    )}
-                  </Group>
-                </Group>
-              ))}
-            </Stack>
-            {report.conflicts.length > 0 && (
-              <Stack gap={4}>
-                <Text size="xs" fw={600}>{t("providerCatalog.environment.conflicts")}</Text>
-                {report.conflicts.map((conflict) => (
-                  <Group key={conflict.variable} justify="space-between" wrap="nowrap">
-                    <Text size="xs">{conflict.variable}</Text>
-                    <Badge color={!conflict.present || conflict.matchesHome ? "green" : "yellow"}>
-                      {!conflict.present
-                        ? t("providerCatalog.environment.notSet")
-                        : conflict.matchesHome
-                          ? t("providerCatalog.environment.matchesHome")
-                          : t("providerCatalog.environment.conflict")}
-                    </Badge>
-                  </Group>
+              <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xs">
+                {alignmentRoots.map(([id, label, path]) => (
+                  <Card key={id} withBorder radius="md" padding="xs" className="border-border/50 bg-surface-container-lowest">
+                    <Group justify="space-between" align="flex-start" gap="xs" wrap="nowrap">
+                      <Stack gap={2} miw={0}>
+                        <Text size="xs" fw={600}>{label}</Text>
+                        <Text size="xs" c="dimmed" truncate title={path}>{path}</Text>
+                      </Stack>
+                      {report.alignment.explicitRoots.includes(id) && (
+                        <Badge size="sm" color="yellow">{t("providerCatalog.environment.explicit")}</Badge>
+                      )}
+                    </Group>
+                  </Card>
                 ))}
+              </SimpleGrid>
+            </Stack>
+
+            {conflicts.length > 0 && (
+              <Stack gap="xs">
+                <Text size="xs" fw={600}>{t("providerCatalog.environment.conflicts")}</Text>
+                <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="xs">
+                  {conflicts.map((conflict) => (
+                    <Card key={conflict.variable} withBorder radius="md" padding="xs" className="border-border/50 bg-surface-container-lowest">
+                      <Group justify="space-between" gap="xs" wrap="nowrap">
+                        <Text size="xs" fw={600} truncate>{conflict.variable}</Text>
+                        <Badge size="sm" color={!conflict.present || conflict.matchesHome ? "green" : "yellow"}>
+                          {!conflict.present
+                            ? t("providerCatalog.environment.notSet")
+                            : conflict.matchesHome
+                              ? t("providerCatalog.environment.matchesHome")
+                              : t("providerCatalog.environment.conflict")}
+                        </Badge>
+                      </Group>
+                    </Card>
+                  ))}
+                </SimpleGrid>
               </Stack>
             )}
           </Stack>

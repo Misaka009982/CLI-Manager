@@ -219,6 +219,24 @@ pub fn provider_home_get(
 }
 
 #[tauri::command]
+pub fn provider_home_active_get() -> Result<ProviderHomeState, String> {
+    home::active()
+}
+
+#[tauri::command]
+pub fn provider_home_cached_get(
+    environment_kind: String,
+    environment_id: Option<String>,
+) -> Option<ProviderHomeState> {
+    home::cached(environment_kind, environment_id)
+}
+
+#[tauri::command]
+pub fn provider_wsl_list_distros() -> Result<Vec<String>, String> {
+    home::list_wsl_distros()
+}
+
+#[tauri::command]
 pub fn provider_home_preview(input: HomeSelectInput) -> Result<ProviderHomeState, String> {
     block_on(home::preview(input))
 }

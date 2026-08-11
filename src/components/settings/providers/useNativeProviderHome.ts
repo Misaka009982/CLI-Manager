@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getHistoryPathArgs } from "@/lib/historyPathArgs";
 import {
@@ -11,6 +11,7 @@ import {
   type NativeProviderGlobalCurrent,
   type NativeProviderGlobalPreview,
   type NativeProviderHomeInput,
+  type NativeProviderHomeIdentity,
   type NativeProviderHomeState,
 } from "./nativeProviderTypes";
 
@@ -27,6 +28,9 @@ export interface UseNativeProviderHomeResult {
   environmentId: string;
   mode: "auto" | "manual";
   homePath: string;
+  wslDistros: string[];
+  wslDistrosLoading: boolean;
+  wslDistrosErrorCode: string | null;
   home: NativeProviderHomeState | null;
   previewHome: NativeProviderHomeState | null;
   homeDraftDirty: boolean;
@@ -38,9 +42,10 @@ export interface UseNativeProviderHomeResult {
   errorCode: string | null;
   setEnvironmentKind: (kind: NativeProviderEnvironmentKind) => void;
   setEnvironmentId: (id: string) => void;
+  refreshWslDistros: (preferredEnvironmentId?: string, restoreCachedHome?: boolean) => Promise<string | null>;
   setMode: (mode: "auto" | "manual") => void;
   setHomePath: (path: string) => void;
-  refreshHome: () => Promise<void>;
+  refreshHome: (environmentIdOverride?: string) => Promise<void>;
   selectHome: () => Promise<void>;
   resetHome: () => Promise<void>;
   previewGlobal: () => Promise<NativeProviderGlobalPreview | null>;
@@ -60,9 +65,12 @@ export function useNativeProviderHome(
   configuredRoots: NativeProviderRootOverrides,
 ): UseNativeProviderHomeResult {
   const [environmentKind, setEnvironmentKindState] = useState<NativeProviderEnvironmentKind>("local");
-  const [environmentId, setEnvironmentId] = useState("host");
+  const [environmentId, setEnvironmentIdState] = useState("host");
   const [mode, setMode] = useState<"auto" | "manual">("auto");
   const [homePath, setHomePath] = useState("");
+  const [wslDistros, setWslDistros] = useState<string[]>([]);
+  const [wslDistrosLoading, setWslDistrosLoading] = useState(false);
+  const [wslDistrosErrorCode, setWslDistrosErrorCode] = useState<string | null>(null);
   const [home, setHome] = useState<NativeProviderHomeState | null>(null);
   const [previewHome, setPreviewHome] = useState<NativeProviderHomeState | null>(null);
   const [current, setCurrent] = useState<NativeProviderGlobalCurrent | null>(null);
@@ -71,11 +79,109 @@ export function useNativeProviderHome(
   const [loading, setLoading] = useState(false);
   const [action, setAction] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const wslDistrosRequestRef = useRef(0);
+  const environmentSelectionRequestRef = useRef(0);
+  const initialHomeLoadRef = useRef(false);
+
+  const clearHomeForEnvironment = useCallback(() => {
+    setHome(null);
+    setPreviewHome(null);
+    setCurrent(null);
+    setPreview(null);
+    setReport(null);
+    setMode("auto");
+    setHomePath("");
+  }, []);
+
+  const loadCachedHome = useCallback(async (
+    kind: NativeProviderEnvironmentKind,
+    id: string | null,
+  ) => {
+    const requestId = ++environmentSelectionRequestRef.current;
+    if (kind === "wsl" && !id?.trim()) {
+      clearHomeForEnvironment();
+      return;
+    }
+    try {
+      const cached = await invoke<NativeProviderHomeState | null>("provider_home_cached_get", {
+        environmentKind: kind,
+        environmentId: id?.trim() || null,
+      });
+      if (requestId !== environmentSelectionRequestRef.current) return;
+      if (!cached) {
+        clearHomeForEnvironment();
+        return;
+      }
+      setHome(cached);
+      setMode(cached.mode);
+      setHomePath(cached.homePath);
+      setPreviewHome(null);
+      setCurrent(null);
+      setPreview(null);
+      setReport(null);
+    } catch {
+      if (requestId === environmentSelectionRequestRef.current) clearHomeForEnvironment();
+    }
+  }, [clearHomeForEnvironment]);
+
+  const refreshWslDistros = useCallback(async (
+    preferredEnvironmentId?: string,
+    restoreCachedHome = true,
+  ) => {
+    const requestId = ++wslDistrosRequestRef.current;
+    setWslDistrosLoading(true);
+    setWslDistrosErrorCode(null);
+    try {
+      const next = await invoke<string[]>("provider_wsl_list_distros");
+      if (requestId !== wslDistrosRequestRef.current) return null;
+      const distros = Array.from(new Set(
+        next.map((distro) => distro.trim()).filter(Boolean),
+      )).sort((left, right) => left.localeCompare(right));
+      setWslDistros(distros);
+      const selectedDistro = distros.find((distro) => {
+        const preferred = preferredEnvironmentId?.trim();
+        return preferred !== undefined
+          && distro.localeCompare(preferred, undefined, { sensitivity: "accent" }) === 0;
+      }) ?? distros[0] ?? null;
+      const currentId = preferredEnvironmentId?.trim() ?? "";
+      const currentMatch = distros.find((distro) =>
+        distro.localeCompare(currentId, undefined, { sensitivity: "accent" }) === 0,
+      );
+      const nextId = selectedDistro && preferredEnvironmentId?.trim()
+        ? selectedDistro
+        : currentMatch ?? selectedDistro ?? "";
+      setEnvironmentIdState(nextId);
+      if (restoreCachedHome) void loadCachedHome("wsl", nextId || null);
+      return nextId || null;
+    } catch (error) {
+      if (requestId !== wslDistrosRequestRef.current) return null;
+      setWslDistros([]);
+      setWslDistrosErrorCode(providerErrorCode(error));
+      return null;
+    } finally {
+      if (requestId === wslDistrosRequestRef.current) setWslDistrosLoading(false);
+    }
+  }, [loadCachedHome]);
 
   const setEnvironmentKind = useCallback((kind: NativeProviderEnvironmentKind) => {
     setEnvironmentKindState(kind);
-    setEnvironmentId(kind === "local" ? "host" : "");
-  }, []);
+    if (kind === "local") {
+      ++wslDistrosRequestRef.current;
+      setWslDistros([]);
+      setWslDistrosErrorCode(null);
+      setEnvironmentIdState("host");
+      void loadCachedHome("local", "host");
+      return;
+    }
+    setEnvironmentIdState("");
+    void loadCachedHome("wsl", null);
+    void refreshWslDistros();
+  }, [loadCachedHome, refreshWslDistros]);
+
+  const setEnvironmentId = useCallback((id: string) => {
+    setEnvironmentIdState(id);
+    if (environmentKind === "wsl") void loadCachedHome("wsl", id);
+  }, [environmentKind, loadCachedHome]);
 
   const identity = useCallback(() => ({
     environmentKind,
@@ -102,32 +208,34 @@ export function useNativeProviderHome(
     }
   }, []);
 
-  const refreshCurrent = useCallback(async () => {
+  const refreshCurrentForIdentity = useCallback(async (
+    homeIdentity: Pick<NativeProviderHomeIdentity, "environmentKind" | "environmentId">,
+  ) => {
     try {
       const next = await invoke<NativeProviderGlobalCurrent>("provider_global_current", {
-        input: { appType, homeIdentity: identity() },
+        input: { appType, homeIdentity },
       });
       setCurrent(next);
     } catch {
       setCurrent(null);
     }
-  }, [appType, identity]);
+  }, [appType]);
 
-  const refreshHome = useCallback(async () => {
+  const refreshHome = useCallback(async (environmentIdOverride?: string) => {
     setLoading(true);
     setErrorCode(null);
     try {
       const next = await invoke<NativeProviderHomeState>("provider_home_get", {
         environmentKind,
-        environmentId: environmentId.trim() || null,
+        environmentId: environmentIdOverride?.trim() || environmentId.trim() || null,
       });
       setHome(next);
       setEnvironmentKindState(next.identity.environmentKind);
-      setEnvironmentId(next.identity.environmentId);
+      setEnvironmentIdState(next.identity.environmentId);
       setMode(next.mode);
       setHomePath(next.homePath);
       setPreviewHome(null);
-      await refreshCurrent();
+      await refreshCurrentForIdentity(next.identity);
       setPreview(null);
       setReport(null);
     } catch (error) {
@@ -140,7 +248,39 @@ export function useNativeProviderHome(
     } finally {
       setLoading(false);
     }
-  }, [environmentId, environmentKind, refreshCurrent]);
+  }, [environmentId, environmentKind, refreshCurrentForIdentity]);
+
+  const loadActiveHome = useCallback(async () => {
+    setLoading(true);
+    setErrorCode(null);
+    try {
+      const next = await invoke<NativeProviderHomeState>("provider_home_active_get");
+      setHome(next);
+      setEnvironmentKindState(next.identity.environmentKind);
+      setEnvironmentId(next.identity.environmentId);
+      setMode(next.mode);
+      setHomePath(next.homePath);
+      setPreviewHome(null);
+      if (next.identity.environmentKind === "wsl") {
+        void refreshWslDistros(next.identity.environmentId);
+      } else {
+        ++wslDistrosRequestRef.current;
+        setWslDistros([]);
+        setWslDistrosErrorCode(null);
+      }
+      setPreview(null);
+      setReport(null);
+    } catch (error) {
+      setHome(null);
+      setCurrent(null);
+      setPreviewHome(null);
+      setPreview(null);
+      setReport(null);
+      setErrorCode(providerErrorCode(error));
+    } finally {
+      setLoading(false);
+    }
+  }, [refreshWslDistros]);
 
   const previewDraftHome = useCallback(async (): Promise<NativeProviderHomeState | null> => {
     try {
@@ -152,14 +292,14 @@ export function useNativeProviderHome(
     }
   }, [homeInput]);
 
-  const homeDraftDirty = Boolean(home && (
+  const homeDraftDirty = !home || (
     home.identity.identity !== `${environmentKind}:${environmentId.trim() || "host"}`
       || home.mode !== mode
       || (mode === "manual" && home.homePath !== homePath.trim())
-  ));
+  );
 
   useEffect(() => {
-    if (!home || !homeDraftDirty) {
+    if (!home || !homeDraftDirty || environmentKind !== "local" || mode !== "manual") {
       setPreviewHome(null);
       return;
     }
@@ -175,15 +315,19 @@ export function useNativeProviderHome(
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [home, homeDraftDirty, previewDraftHome]);
+  }, [environmentKind, home, homeDraftDirty, mode, previewDraftHome]);
 
   useEffect(() => {
     setPreview(null);
+    setCurrent(null);
+    setReport(null);
   }, [appType, providerId]);
 
   useEffect(() => {
-    void refreshHome();
-  }, [refreshHome]);
+    if (initialHomeLoadRef.current) return;
+    initialHomeLoadRef.current = true;
+    void loadActiveHome();
+  }, [loadActiveHome]);
 
   const selectHome = useCallback(async () => {
     const input = homeInput();
@@ -191,14 +335,14 @@ export function useNativeProviderHome(
       const next = await invoke<NativeProviderHomeState>("provider_home_select", { input });
       setHome(next);
       setEnvironmentKindState(next.identity.environmentKind);
-      setEnvironmentId(next.identity.environmentId);
+      setEnvironmentIdState(next.identity.environmentId);
       setHomePath(next.homePath);
       setPreviewHome(null);
-      await refreshCurrent();
+      setCurrent(null);
       setPreview(null);
       setReport(null);
     });
-  }, [homeInput, refreshCurrent, run]);
+  }, [homeInput, run]);
 
   const resetHome = useCallback(async () => {
     await run("reset-home", async () => {
@@ -208,15 +352,15 @@ export function useNativeProviderHome(
       });
       setHome(next);
       setEnvironmentKindState(next.identity.environmentKind);
-      setEnvironmentId(next.identity.environmentId);
+      setEnvironmentIdState(next.identity.environmentId);
       setMode(next.mode);
       setHomePath(next.homePath);
       setPreviewHome(null);
-      await refreshCurrent();
+      setCurrent(null);
       setPreview(null);
       setReport(null);
     });
-  }, [environmentId, environmentKind, refreshCurrent, run]);
+  }, [environmentId, environmentKind, run]);
 
   const previewGlobal = useCallback(async () => {
     if (!providerId) return null;
@@ -285,6 +429,9 @@ export function useNativeProviderHome(
     environmentId,
     mode,
     homePath,
+    wslDistros,
+    wslDistrosLoading,
+    wslDistrosErrorCode,
     home,
     previewHome,
     homeDraftDirty,
@@ -296,6 +443,7 @@ export function useNativeProviderHome(
     errorCode,
     setEnvironmentKind,
     setEnvironmentId,
+    refreshWslDistros,
     setMode,
     setHomePath,
     refreshHome,

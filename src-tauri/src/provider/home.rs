@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const LOCAL_ENVIRONMENT_ID: &str = "host";
 const WSL_HOME_DETECT_TIMEOUT: Duration = Duration::from_secs(30);
 const WSL_HOME_VALIDATION_TIMEOUT: Duration = Duration::from_secs(5);
+const WSL_DISTRO_LIST_TIMEOUT: Duration = Duration::from_secs(5);
 const ACTIVE_HOME_IDENTITY_SETTING: &str = "active_provider_home_identity";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,6 +104,52 @@ fn default_wsl_context() -> Result<(String, String), String> {
         return Err("provider_wsl_probe_failed".to_string());
     }
     parse_default_wsl_context(&output.stdout)
+}
+
+fn decode_wsl_output(stdout: &[u8]) -> String {
+    let is_utf16le = stdout.starts_with(&[0xff, 0xfe])
+        || (stdout.len() >= 4 && stdout.chunks_exact(2).all(|chunk| chunk[1] == 0));
+    if !is_utf16le {
+        return String::from_utf8_lossy(stdout).into_owned();
+    }
+
+    let bytes = stdout.strip_prefix(&[0xff, 0xfe]).unwrap_or(stdout);
+    let units = bytes
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]));
+    String::from_utf16_lossy(&units.collect::<Vec<_>>())
+}
+
+fn parse_wsl_distros(stdout: &[u8]) -> Vec<String> {
+    decode_wsl_output(stdout)
+        .lines()
+        .filter_map(|line| {
+            let distro = line
+                .trim()
+                .trim_start_matches('\u{feff}')
+                .trim_start_matches("* ")
+                .trim();
+            if distro.is_empty()
+                || distro.eq_ignore_ascii_case("windows subsystem for linux distributions:")
+            {
+                None
+            } else {
+                Some(distro.to_string())
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn list_wsl_distros() -> Result<Vec<String>, String> {
+    let exe = wsl::find_wsl_exe().ok_or_else(|| "provider_wsl_unavailable".to_string())?;
+    let mut command = shell_resolver::silent_command(exe.to_string_lossy().as_ref());
+    command.args(["-l", "-q"]);
+    let output = shell_resolver::output_with_timeout(command, WSL_DISTRO_LIST_TIMEOUT)
+        .map_err(|_| "provider_wsl_list_failed".to_string())?;
+    if !output.status.success() {
+        return Err("provider_wsl_list_failed".to_string());
+    }
+    Ok(parse_wsl_distros(&output.stdout))
 }
 
 fn resolve_wsl_environment_id(input: &HomeSelectInput) -> Result<String, String> {
@@ -253,23 +300,23 @@ fn validate_wsl_home(raw: &str, distro: &str) -> Result<String, String> {
     if matches!(file_name.as_str(), ".claude" | ".codex" | ".grok") {
         return Err("provider_home_must_be_parent_directory".to_string());
     }
-    if !run_wsl(distro, "test", &["-d", &linux_path])
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-    {
-        return Err("provider_home_invalid".to_string());
-    }
-    if !run_wsl(distro, "test", &["-r", &linux_path])
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-    {
-        return Err("provider_home_not_readable".to_string());
-    }
-    if !run_wsl(distro, "test", &["-w", &linux_path])
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-    {
-        return Err("provider_home_not_writable".to_string());
+    let validation = run_wsl(
+        distro,
+        "sh",
+        &[
+            "-lc",
+            "if [ ! -d \"$1\" ]; then exit 1; elif [ ! -r \"$1\" ]; then exit 2; elif [ ! -w \"$1\" ]; then exit 3; fi",
+            "--",
+            &linux_path,
+        ],
+    )
+    .map_err(|_| "provider_wsl_probe_failed".to_string())?;
+    match validation.status.code() {
+        Some(0) => {}
+        Some(1) => return Err("provider_home_invalid".to_string()),
+        Some(2) => return Err("provider_home_not_readable".to_string()),
+        Some(3) => return Err("provider_home_not_writable".to_string()),
+        _ => return Err("provider_home_invalid".to_string()),
     }
     Ok(wsl::normalize_wsl_unc_path(raw))
 }
@@ -530,6 +577,28 @@ pub(crate) fn cached_state(kind: &str, id: &str) -> Option<ProviderHomeState> {
         .and_then(|values| values.get(&format!("{kind}:{id}")).cloned())
 }
 
+pub(crate) fn cached(
+    environment_kind: String,
+    environment_id: Option<String>,
+) -> Option<ProviderHomeState> {
+    let kind = environment_kind.trim().to_ascii_lowercase();
+    let id = environment_id
+        .unwrap_or_else(|| LOCAL_ENVIRONMENT_ID.to_string())
+        .trim()
+        .to_string();
+    if (kind != "local" && kind != "wsl") || id.is_empty() {
+        return None;
+    }
+    if kind == "local" && id != LOCAL_ENVIRONMENT_ID {
+        return None;
+    }
+    cached_state(&kind, &id)
+}
+
+pub(crate) fn active() -> Result<ProviderHomeState, String> {
+    active_state().ok_or_else(|| "provider_home_active_unavailable".to_string())
+}
+
 fn fallback_local_state() -> Option<ProviderHomeState> {
     let home = auto_local_home().ok()?.to_string_lossy().into_owned();
     Some(ProviderHomeState {
@@ -644,6 +713,25 @@ mod tests {
             parse_default_wsl_context(b"Ubuntu-22.04\n/"),
             Err("provider_wsl_probe_failed".to_string())
         );
+    }
+
+    #[test]
+    fn parses_wsl_distro_list_output() {
+        assert_eq!(
+            parse_wsl_distros(b"Ubuntu\r\nDebian\r\nUbuntu\r\n"),
+            vec!["Ubuntu", "Debian", "Ubuntu"]
+        );
+    }
+
+    #[test]
+    fn parses_utf16_wsl_distro_list_output() {
+        let mut output = vec![0xff, 0xfe];
+        output.extend(
+            "Ubuntu\r\nDebian\r\n"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        );
+        assert_eq!(parse_wsl_distros(&output), vec!["Ubuntu", "Debian"]);
     }
 
     #[test]

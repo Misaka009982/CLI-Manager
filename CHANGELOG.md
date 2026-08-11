@@ -2,7 +2,16 @@
 
 ## [TEMP]
 
+- 优化侧边栏项目树图标展示：移除项目树图标外围的圆形背景，保留历史树、统计树和项目选择器的原有样式。
+- 侧边栏供应商快捷切换现在复用设置中的全局供应商预览、确认与应用流程，目标为当前 CLI Home；选择成功后清理项目/Worktree 级覆盖，并在切换面板显示当前 Home 是本机还是 WSL（含发行版名称）及对应图标。
+- 优化 CLI Home 环境诊断布局：将 Home/供应商/CLI 状态、配置目标、Hook/历史根目录与环境变量冲突拆分为分组卡片和响应式双列网格，路径改为单独的次级信息行，状态徽章与“打开目标”操作不再挤在同一行。
+- 修复 CLI Home 保存 WSL 手动目录后关闭设置再打开仍恢复为本地 `host` 的问题：设置页现在读取已持久化的活动 Home 身份，保留 WSL 发行版、manual 模式与目录路径。
+- 修复 CLI Home 切换 Claude/Codex/Grok Build Tab 时重复刷新 WSL Home 导致卡顿的问题：Home 初始化只执行一次，路径卡片与环境诊断按当前 CLI 类型过滤显示。
+- 修复 CLI Home 本机与 WSL 环境切换时沿用另一套路径的问题：切换只恢复对应环境缓存，未缓存时清空旧结果，避免本机与 WSL 配置混用。
+- 优化进入 CLI Home 的首屏加载：不再同步等待 WSL Home 校验、全局当前状态或发行版扫描，先展示已缓存 Home，发行版列表改为非阻塞辅助加载。
+- 优化 CLI Home 保存/恢复 Home：不再自动串联当前供应商刷新和完整环境诊断；WSL 手动目录、读权限、写权限校验合并为一次 WSL 调用，减少冷启动等待。
 - 修复设置中 Claude/Codex Hook 卸载未同步删除 CC Switch 通用配置的问题：恢复本地 Hook 与 `common_config_claude` / `common_config_codex` 的安装、卸载及单模块同步，只移除 CLI-Manager 自有标记并保留用户和第三方配置；支持自定义 `ccSwitchDbPath`、默认路径与 WSL 安全事务写入，CC Switch 不可用时仍不阻断本地 Hook 操作。
+- 优化「设置 → 供应商目录 → CLI Home」运行环境切换：切换 local/WSL 或 WSL 发行版时不再立即触发耗时的 Home 识别与环境诊断，保留已显示结果，改由用户点击刷新后识别；切换到 WSL 时自动列出已安装发行版并提供选择，保留仍存在的当前发行版，否则默认选择列表第一项。中英文界面同步支持该流程。
 - 修复历史会话层级：Codex rollout 的 sub-agent 现在从 `session_meta` 读取 `parent_thread_id` / `forked_from_id` 并在历史列表中挂到主会话下，同时保留 Claude `subagents/agent-*.jsonl` 的路径兼容逻辑。
 - 终端侧边栏「实时统计」新增会话级 Agent 能力卡片：严格绑定当前 Tab 的原生 Session ID，统一展示 Claude、Codex、Pi、Grok Build、OpenCode 在本地、WSL 与 SSH 环境中的生效 MCP、正常/异常/检查中/未知健康状态，以及可用、禁用、拒绝、覆盖、无效 Skills；卡片使用跟随终端主题的 Agent 品牌图标徽章，点击 MCP 或 Skills 摘要会直接打开对应详情页签，长描述不会再把状态徽章挤出可视区域。详情弹窗支持状态筛选、来源与 24 小时时间、刷新和 Agent 原生只读深度检查，配置与错误全程脱敏；修复 Rust `toml 0.9` 将完整 Codex TOML 文档误当作单值解析、导致有效用户级与项目级配置重复显示 `config_parse_error` 的问题。新增 OpenCode 托管会话插件安装入口；SSH Agent `0.1.8` / protocol `1.11` 通过 `agentCapabilitiesV1` 提供远端诊断，旧 Agent 明确提示升级且不回退读取本机路径。
 - 「设置 → 供应商目录 → CLI Home」的派生路径卡片新增双重图标：左侧复用 Claude、Codex、Grok 的 AI Agent 品牌图标，右侧以文件夹、历史文件夹、配置文件和密钥图标及不同颜色标识资源类型，可同时快速区分所属 Agent 与目录/配置/认证用途；图标不替代现有中英文文本标签。

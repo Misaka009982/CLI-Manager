@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { Monitor } from "lucide-react";
 import type { Project, WorktreeRecord } from "../lib/types";
 import {
   getClaudeProviderOverride,
@@ -15,17 +16,36 @@ import {
 import { useI18n, type TranslationKey } from "../lib/i18n";
 import { useProjectStore } from "../stores/projectStore";
 import { useWorktreeStore } from "../stores/worktreeStore";
+import { useAppConfirm } from "./ui/useAppConfirm";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
-import { AlertTriangle, Boxes, Check, ChevronRight, Database, RefreshCw } from "./icons";
+import { AlertTriangle, Boxes, Check, ChevronRight, Database, Globe, RefreshCw } from "./icons";
 import { ProviderBadge, type ProviderBadgeTone } from "./provider/ProviderRow";
 import { VendorIcon, inferVendor, type VendorKey } from "./VendorIcon";
-import { providerErrorCode, type NativeProviderCard } from "./settings/providers/nativeProviderTypes";
+import {
+  providerErrorCode,
+  type NativeProviderCard,
+  type NativeProviderGlobalApplyResult,
+  type NativeProviderGlobalCurrent,
+  type NativeProviderGlobalPreview,
+  type NativeProviderHomeState,
+} from "./settings/providers/nativeProviderTypes";
+import { providerGlobalTargetRoot } from "./settings/providers/nativeProviderGlobalView";
 
 interface ProviderScopeResponse {
   appType: string;
   providerId: string;
   providerName: string;
   source: string;
+}
+
+function homeModeLabel(
+  home: NativeProviderHomeState | null,
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string,
+): string {
+  if (!home) return t("providerSwitch.homeUnavailable");
+  return home.identity.environmentKind === "wsl"
+    ? t("providerSwitch.homeWsl")
+    : t("providerSwitch.homeLocal");
 }
 
 type SwitchBadge = {
@@ -54,7 +74,7 @@ function formatError(
   if (code === "provider_not_ready" || code === "provider_key_not_active") {
     return t("providerSwitch.errors.notReady");
   }
-  if (code === "provider_current_not_set") {
+  if (code === "provider_current_not_set" || code === "provider_home_active_unavailable") {
     return t("providerSwitch.errors.currentNotSet");
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -212,6 +232,7 @@ interface Props {
 
 export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
   const { t } = useI18n();
+  const { confirm, confirmDialog } = useAppConfirm();
   const appType = getProviderSwitchAppType(project);
   const targetProviderOverrides = worktree?.provider_overrides ?? project.provider_overrides;
   const targetProject = useMemo<Project>(
@@ -225,6 +246,8 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
   );
   const [providers, setProviders] = useState<NativeProviderCard[]>([]);
   const [probe, setProbe] = useState<ProviderScopeResponse | null>(null);
+  const [home, setHome] = useState<NativeProviderHomeState | null>(null);
+  const [globalCurrent, setGlobalCurrent] = useState<NativeProviderGlobalCurrent | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [applyingId, setApplyingId] = useState<string | null>(null);
@@ -252,20 +275,37 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
     }
 
     try {
-      const list = await invoke<NativeProviderCard[]>("provider_catalog_list", { appType });
+      const [list, activeHome] = await Promise.all([
+        invoke<NativeProviderCard[]>("provider_catalog_list", { appType }),
+        invoke<NativeProviderHomeState>("provider_home_active_get"),
+      ]);
       setProviders(list.filter((provider) => provider.appType === appType));
-      try {
-        const resolved = await invoke<ProviderScopeResponse>("provider_scope_resolve", {
+      setHome(activeHome);
+      const [resolvedResult, currentResult] = await Promise.allSettled([
+        invoke<ProviderScopeResponse>("provider_scope_resolve", {
           input: {
             appType,
             projectId: project.id,
             worktreeId: worktree?.id ?? null,
             providerId: null,
           },
-        });
-        setProbe(resolved);
-      } catch (scopeError) {
-        setError(formatError(scopeError, t));
+        }),
+        invoke<NativeProviderGlobalCurrent>("provider_global_current", {
+          input: {
+            appType,
+            homeIdentity: activeHome.identity,
+          },
+        }),
+      ]);
+      if (resolvedResult.status === "fulfilled") {
+        setProbe(resolvedResult.value);
+      } else {
+        setError(formatError(resolvedResult.reason, t));
+      }
+      if (currentResult.status === "fulfilled") {
+        setGlobalCurrent(currentResult.value);
+      } else {
+        setError(formatError(currentResult.reason, t));
       }
     } catch (listError) {
       setProviders([]);
@@ -282,17 +322,53 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
   const applyProvider = async (provider: NativeProviderCard) => {
     if (applyingId || !appType) return;
     setApplyingId(provider.id);
+    const previousOverrides = targetProviderOverrides;
+    const hadOverride = Boolean(getOverride(targetProject, appType));
     try {
-      const nextProviderOverrides = withOverride(targetProviderOverrides, appType, provider);
-      await updateTargetProviderOverrides(nextProviderOverrides);
-      setProbe({
-        appType,
-        providerId: provider.id,
-        providerName: provider.name,
-        source: worktree ? "worktree" : "project",
+      if (!home) throw new Error("provider_home_active_unavailable");
+      const preview = await invoke<NativeProviderGlobalPreview>("provider_global_preview", {
+        input: {
+          appType,
+          providerId: provider.id,
+          homeIdentity: home.identity,
+        },
       });
+      const confirmed = await confirm({
+        title: t("providerCatalog.global.confirmTitle"),
+        message: t("providerCatalog.global.confirmMessage", {
+          provider: preview.providerName,
+          home: providerGlobalTargetRoot(preview),
+        }),
+        confirmText: t("providerCatalog.global.apply"),
+        danger: true,
+      });
+      if (!confirmed) return;
+
+      if (hadOverride) {
+        await updateTargetProviderOverrides(withOverride(previousOverrides, appType, null));
+      }
+      let result: NativeProviderGlobalApplyResult;
+      try {
+        result = await invoke<NativeProviderGlobalApplyResult>("provider_global_apply", {
+          input: {
+            appType,
+            providerId: provider.id,
+            homeIdentity: home.identity,
+            previewFingerprint: preview.fingerprint,
+          },
+        });
+      } catch (applyError) {
+        if (hadOverride) {
+          await updateTargetProviderOverrides(previousOverrides).catch(() => undefined);
+        }
+        throw applyError;
+      }
+      setProbe({ appType, providerId: result.providerId, providerName: provider.name, source: "global" });
+      setGlobalCurrent((current) => current
+        ? { ...current, providerId: result.providerId, providerName: provider.name, state: "applied" }
+        : current);
       toast.success(t("providerSwitch.applySuccess"), {
-        description: t("providerSwitch.applyDescription", { name: provider.name }),
+        description: t("providerSwitch.globalApplyDescription", { name: provider.name }),
       });
       await useProjectStore.getState().refreshProviderBadges();
     } catch (applyError) {
@@ -330,7 +406,7 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
 
   const hasOverride = probe?.source === "project" || probe?.source === "worktree";
   const followGlobal = probe?.source === "global";
-  const globalCurrentName = providers.find((provider) => provider.isCurrent)?.name ?? null;
+  const globalCurrentName = globalCurrent?.providerName ?? providers.find((provider) => provider.isCurrent)?.name ?? null;
   const hasCustomProviderStartup = Boolean(project.startup_cmd.trim());
   const override = getOverride(targetProject, appType);
 
@@ -348,6 +424,16 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
           </DialogTitle>
           {appType && (
             <span className="text-xs text-text-muted">{providerTypeLabel(appType, t)}</span>
+          )}
+        </div>
+        <div
+          className="mb-2 flex items-center gap-1.5 text-[11px] text-text-muted"
+          aria-label={t("providerSwitch.homeModeAria", { mode: homeModeLabel(home, t) })}
+        >
+          {home?.identity.environmentKind === "wsl" ? <Globe size={14} /> : <Monitor size={14} />}
+          <span>{homeModeLabel(home, t)}</span>
+          {home?.identity.environmentKind === "wsl" && home.identity.environmentId && (
+            <span className="truncate" title={home.identity.environmentId}>· {home.identity.environmentId}</span>
           )}
         </div>
         <p className="mb-3 break-all text-xs text-text-muted" title={targetProject.path}>
@@ -407,7 +493,7 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
         {!loading && providers.length > 0 && (
           <div className="ui-thin-scroll max-h-[50vh] space-y-2.5 overflow-y-auto pr-0">
             {providers.map((provider) => {
-              const selected = hasOverride && probe?.providerId === provider.id;
+              const selected = probe?.providerId === provider.id && (hasOverride || probe?.source === "global");
               const vendor = inferProviderVendor(provider);
               const subtitle = provider.baseUrl ?? provider.category ?? undefined;
               const badges: SwitchBadge[] = [];
@@ -453,6 +539,7 @@ export function ProviderSwitchModal({ project, worktree, onClose }: Props) {
           <p className="mt-3 text-xs text-text-muted">{t("providerSwitch.customStartupHint")}</p>
         )}
       </DialogContent>
+      {confirmDialog}
     </Dialog>
   );
 }

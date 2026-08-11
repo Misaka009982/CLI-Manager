@@ -63,6 +63,11 @@ form must not hide URL, key or model in a generic configuration textarea.
 - Global apply is an explicit preview -> confirmation -> progress -> verified
   result flow. It tells users it writes the selected Home’s real CLI files and
   applies to new CLI processes only.
+- The sidebar provider quick-switch uses the same global preview -> confirmation
+  -> apply flow against the active CLI Home. It must not create a project or
+  Worktree override; when an older override exists, successful global apply
+  clears it, and a failed apply restores it. The quick-switch header shows a
+  localized local/WSL icon and, for WSL, the selected distribution.
 - The project/Worktree selector lists native providers and visibly resolves
   Worktree > project > global. Reset means follow the next lower scope.
 - Home selection offers auto, choose folder, paste absolute path and reset.
@@ -74,13 +79,18 @@ form must not hide URL, key or model in a generic configuration textarea.
   It shows derived Claude/Codex/Grok live/config/history/Hook paths and warns
   if a feature has an explicit root not following Home. It never performs an
   unrequested Hook install/uninstall/move.
-- In WSL auto mode, keep the Home text input editable; the first edit changes
-  the draft to manual mode so a WSL UNC path can be pasted without a dead-end
-  UI.
-- Switching from local to WSL clears the reserved local `host` identity. When
-  the WSL identity is absent, the backend resolves the default distribution
-  and its real user Home, then the frontend adopts the returned distribution
-  identity together with the normalized UNC path.
+- In WSL mode, the environment selector lists installed distributions from the
+  read-only `provider_wsl_list_distros` command. Preserve the current selected
+  distribution when it still exists; otherwise select the first returned item.
+  Local mode keeps the reserved `host` identity.
+- Switching environment or WSL distribution only changes the draft selection:
+  preserve the last successfully loaded Home/diagnostic snapshot and do not
+  call Home detection or environment inspection until the user explicitly
+  refreshes, saves, or resets. WSL draft changes must not trigger the Home
+  preview probe; local manual-path previews remain allowed.
+- The WSL distribution list may load automatically on entering WSL because it
+  is only an enumeration request; list failure/empty results remain retryable
+  and must not block local mode.
 - Home adoption passes the selected CLI config root to the history binding
   synchronizer; Grok derives its single `.grok/sessions` history root there,
   so the UI must not pass an already-derived `sessions` path.
@@ -266,6 +276,36 @@ form must not hide URL, key or model in a generic configuration textarea.
   distinguishable from merely queued or ready providers.
 - The “In use” badge uses a filled, high-contrast style rather than a light
   status pill so it remains legible among queue membership and health badges.
+
+## CLI Home persisted active-state restore contract (2026-08-11)
+
+- On CLI Home mount, the frontend calls `provider_home_active_get` and uses its
+  returned identity, mode and Home path as the initial editor state. It must
+  not default the editor to `local:host` by calling `provider_home_get`.
+- The initial mount must not await `provider_global_current`, environment
+  inspection, or WSL Home validation. The cached Home state must render first;
+  WSL distribution enumeration may run as a non-blocking auxiliary request.
+- Restoring an active WSL Home may separately load the WSL distribution list;
+  that list request must not perform Home `$HOME` detection. The selected
+  persisted distro remains preferred when it is still installed.
+- Explicit refresh, save and reset continue to use the current draft identity
+  and update the editor from the backend result. Current-provider feedback must
+  use that returned identity rather than a stale pre-action closure.
+- If the active-state read fails, show the existing localized Home preference
+  error and keep the page recoverable through the existing explicit actions.
+- Switching the Claude/Codex/Grok Build type tab must not rerun the active Home
+  load, WSL distribution enumeration, Home detection, or environment inspect.
+  The Home target cards and environment diagnostics shown below the tabs must
+  be filtered to the selected app type; stale app-specific diagnostics are
+  cleared until the user explicitly refreshes.
+- Local and WSL are separate Home identities. When the environment selector
+  changes, restore only the selected identity's cached Home state; on a cache
+  miss clear the previous Home/path/diagnostic display. Never show local paths
+  under WSL or WSL paths under local merely because detection was deferred.
+- Saving or resetting Home updates only the selected Home state and clears
+  stale current-provider/diagnostic output. It must not automatically invoke
+  `provider_global_current` or `provider_environment_inspect`; the explicit
+  top refresh action owns that full follow-up.
 
 ## Provider key visual clarity contract (2026-08-07)
 

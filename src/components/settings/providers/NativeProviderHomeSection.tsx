@@ -36,7 +36,9 @@ import type {
   NativeProviderAppType,
   NativeProviderEnvironmentKind,
   NativeProviderHomeInput,
+  NativeProviderHomeState,
 } from "./nativeProviderTypes";
+import type { ReactNode } from "react";
 
 interface NativeProviderHomeSectionProps {
   appType: NativeProviderAppType;
@@ -63,10 +65,12 @@ const ERROR_TRANSLATIONS: Partial<Record<string, TranslationKey>> = {
   provider_home_must_be_parent_directory: "providerCatalog.home.errors.mustBeParent",
   provider_home_environment_mismatch: "providerCatalog.home.errors.environmentMismatch",
   provider_home_cache_unavailable: "providerCatalog.home.errors.preference",
+  provider_home_active_unavailable: "providerCatalog.home.errors.preference",
   provider_home_preference_read_failed: "providerCatalog.home.errors.preference",
   provider_home_preference_write_failed: "providerCatalog.home.errors.preference",
   provider_wsl_unavailable: "providerCatalog.home.errors.wslUnavailable",
   provider_wsl_probe_failed: "providerCatalog.home.errors.wslProbeFailed",
+  provider_wsl_list_failed: "providerCatalog.home.errors.wslListFailed",
   provider_apply_conflict: "providerCatalog.global.errors.conflict",
   provider_apply_failed: "providerCatalog.global.errors.failed",
   provider_apply_backup_failed: "providerCatalog.global.errors.failed",
@@ -115,14 +119,27 @@ export function NativeProviderHomeSection({
   const busy = Boolean(state.action) || state.loading;
   const currentHome = state.previewHome ?? state.home;
   const homePreviewPending = Boolean(state.previewHome);
+  const homePathItems = currentHome ? buildHomePathItems(currentHome, appType, t) : [];
   const [adoptingHome, setAdoptingHome] = useState(false);
 
   const refreshHomeAndDiagnostics = async (
-    refresh: () => Promise<void>,
+    refresh: (environmentIdOverride?: string) => Promise<void>,
     homeInputOverride?: NativeProviderHomeInput,
+    refreshDistros = false,
   ) => {
-    await refresh();
-    await state.inspectEnvironment(undefined, undefined, homeInputOverride);
+    const selectedDistro = refreshDistros && state.environmentKind === "wsl"
+      ? await state.refreshWslDistros(state.environmentId, false)
+      : null;
+    const effectiveHomeInputOverride = selectedDistro
+      ? {
+          environmentKind: "wsl" as const,
+          environmentId: selectedDistro,
+          mode: state.mode,
+          homePath: state.mode === "manual" ? state.homePath.trim() : null,
+        }
+      : homeInputOverride;
+    await refresh(selectedDistro ?? undefined);
+    await state.inspectEnvironment(undefined, undefined, effectiveHomeInputOverride);
   };
 
   const adoptSelectedHome = async () => {
@@ -184,9 +201,9 @@ export function NativeProviderHomeSection({
                 size="compact-sm"
                 variant="subtle"
                 color="gray"
-                loading={state.loading}
+                loading={state.loading || state.wslDistrosLoading}
                 aria-label={t("common.refresh")}
-                onClick={() => void refreshHomeAndDiagnostics(state.refreshHome).catch(() => undefined)}
+                onClick={() => void refreshHomeAndDiagnostics(state.refreshHome, undefined, true).catch(() => undefined)}
               >
                 <RefreshCw size={15} />
               </Button>
@@ -222,13 +239,30 @@ export function NativeProviderHomeSection({
                 disabled={busy}
                 onChange={(value) => state.setEnvironmentKind((value as NativeProviderEnvironmentKind) || "local")}
               />
-              <TextInput
-                label={t("providerCatalog.home.environmentId")}
-                value={state.environmentId}
-                disabled={busy || state.environmentKind === "local"}
-                placeholder={t("providerCatalog.home.environmentIdPlaceholder")}
-                onChange={(event) => state.setEnvironmentId(event.currentTarget.value)}
-              />
+              {state.environmentKind === "wsl" ? (
+                <Group align="flex-end" gap={4} wrap="nowrap" className="min-w-0">
+                  <Select
+                    className="min-w-0 flex-1"
+                    label={t("providerCatalog.home.environmentId")}
+                    value={state.environmentId || null}
+                    data={state.wslDistros.map((distro) => ({ value: distro, label: distro }))}
+                    disabled={busy}
+                    placeholder={t("providerCatalog.home.environmentIdPlaceholder")}
+                    nothingFoundMessage={t("providerCatalog.home.wslDistrosEmpty")}
+                    error={state.wslDistrosErrorCode
+                      ? t(ERROR_TRANSLATIONS[state.wslDistrosErrorCode] ?? "providerCatalog.home.errors.wslListFailed")
+                      : undefined}
+                    onChange={(value) => state.setEnvironmentId(value ?? "")}
+                  />
+                </Group>
+              ) : (
+                <TextInput
+                  label={t("providerCatalog.home.environmentId")}
+                  value={state.environmentId}
+                  disabled
+                  placeholder={t("providerCatalog.home.environmentIdPlaceholder")}
+                />
+              )}
               <Select
                 label={t("providerCatalog.home.mode")}
                 value={state.mode}
@@ -271,8 +305,10 @@ export function NativeProviderHomeSection({
                 color="cliPrimary"
                 leftSection={<Save size={15} />}
                 loading={state.action === "select-home"}
-                disabled={busy || (state.mode === "manual" && !state.homePath.trim())}
-                onClick={() => void refreshHomeAndDiagnostics(state.selectHome).catch(() => undefined)}
+                disabled={busy
+                  || (state.environmentKind === "wsl" && !state.environmentId.trim())
+                  || (state.mode === "manual" && !state.homePath.trim())}
+                onClick={() => void state.selectHome().catch(() => undefined)}
               >
                 {t("providerCatalog.home.save")}
               </Button>
@@ -281,15 +317,8 @@ export function NativeProviderHomeSection({
                 variant="light"
                 leftSection={<RotateCcw size={15} />}
                 loading={state.action === "reset-home"}
-                disabled={busy}
-                onClick={() => void refreshHomeAndDiagnostics(state.resetHome, {
-                  environmentKind: state.environmentKind,
-                  environmentId: state.environmentKind === "local"
-                    ? null
-                    : state.environmentId.trim() || null,
-                  mode: "auto",
-                  homePath: null,
-                }).catch(() => undefined)}
+                disabled={busy || (state.environmentKind === "wsl" && !state.environmentId.trim())}
+                onClick={() => void state.resetHome().catch(() => undefined)}
               >
                 {t("providerCatalog.home.reset")}
               </Button>
@@ -312,66 +341,9 @@ export function NativeProviderHomeSection({
             {currentHome && (
               <Stack gap="xs">
                 <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
-                  <PathItem
-                    agentIcon={<CliToolIcon icon="claude-code" size={15} />}
-                    icon={<Folder className="text-blue-500" size={14} />}
-                    label={t("providerCatalog.home.claude")}
-                    path={currentHome.targets.claudeConfigDir}
-                  />
-                  <PathItem
-                    agentIcon={<CliToolIcon icon="codex" size={15} />}
-                    icon={<Folder className="text-blue-500" size={14} />}
-                    label={t("providerCatalog.home.codex")}
-                    path={currentHome.targets.codexConfigDir}
-                  />
-                  <PathItem
-                    agentIcon={<CliToolIcon icon="grok" size={15} />}
-                    icon={<Folder className="text-blue-500" size={14} />}
-                    label={t("providerCatalog.home.grok")}
-                    path={currentHome.targets.grokConfigDir}
-                  />
-                  <PathItem
-                    agentIcon={<CliToolIcon icon="claude-code" size={15} />}
-                    icon={<FileCog className="text-violet-500" size={14} />}
-                    label={t("providerCatalog.home.claudeSettings")}
-                    path={appendPath(currentHome.targets.claudeConfigDir, "settings.json")}
-                  />
-                  <PathItem
-                    agentIcon={<CliToolIcon icon="codex" size={15} />}
-                    icon={<KeyRound className="text-amber-500" size={14} />}
-                    label={t("providerCatalog.home.codexAuth")}
-                    path={appendPath(currentHome.targets.codexConfigDir, "auth.json")}
-                  />
-                  <PathItem
-                    agentIcon={<CliToolIcon icon="codex" size={15} />}
-                    icon={<FileCog className="text-violet-500" size={14} />}
-                    label={t("providerCatalog.home.codexConfig")}
-                    path={appendPath(currentHome.targets.codexConfigDir, "config.toml")}
-                  />
-                  <PathItem
-                    agentIcon={<CliToolIcon icon="grok" size={15} />}
-                    icon={<FileCog className="text-violet-500" size={14} />}
-                    label={t("providerCatalog.home.grokConfig")}
-                    path={appendPath(currentHome.targets.grokConfigDir, "config.toml")}
-                  />
-                  <PathItem
-                    agentIcon={<CliToolIcon icon="claude-code" size={15} />}
-                    icon={<FolderClock className="text-teal-500" size={14} />}
-                    label={t("providerCatalog.home.claudeHistory")}
-                    path={currentHome.targets.claudeHistoryRoot}
-                  />
-                  <PathItem
-                    agentIcon={<CliToolIcon icon="codex" size={15} />}
-                    icon={<FolderClock className="text-teal-500" size={14} />}
-                    label={t("providerCatalog.home.codexHistory")}
-                    path={currentHome.targets.codexHistoryRoot}
-                  />
-                  <PathItem
-                    agentIcon={<CliToolIcon icon="grok" size={15} />}
-                    icon={<FolderClock className="text-teal-500" size={14} />}
-                    label={t("providerCatalog.home.grokHistory")}
-                    path={currentHome.targets.grokHistoryRoot}
-                  />
+                  {homePathItems.map(({ key, ...item }) => (
+                    <PathItem key={key} {...item} />
+                  ))}
                 </SimpleGrid>
                 <Button
                   size="xs"
@@ -394,10 +366,107 @@ export function NativeProviderHomeSection({
           providerId={providerId}
           onGlobalApplied={onGlobalApplied}
         />
-        <NativeProviderEnvironmentSection state={state} />
+        <NativeProviderEnvironmentSection appType={appType} state={state} />
       </Stack>
     </>
   );
+}
+
+interface HomePathItem {
+  key: string;
+  agentIcon: ReactNode;
+  icon: ReactNode;
+  label: string;
+  path: string;
+}
+
+function buildHomePathItems(
+  home: NativeProviderHomeState,
+  appType: NativeProviderAppType,
+  t: (key: TranslationKey) => string,
+): HomePathItem[] {
+  if (appType === "claude") {
+    return [
+      {
+        key: "claude-directory",
+        agentIcon: <CliToolIcon icon="claude-code" size={15} />,
+        icon: <Folder className="text-blue-500" size={14} />,
+        label: t("providerCatalog.home.claude"),
+        path: home.targets.claudeConfigDir,
+      },
+      {
+        key: "claude-settings",
+        agentIcon: <CliToolIcon icon="claude-code" size={15} />,
+        icon: <FileCog className="text-violet-500" size={14} />,
+        label: t("providerCatalog.home.claudeSettings"),
+        path: appendPath(home.targets.claudeConfigDir, "settings.json"),
+      },
+      {
+        key: "claude-history",
+        agentIcon: <CliToolIcon icon="claude-code" size={15} />,
+        icon: <FolderClock className="text-teal-500" size={14} />,
+        label: t("providerCatalog.home.claudeHistory"),
+        path: home.targets.claudeHistoryRoot,
+      },
+    ];
+  }
+
+  if (appType === "codex") {
+    return [
+      {
+        key: "codex-directory",
+        agentIcon: <CliToolIcon icon="codex" size={15} />,
+        icon: <Folder className="text-blue-500" size={14} />,
+        label: t("providerCatalog.home.codex"),
+        path: home.targets.codexConfigDir,
+      },
+      {
+        key: "codex-auth",
+        agentIcon: <CliToolIcon icon="codex" size={15} />,
+        icon: <KeyRound className="text-amber-500" size={14} />,
+        label: t("providerCatalog.home.codexAuth"),
+        path: appendPath(home.targets.codexConfigDir, "auth.json"),
+      },
+      {
+        key: "codex-config",
+        agentIcon: <CliToolIcon icon="codex" size={15} />,
+        icon: <FileCog className="text-violet-500" size={14} />,
+        label: t("providerCatalog.home.codexConfig"),
+        path: appendPath(home.targets.codexConfigDir, "config.toml"),
+      },
+      {
+        key: "codex-history",
+        agentIcon: <CliToolIcon icon="codex" size={15} />,
+        icon: <FolderClock className="text-teal-500" size={14} />,
+        label: t("providerCatalog.home.codexHistory"),
+        path: home.targets.codexHistoryRoot,
+      },
+    ];
+  }
+
+  return [
+    {
+      key: "grok-directory",
+      agentIcon: <CliToolIcon icon="grok" size={15} />,
+      icon: <Folder className="text-blue-500" size={14} />,
+      label: t("providerCatalog.home.grok"),
+      path: home.targets.grokConfigDir,
+    },
+    {
+      key: "grok-config",
+      agentIcon: <CliToolIcon icon="grok" size={15} />,
+      icon: <FileCog className="text-violet-500" size={14} />,
+      label: t("providerCatalog.home.grokConfig"),
+      path: appendPath(home.targets.grokConfigDir, "config.toml"),
+    },
+    {
+      key: "grok-history",
+      agentIcon: <CliToolIcon icon="grok" size={15} />,
+      icon: <FolderClock className="text-teal-500" size={14} />,
+      label: t("providerCatalog.home.grokHistory"),
+      path: home.targets.grokHistoryRoot,
+    },
+  ];
 }
 
 function appendPath(root: string, name: string): string {
