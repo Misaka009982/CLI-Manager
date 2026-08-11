@@ -9,6 +9,7 @@
 - Windows 为宠物与 Bubble 应用各自的多矩形原生命中区域，卡片之间的透明间隙可点击穿透；区域事务失败会恢复完整窗口命中，避免决策入口失效。macOS/Linux 使用完整窗口命中的安全回退，不宣称具备 Windows 等价穿透。Bubble 以无激活方式显示并使用独立最小权限 capability；窗口生命周期由 token、surface epoch 与单调 revision 防止隐藏后迟到请求复现。
 - Pi Extension 新增运行心跳、最终 `error`/`aborted` 中断上报，以及 `question` / `questionnaire` 的桌宠显式回答桥；显式名为 `cli_manager_permission` 的权限生产者也可接入同一决策通道，但桥接本身不注册模型可调用的权限工具、不拦截普通工具。前端与 daemon 都会独立判定 60 秒心跳中断并合并为同一事故；决策卡在桌宠关闭、临时隐藏或全屏自动隐藏时仍会强制可见，后台事故可先恢复 daemon 会话再跳回。broker 会感知前端消费者断开并回退 Pi 原生 UI，乱序终态不会删除更新的决策，任何路径都不自动批准、拒绝或代答。桌宠窗口生命周期仍由 CLI-Manager 管理，Pi 不注册桌宠控制命令。
 - 修复旧版 CLI-Manager 自有 Pi Extension 缺少 `sourceInstanceId`、被新版 Hook 入口拒绝后所有 Pi 会话显示“无运行状态”的问题；安装状态现在会识别扩展资源是否与当前协议兼容，Pi 桥接启用时会保留原模块选择并自动升级自有旧扩展，第三方同名文件仍不会被覆盖。
+- 修复 Pi Extension 与已有 `question.ts` / `questionnaire.ts` 同名工具冲突、导致 Pi 在扩展加载阶段无法启动的问题；对应桥接接口会等全部扩展加载完成后检查当前工具表，仅在检测到已有 `question` / `questionnaire` 工具时加载，缺少插件则直接跳过。
 
 ## [V1.3.5]
 

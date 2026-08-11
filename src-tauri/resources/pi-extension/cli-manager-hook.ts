@@ -610,13 +610,18 @@ function registerQuestionnaireBridge(pi: ExtensionAPI): void {
   });
 }
 
-export default function cliManagerHook(pi: ExtensionAPI) {
-  registerQuestionBridge(pi);
-  registerQuestionnaireBridge(pi);
+function loadDetectedDecisionBridges(pi: ExtensionAPI): void {
+  // 只接入已安装的同名工具；缺少插件时不提供 fallback。
+  const existingTools = new Set(pi.getAllTools().map((tool) => tool.name));
+  if (existingTools.has("question")) registerQuestionBridge(pi);
+  if (existingTools.has("questionnaire")) registerQuestionnaireBridge(pi);
+}
 
+export default function cliManagerHook(pi: ExtensionAPI) {
   pi.on("tool_call", requestPermissionDecision);
 
   pi.on("session_start", async (_event, ctx) => {
+    loadDetectedDecisionBridges(pi);
     activeSessionId = readSessionId(ctx);
     await postHookEvent("SessionStart", activeSessionId);
   });

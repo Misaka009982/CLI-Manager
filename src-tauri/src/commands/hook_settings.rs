@@ -5230,6 +5230,26 @@ model_instructions_file = "./instruction.md"
         assert!(extension.contains("/api/pi-decision/poll"));
         assert!(extension.contains("registerQuestionBridge"));
         assert!(extension.contains("registerQuestionnaireBridge"));
+        assert!(extension.contains("loadDetectedDecisionBridges"));
+        assert!(extension.contains("pi.getAllTools()"));
+        assert!(extension.contains(
+            r#"if (existingTools.has("question")) registerQuestionBridge(pi);"#
+        ));
+        assert!(extension.contains(
+            r#"if (existingTools.has("questionnaire")) registerQuestionnaireBridge(pi);"#
+        ));
+        assert!(!extension.contains("if (!existingTools.has("));
+        assert!(extension.contains("loadDetectedDecisionBridges(pi);"));
+        let entrypoint = extension
+            .split_once("export default function cliManagerHook(pi: ExtensionAPI) {")
+            .map(|(_, value)| value)
+            .expect("Pi extension entrypoint should exist");
+        let before_session_start = entrypoint
+            .split_once("pi.on(\"session_start\"")
+            .map(|(value, _)| value)
+            .expect("Pi extension should register session_start");
+        assert!(!before_session_start.contains("registerQuestionBridge(pi);"));
+        assert!(!before_session_start.contains("registerQuestionnaireBridge(pi);"));
         assert!(extension.contains("Error: No options provided"));
         assert!(extension.contains("ctx.mode !== \"tui\""));
         assert!(extension.contains("removeEventListener(\"abort\", handleAbort)"));
