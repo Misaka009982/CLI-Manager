@@ -211,6 +211,7 @@ pub(crate) struct SessionFileRef {
 #[derive(Clone)]
 struct SessionSummaryScan {
     session_id: Option<String>,
+    parent_session_id: Option<String>,
     message_count: usize,
     first_user_message: Option<String>,
     first_message: Option<String>,
@@ -276,6 +277,8 @@ struct CachedSessionComputation {
     created_at: i64,
     updated_at: i64,
     session_id: String,
+    #[serde(default)]
+    parent_session_id: Option<String>,
     title: String,
     message_count: usize,
     branch: Option<String>,
@@ -489,6 +492,8 @@ pub struct HistoryMessage {
 #[serde(rename_all = "camelCase")]
 pub struct HistorySessionSummary {
     pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
     pub source: String,
     pub project_key: String,
     pub title: String,
@@ -2951,6 +2956,7 @@ async fn opencode_stats_facts(
 fn opencode_summary_from_parsed(parsed: &OpenCodeParsedSession) -> HistorySessionSummary {
     HistorySessionSummary {
         session_id: parsed.computed.session_id.clone(),
+        parent_session_id: parsed.computed.parent_session_id.clone(),
         source: "opencode".to_string(),
         project_key: parsed.file_ref.project_key.clone(),
         title: parsed.computed.title.clone(),
@@ -4013,6 +4019,7 @@ fn summary_from_computation(
 ) -> HistorySessionSummary {
     HistorySessionSummary {
         session_id: computed.session_id.clone(),
+        parent_session_id: computed.parent_session_id.clone(),
         source: file_ref.source.clone(),
         project_key: file_ref.project_key.clone(),
         title: computed.title.clone(),
@@ -4090,6 +4097,7 @@ fn build_session_computation(
         created_at,
         updated_at,
         session_id,
+        parent_session_id: summary_scan.parent_session_id,
         title,
         message_count: summary_scan.message_count,
         branch: summary_scan.branch,
@@ -4700,6 +4708,7 @@ fn merge_session_detail_parts(
             },
             updated_at,
             session_id: parent_session_id,
+            parent_session_id: None,
             title: parent_title,
             message_count: messages.len(),
             branch,
@@ -4805,6 +4814,7 @@ fn convert_history_session(
     let title = codex_history_index_text(detail).unwrap_or_else(|| detail.title.clone());
     let summary = HistorySessionSummary {
         session_id: session_id.clone(),
+        parent_session_id: None,
         source: target_source.clone(),
         project_key: file_ref.project_key.clone(),
         title,
@@ -5935,6 +5945,7 @@ async fn parse_opencode_session_row(
         created_at,
         updated_at,
         session_id,
+        parent_session_id: None,
         title,
         message_count: messages.len(),
         branch: None,
@@ -8013,6 +8024,36 @@ fn extract_session_meta_id(value: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+fn extract_session_meta_parent_id(value: &Value) -> Option<String> {
+    if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return None;
+    }
+    let payload = value.get("payload")?;
+    let source_parent = payload
+        .get("source")
+        .and_then(|source| source.get("subagent"))
+        .and_then(|subagent| subagent.get("thread_spawn"))
+        .and_then(|spawn| {
+            spawn
+                .get("parent_thread_id")
+                .or_else(|| spawn.get("parentThreadId"))
+        })
+        .and_then(Value::as_str);
+    [
+        payload.get("parent_thread_id"),
+        payload.get("parentThreadId"),
+        payload.get("forked_from_id"),
+        payload.get("forkedFromId"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .chain(source_parent)
+    .map(str::trim)
+    .find(|id| !id.is_empty())
+    .map(str::to_string)
+}
+
 /// 单遍扫描会话文件，产出 summary 与 stats；`collect_messages` 为 true 时同时收集完整消息列表
 /// （供 detail 复用同一次 IO/解析，避免二次读取）。消息的 model 回填与重复 usage 行清空语义
 /// 与 `iter_session_messages` 保持一致。
@@ -8045,6 +8086,7 @@ fn scan_session_inner(
             return (
                 SessionSummaryScan {
                     session_id: None,
+                    parent_session_id: None,
                     message_count: 0,
                     first_user_message: None,
                     first_message: None,
@@ -8057,6 +8099,7 @@ fn scan_session_inner(
     };
 
     let mut session_id: Option<String> = None;
+    let mut parent_session_id: Option<String> = None;
     let mut message_count = 0usize;
     let mut first_user_message: Option<String> = None;
     let mut first_message: Option<String> = None;
@@ -8110,6 +8153,9 @@ fn scan_session_inner(
         }
         if session_id.is_none() {
             session_id = extract_session_meta_id(&value);
+        }
+        if parent_session_id.is_none() {
+            parent_session_id = extract_session_meta_parent_id(&value);
         }
 
         let line_reasoning_effort = extract_reasoning_effort(&value);
@@ -8280,6 +8326,7 @@ fn scan_session_inner(
     (
         SessionSummaryScan {
             session_id,
+            parent_session_id,
             message_count,
             first_user_message,
             first_message,
@@ -9459,6 +9506,7 @@ fn empty_session_scan() -> (SessionSummaryScan, SessionStatsScan, Vec<HistoryMes
     (
         SessionSummaryScan {
             session_id: None,
+            parent_session_id: None,
             message_count: 0,
             first_user_message: None,
             first_message: None,
@@ -9718,6 +9766,7 @@ fn json_session_scan_result(
                 .map(str::trim)
                 .filter(|id| !id.is_empty())
                 .map(str::to_string),
+            parent_session_id: None,
             message_count: messages.len(),
             first_user_message,
             first_message,
@@ -13801,6 +13850,7 @@ mod tests {
             created_at: 1,
             updated_at: 2,
             session_id: "session-a".to_string(),
+            parent_session_id: None,
             title: "session-a".to_string(),
             message_count: 0,
             branch: None,
@@ -14460,6 +14510,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             session_id: "g2".to_string(),
+            parent_session_id: None,
             title: "g2".to_string(),
             message_count: 0,
             branch: None,
@@ -14901,6 +14952,7 @@ mod tests {
                 created_at: DAY_MS,
                 updated_at: DAY_MS,
                 session_id: "session-1".to_string(),
+                parent_session_id: None,
                 title: "priced session".to_string(),
                 message_count: 1,
                 branch: None,
@@ -14998,6 +15050,24 @@ mod tests {
         let computed = scan_session_computation(&file, 1, 2);
 
         assert_eq!(computed.session_id, "019ed4a1-d197-75d0-950c-28cb3bbed404");
+    }
+
+    #[test]
+    fn build_session_computation_extracts_codex_parent_thread_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("rollout-child.jsonl");
+        write_text(
+            &file,
+            r#"{"type":"session_meta","payload":{"id":"child-session","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-session","depth":1}}}}}"#,
+        );
+
+        let computed = scan_session_computation(&file, 1, 2);
+
+        assert_eq!(computed.session_id, "child-session");
+        assert_eq!(
+            computed.parent_session_id.as_deref(),
+            Some("parent-session")
+        );
     }
 
     #[test]

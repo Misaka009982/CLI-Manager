@@ -587,6 +587,7 @@ export interface HistorySessionSummary {
   project_key: string;
   title: string;
   file_path: string;
+  parent_session_id?: string | null;
   cwd?: string | null;
   created_at: number;
   updated_at: number;

@@ -317,6 +317,7 @@ function normalizeSummary(raw: unknown): HistorySessionSummary {
     project_key: asString(rec.project_key ?? rec.projectKey),
     title: asString(rec.title),
     file_path: asString(rec.file_path ?? rec.filePath),
+    parent_session_id: asString(rec.parent_session_id ?? rec.parentSessionId ?? "") || null,
     cwd: asString(rec.cwd ?? "") || null,
     created_at: asNumber(rec.created_at ?? rec.createdAt),
     updated_at: asNumber(rec.updated_at ?? rec.updatedAt),
