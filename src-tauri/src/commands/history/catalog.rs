@@ -140,6 +140,9 @@ async fn ensure_schema(conn: &mut SqliteConnection) -> Result<(), String> {
         .await
         .map_err(|err| err.to_string())?;
     if current_version >= HISTORY_INDEX_SCHEMA_VERSION {
+        if !compact_fts_schema_ready(conn).await? {
+            rebuild_compact_fts(conn).await?;
+        }
         return Ok(());
     }
     let statements = [
@@ -219,6 +222,24 @@ async fn ensure_schema(conn: &mut SqliteConnection) -> Result<(), String> {
     }
     ensure_v2_schema(conn, current_version).await?;
     Ok(())
+}
+
+async fn compact_fts_schema_ready(conn: &mut SqliteConnection) -> Result<bool, String> {
+    for table in ["history_catalog_messages_fts", "history_messages_fts"] {
+        let sql: Option<String> =
+            sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1")
+                .bind(table)
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(|err| err.to_string())?;
+        if !sql
+            .map(|value| value.to_ascii_lowercase().contains("detail='none'"))
+            .unwrap_or(false)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 async fn ensure_v2_schema(conn: &mut SqliteConnection, current_version: i64) -> Result<(), String> {
@@ -4274,6 +4295,68 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(version, HISTORY_INDEX_SCHEMA_VERSION);
+    }
+
+    #[tokio::test]
+    async fn current_version_rebuilds_legacy_fts_schema() {
+        let mut conn = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        ensure_schema(&mut conn).await.unwrap();
+        for trigger in [
+            "history_catalog_messages_ai",
+            "history_catalog_messages_ad",
+            "history_catalog_messages_au",
+            "history_messages_ai",
+            "history_messages_ad",
+            "history_messages_au",
+        ] {
+            sqlx::query(&format!("DROP TRIGGER {trigger}"))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        for (table, column, source_table) in [
+            (
+                "history_catalog_messages_fts",
+                "content",
+                "history_catalog_messages",
+            ),
+            (
+                "history_messages_fts",
+                "display_content",
+                "history_messages",
+            ),
+        ] {
+            sqlx::query(&format!("DROP TABLE {table}"))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            sqlx::query(&format!(
+                "CREATE VIRTUAL TABLE {table} USING fts5(
+                    {column}, content='{source_table}', content_rowid='id',
+                    tokenize='trigram case_sensitive 0'
+                )"
+            ))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        }
+        sqlx::query("PRAGMA user_version = 6")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        ensure_schema(&mut conn).await.unwrap();
+
+        for table in ["history_catalog_messages_fts", "history_messages_fts"] {
+            let sql: String = sqlx::query_scalar(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            )
+            .bind(table)
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+            assert!(sql.contains("detail='none'"));
+        }
     }
 
     #[tokio::test]

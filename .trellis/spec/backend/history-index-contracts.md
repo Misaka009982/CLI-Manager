@@ -91,7 +91,7 @@ catalog::ensure_refresh(app, roots, false, false).await?;
 
 - Fresh catalogs create both FTS5 tables with `detail='none'` and `tokenize='trigram case_sensitive 0'`.
 - Existing v5 catalogs drop/recreate both FTS tables and their three maintenance triggers, rebuild from the ordinary message tables, then run one `VACUUM`.
-- The v5→v6 rebuild runs only when `0 < user_version < 6`; fresh creation must not perform a redundant rebuild or vacuum.
+- The v5→v6 rebuild runs for `0 < user_version < 6`; catalogs reporting `user_version >= 6` must still inspect both FTS `sqlite_master.sql` definitions and rebuild when either table is missing `detail='none'`. Fresh creation must not perform a redundant rebuild or vacuum.
 - `detail='none'` cannot evaluate the existing multi-token phrase query or provide `snippet()`. Search must bind overlapping trigrams to FTS with `AND`, then apply a case-insensitive contiguous `instr()` filter against the ordinary message content and derive a bounded prefix snippet from that content.
 - Schema/version metadata is written only after all upgrade operations succeed. The catalog remains a derived cache; source history files are never modified.
 
@@ -101,6 +101,7 @@ catalog::ensure_refresh(app, roots, false, false).await?;
 |---|---|
 | Fresh catalog | Create compact FTS directly; do not rebuild/vacuum again |
 | Existing v5 catalog | Preserve message rows, rebuild both FTS tables, compact pages, advance to v6 |
+| `user_version >= 6` but either FTS table has the legacy detail mode | Rebuild both FTS tables and restore their triggers before serving the catalog |
 | English or Chinese query of at least 3 characters | Return contiguous matches with the existing result fields |
 | Query contains quotes | Escape each trigram as a bound FTS literal; never interpolate user input |
 | FTS rebuild or metadata update fails | Return the error and do not report the new schema version |
