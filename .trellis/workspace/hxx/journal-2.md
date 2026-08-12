@@ -732,3 +732,36 @@ OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 81: 优化历史会话索引数据库体积
+
+**Date**: 2026-08-12
+**Task**: 优化历史会话索引数据库体积
+**Branch**: `master`
+
+### Summary
+
+新建并完成 Trellis 任务：将历史 catalog FTS 升级为 detail=none，使用三元组候选加正文连续匹配，兼容 v5→v6 迁移并回收碎片；156 个 history 测试、cargo check 和 fmt 检查通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d6e10b19` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
