@@ -22,11 +22,13 @@ import {
   hasDataTransferType,
 } from "../lib/terminalClipboardImage";
 import {
+  appendTerminalFileDragSeparator,
   endTerminalFileDrag,
   getTerminalFileDropZoneIdAtPoint,
   getTerminalFileDragPayload,
   getTerminalFileDragText,
   parseTerminalFileDragPayload,
+  markTerminalFileDragPanelSyncSuppression,
   registerTerminalDropZone,
   TERMINAL_FILE_DRAG_MIME,
   type TerminalFileDragPayload,
@@ -1259,7 +1261,10 @@ export function useTerminalInput({
     const unregisterTerminalDropZone = registerTerminalDropZone({
       id: sessionId,
       getRect: () => (isVisibleRef.current ? pasteTarget.getBoundingClientRect() : null),
-      paste: (payload) => pasteIntoTerminal(resolveTerminalFileDragText(payload)),
+      paste: (payload) => {
+        markTerminalFileDragPanelSyncSuppression();
+        pasteIntoTerminal(appendTerminalFileDragSeparator(resolveTerminalFileDragText(payload)));
+      },
       focus: () => terminal.focus(),
     });
     const onPaste = (event: ClipboardEvent) => {
@@ -1335,7 +1340,8 @@ export function useTerminalInput({
       event.preventDefault();
       event.stopPropagation();
       if (!text) return;
-      pasteIntoTerminal(text);
+      if (payload) markTerminalFileDragPanelSyncSuppression();
+      pasteIntoTerminal(payload ? appendTerminalFileDragSeparator(text) : text);
       endTerminalFileDrag();
       terminal.focus();
     };

@@ -27,6 +27,7 @@ interface TerminalDragPointEvent {
 
 let currentDrag: TerminalFileDragPayload | null = null;
 let lastPoint: { x: number; y: number } | null = null;
+let suppressNextFilePanelProjectSync = false;
 const dropZones = new Map<string, TerminalDropZone>();
 
 function isUsableCoordinate(x: number, y: number): boolean {
@@ -68,6 +69,7 @@ export function createTerminalFileDragPayload(
 export function beginTerminalFileDrag(payload: TerminalFileDragPayload) {
   currentDrag = payload.text ? payload : null;
   lastPoint = null;
+  suppressNextFilePanelProjectSync = false;
 }
 
 export function endTerminalFileDrag() {
@@ -81,6 +83,20 @@ export function getTerminalFileDragText(): string {
 
 export function getTerminalFileDragPayload(): TerminalFileDragPayload | null {
   return currentDrag;
+}
+
+export function appendTerminalFileDragSeparator(text: string): string {
+  return /\s$/u.test(text) ? text : `${text} `;
+}
+
+export function markTerminalFileDragPanelSyncSuppression() {
+  suppressNextFilePanelProjectSync = true;
+}
+
+export function consumeTerminalFileDragPanelSyncSuppression(): boolean {
+  const shouldSuppress = suppressNextFilePanelProjectSync;
+  suppressNextFilePanelProjectSync = false;
+  return shouldSuppress;
 }
 
 export function parseTerminalFileDragPayload(value: string | null | undefined): TerminalFileDragPayload | null {
@@ -145,6 +161,7 @@ export function commitTerminalFileDragDrop(): boolean {
 
   const zone = getDropZoneAtPoint(lastPoint.x, lastPoint.y);
   if (zone) {
+    markTerminalFileDragPanelSyncSuppression();
     zone.paste(currentDrag);
     zone.focus();
     endTerminalFileDrag();

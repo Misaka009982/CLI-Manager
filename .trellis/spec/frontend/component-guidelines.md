@@ -262,6 +262,34 @@ const handleOpenProjectFiles = async (project: Project) => {
 
 **Tests**: Run `npx tsc --noEmit`; manually verify opening the right Files panel leaves the left project tree visible, while the left context-menu Browse Files action still opens a file tree with a working return button.
 
+### Convention: Internal terminal file drops preserve the source file panel context
+
+**What**: A file dragged from the file panel into any terminal uses a one-shot suppression marker while the target terminal receives focus. `TerminalTabs` must consume that marker before synchronizing the shared file explorer project, so the source project's selected directory remains visible after a cross-project drop.
+
+**Why**: Focusing a split terminal normally changes the active session and would otherwise replace the shared file panel project before the user can continue selecting files from the source directory.
+
+**Contracts**:
+
+- The suppression marker is set only after an internal file drag has resolved a terminal drop zone.
+- It is consumed once by `syncFilePanelProject`; ordinary terminal activation and explicit Files-panel navigation continue to synchronize normally.
+- Internal file-drag text appends one trailing space unless it already ends in whitespace; ordinary paste and system file drops keep their existing text behavior.
+
+**Tests**: Run `node --test scripts/fileExplorerPathActions.test.mjs` and `npx tsc --noEmit`; manually verify a file panel drag to another split project's terminal keeps the source project and directory, then verify the next explicit Files-panel switch still follows the selected terminal.
+
+### Convention: Terminal Tab CLI icons inherit Tab foreground color
+
+**What**: CLI-specific icons rendered inside terminal Tabs must receive `className="text-current"` so monochrome icons such as OpenCode and Pi follow the Tab's theme-aware foreground color.
+
+**Why**: The shared `CliToolIcon` default is suitable for normal application surfaces but can become low-contrast inside terminal chrome, whose foreground color is scoped by the active terminal theme.
+
+**Correct**:
+
+```tsx
+<CliToolIcon icon={cliToolIcon} size={14} className="text-current" />
+```
+
+**Tests**: Run `npx tsc --noEmit`; manually verify OpenCode and Pi Tabs in dark, light, and split-pane terminal themes.
+
 ### Convention: Optional-container Radix dialogs pick positioning by portal target
 
 **What**: A Radix `Dialog.Portal` that accepts an optional `container` must use container-relative `absolute inset-0` positioning only when a container is supplied. When the portal falls back to `document.body`, the overlay and content must use viewport-relative `fixed inset-0`.

@@ -109,6 +109,7 @@ import {
   TERMINAL_FILE_NAVIGATION_REQUEST_EVENT,
   type TerminalFileNavigationRequest,
 } from "../lib/terminalFileNavigation";
+import { consumeTerminalFileDragPanelSyncSuppression } from "../lib/terminalFileDrag";
 import {
   resolveTerminalPaneMarker,
   type TerminalPaneMarkerSettings,
@@ -688,7 +689,7 @@ function SortableTab({
             </span>
           ) : cliToolIcon ? (
             <span className="ui-terminal-tab-vendor inline-flex shrink-0 items-center" aria-hidden="true">
-              <CliToolIcon icon={cliToolIcon} size={14} />
+              <CliToolIcon icon={cliToolIcon} size={14} className="text-current" />
             </span>
           ) : null}
           {worktree && (
@@ -1033,7 +1034,7 @@ function SortableWorkspanTab({
               </span>
             ) : cliToolIcon ? (
               <span className="ui-terminal-tab-vendor inline-flex shrink-0 items-center" aria-hidden="true">
-                <CliToolIcon icon={cliToolIcon} size={14} />
+                <CliToolIcon icon={cliToolIcon} size={14} className="text-current" />
               </span>
             ) : (
               <Terminal size={14} strokeWidth={1.8} aria-hidden="true" />
@@ -1126,7 +1127,7 @@ function DragOverlayTab({
         </span>
       ) : cliToolIcon ? (
         <span className="ui-terminal-tab-vendor inline-flex shrink-0 items-center" aria-hidden="true">
-          <CliToolIcon icon={cliToolIcon} size={14} />
+          <CliToolIcon icon={cliToolIcon} size={14} className="text-current" />
         </span>
       ) : null}
       <span className="ui-terminal-tab-title min-w-0 flex-1 truncate tracking-[0.01em]">{title}</span>
@@ -3439,7 +3440,9 @@ export function TerminalTabs({
   }, [closeHistory, panelSession, projectById, rejectUnsupportedCapability, replayPanelActive, sidePanelMerged, terminalSidePanelSingleOpen]);
 
   const syncFilePanelProject = useCallback(async (project: Project) => {
+    const preserveCurrentFilePanel = consumeTerminalFileDragPanelSyncSuppression();
     if (rejectUnsupportedCapability(project, "files")) return false;
+    if (preserveCurrentFilePanel) return true;
     try {
       const sameFileContext = isSameProjectFileContext(
         useFileExplorerStore.getState().project,
