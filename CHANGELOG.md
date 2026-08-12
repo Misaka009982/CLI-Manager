@@ -2,127 +2,50 @@
 
 ## [TEMP]
 
-- 修复终端恢复历史画面后尺寸重排导致 PTY 输出从过期光标位置写入、覆盖已恢复内容的问题：释放输出闸门前重新将光标定位到干净的底部行并刷新视口。
-- 修复文件面板路径复制菜单交互：点击“复制路径为”后原位切换为仅显示 AI 路径和项目相对路径的菜单，一级菜单项不再残留；二级菜单沿用文件菜单样式，并使用 Sparkles/Link2 语义图标。
-- 修复文件面板路径复制二级菜单被侧栏横向裁剪的问题：Radix 子菜单现在通过独立 Portal 渲染，窄侧栏中也能完整显示 AI 路径和相对路径选项。
-- 增强文件面板与 Git 变更面板的右键路径复制：顶层“复制路径”直接复制本地或 SSH 项目的绝对路径，二级“复制路径为”支持 AI 路径和项目相对路径；文件树、搜索结果、根区域及 Git 文件/目录节点统一支持，中英文菜单与复制提示同步完善。
-- 优化 WSL 供应商切换与本地路由接管耗时：预览/应用复用短生命周期配置计划并在应用前重新校验 CLI Home、供应商来源和文件指纹；同一 Home 的目标读取、可写检查、暂存写入与验证改为批量 WSL 调用，WSL 路由网关查询合并为单次调用，并缓存极短时间内的成功 endpoint 探测，保留权限校验、冲突保护和失败回滚。
-- 修复终端侧边栏与设置页故障切换展示、排序不一致的问题：关闭自动故障切换后不再显示 `#N` 优先级徽标或拖拽手柄；开启后已入队供应商会按 `provider.sort_index` 自动连续置顶为 `#1/#2/...`，未入队供应商保持相对顺序并排在其后。设置页“供应商目录”主列表同步显示 `#N`、加入/移出和上下调整操作，与侧边栏及路由页使用相同派生顺序和 dnd-kit 拖拽；队列、开关或排序写入成功后会立即向独立 Hook 实例发布同一份快照，新打开的入口也会回放最近成功状态，再由后端轮询校准，同时设置页轮询不会覆盖正在编辑的参数草稿。自动故障切换开启期间，点击供应商卡片不再进入全局供应商确认/应用流程，只允许通过队列控件调整成员和优先级。
-- 修复打开终端侧边栏供应商面板时同步读取 WSL 全局当前状态导致界面卡住的问题：面板首屏只读取活动 Home、供应商目录和路由快照，当前项使用目录状态，WSL 全局配置校验仅在实际切换时执行。
-- 修复终端侧边栏供应商切换始终使用 Windows 本机 `local:host` 的问题：现在读取设置中当前 CLI Home 的本机或 WSL 身份，供应商查询、预览、应用与路由接管均作用于该 Home。
-- 优化侧边栏项目树图标展示：移除项目树图标外围的圆形背景，保留历史树、统计树和项目选择器的原有样式。
-- 侧边栏供应商快捷切换现在复用设置中的全局供应商预览、确认与应用流程，目标为当前 CLI Home；不主动清理已有项目/Worktree 级覆盖，并在切换面板显示当前 Home 是本机还是 WSL（含发行版名称）及对应图标。
-- 优化 CLI Home 环境诊断布局：将 Home/供应商/CLI 状态、配置目标、Hook/历史根目录与环境变量冲突拆分为分组卡片和响应式双列网格，路径改为单独的次级信息行，状态徽章与“打开目标”操作不再挤在同一行。
-- 修复 CLI Home 保存 WSL 手动目录后关闭设置再打开仍恢复为本地 `host` 的问题：设置页现在读取已持久化的活动 Home 身份，保留 WSL 发行版、manual 模式与目录路径。
-- 修复 CLI Home 切换 Claude/Codex/Grok Build Tab 时重复刷新 WSL Home 导致卡顿的问题：Home 初始化只执行一次，路径卡片与环境诊断按当前 CLI 类型过滤显示。
-- 修复 CLI Home 本机与 WSL 环境切换时沿用另一套路径的问题：切换只恢复对应环境缓存，未缓存时清空旧结果，避免本机与 WSL 配置混用。
-- 优化进入 CLI Home 的首屏加载：不再同步等待 WSL Home 校验、全局当前状态或发行版扫描，先展示已缓存 Home，发行版列表改为非阻塞辅助加载。
-- 优化 CLI Home 保存/恢复 Home：不再自动串联当前供应商刷新和完整环境诊断；WSL 手动目录、读权限、写权限校验合并为一次 WSL 调用，减少冷启动等待。
-- 修复设置中 Claude/Codex Hook 卸载未同步删除 CC Switch 通用配置的问题：恢复本地 Hook 与 `common_config_claude` / `common_config_codex` 的安装、卸载及单模块同步，只移除 CLI-Manager 自有标记并保留用户和第三方配置；支持自定义 `ccSwitchDbPath`、默认路径与 WSL 安全事务写入，CC Switch 不可用时仍不阻断本地 Hook 操作。
-- 优化「设置 → 供应商目录 → CLI Home」运行环境切换：切换 local/WSL 或 WSL 发行版时不再立即触发耗时的 Home 识别与环境诊断，保留已显示结果，改由用户点击刷新后识别；切换到 WSL 时自动列出已安装发行版并提供选择，保留仍存在的当前发行版，否则默认选择列表第一项。中英文界面同步支持该流程。
-- 修复历史会话层级：Codex rollout 的 sub-agent 现在从 `session_meta` 读取 `parent_thread_id` / `forked_from_id` 并在历史列表中挂到主会话下，同时保留 Claude `subagents/agent-*.jsonl` 的路径兼容逻辑。
-- 终端侧边栏「实时统计」新增会话级 Agent 能力卡片：严格绑定当前 Tab 的原生 Session ID，统一展示 Claude、Codex、Pi、Grok Build、OpenCode 在本地、WSL 与 SSH 环境中的生效 MCP、正常/异常/检查中/未知健康状态，以及可用、禁用、拒绝、覆盖、无效 Skills；卡片使用跟随终端主题的 Agent 品牌图标徽章，点击 MCP 或 Skills 摘要会直接打开对应详情页签，长描述不会再把状态徽章挤出可视区域。详情弹窗支持状态筛选、来源与 24 小时时间、刷新和 Agent 原生只读深度检查，配置与错误全程脱敏；修复 Rust `toml 0.9` 将完整 Codex TOML 文档误当作单值解析、导致有效用户级与项目级配置重复显示 `config_parse_error` 的问题。新增 OpenCode 托管会话插件安装入口；SSH Agent `0.1.8` / protocol `1.11` 通过 `agentCapabilitiesV1` 提供远端诊断，旧 Agent 明确提示升级且不回退读取本机路径。
-- 「设置 → 供应商目录 → CLI Home」的派生路径卡片新增双重图标：左侧复用 Claude、Codex、Grok 的 AI Agent 品牌图标，右侧以文件夹、历史文件夹、配置文件和密钥图标及不同颜色标识资源类型，可同时快速区分所属 Agent 与目录/配置/认证用途；图标不替代现有中英文文本标签。
-- 重新设计「设置 → 供应商目录」页面，降低信息密度：取消左右分栏，供应商列表改为全宽单行卡片（厂商图标 + 名称 + 当前徽章 + 模型/endpoint 摘要 + 可用性状态圆点 + 启停开关），拖拽手柄常驻卡片行首，箭头排序、复制、删除收进 hover 才显形的「更多操作」菜单；点击任意一行打开供应商详情弹窗，「基本信息 / 生效配置 / API 密钥 / 完整配置」四个页签与「预览变更 / 应用到全局」都移入弹窗；类型通用配置收成单行折叠块，说明与优先级文案仅在展开后显示。新建供应商保存后自动带出详情弹窗接着配密钥；关闭弹窗时若完整配置有未保存改动会先确认，切换 CLI 类型或 surface 不会残留弹窗状态。
-- 修复供应商目录列表拖拽排序在 Tauri WebView 中不生效的问题：改用 @dnd-kit（与终端标签页、供应商快捷面板一致），替换拿不到有效 dropEffect 的 HTML5 原生 draggable；拖拽手柄固定在卡片最左侧并常驻显示，搜索过滤期间禁用拖拽，避免在过滤后的子集上无法推导后端要求的全量顺序，箭头排序不受影响。
-- 统一终端右侧供应商面板的滚动条样式：复用其他终端侧栏的细滚动条尺寸，并按终端主题设置滑块与轨道颜色。
-- 修复「设置 → 供应商目录 → CLI Home」切换到 WSL 后自动解析沿用本地 `host` 身份、目录错误且选择按钮禁用的问题：自动模式现在识别默认 WSL 发行版及其真实用户 Home，并同步规范化 UNC 路径；Local/WSL 的目录按钮在自动和手动模式下均可使用，选中目录后切换为手动模式，WSL 路径也可直接编辑或粘贴。
-- 修复 WSL 冷启动超过 5 秒时 CLI Home 将默认发行版误报为探测失败的问题：默认发行版与指定发行版的 Home 自动探测现在允许完整冷启动时间，目录读写校验仍保持短超时，避免故障发行版让设置页长时间卡住。
-- 修复 Tauri WebView 中拖动手柄不触发原生拖拽的问题：拖拽事件改绑定到供应商整行容器，手柄仅作为可拖动视觉提示。
-- 修复路由状态不可用时供应商拖动排序被误判为禁用：拖动能力现在只依赖供应商列表和当前操作状态，不再要求故障转移快照已加载。
-- 供应商快捷面板支持直接拖动卡片调整供应商顺序，松手后复用供应商目录排序并保留队列状态；同时保留上下箭头和键盘排序方式，拖拽手柄固定在所有队列操作按钮的最右侧。
-- 供应商快捷面板「路由状态」卡片新增两个开关：本地路由开关一键完成 daemon 启动与当前 CLI Home 接管（关闭时只撤当前 CLI 接管，daemon 保持运行），自动故障转移开关直接在侧边栏启停；关闭本地路由会先自动关闭故障转移，避免出现无接管却启用故障转移的状态。卡片使用两列布局，左侧路由状态固定为 140px，并在标题下直接显示“路由运行中/路由未开启”且跟随当前 CLI Home 接管状态，不再显示“手动热切换”模式文字或独立状态胶囊，右列展示两个单行开关；前置条件缺失时开关禁用并给出中英文原因说明。
-- 供应商卡片调整选中态布局：品牌图标与状态圆点跨名称/模型两行垂直居中，正文保持单列；当前供应商仅由整卡高亮表达，右侧互斥使用绿/黄/红圆点标记可用、不可用、半开或熔断，避免选中态与可用状态重复冲突。
-- 供应商快捷面板补充 AI 厂商图标并统一状态标记：供应商卡片显示 Claude/OpenAI/DeepSeek/Grok 等品牌标识，正常、不可用、半开与熔断状态使用不同颜色的圆点辅助识别。
-- 优化终端右侧供应商面板视觉层级：复用其他终端辅助面板的 36px 标准标题栏和终端主题背景，提高深色主题对比度，采用路由状态卡片、紧凑供应商卡片和更清晰的设置入口，保留队列排序与快捷切换能力。
-- 终端右侧新增供应商快捷切换面板：保留全局供应商切换与设置入口，展示路由/当前渠道状态，并支持自动故障转移队列的勾选与优先级调整、手动热切换。
-- 路由故障转移支持手动热切换：关闭自动故障转移时队列变为单选，选择供应商会立即热切换已接管的 CLI Home；开启自动故障转移后恢复多供应商队列与优先级切换。队列后台刷新仅更新熔断状态，不再闪烁开关和参数输入；新增熔断/降级状态区分。
-- 修复本地代理测试连续等待多个网络端点导致长时间卡顿的问题；代理测试总耗时限制为 5 秒。Claude 模型映射同时支持角色名、自定义显示名称及 `[1m]` 变体，确保自定义模型名称能够映射到真实上游模型。
-- 增加 daemon 故障转移诊断日志：记录候选顺序、熔断跳过、实际尝试、上游状态分类、流完成/断流及最终选中的渠道。
+### 供应商路由与故障转移
 
-- 提高故障转移队列“正在使用”标签的对比度；重置故障转移状态后，活动渠道恢复为队列中第一个可用供应商。
+- 新增终端右侧供应商快捷面板，支持全局切换、当前路由状态查看、自动故障转移队列管理和手动热切换；同时保留设置页的全局供应商预览、确认和应用流程，目标始终为当前 CLI Home，不清理项目/Worktree 级覆盖。
+- 统一路由、侧边栏和设置页的队列顺序与状态展示：支持“已入队/正在使用”、上下移、拖拽和键盘排序；自动故障转移开启时按 `provider.sort_index` 连续显示 `#1/#2/...`，关闭时隐藏优先级标识并改为单选。
+- 本地路由开关负责 daemon 启停与当前 CLI Home 接管，关闭本地路由会先关闭自动故障转移；daemon 停止期间不再误显示为启用或允许接管。队列写入成功后同步 Hook 快照，新入口回放最近状态，再由后端轮询校准。
+- 路由按 Claude/Codex/Grok 显示接管开关，高级信息折叠展示并支持自定义监听端口；队列隐藏 UUID 和冗余密钥，健康、降级、半开和熔断状态直接显示。daemon 日志记录候选顺序、熔断跳过、实际尝试、上游状态、流完成/断流和最终渠道。
+- WSL 供应商切换与路由接管复用短生命周期配置计划，合并同一 Home 的读取、权限检查、暂存写入、验证和路由网关查询，缓存短时成功 endpoint 探测，并保留冲突保护与失败回滚；代理测试总耗时限制为 5 秒。
+- 项目级 Codex 供应商优先使用真实 Home 下的 `--profile`，Claude 使用 `--settings`；Codex Responses 只有收到 `response.completed` 才计为成功，异常断流会熔断当前供应商并切换到下一渠道。重置故障转移状态后，活动渠道恢复为队列中第一个可用供应商。
 
-- 供应商设置页记住上次的应用类型、目录/Home/路由页签、详情页签、选中供应商和页面滚动位置；故障转移队列用醒目的“正在使用”标识当前实际渠道。
+### 供应商目录与配置
 
-- 路由服务启动时校准持久化启用意图与 daemon 实时状态；daemon 停止期间不再显示为已启用，也不会允许接管或自动故障转移误运行。
+- 供应商目录改为全宽单行卡片，详情集中到“基本信息 / 生效配置 / API 密钥 / 完整配置”弹窗；通用配置使用可折叠 Monaco 编辑器，Claude 使用 JSON，Codex/Grok 使用 TOML。新建后可直接进入详情配置密钥，关闭未保存的完整配置前会确认。
+- 供应商页面记住应用类型、目录/Home/路由页签、详情页签、选中项和滚动位置；Claude/Codex/Grok 使用对应 CLI 图标，界面文案统一去掉“原生”前缀，英文同步使用 `Providers`。
+- 密钥状态改为“候选/已封存”和“当前密钥·生效中”；激活密钥会静默写入全局配置。模型映射支持远端模型和完整 URL，Codex/Grok 保留兼容字段但不再展示无效开关。
+- Claude 模型映射支持角色名、自定义显示名称、回退模型和 `[1m]` 变体；切换 Claude/Codex/Grok 标签时默认选中当前全局供应商，没有当前项时选中列表第一项，并保留同一标签内的手动选择。
+- 修复全局供应商被项目错误隔离、Grok/Codex 错误替换 Home、Claude 快照丢失通用配置、Codex 全局写入残留字段等问题；全局配置直接使用真实 Home，项目/Worktree 覆盖行为保持不变。
+- 修复通用配置折叠/展开触发 Monaco `InstantiationService has been disposed`，应用后刷新目录状态，并在 Apply 前自动执行新鲜预检，确认页显示对应配置根目录。
+- 设置页内嵌弹框按 Esc 只关闭自身，IME 组合态下的 Esc 不再关闭设置页；供应商启停开关补充被项目/Worktree 引用时的限制提示。
 
-- 故障转移队列补充“已入队”状态与上下移优先级操作；项目级 Codex 供应商优先使用真实 Home 下的 `--profile`，Claude 使用 `--settings`；Codex Responses 流只有收到 `response.completed` 才计为成功，异常断流会立即熔断当前供应商，后续请求切换到下一渠道并记住成功渠道。
+### CLI Home、WSL 与环境诊断
 
-- 简化原生供应商路由界面：接管开关改为按 Claude/Codex/Grok 类型显示“接管 {app} 路由”，并与本地路由服务、自动故障转移建立联动；故障转移改为接管后默认折叠，供应商队列隐藏 UUID 与冗余密钥信息，健康/降级状态直接显示在队列行内，移除本地路由快捷开关；高级路由信息保留为折叠块，并支持在停用服务与接管后自定义监听端口。
-- 修复「跟随全局供应商」的项目仍按项目级隔离方式启动的问题：全局应用后，Claude 启动命令恢复为纯 `claude`（不再追加 `--settings "…/providers/generated/claude/<uuid>/claude/settings.json"`），Grok 不再注入进程级 `GROK_MODELS_BASE_URL` / `XAI_API_KEY` / `--model`，三类 CLI 统一直接使用全局应用已写入真实 Home 的 live 配置；项目 / Worktree / 显式恢复的供应商覆盖行为保持不变。同时修复从未执行过「应用到全局」时（导入的供应商 `is_current` 为 0）跟随全局的项目因 `provider_current_not_set` 无法创建终端的问题，以及会话恢复复用已失效历史快照导致修复对存量会话不生效、快照目录被回收后启动报 `provider_snapshot_missing`、或在两次会话之间改动供应商后仍静默沿用旧供应商的问题。
-- 供应商密钥维护改进：当前供应商激活密钥时自动静默写入全局配置文件，无需手动 Apply；供应商维护页面记住上次访问的 App Type、选中供应商和详情 Tab；活动密钥的 Switch 开关改用 `readOnly` 保持视觉上的启用状态不被灰化。
-- 澄清密钥行的语义歧义：「已启用/已停用」改为「候选/已封存」，「当前密钥」改为「当前密钥·生效中」，开关旁增加「候选」文字标签，明确它控制的是候选池而非生效状态；查看密钥图标从眼睛换成钥匙（眼睛容易误读为可见性开关）；「激活」按钮改为实心 + ⚡ 图标并放大，从最不起眼变为该行主操作。
-- 优化原生供应商切换 Tab 时的默认选中逻辑：切换 Claude / Codex / Grok 标签时，右侧供应商列表自动选中当前已全局启用的供应商（`is_current` 标记），没有全局启用时则选中列表第一个；同一 Tab 内手动选择后再切回继续保留手选的那个。
-- 修复设置页内嵌套弹框按 Esc 会连带关闭整个设置页的问题：供应商维护、SSH 主机维护/导入/CLI 集成、插件安装、确认/输入等弹框的 Esc 现在只关闭自身；同时 IME 输入法组合态下的 Esc 不再关闭设置页。
-- 供应商功能界面文案统一去掉「原生」前缀：设置页标签、目录标题、搜索框、新增/编辑弹框标题、空列表提示、切换失败提示、导入错误与备份相关文案均改为「供应商」，英文同步为 `Providers`；`原生` 一词在 TUI 颜色、系统凭据库、上游请求协议（`Responses（原生）`）等无关语境中保留。
-- 供应商维护的 Claude / Codex / Grok Build 标签改用对应 CLI 工具图标（复用 `CliToolIcon` 的 Claude、OpenAI、Grok 图标），替换原先的通用终端/代码/扳手图标；未选中标签的图标半透明显示以强化选中态。
-- 优化原生供应商新增/编辑弹框布局：Header 覆盖与 Body 覆盖的 JSON 编辑器高度从 140px 收窄到 84px，底部「取消 / 保存」操作栏改为吸底常驻，滚动长表单时无需再拉到最底部才能保存。
-- 修复原生 Grok Build 供应商启动替换 `GROK_HOME` 导致 Hook、MCP、历史会话和实时统计不可用的问题：全局、项目、Worktree 与显式供应商均保留真实 Home，所选 endpoint/key/model 改用 `GROK_MODELS_BASE_URL`、`XAI_API_KEY` 与 `--model` 做进程级覆盖；旧临时 Home 中已产生的会话会先持久备份，再恢复到真实历史目录，恢复失败时保留源快照；修正历史 IPC 已传入 `.grok\\sessions` 却再次追加 `sessions` 导致历史列表为空的问题。
-- 修复原生 Codex 供应商启动错误替换 `CODEX_HOME` 的回归：全局供应商直接使用真实 Home，项目/Worktree 覆盖改用安全的启动配置参数与子进程密钥环境，因此原有 MCP、Hook、沙箱策略、插件、历史会话和实时统计继续生效。
-- 供应商模型映射支持 Claude、Codex、Grok 获取远端模型列表；完整 URL 获取模型时不再追加 `/models`，Codex/Grok 的 Goal mode 与远程压缩字段继续兼容读取但不再展示为未生效开关。
-- 修复供应商通用配置展开/收起后报 `InstantiationService has been disposed` 的问题：折叠区改为真正卸载（`keepMounted={false}`），不再让 Mantine `Collapse` 默认的 React `<Activity mode="hidden">` 在隐藏时销毁 Monaco 实例却保留失效引用，重新展开时对已销毁实例调用 `setModel`；`aria-controls` 目标移到 Collapse 容器以免卸载后悬空。三个供应商类别默认收起，编辑 API 密钥时直接加载明文密钥。
-- 修复项目级 Claude 供应商快照丢失通用配置的问题：生成的 `settings.json` 现在写入合并通用配置、供应商配置和当前密钥后的完整文档。
-- 明确供应商启停开关的作用和引用限制，补齐被项目/Worktree 引用时的错误提示；多密钥列表分别展示“当前密钥”和“已启用/已停用”状态。
-- 修正 Codex 全局写入：API 密钥只写入 `auth.json` 根级 `OPENAI_API_KEY`，`config.toml` 不再残留根级 `base_url`/`wire_api`，也不再写入多余的 `env_key`。
+- 新增共享 CLI Home 解析，支持本机/WSL 自动与手动 Home、按环境持久化、发行版选择、派生 Claude/Codex/Grok 目标和显式根目录优先级；Grok 历史固定解析到 `.grok/sessions`。
+- 修复 WSL Home 身份、路径、冷启动和本机/WSL 缓存混用问题；自动识别默认发行版真实用户 Home、规范化 UNC 路径，目录选择在自动和手动模式均可用。侧边栏供应商面板首屏只读取活动 Home、目录和路由快照，WSL 全局配置校验延迟到实际切换。
+- 优化 CLI Home 首屏和保存流程：优先展示缓存，发行版扫描、Home 校验、供应商刷新和完整诊断改为非阻塞或按需执行；WSL 目录及读写权限检查合并为一次调用。
+- 环境诊断按 Home/供应商/CLI 状态、配置目标、Hook/历史根目录和环境变量冲突分组展示，支持脱敏复制诊断信息和打开目标；派生路径卡片同时展示 Agent 与资源类型图标。
 
-### Provider Domain Phase 0
+### Hook、Agent 与历史
 
-- Added an independent `providers.db` initialization boundary with CCS composite identity, manual multi-key storage, Home/import/repair/apply journal tables, and pre-migration backups; runtime provider commands still use the legacy CCS path until later cutover phases.
+- Hook 卸载现在同步清理 CC Switch 通用配置，保留用户和第三方配置，兼容自定义 `ccSwitchDbPath`、默认路径和 WSL 安全事务；CC Switch 不可用时不阻断本地 Hook 操作。
+- 新增会话级 Agent 能力卡片，绑定当前 Tab 的 Session ID，展示 Claude、Codex、Pi、Grok Build、OpenCode 在本机、WSL 和 SSH 中的 MCP/Skills 状态；详情支持筛选、刷新和只读深度检查，配置与错误均脱敏。新增 OpenCode 托管会话插件入口，旧 SSH Agent 明确提示升级。
+- Codex rollout sub-agent 从 `session_meta` 读取父会话关系并挂到主会话下，同时保留 Claude sub-agent 路径兼容；Toml 解析也修复了完整 Codex 文档被误当作单值、重复显示 `config_parse_error` 的问题。
 
-### Provider Domain Phase 1 (vertical slice)
+### 终端、历史、统计与文件面板
 
-- Added native provider catalog/key Tauri commands backed by `providers.db`, including composite app identity, CRUD, duplicate, enable/current state, explicit key activation, masked read DTOs, secret reveal boundary, common-config persistence, and atomic active-key replacement; CCS remains an import source and the existing read-only CCS page is preserved.
-- Added a visible Settings → Native Providers entry with separate catalog, provider editor, metadata/Base URL/model fields, type-specific common-config JSON/TOML editor, complete Claude/Codex/Grok document editors, multi-key create/edit/reveal/reorder/activation/replacement flow, localized error states, and independent React components organized by page orchestration, data hooks, catalog/card, editor, document editor, key section, reveal/replacement dialogs, and forms. Home apply, project/Worktree resolution, environment diagnostics, and CCS import remain later phases.
+- 修复终端恢复历史画面后尺寸重排导致 PTY 从过期光标位置写入、覆盖已恢复内容的问题；恢复时重新同步终端尺寸与快照光标坐标，兼容 PowerShell、CMD、Git Bash 和 WSL。
+- 修复多个终端持续输出时各自调度 xterm 写入集中占用浏览器帧主线程的问题：daemon live 输出改为 64 KiB 有界聚合，前端按可见优先且隐藏不饥饿的全局队列每帧只启动一个写入批次，并保持 Replay、Reset 与 write callback 后 ACK 时序。
+- 开发者设置新增默认关闭的“隐藏 CODEX 运行时光标”开关，仅作用于 Codex 会话；补齐首帧识别，并在终端重新获得焦点后持续应用隐藏状态。Windows 兼容修复说明同步补充该能力。
+- 实时统计严格绑定当前 Tab 的项目作用域，同项目及其 Worktree 共享项目汇总；Token 卡片新增缓存命中率，实时统计、文件、Git 变更、时间轴和系统资源面板统一标题栏、图标与背景。
+- 文件面板和 Git 变更面板统一支持复制本地/SSH 绝对路径、AI 路径和项目相对路径，覆盖文件树、搜索结果、根区域及 Git 文件/目录节点；“复制路径为”菜单原位切换，二级菜单通过 Portal 渲染，窄侧栏不再裁剪，并同步完善中英文文案和语义图标。
+- 侧边栏项目树移除图标外围的圆形背景，历史树、统计树和项目选择器保持原有样式。
 
-### Provider Domain Phase 2 (in progress)
+### SSH 与兼容性修复
 
-- Added a shared native Home resolution path for automatic/manual local Homes and WSL Homes, including per-environment persistence, reset-to-auto, derived Claude/Codex/Grok targets, and explicit-root precedence. Grok history now resolves to the exact `.grok/sessions` root and is propagated through history operations.
-- Added masked environment diagnostics for CLI/version, Home source, target access, current provider state, conflicts, Hook/history alignment, and pending recovery; the Home settings view can copy safe diagnostics and open existing targets without exposing secrets.
-- Added owner-aware global preview/apply handling with target fingerprints, staging, backups, verification, compensation, journal recovery, and startup recovery independent of Home cache inspection. Native current-provider state is committed only after verified application, while key changes and CCS imports remain explicit follow-up actions.
-- Completed native provider type-tab keyboard navigation with Arrow/Home/End focus movement while preserving the existing roving-tabindex interaction.
-- Global apply completion now refreshes the selected provider’s catalog/detail state so current-provider and active-key badges do not remain stale.
-- Claude provider maintenance now exposes CCS-compatible API format/auth-field selectors, full-URL preference, Sonnet/Opus/Fable/Haiku/Subagent model mapping, display names, fallback model and 1M markers; global journal recovery now shares the apply lock for the same Home and CLI type.
-- Acceptance closeout started on 2026-08-03: TypeScript, Rust format/check/test, provider focused tests, diff check and i18n parity passed; WSL/real Home writes/real Tauri UI/macOS runtime remain blocked by the environment, and the release version is still `[TEMP]` pending an explicit version.
-- 2026-08-04 closeout follow-up: synchronized two stale test assertions with ssh-agent `0.1.7` and the native provider v2 reference contract; focused scripts pass 17/17, while the broad suite remains 339/340 because one obsolete terminal cursor test references a module removed by the xterm subsystem refactor.
-- 2026-08-04 UI follow-up implemented for the native provider task: CCS import is opened from the catalog Import action, repair references prefer readable project/Worktree names with stable-ID fallback, CLI Home is a separate surface, and provider list/detail panes share bounded equal-height scrolling. Static UI regression and type/Rust checks pass; runtime UI/WSL/macOS checks remain blocked.
-- 2026-08-04 native provider UI follow-up: common configuration now uses a collapsible Monaco editor with Claude JSON and Codex/Grok TOML validation, surface navigation sits above CLI type tabs, and provider detail cards use responsive wrapping/overflow protection. Runtime UI, WSL and macOS checks remain blocked; release version is still `[TEMP]`.
-- 2026-08-04 native provider detail follow-up: the catalog now uses equal-height responsive master/detail panes, exposes Basic / Effective config / API keys / Complete config tabs, and places the existing global preview/apply workflow in the basic detail view; Codex and Grok Build continue through the shared maintenance structure. Runtime UI, WSL and macOS checks remain blocked; release version is still `[TEMP]`.
-- 2026-08-04 native provider runtime feedback fixes: common Monaco editors keep a stable model across collapse/reopen, effective previews use editor-style JSON/TOML surfaces, Codex/Grok provider forms expose their own TOML documents, current global providers are detected from materialized Home targets before database fallback, global action buttons wrap safely, and the detail duplicate action was removed. Runtime UI, WSL and macOS checks remain blocked; release version is still `[TEMP]`.
-- 2026-08-04 global apply feedback fix: confirmation now shows the app-specific `.claude`/`.codex`/`.grok` config root, and Apply automatically performs the guarded fresh preflight so users no longer need to click Preview first. Runtime UI, WSL and macOS checks remain blocked; release version is still `[TEMP]`.
-- 2026-08-04 provider maintenance feedback fix: Codex/Grok now expose CCS-style upstream format, model mapping, User-Agent, JSON override, Goal mode and remote-compression options; empty Claude/Codex/Grok provider documents are generated from typed fields in the user-facing JSON/TOML format, while manual raw documents and key-manager-owned secrets are preserved. Runtime UI, WSL and macOS checks remain blocked; release version is still `[TEMP]`.
-- 2026-08-05 fixed Claude common-config collapse/reopen triggering Monaco's disposed `InstantiationService` error by avoiding editor retention inside the collapsed panel.
-
-### 新增
-
-- **供应商域重建规划**：完成 CCS 兼容供应商域的需求、设计、分阶段计划、验收计划和原型评审包；目标覆盖完整配置编辑、类型通用配置、手动多 Key、全局 Home 写入、原生项目/Worktree 切换、环境检查与 CCS 导入。实现将在后续任务开始。
-
-### 修复
-
-- **供应商迁移兼容**：保留已发布的 v25/v26 历史供应商迁移注册，移除未完成的原生供应商功能后已有数据库仍可启动；后续 CCS 兼容供应商域使用独立 `providers.db`，避免复用旧表。
-### SSH MFA 认证
-
-- 修复保存用户名/密码连接启用 Keyboard-interactive/MFA 的 SSH 主机时，AskPass 对 MFA 提示持续失败并循环输出、终端无法输入的问题；保存密码仍只自动填写普通密码提示，MFA/OTP/PIN 等后续挑战改为在所属交互终端隐藏输入。同步加固后台非交互策略、AskPass 内部环境优先级、broker token 长度和服务端 prompt 控制序列过滤。（Refs #195）
-
-### Windows 兼容修复
-
-- 设置 -> 开发者 -> Windows 兼容修复的说明补充 Codex CLI 在内部终端运行期间光标乱闪的修复；缺少该配置的新安装默认开启，已有明确关闭配置继续保留。
-
-### Codex 终端光标
-
-- 开发者设置新增默认关闭的“隐藏CODEX运行时光标”开关；开启后复用旧版 80ms 光标显示合并逻辑，仅作用于 Codex 会话，减少 MCP 加载和模型输出期间的光标闪烁；补齐首帧 Codex 识别，并在终端重新获得焦点后持续应用隐藏状态。
-
-### 终端输出调度
-
-- 修复多个终端持续输出时各自调度 xterm 写入导致同一浏览器帧集中占用主线程的问题；daemon live 输出改为 64 KiB 有界聚合，前端按可见优先且隐藏不饥饿的全局队列每帧只启动一个写入批次，并保持 Replay、Reset 与 write callback 后 ACK 时序不变。
-
-### 终端会话恢复
-
-- 修复普通 Shell 会话恢复旧画面时，终端尺寸与快照光标坐标不同步，导致后续 PowerShell、CMD、Git Bash 或 WSL 输出覆盖已有文字的问题。
-
-### 实时统计
-
-- 修复切换到不同项目的终端 Tab 后，“今日项目用量”仍显示上一个项目统计的问题；统计结果现在严格绑定当前项目作用域，同项目及其 Worktree 仍共享项目级汇总。
-- Token 用量卡片的缓存命中项新增命中率小字，按输入、缓存读取与缓存写入的上下文 Token 计算；实时统计、文件、Git 变更、时间轴和系统资源面板统一标题栏尺寸、图标与背景，并与合并面板 Tab 栏保持协调。
+- 修复保存用户名/密码连接启用 Keyboard-interactive/MFA 的 SSH 主机时 AskPass 循环失败、终端无法输入的问题：普通密码提示仍自动填写，MFA/OTP/PIN 等挑战改在所属交互终端隐藏输入；同时加固后台非交互策略、AskPass 环境优先级、broker token 长度和服务端 prompt 控制序列过滤。（Refs #195）
 
 ## [V1.3.5] - 2026-08-06
 
