@@ -13,7 +13,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 const CATALOG_DB_FILE: &str = "history-catalog.db";
 const CATALOG_PARSER_VERSION: i64 = 1;
-const HISTORY_INDEX_SCHEMA_VERSION: i64 = 5;
+const HISTORY_INDEX_SCHEMA_VERSION: i64 = 6;
 const HISTORY_INDEX_MODEL_VERSION: i64 = 1;
 const CATALOG_REFRESH_TTL_MS: i64 = 10_000;
 const CATALOG_SEARCH_MIN_CHARS: usize = 3;
@@ -185,6 +185,7 @@ async fn ensure_schema(conn: &mut SqliteConnection) -> Result<(), String> {
             content,
             content='history_catalog_messages',
             content_rowid='id',
+            detail='none',
             tokenize='trigram case_sensitive 0'
         )",
         "CREATE TRIGGER IF NOT EXISTS history_catalog_messages_ai AFTER INSERT ON history_catalog_messages BEGIN
@@ -216,11 +217,11 @@ async fn ensure_schema(conn: &mut SqliteConnection) -> Result<(), String> {
             .await
             .map_err(|err| err.to_string())?;
     }
-    ensure_v2_schema(conn).await?;
+    ensure_v2_schema(conn, current_version).await?;
     Ok(())
 }
 
-async fn ensure_v2_schema(conn: &mut SqliteConnection) -> Result<(), String> {
+async fn ensure_v2_schema(conn: &mut SqliteConnection, current_version: i64) -> Result<(), String> {
     let statements = [
         "CREATE TABLE IF NOT EXISTS history_meta (
             key TEXT PRIMARY KEY,
@@ -379,6 +380,7 @@ async fn ensure_v2_schema(conn: &mut SqliteConnection) -> Result<(), String> {
             display_content,
             content='history_messages',
             content_rowid='id',
+            detail='none',
             tokenize='trigram case_sensitive 0'
         )",
         "CREATE TRIGGER IF NOT EXISTS history_messages_ai AFTER INSERT ON history_messages BEGIN
@@ -571,6 +573,9 @@ async fn ensure_v2_schema(conn: &mut SqliteConnection) -> Result<(), String> {
     ] {
         ensure_column(conn, table, column, definition).await?;
     }
+    if current_version > 0 && current_version < HISTORY_INDEX_SCHEMA_VERSION {
+        rebuild_compact_fts(conn).await?;
+    }
     sqlx::query("DROP INDEX IF EXISTS idx_history_source_instances_one_active")
         .execute(&mut *conn)
         .await
@@ -608,6 +613,92 @@ async fn ensure_v2_schema(conn: &mut SqliteConnection) -> Result<(), String> {
     .execute(&mut *conn)
     .await
     .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+async fn rebuild_compact_fts(conn: &mut SqliteConnection) -> Result<(), String> {
+    let mut tx = conn.begin().await.map_err(|err| err.to_string())?;
+    for (fts_table, source_table, source_column) in [
+        (
+            "history_catalog_messages_fts",
+            "history_catalog_messages",
+            "content",
+        ),
+        (
+            "history_messages_fts",
+            "history_messages",
+            "display_content",
+        ),
+    ] {
+        for trigger in [
+            format!("{source_table}_ai"),
+            format!("{source_table}_ad"),
+            format!("{source_table}_au"),
+        ] {
+            sqlx::query(&format!("DROP TRIGGER IF EXISTS {trigger}"))
+                .execute(&mut *tx)
+                .await
+                .map_err(|err| err.to_string())?;
+        }
+        sqlx::query(&format!("DROP TABLE IF EXISTS {fts_table}"))
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| err.to_string())?;
+        sqlx::query(&format!(
+            "CREATE VIRTUAL TABLE {fts_table} USING fts5(
+                {source_column},
+                content='{source_table}',
+                content_rowid='id',
+                detail='none',
+                tokenize='trigram case_sensitive 0'
+            )"
+        ))
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| err.to_string())?;
+        sqlx::query(&format!(
+            "INSERT INTO {fts_table}({fts_table}) VALUES ('rebuild')"
+        ))
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| err.to_string())?;
+        sqlx::query(&format!(
+            "CREATE TRIGGER {source_table}_ai AFTER INSERT ON {source_table} BEGIN
+                INSERT INTO {fts_table}(rowid, {source_column}) VALUES (new.id, new.{source_column});
+            END"
+        ))
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| err.to_string())?;
+        sqlx::query(&format!(
+            "CREATE TRIGGER {source_table}_ad AFTER DELETE ON {source_table} BEGIN
+                INSERT INTO {fts_table}({fts_table}, rowid, {source_column})
+                VALUES ('delete', old.id, old.{source_column});
+            END"
+        ))
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| err.to_string())?;
+        sqlx::query(&format!(
+            "CREATE TRIGGER {source_table}_au AFTER UPDATE ON {source_table} BEGIN
+                INSERT INTO {fts_table}({fts_table}, rowid, {source_column})
+                VALUES ('delete', old.id, old.{source_column});
+                INSERT INTO {fts_table}(rowid, {source_column}) VALUES (new.id, new.{source_column});
+            END"
+        ))
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| err.to_string())?;
+    }
+    tx.commit().await.map_err(|err| err.to_string())?;
+    sqlx::query("PRAGMA optimize")
+        .execute(&mut *conn)
+        .await
+        .map_err(|err| err.to_string())?;
+    sqlx::query("VACUUM")
+        .execute(&mut *conn)
+        .await
+        .map_err(|err| err.to_string())?;
     Ok(())
 }
 
@@ -1364,6 +1455,15 @@ fn fts_literal(query: &str) -> String {
     format!("\"{}\"", query.replace('"', "\"\""))
 }
 
+fn fts_trigram_query(query: &str) -> String {
+    let chars: Vec<char> = query.chars().collect();
+    chars
+        .windows(3)
+        .map(|trigram| fts_literal(&trigram.iter().collect::<String>()))
+        .collect::<Vec<_>>()
+        .join(" AND ")
+}
+
 fn merge_search_results(
     primary: Vec<HistorySearchResult>,
     fallback: Vec<HistorySearchResult>,
@@ -1462,15 +1562,19 @@ async fn search_sessions_from_legacy_catalog(
 
     let mut builder = QueryBuilder::<Sqlite>::new(
         "SELECT s.session_id, s.source, s.project_key, s.title, s.file_path,
-                m.role, snippet(history_catalog_messages_fts, 0, '', '', '…', 24) AS snippet,
+                m.role, substr(m.content, 1, 240) AS snippet,
                 m.timestamp
          FROM history_catalog_messages_fts
          JOIN history_catalog_messages m ON m.id = history_catalog_messages_fts.rowid
          JOIN history_catalog_sessions s
            ON s.roots_key = m.roots_key AND s.file_path = m.file_path
-         WHERE history_catalog_messages_fts MATCH ",
+         WHERE history_catalog_messages_fts MATCH (",
     );
-    builder.push_bind(fts_literal(normalized));
+    builder.push_bind(fts_trigram_query(normalized));
+    builder.push(")");
+    builder.push(" AND instr(lower(m.content), lower(");
+    builder.push_bind(normalized);
+    builder.push(")) > 0");
     builder.push(" AND s.roots_key = ");
     builder.push_bind(&roots_key);
     if let Some(source) = source_filter {
@@ -1548,7 +1652,7 @@ async fn search_sessions_from_v2(
 
     let mut builder = QueryBuilder::<Sqlite>::new(
         "SELECT s.session_id, s.source, s.project_key, s.title, s.file_path,
-                m.role, snippet(history_messages_fts, 0, '', '', '…', 24) AS snippet,
+                m.role, substr(m.display_content, 1, 240) AS snippet,
                 m.timestamp_ms
          FROM history_messages_fts
          JOIN history_messages m ON m.id = history_messages_fts.rowid
@@ -1561,9 +1665,13 @@ async fn search_sessions_from_v2(
             JOIN history_source_instances i ON i.id = hs.source_instance_id
             WHERE i.activation_state = 'active' AND hs.parse_status = 'ok'
          ) s ON s.id = m.session_id
-         WHERE history_messages_fts MATCH ",
+         WHERE history_messages_fts MATCH (",
     );
-    builder.push_bind(fts_literal(normalized));
+    builder.push_bind(fts_trigram_query(normalized));
+    builder.push(")");
+    builder.push(" AND instr(lower(m.display_content), lower(");
+    builder.push_bind(normalized);
+    builder.push(")) > 0");
     if let Some(source) = source_filter {
         builder.push(" AND s.source = ");
         builder.push_bind(source);
@@ -3995,6 +4103,15 @@ mod tests {
     }
 
     #[test]
+    fn fts_trigram_query_preserves_overlapping_literal_terms() {
+        assert_eq!(
+            fts_trigram_query("history"),
+            "\"his\" AND \"ist\" AND \"sto\" AND \"tor\" AND \"ory\""
+        );
+        assert_eq!(fts_trigram_query("数据库"), "\"数据库\"");
+    }
+
+    #[test]
     fn project_candidates_include_claude_key_and_basename() {
         let (_cwd, keys, basename) = project_candidates(r"D:\work\pythonProject\CLI-Manager");
         assert!(keys.iter().any(|key| key.contains("cli-manager")));
@@ -4050,21 +4167,113 @@ mod tests {
 
         let chinese: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM history_catalog_messages_fts
-             WHERE history_catalog_messages_fts MATCH '\"历史会话\"'",
+             WHERE history_catalog_messages_fts MATCH ?1",
         )
+        .bind(fts_trigram_query("历史会话"))
         .fetch_one(&mut conn)
         .await
         .unwrap();
         let code: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM history_catalog_messages_fts
-             WHERE history_catalog_messages_fts MATCH '\"Catalog\"'",
+             WHERE history_catalog_messages_fts MATCH ?1",
         )
+        .bind(fts_trigram_query("Catalog"))
         .fetch_one(&mut conn)
         .await
         .unwrap();
 
         assert_eq!(chinese, 1);
         assert_eq!(code, 1);
+    }
+
+    #[tokio::test]
+    async fn schema_v5_upgrade_rebuilds_compact_fts_without_losing_messages() {
+        let mut conn = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        ensure_schema(&mut conn).await.unwrap();
+        sqlx::query(
+            "INSERT INTO history_catalog_messages(
+                roots_key, file_path, message_index, role, timestamp, content
+             ) VALUES ('roots', 'session.jsonl', 0, 'user', NULL,
+                       'history-catalog 数据库压缩测试')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query("DROP TRIGGER history_catalog_messages_ai")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("DROP TRIGGER history_catalog_messages_ad")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("DROP TRIGGER history_catalog_messages_au")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE history_catalog_messages_fts")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE VIRTUAL TABLE history_catalog_messages_fts USING fts5(
+                content,
+                content='history_catalog_messages',
+                content_rowid='id',
+                tokenize='trigram case_sensitive 0'
+            )",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO history_catalog_messages_fts(history_catalog_messages_fts) VALUES ('rebuild')")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA user_version = 5")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        ensure_schema(&mut conn).await.unwrap();
+
+        let detail: String = sqlx::query_scalar(
+            "SELECT sql FROM sqlite_master
+             WHERE name = 'history_catalog_messages_fts'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        assert!(detail.contains("detail='none'"));
+        let content: String =
+            sqlx::query_scalar("SELECT content FROM history_catalog_messages WHERE id = 1")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(content, "history-catalog 数据库压缩测试");
+        let english: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM history_catalog_messages_fts
+             WHERE history_catalog_messages_fts MATCH ?1",
+        )
+        .bind(fts_trigram_query("history"))
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        let chinese: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM history_catalog_messages_fts
+             WHERE history_catalog_messages_fts MATCH ?1",
+        )
+        .bind(fts_trigram_query("数据库"))
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(english, 1);
+        assert_eq!(chinese, 1);
+        let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(version, HISTORY_INDEX_SCHEMA_VERSION);
     }
 
     #[tokio::test]
@@ -4255,8 +4464,9 @@ mod tests {
 
         let fts_hits: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM history_messages_fts
-             WHERE history_messages_fts MATCH '\"历史索引\"'",
+             WHERE history_messages_fts MATCH ?1",
         )
+        .bind(fts_trigram_query("历史索引"))
         .fetch_one(&mut conn)
         .await
         .unwrap();
