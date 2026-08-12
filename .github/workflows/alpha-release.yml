@@ -1,0 +1,297 @@
+name: Alpha Release (Windows Unsigned)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "构建版本（例如 1.3.5；留空则使用仓库当前版本）"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: alpha-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Cache bundled Electron runtime
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/target/electron-runtime-cache
+          key: electron-pet-runtime-${{ runner.os }}-${{ runner.arch }}-v41.10.2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+          shared-key: windows-unsigned-alpha
+          cache-on-failure: true
+
+      - name: Resolve and stamp alpha version
+        id: version
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          test "$GITHUB_REF_NAME" = "$DEFAULT_BRANCH" || {
+            echo "Alpha releases must run from the default branch: $DEFAULT_BRANCH" >&2
+            exit 1
+          }
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+
+          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+          const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8"));
+          const tauriConfig = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+          const cargoTomlPath = "src-tauri/Cargo.toml";
+          const cargoLockPath = "src-tauri/Cargo.lock";
+          const cargoToml = readFileSync(cargoTomlPath, "utf8");
+          const cargoLock = readFileSync(cargoLockPath, "utf8");
+          const cargoVersion = cargoToml.match(
+            /^\[package\]\r?\nname = "cli-manager"\r?\nversion = "([^"]+)"/m,
+          )?.[1];
+          const cargoLockVersion = cargoLock.match(
+            /^\[\[package\]\]\r?\nname = "cli-manager"\r?\nversion = "([^"]+)"/m,
+          )?.[1];
+          const repositoryVersions = [
+            packageJson.version,
+            packageLock.version,
+            packageLock.packages?.[""]?.version,
+            tauriConfig.version,
+            cargoVersion,
+            cargoLockVersion,
+          ];
+          if (repositoryVersions.some((value) => value !== repositoryVersions[0])) {
+            throw new Error(
+              `Desktop version files are out of sync: ${repositoryVersions.join(", ")}`,
+            );
+          }
+
+          const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+          const repositoryVersion = repositoryVersions[0];
+          if (!stableVersionPattern.test(repositoryVersion)) {
+            throw new Error(
+              `Repository version is not a stable semantic version: ${repositoryVersion}`,
+            );
+          }
+
+          const repositoryParts = repositoryVersion.split(".").map(Number);
+          const requested = process.env.REQUESTED_VERSION?.trim();
+          const targetVersion = requested || repositoryVersion;
+          if (!stableVersionPattern.test(targetVersion)) {
+            throw new Error(
+              "The requested version must use major.minor.patch format without leading zeros",
+            );
+          }
+          const targetParts = targetVersion.split(".").map(Number);
+          const firstDifference = targetParts.findIndex(
+            (value, index) => value !== repositoryParts[index],
+          );
+          if (
+            firstDifference >= 0
+            && targetParts[firstDifference] < repositoryParts[firstDifference]
+          ) {
+            throw new Error("The alpha build version must not be older than the repository version");
+          }
+
+          const runNumber = process.env.GITHUB_RUN_NUMBER;
+          const runAttempt = process.env.GITHUB_RUN_ATTEMPT;
+          if (!/^\d+$/.test(runNumber ?? "") || !/^\d+$/.test(runAttempt ?? "")) {
+            throw new Error("GitHub run identity is unavailable");
+          }
+          const runNumberValue = Number(runNumber);
+          if (
+            !Number.isSafeInteger(runNumberValue)
+            || runNumberValue < 1
+            || runNumberValue > 65535
+          ) {
+            throw new Error("GITHUB_RUN_NUMBER must be between 1 and 65535 for MSI packaging");
+          }
+          const releaseVersion = `${targetVersion}-alpha.${runNumber}.${runAttempt}`;
+          const bundleVersion = `${targetVersion}-${runNumberValue}`;
+          const tag = `V${releaseVersion}`;
+
+          if (!tauriConfig.bundle || !Array.isArray(tauriConfig.bundle.resources)) {
+            throw new Error("Tauri bundle resources are unavailable");
+          }
+          packageJson.version = bundleVersion;
+          packageLock.version = bundleVersion;
+          packageLock.packages[""].version = bundleVersion;
+          tauriConfig.version = bundleVersion;
+          tauriConfig.bundle.targets = ["msi", "nsis"];
+          tauriConfig.bundle.createUpdaterArtifacts = false;
+          tauriConfig.bundle.resources = tauriConfig.bundle.resources.filter(
+            (resource) => resource !== "resources/ssh-agent/**/*",
+          );
+
+          writeFileSync("package.json", `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+          writeFileSync("package-lock.json", `${JSON.stringify(packageLock, null, 2)}\n`, "utf8");
+          writeFileSync(
+            "src-tauri/tauri.conf.json",
+            `${JSON.stringify(tauriConfig, null, 2)}\n`,
+            "utf8",
+          );
+
+          const replacements = [
+            {
+              path: cargoTomlPath,
+              source: cargoToml,
+              pattern: /^(\[package\]\r?\nname = "cli-manager"\r?\n)version = "[^"]+"/m,
+            },
+            {
+              path: cargoLockPath,
+              source: cargoLock,
+              pattern: /^(\[\[package\]\]\r?\nname = "cli-manager"\r?\n)version = "[^"]+"/m,
+            },
+          ];
+          for (const item of replacements) {
+            const matches = item.source.match(new RegExp(item.pattern.source, "gm")) ?? [];
+            if (matches.length !== 1) {
+              throw new Error(`Expected exactly one desktop package version in ${item.path}`);
+            }
+            writeFileSync(
+              item.path,
+              item.source.replace(item.pattern, `$1version = "${bundleVersion}"`),
+              "utf8",
+            );
+          }
+
+          appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `version=${releaseVersion}\nbundle_version=${bundleVersion}\ntag=${tag}\n`,
+            "utf8",
+          );
+          console.log(
+            `Resolved unsigned Windows alpha release ${releaseVersion}; bundle ${bundleVersion}`,
+          );
+          NODE
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Prepare bundled Electron desktop pet
+        shell: bash
+        env:
+          TAURI_ENV_PLATFORM: windows
+          TAURI_ENV_ARCH: x86_64
+        run: node ./scripts/prepare-electron-pet-runtime.mjs
+
+      - name: Record stable latest release
+        id: stable_latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build unsigned Windows Release and Debug alpha
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_OPTIONS: "--max-old-space-size=4096"
+          CARGO_INCREMENTAL: "1"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        with:
+          tagName: ${{ steps.version.outputs.tag }}
+          releaseName: "CLI-Manager ${{ steps.version.outputs.tag }} (Windows Unsigned Alpha)"
+          releaseBody: |
+            > [!WARNING]
+            > 这是供个人测试的 Windows 无签名 Alpha。它可能不稳定，不属于正式更新通道。
+
+            - 来源提交：`${{ github.sha }}`
+            - 工作流运行：`${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`
+            - 同一次运行生成 Release 和 Debug 两种构建，各提供 `.msi` 与 NSIS `.exe` 安装包
+            - Debug 安装包文件名带 `-debug`，用于验证和诊断
+            - Debug 验证通过后可直接安装同次运行中不带 `-debug` 的 Release 安装包，无需重新打包
+            - 安装包内部版本：`${{ steps.version.outputs.bundle_version }}`；Alpha 身份以 Release tag 为准
+            - 构建版本可以与仓库当前版本相同；若本机已安装同版本稳定版，Windows 安装器可能要求先卸载稳定版
+            - 不包含 `latest.json` 或 updater 签名资产，不能通过应用内更新安装本 Alpha
+            - 不包含内置 SSH Agent bundle；需要 Agent 时会联网获取并验证稳定版 manifest
+            - 不会写入稳定版 R2/`latest` 更新通道
+
+            Windows 首次安装可能触发 SmartScreen 提示，请仅在确认来源提交后继续。
+          releaseDraft: true
+          prerelease: true
+          includeDebug: true
+          includeRelease: true
+          includeUpdaterJson: false
+
+      - name: Verify assets and publish prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ALPHA_TAG: ${{ steps.version.outputs.tag }}
+          EXPECTED_STABLE_TAG: ${{ steps.stable_latest.outputs.tag }}
+        shell: bash
+        run: |
+          RELEASE_STATE="$(gh release view "$ALPHA_TAG" --json isDraft,isPrerelease --jq '[.isDraft, .isPrerelease] | @tsv')"
+          test "$RELEASE_STATE" = $'true\ttrue' || {
+            echo "Alpha release must remain a draft prerelease until verification completes" >&2
+            exit 1
+          }
+
+          ASSETS="$(gh release view "$ALPHA_TAG" --json assets --jq '.assets[].name')"
+          RELEASE_MSI="$(printf '%s\n' "$ASSETS" | grep -E '\.msi$' | grep -Ev -- '-debug\.msi$' || true)"
+          DEBUG_MSI="$(printf '%s\n' "$ASSETS" | grep -E -- '-debug\.msi$' || true)"
+          RELEASE_EXE="$(printf '%s\n' "$ASSETS" | grep -E -- '-setup\.exe$' || true)"
+          DEBUG_EXE="$(printf '%s\n' "$ASSETS" | grep -E -- '-setup-debug\.exe$' || true)"
+          test -n "$RELEASE_MSI" || {
+            echo "Missing Windows Release MSI alpha installer" >&2
+            exit 1
+          }
+          test -n "$DEBUG_MSI" || {
+            echo "Missing Windows Debug MSI alpha installer" >&2
+            exit 1
+          }
+          test -n "$RELEASE_EXE" || {
+            echo "Missing Windows Release NSIS alpha installer" >&2
+            exit 1
+          }
+          test -n "$DEBUG_EXE" || {
+            echo "Missing Windows Debug NSIS alpha installer" >&2
+            exit 1
+          }
+          for forbidden_pattern in \
+            '^latest\.json$' \
+            '\.sig$' \
+            '^cli-manager-ssh-agent-' \
+            '^ssh-agent-release-manifest\.json$' \
+            '^install-ssh-agent\.sh$' \
+            '\.(dmg|deb|AppImage)$'
+          do
+            if printf '%s\n' "$ASSETS" | grep -Eq "$forbidden_pattern"
+            then
+              echo "Windows unsigned alpha contains a forbidden asset matching: $forbidden_pattern" >&2
+              exit 1
+            fi
+          done
+
+          gh release edit "$ALPHA_TAG" --draft=false --prerelease --latest=false
+
+          RELEASE_STATE="$(gh release view "$ALPHA_TAG" --json isDraft,isPrerelease --jq '[.isDraft, .isPrerelease] | @tsv')"
+          test "$RELEASE_STATE" = $'false\ttrue' || {
+            echo "Windows alpha was not published as a prerelease" >&2
+            exit 1
+          }
+          ACTUAL_STABLE_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          test "$ACTUAL_STABLE_TAG" = "$EXPECTED_STABLE_TAG" || {
+            echo "Publishing Windows alpha changed the stable latest release" >&2
+            exit 1
+          }
