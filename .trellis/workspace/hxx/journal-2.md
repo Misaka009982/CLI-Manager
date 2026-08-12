@@ -765,3 +765,36 @@ OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 82: 修复历史索引压缩迁移检测
+
+**Date**: 2026-08-12
+**Task**: 修复历史索引压缩迁移检测
+**Branch**: `master`
+
+### Summary
+
+确认发布后打开历史 catalog 会自动检查 user_version 与真实 FTS schema；修复版本号已为 6 但 FTS 仍为旧 detail 模式时跳过迁移的问题。新增真实 schema 检测和回归测试，更新历史索引契约与 TEMP changelog；cargo fmt、cargo check、cargo test history 157/157 通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ad1e2a26` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
