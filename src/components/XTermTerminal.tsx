@@ -1340,14 +1340,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       resolveInitialDisplayReady = null;
       resolve?.();
     };
-    const finishInitialDisplayRestore = () => {
+    const finishInitialDisplayRestore = (hasSnapshot: boolean) => {
       scheduleFit(true);
-      // RAF-A (scheduleFit) fires before RAF-B below. If a horizontal resize occurs
-      // in RAF-A, xterm reflows the buffer and may move the cursor away from the
-      // clean bottom line written by the snapshot restore sequence. RAF-B runs after
-      // RAF-A, so we re-push the cursor to the bottom here before releasing the PTY
-      // output gate (markInitialDisplayReady). Without this, PTY output starts
-      // writing at the stale post-reflow cursor position, overwriting restored text.
       requestAnimationFrame(() => {
         if (terminalRef.current !== terminal) return;
         snapshotBeforeUnmountRef.current = () => {
@@ -1357,9 +1351,16 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
             logError("Failed to snapshot terminal buffer before dispose", { sessionId, err });
           }
         };
-        // Re-anchor cursor to a clean line after the fit/resize reflow, then open
-        // the PTY output gate. \x1b[999B is a no-op when cursor is already at the
-        // viewport bottom, so this is safe to call unconditionally.
+        if (!hasSnapshot) {
+          markInitialDisplayReady();
+          return;
+        }
+        // RAF-A (scheduleFit) fires before RAF-B below. If a horizontal resize occurs
+        // in RAF-A, xterm reflows the buffer and may move the cursor away from the
+        // clean bottom line written by the snapshot restore sequence. RAF-B runs after
+        // RAF-A, so re-push the cursor to the bottom before releasing the PTY output
+        // gate. This must stay in the snapshot path: a new shell has no stale cursor
+        // to repair and should keep its normal initial cursor position.
         terminal.write("\x1b[999B\r\n", () => {
           if (terminalRef.current !== terminal) return;
           terminal.scrollToBottom();
@@ -1392,12 +1393,12 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           refreshTerminalViewport(terminal);
           scheduleViewportRefresh();
           writeDeferredStartup();
-          finishInitialDisplayRestore();
+          finishInitialDisplayRestore(true);
         });
       });
     } else {
       writeDeferredStartup();
-      finishInitialDisplayRestore();
+      finishInitialDisplayRestore(false);
     }
     if (isActive && isVisible) {
       focusTerminalWithCodexCursorPolicy(terminal);

@@ -1,4 +1,5 @@
 use super::circuit::{CircuitPermit, CircuitPolicy, CircuitRegistry, CircuitSnapshot};
+use crate::usage::{self, RouteUsageContext, SseUsageCollector};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use http_body_util::{BodyExt, Full, Limited, StreamBody};
@@ -205,15 +206,23 @@ struct HotSwitchCommit {
     provider_id: String,
 }
 
+struct UsageCommit {
+    context: RouteUsageContext,
+    status_code: Option<u16>,
+}
+
 struct TimedBodyState<S> {
     stream: Pin<Box<S>>,
     mode: BodyTimeoutMode,
     tracker: Option<StreamCommitTracker>,
     circuit: Option<CircuitCommit>,
+    usage_collector: Option<SseUsageCollector>,
+    usage_commit: Option<UsageCommit>,
 }
 
 impl<S> Drop for TimedBodyState<S> {
     fn drop(&mut self) {
+        finish_usage_commit(self, Some("routing_client_cancelled"));
         if let Some(circuit) = self.circuit.take() {
             if let Some(permit) = circuit.permit {
                 circuit.state.circuits.release(permit);
@@ -454,6 +463,8 @@ async fn forward_request(
 ) -> Result<Response<RouteBody>, (StatusCode, &'static str)> {
     let request_path = request.uri().path().to_string();
     let route = classify_route(request.method(), &request_path)?;
+    let request_started_at = crate::provider::routing::now_millis();
+    let request_id = usage::new_request_id();
     if header_bytes(request.headers()) > MAX_HEADER_BYTES {
         return Err((
             StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
@@ -474,6 +485,25 @@ async fn forward_request(
             "routing_request_body_must_be_object",
         ));
     }
+    let app_type = route_app_type(route);
+    let requested_model = request_json
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let header_pairs = headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect::<Vec<_>>();
+    let session_id =
+        usage::session_id_from_headers_and_body(app_type, &header_pairs, &request_json);
+    let usage_logging_enabled = crate::provider::routing::usage_logging_enabled()
+        .await
+        .unwrap_or(true);
     let rectifier_config = crate::provider::routing::load_rectifier_config()
         .await
         .map_err(|_| {
@@ -559,6 +589,40 @@ async fn forward_request(
     };
     let mut provider_index = 0usize;
     let mut terminal_failure = None;
+    let record_failed_attempt = |snapshot: &ProviderSnapshot,
+                                 attempt_index: usize,
+                                 status_code: Option<StatusCode>,
+                                 error_code: &'static str| {
+        if !usage_logging_enabled {
+            return;
+        }
+        let context = RouteUsageContext {
+            request_id: format!("{}:attempt:{}", request_id, attempt_index + 1),
+            logical_request_id: request_id.clone(),
+            app_type: app_type.to_string(),
+            session_id: session_id.clone(),
+            requested_model: requested_model.clone(),
+            outbound_model: effective_model_for_request(&request_json, &snapshot.model_mappings),
+            provider_id: snapshot.provider_id.clone(),
+            provider_name: snapshot.provider_name.clone(),
+            started_at_ms: request_started_at,
+            is_streaming: streaming,
+            attempt_index: attempt_index as u32,
+            attempt_count: attempt_index.saturating_add(1) as u32,
+            degraded: attempt_index > 0,
+        };
+        tokio::task::spawn_local(async move {
+            usage::record_route_usage_best_effort(
+                context,
+                usage::UsageCapture::default(),
+                status_code.map(|status| status.as_u16()),
+                "error",
+                Some(error_code),
+                crate::provider::routing::now_millis().saturating_sub(request_started_at),
+            )
+            .await;
+        });
+    };
     let selected = loop {
         if provider_index >= snapshots.len() || provider_index >= max_provider_attempts {
             break None;
@@ -828,15 +892,19 @@ async fn forward_request(
                     snapshot.provider_id,
                     provider_index + 1,
                 );
+                let outbound_model =
+                    effective_model_for_request(&request_json, &snapshot.model_mappings);
                 break Some((
                     response,
                     circuit_permit,
                     provider_index,
                     snapshot.provider_id,
                     snapshot.provider_name,
+                    outbound_model,
                 ));
             }
             ProviderAttemptOutcome::Failure(status, message) => {
+                record_failed_attempt(&snapshot, provider_index, Some(status), message);
                 log::warn!(
                     "routing provider circuit failure: app_type={} provider={} provider_id={} status={} reason={}",
                     snapshot.app_type,
@@ -849,6 +917,12 @@ async fn forward_request(
                 terminal_failure = Some((status, message));
             }
             ProviderAttemptOutcome::KeyExhausted => {
+                record_failed_attempt(
+                    &snapshot,
+                    provider_index,
+                    None,
+                    "routing_provider_key_exhausted",
+                );
                 log::warn!(
                     "routing provider key pool exhausted: app_type={} provider_id={}",
                     snapshot.app_type,
@@ -873,6 +947,7 @@ async fn forward_request(
         selected_provider_index,
         selected_provider_id,
         selected_provider_name,
+        selected_outbound_model,
     )) = selected
     else {
         log::warn!(
@@ -897,6 +972,21 @@ async fn forward_request(
         selected_provider_index + 1,
     );
     let headers = response.headers().clone();
+    let route_usage_context = |provider_id: String, provider_name: String| RouteUsageContext {
+        request_id: format!("{}:attempt:{}", request_id, selected_provider_index + 1),
+        logical_request_id: request_id.clone(),
+        app_type: app_type.to_string(),
+        session_id: session_id.clone(),
+        requested_model: requested_model.clone(),
+        outbound_model: selected_outbound_model.clone(),
+        provider_id,
+        provider_name,
+        started_at_ms: request_started_at,
+        is_streaming: streaming,
+        attempt_index: selected_provider_index as u32,
+        attempt_count: selected_provider_index.saturating_add(1) as u32,
+        degraded: selected_provider_index > 0,
+    };
     if !streaming {
         let body = match tokio::time::timeout(
             Duration::from_secs(failover_config.non_streaming_timeout),
@@ -930,6 +1020,30 @@ async fn forward_request(
             record_circuit_success(&state, &mut circuit_permit, circuit_policy);
         } else if let Some(permit) = circuit_permit.take() {
             state.circuits.release(permit);
+        }
+        if usage_logging_enabled {
+            let capture = serde_json::from_slice::<serde_json::Value>(&body)
+                .map(|value| usage::parse_response_json(&value))
+                .unwrap_or_default();
+            let context =
+                route_usage_context(selected_provider_id.clone(), selected_provider_name.clone());
+            let duration_ms =
+                crate::provider::routing::now_millis().saturating_sub(request_started_at);
+            tokio::spawn(async move {
+                usage::record_route_usage_best_effort(
+                    context,
+                    capture,
+                    Some(status.as_u16()),
+                    if classify_upstream_status(status) == UpstreamErrorClass::Success {
+                        "success"
+                    } else {
+                        "error"
+                    },
+                    None,
+                    duration_ms,
+                )
+                .await;
+            });
         }
         let body = Full::new(body).map_err(|error| match error {}).boxed();
         let mut builder = Response::builder().status(status);
@@ -975,8 +1089,16 @@ async fn forward_request(
                 && classify_upstream_status(status) == UpstreamErrorClass::Success)
                 .then(|| HotSwitchCommit {
                     app_type: route_app_type(route),
-                    provider_id: selected_provider_id,
+                    provider_id: selected_provider_id.clone(),
                 }),
+        }),
+        usage_logging_enabled.then(|| SseUsageCollector::default()),
+        usage_logging_enabled.then(|| UsageCommit {
+            context: route_usage_context(
+                selected_provider_id.clone(),
+                selected_provider_name.clone(),
+            ),
+            status_code: Some(status.as_u16()),
         }),
     );
     let body = BodyExt::boxed(StreamBody::new(stream));
@@ -1864,6 +1986,8 @@ fn timed_body_stream<S>(
     mode: BodyTimeoutMode,
     tracker: Option<StreamCommitTracker>,
     circuit: Option<CircuitCommit>,
+    usage_collector: Option<SseUsageCollector>,
+    usage_commit: Option<UsageCommit>,
 ) -> impl Stream<Item = Result<Frame<Bytes>, BoxError>>
 where
     S: Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
@@ -1874,6 +1998,8 @@ where
             mode,
             tracker,
             circuit,
+            usage_collector,
+            usage_commit,
         }),
         |state| async move {
             let mut state = state?;
@@ -1907,6 +2033,9 @@ where
                         .as_mut()
                         .map(|tracker| tracker.observe(&chunk))
                         .unwrap_or(StreamCommitOutcome::None);
+                    if let Some(collector) = state.usage_collector.as_mut() {
+                        collector.observe(&chunk);
+                    }
                     match outcome {
                         StreamCommitOutcome::Success => {
                             if let Some(circuit) = state.circuit.as_mut() {
@@ -1961,14 +2090,17 @@ where
                 }
                 Ok(Some(Err(error))) => {
                     finish_stream_circuit(&mut state);
+                    finish_usage_commit(&mut state, Some("routing_upstream_stream_error"));
                     Some((Err::<Frame<Bytes>, BoxError>(Box::new(error)), None))
                 }
                 Ok(None) => {
                     finish_stream_circuit(&mut state);
+                    finish_usage_commit(&mut state, None);
                     None
                 }
                 Err(_) => {
                     finish_stream_circuit(&mut state);
+                    finish_usage_commit(&mut state, Some("routing_upstream_stream_timeout"));
                     Some((
                         Err::<Frame<Bytes>, BoxError>(Box::new(std::io::Error::new(
                             std::io::ErrorKind::TimedOut,
@@ -1980,6 +2112,35 @@ where
             }
         },
     )
+}
+
+fn finish_usage_commit<S>(state: &mut TimedBodyState<S>, error_code: Option<&'static str>) {
+    let Some(commit) = state.usage_commit.take() else {
+        return;
+    };
+    let capture = state
+        .usage_collector
+        .take()
+        .map(SseUsageCollector::finish)
+        .unwrap_or_default();
+    let outcome = if error_code.is_some() {
+        "error"
+    } else {
+        "success"
+    };
+    let duration_ms =
+        crate::provider::routing::now_millis().saturating_sub(commit.context.started_at_ms);
+    tokio::spawn(async move {
+        usage::record_route_usage_best_effort(
+            commit.context,
+            capture,
+            commit.status_code,
+            outcome,
+            error_code,
+            duration_ms,
+        )
+        .await;
+    });
 }
 
 fn is_key_retryable(status: reqwest::StatusCode) -> bool {

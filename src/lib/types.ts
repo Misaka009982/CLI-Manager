@@ -935,6 +935,12 @@ export interface HistoryStatsPayload {
   source_distribution: HistoryStatsSourceItem[];
   project_efficiency: HistoryStatsProjectEfficiencyItem[];
   hourly_activity: HistoryStatsHourlyActivityItem[];
+  data_quality: {
+    route_records: number;
+    session_fallback_records: number;
+    unattributed_records: number;
+    missing_usage_records: number;
+  };
 }
 
 export type RequestLogSource = "claude" | "codex" | "gemini" | "opencode" | "grok";
@@ -977,6 +983,18 @@ export interface RequestLogItem {
   unpriced_tokens: number;
   status: "recorded";
   session_available: boolean;
+  data_source?: "route" | "session_log";
+  provider_id?: string | null;
+  provider_name?: string | null;
+  requested_model?: string | null;
+  outbound_model?: string | null;
+  response_model?: string | null;
+  usage_status?: "complete" | "partial" | "missing" | "invalid";
+  status_code?: number | null;
+  outcome?: string;
+  duration_ms?: number;
+  attempt_count?: number;
+  degraded?: boolean;
 }
 
 export interface RequestLogSummary {

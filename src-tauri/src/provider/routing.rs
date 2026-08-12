@@ -1332,6 +1332,13 @@ async fn load_service_config(
     Ok(config)
 }
 
+pub(crate) async fn usage_logging_enabled() -> Result<bool, String> {
+    let mut connection = database::open_connection().await?;
+    Ok(load_service_config(&mut connection)
+        .await?
+        .usage_logging_enabled)
+}
+
 async fn load_takeovers(
     connection: &mut SqliteConnection,
 ) -> Result<Vec<RoutingTakeoverItem>, String> {

@@ -55,6 +55,18 @@ pub struct RequestLogItem {
     unpriced_tokens: u64,
     status: &'static str,
     session_available: bool,
+    data_source: String,
+    provider_id: Option<String>,
+    provider_name: Option<String>,
+    requested_model: Option<String>,
+    outbound_model: Option<String>,
+    response_model: Option<String>,
+    usage_status: String,
+    status_code: Option<i64>,
+    outcome: String,
+    duration_ms: i64,
+    attempt_count: u64,
+    degraded: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -378,6 +390,11 @@ async fn replace_document(
         .execute(&mut *tx)
         .await
         .map_err(|err| format!("request_logs_delete_failed: {err}"))?;
+    sqlx::query("DELETE FROM usage_records WHERE data_source = 'session_log' AND file_path = ?1")
+        .bind(&document.file_path)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| format!("usage_records_session_cleanup_failed: {err}"))?;
 
     for event in &document.events {
         let timestamp_ms = event
@@ -412,6 +429,53 @@ async fn replace_document(
         .execute(&mut *tx)
         .await
         .map_err(|err| format!("request_logs_insert_failed: {err}"))?;
+        sqlx::query(
+            "INSERT INTO usage_records(
+                record_id, logical_request_id, data_source, source, event_key,
+                file_path, event_index, session_id, project_key, attribution_status,
+                response_model, pricing_model, input_tokens, output_tokens,
+                cache_read_tokens, cache_creation_tokens, usage_status, outcome,
+                started_at_ms, completed_at_ms, duration_ms, created_at_ms, updated_at_ms
+             ) VALUES (?1, ?2, 'session_log', ?3, ?4, ?5, ?6, ?7, ?8, 'resolved',
+                       ?9, ?9, ?10, ?11, ?12, ?13, 'complete', 'success',
+                       ?14, ?14, 0, ?15, ?15)
+             ON CONFLICT(record_id) DO UPDATE SET
+                response_model = excluded.response_model,
+                pricing_model = excluded.pricing_model,
+                input_tokens = excluded.input_tokens,
+                output_tokens = excluded.output_tokens,
+                cache_read_tokens = excluded.cache_read_tokens,
+                cache_creation_tokens = excluded.cache_creation_tokens,
+                started_at_ms = excluded.started_at_ms,
+                completed_at_ms = excluded.completed_at_ms,
+                updated_at_ms = excluded.updated_at_ms",
+        )
+        .bind(request_id(
+            &document.source,
+            &document.file_path,
+            &event.event_key,
+        ))
+        .bind(request_id(
+            &document.source,
+            &document.file_path,
+            &event.event_key,
+        ))
+        .bind(&document.source)
+        .bind(&event.event_key)
+        .bind(&document.file_path)
+        .bind(event.event_index as i64)
+        .bind(&document.session_id)
+        .bind(&document.project_key)
+        .bind(&event.model)
+        .bind(event.usage.input_tokens as i64)
+        .bind(event.usage.output_tokens as i64)
+        .bind(event.usage.cache_read_tokens as i64)
+        .bind(event.usage.cache_creation_tokens as i64)
+        .bind(timestamp_ms)
+        .bind(synced_at_ms)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| format!("usage_records_session_insert_failed: {err}"))?;
     }
 
     sqlx::query(
@@ -460,6 +524,13 @@ async fn remove_missing_files(
             .execute(&mut *tx)
             .await
             .map_err(|err| format!("request_logs_cleanup_failed: {err}"))?;
+        sqlx::query(
+            "DELETE FROM usage_records WHERE data_source = 'session_log' AND file_path = ?1",
+        )
+        .bind(path)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| format!("usage_records_cleanup_failed: {err}"))?;
         sqlx::query("DELETE FROM request_log_sync WHERE file_path = ?1")
             .bind(path)
             .execute(&mut *tx)
@@ -566,12 +637,14 @@ pub async fn history_sync_request_logs(
 ) -> Result<RequestLogSyncResult, String> {
     let _guard = request_log_sync_lock().lock().await;
     let mut conn = open_cli_manager_db().await?;
-    sync_request_logs_with_connection(
+    let result = sync_request_logs_with_connection(
         &mut conn,
         history_roots(claude_config_dir, codex_config_dir, grok_session_root),
         force.unwrap_or(false),
     )
-    .await
+    .await?;
+    let _ = crate::usage::reconcile_route_attribution().await;
+    Ok(result)
 }
 
 fn normalized_filter(value: Option<&String>) -> Option<String> {
@@ -749,7 +822,7 @@ async fn list_request_logs_with_connection(
     let page_size = page_size.clamp(1, MAX_PAGE_SIZE);
 
     let mut count_builder =
-        QueryBuilder::<Sqlite>::new("SELECT COUNT(*) AS total FROM request_logs");
+        QueryBuilder::<Sqlite>::new("SELECT COUNT(*) AS total FROM unified_usage_records");
     push_filters(&mut count_builder, &filters, allowed_paths);
     let total = count_builder
         .build()
@@ -766,7 +839,7 @@ async fn list_request_logs_with_connection(
             SUM(output_tokens) AS output_tokens,
             SUM(cache_read_tokens) AS cache_read_tokens,
             SUM(cache_creation_tokens) AS cache_creation_tokens
-         FROM request_logs",
+         FROM unified_usage_records",
     );
     push_filters(&mut summary_builder, &filters, allowed_paths);
     summary_builder.push(" GROUP BY model");
@@ -830,8 +903,10 @@ async fn list_request_logs_with_connection(
     let mut page_builder = QueryBuilder::<Sqlite>::new(
         "SELECT request_id, source, project_key, session_id, file_path, event_index,
             timestamp_ms, model, input_tokens, output_tokens, cache_read_tokens,
-            cache_creation_tokens
-         FROM request_logs",
+            cache_creation_tokens, data_source, provider_id, provider_name,
+            requested_model, outbound_model, response_model, usage_status,
+            status_code, outcome, duration_ms, attempt_count, degraded
+         FROM unified_usage_records",
     );
     push_filters(&mut page_builder, &filters, allowed_paths);
     page_builder
@@ -893,6 +968,24 @@ async fn list_request_logs_with_connection(
             total_cost_usd: priced.total_cost_usd,
             unpriced_tokens: priced.unpriced_tokens,
             status: "recorded",
+            data_source: row
+                .try_get("data_source")
+                .unwrap_or_else(|_| "session_log".to_string()),
+            provider_id: row.try_get("provider_id").unwrap_or(None),
+            provider_name: row.try_get("provider_name").unwrap_or(None),
+            requested_model: row.try_get("requested_model").unwrap_or(None),
+            outbound_model: row.try_get("outbound_model").unwrap_or(None),
+            response_model: row.try_get("response_model").unwrap_or(None),
+            usage_status: row
+                .try_get("usage_status")
+                .unwrap_or_else(|_| "complete".to_string()),
+            status_code: row.try_get("status_code").unwrap_or(None),
+            outcome: row
+                .try_get("outcome")
+                .unwrap_or_else(|_| "success".to_string()),
+            duration_ms: row.try_get("duration_ms").unwrap_or(0),
+            attempt_count: row.try_get::<i64, _>("attempt_count").unwrap_or(1).max(1) as u64,
+            degraded: row.try_get::<i64, _>("degraded").unwrap_or(0) != 0,
         });
     }
 
@@ -1032,7 +1125,7 @@ pub async fn history_get_request_log_stats(
     let mut builder = QueryBuilder::<Sqlite>::new(
         "SELECT source, model, timestamp_ms, input_tokens, output_tokens,
             cache_read_tokens, cache_creation_tokens
-         FROM request_logs",
+         FROM unified_usage_records",
     );
     push_filters(&mut builder, &filters, allowed_paths.as_ref());
     builder.push(" ORDER BY timestamp_ms ASC, request_id ASC");
@@ -1156,6 +1249,12 @@ mod tests {
                 sqlx::query(statement).execute(&mut conn).await.unwrap();
             }
         }
+        for statement in crate::MIGRATION_CREATE_USAGE_RECORDS_SQL.split(';') {
+            let statement = statement.trim();
+            if !statement.is_empty() {
+                sqlx::query(statement).execute(&mut conn).await.unwrap();
+            }
+        }
         conn
     }
 
@@ -1242,6 +1341,20 @@ mod tests {
                 cache_creation_tokens, created_at_ms, updated_at_ms
              ) VALUES ('r1', 'claude', 'project-a', 'session-a', 'missing.jsonl', 'e1', 0,
                 1000, 'claude-test', 10, 5, 2, 1, 1000, 1000)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO usage_records(
+                record_id, logical_request_id, data_source, source, event_key, file_path,
+                event_index, session_id, project_key, attribution_status, response_model,
+                pricing_model, input_tokens, output_tokens, cache_read_tokens,
+                cache_creation_tokens, usage_status, outcome, started_at_ms, completed_at_ms,
+                duration_ms, created_at_ms, updated_at_ms
+             ) VALUES ('r1', 'r1', 'session_log', 'claude', 'e1', 'missing.jsonl', 0,
+                'session-a', 'project-a', 'resolved', 'claude-test', 'claude-test', 10, 5,
+                2, 1, 'complete', 'success', 1000, 1000, 0, 1000, 1000)",
         )
         .execute(&mut conn)
         .await

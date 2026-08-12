@@ -32,6 +32,7 @@ pub mod statusline_profiles;
 mod sync;
 mod text_encoding;
 mod third_party_notification;
+pub mod usage;
 mod webdav;
 mod wsl;
 
@@ -423,6 +424,122 @@ const MIGRATION_EXTEND_SSH_AGENT_INSTALLATIONS_SQL: &str = "
                 ALTER TABLE ssh_agent_installations ADD COLUMN artifact_sha256 TEXT NOT NULL DEFAULT '';
                 ALTER TABLE ssh_agent_installations ADD COLUMN previous_version TEXT NOT NULL DEFAULT '';
               ";
+
+const MIGRATION_CREATE_USAGE_RECORDS_VERSION: i64 = 27;
+const MIGRATION_CREATE_USAGE_RECORDS_SQL: &str = "
+                CREATE TABLE IF NOT EXISTS usage_records (
+                    record_id              TEXT PRIMARY KEY,
+                    logical_request_id     TEXT NOT NULL,
+                    data_source            TEXT NOT NULL CHECK (data_source IN ('route', 'session_log')),
+                    source                 TEXT NOT NULL,
+                    event_key              TEXT NOT NULL DEFAULT '',
+                    file_path             TEXT,
+                    event_index           INTEGER NOT NULL DEFAULT 0,
+                    session_id             TEXT,
+                    project_key            TEXT,
+                    project_path           TEXT,
+                    attribution_status     TEXT NOT NULL DEFAULT 'pending',
+                    provider_id            TEXT,
+                    provider_name          TEXT,
+                    requested_model        TEXT,
+                    outbound_model         TEXT,
+                    response_model         TEXT,
+                    pricing_model          TEXT,
+                    input_tokens           INTEGER NOT NULL DEFAULT 0,
+                    output_tokens          INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+                    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                    usage_status           TEXT NOT NULL DEFAULT 'complete',
+                    status_code            INTEGER,
+                    outcome                TEXT NOT NULL DEFAULT 'success',
+                    error_code             TEXT,
+                    is_streaming           INTEGER NOT NULL DEFAULT 0,
+                    started_at_ms          INTEGER NOT NULL,
+                    completed_at_ms       INTEGER,
+                    duration_ms            INTEGER NOT NULL DEFAULT 0,
+                    attempt_index         INTEGER NOT NULL DEFAULT 0,
+                    attempt_count         INTEGER NOT NULL DEFAULT 1,
+                    degraded              INTEGER NOT NULL DEFAULT 0,
+                    created_at_ms         INTEGER NOT NULL,
+                    updated_at_ms         INTEGER NOT NULL,
+                    UNIQUE(data_source, logical_request_id, event_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_usage_records_time ON usage_records(started_at_ms DESC);
+                CREATE INDEX IF NOT EXISTS idx_usage_records_project ON usage_records(project_key, started_at_ms DESC);
+                CREATE INDEX IF NOT EXISTS idx_usage_records_session ON usage_records(session_id, started_at_ms DESC);
+                CREATE INDEX IF NOT EXISTS idx_usage_records_provider ON usage_records(provider_id, started_at_ms DESC);
+                CREATE INDEX IF NOT EXISTS idx_usage_records_source ON usage_records(source, data_source, started_at_ms DESC);
+                INSERT OR IGNORE INTO usage_records(
+                    record_id, logical_request_id, data_source, source, event_key,
+                    file_path, event_index, session_id, project_key, attribution_status,
+                    response_model, pricing_model, input_tokens, output_tokens,
+                    cache_read_tokens, cache_creation_tokens, usage_status, outcome,
+                    started_at_ms, completed_at_ms, duration_ms, created_at_ms, updated_at_ms
+                )
+                SELECT request_id, request_id, 'session_log', source, event_key,
+                       file_path, event_index, session_id, project_key, 'resolved',
+                       model, model, input_tokens, output_tokens, cache_read_tokens,
+                       cache_creation_tokens, 'complete', 'success', timestamp_ms,
+                       timestamp_ms, 0, updated_at_ms, updated_at_ms
+                FROM request_logs;
+                DROP VIEW IF EXISTS unified_usage_records;
+                CREATE VIEW unified_usage_records AS
+                SELECT
+                    u.record_id AS request_id,
+                    u.source,
+                    COALESCE(u.project_key, '') AS project_key,
+                    COALESCE(u.session_id, '') AS session_id,
+                    COALESCE(u.file_path, '') AS file_path,
+                    u.event_index,
+                    u.started_at_ms AS timestamp_ms,
+                    COALESCE(u.outbound_model, u.response_model, u.requested_model, u.pricing_model) AS model,
+                    u.input_tokens,
+                    u.output_tokens,
+                    u.cache_read_tokens,
+                    u.cache_creation_tokens,
+                    u.data_source,
+                    u.provider_id,
+                    u.provider_name,
+                    u.requested_model,
+                    u.outbound_model,
+                    u.response_model,
+                    u.usage_status,
+                    u.status_code,
+                    u.outcome,
+                    u.duration_ms,
+                    u.attempt_count,
+                    u.degraded
+                FROM usage_records u
+                WHERE u.data_source = 'route'
+                   OR NOT EXISTS (
+                        SELECT 1
+                        FROM usage_records r
+                        WHERE r.data_source = 'route'
+                          AND r.usage_status IN ('complete', 'partial')
+                          AND NULLIF(r.session_id, '') IS NOT NULL
+                          AND r.session_id = u.session_id
+                          AND ABS(r.started_at_ms - u.started_at_ms) <= 120000
+                          AND COALESCE(r.outbound_model, r.response_model, r.requested_model)
+                              = COALESCE(u.response_model, u.pricing_model)
+                          AND r.input_tokens = u.input_tokens
+                          AND r.output_tokens = u.output_tokens
+                          AND r.cache_read_tokens = u.cache_read_tokens
+                          AND r.cache_creation_tokens = u.cache_creation_tokens
+                   );
+                CREATE TABLE IF NOT EXISTS usage_daily_rollups (
+                    day_start_ms          INTEGER NOT NULL,
+                    source                TEXT NOT NULL,
+                    project_key           TEXT NOT NULL DEFAULT '',
+                    provider_id           TEXT NOT NULL DEFAULT '',
+                    outbound_model        TEXT NOT NULL DEFAULT '',
+                    request_count         INTEGER NOT NULL DEFAULT 0,
+                    input_tokens          INTEGER NOT NULL DEFAULT 0,
+                    output_tokens         INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+                    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(day_start_ms, source, project_key, provider_id, outbound_model)
+                );
+              ";
 fn migrations() -> Vec<Migration> {
     vec![
         Migration {
@@ -683,6 +800,12 @@ fn migrations() -> Vec<Migration> {
             version: provider::MIGRATION_CREATE_NATIVE_PROVIDERS_VERSION,
             description: provider::MIGRATION_CREATE_NATIVE_PROVIDERS_DESCRIPTION,
             sql: provider::MIGRATION_CREATE_NATIVE_PROVIDERS_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: MIGRATION_CREATE_USAGE_RECORDS_VERSION,
+            description: "create_unified_usage_records",
+            sql: MIGRATION_CREATE_USAGE_RECORDS_SQL,
             kind: MigrationKind::Up,
         },
     ]
