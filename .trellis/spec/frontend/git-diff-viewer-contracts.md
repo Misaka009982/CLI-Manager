@@ -60,6 +60,7 @@ type GitDiffViewMode = "split" | "unified";
 ### 3. Contracts
 
 - The review dialog owns the filtered target list and active target identity; the controller owns the active Hunk within one target.
+- The review dialog must derive its initial active target synchronously from `initialFilePath` during render and repeat that binding before paint when the dialog opens or the target tree changes; an empty active ID must never reconcile to the first file before this binding.
 - Target identity is repository context plus repository-relative file path. Status and line counts must not participate in identity, so refresh can retain the same target.
 - Target order is the rendered tracked tree followed by the rendered untracked tree. `M` and `D` filters exclude the untracked tree, matching `GitChangesPanel`.
 - `F7` and `Shift+F7` are handled by the focusable review viewer only. They must not install a global listener or affect terminals and other windows.
@@ -85,6 +86,7 @@ type GitDiffViewMode = "split" | "unified";
 ### 6. Tests Required
 
 - Unit-test tracked/untracked order, `M`/`D` filtering, repository identity, refresh reconciliation, Hunk/file transitions, boundaries, and zero-Hunk fallback.
+- Unit-test opening a non-first changed file on the first render and reopening a mounted dialog with a different initial file.
 - Assert settings default, persisted-value validation, and preference-sync classification.
 - Run the shared Viewer architecture test and the SSH Git regression test.
 
