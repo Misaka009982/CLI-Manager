@@ -39,6 +39,7 @@ import { useHistoryStore } from "./stores/historyStore";
 import { useExternalSessionSyncStore } from "./stores/externalSessionSyncStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useDesktopPetCoordinator } from "./hooks/useDesktopPetCoordinator";
+import { useDesktopPetECoordinator } from "./hooks/useDesktopPetECoordinator";
 import { useRemoteHandoffCoordinator } from "./hooks/useRemoteHandoffCoordinator";
 import { useUpdateStore } from "./stores/updateStore";
 import { useReplayStore } from "./stores/replayStore";
@@ -793,6 +794,13 @@ function App() {
   }, []);
 
   useRemoteHandoffCoordinator(startupReady);
+
+  useDesktopPetECoordinator({
+    appReady: startupReady,
+    terminalFullscreen,
+    onOpenSettings: () => handleOpenSettings("desktop-pet-e"),
+    onActivateSession: handleActivateHookNotificationTarget,
+  });
 
   useDesktopPetCoordinator({
     appReady: startupReady,

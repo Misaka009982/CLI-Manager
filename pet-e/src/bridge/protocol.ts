@@ -1,6 +1,7 @@
 export const DESKTOP_PET_E_PROTOCOL_VERSION = 1;
 export const DESKTOP_PET_E_MAX_LINE_BYTES = 1024 * 1024;
 export const DESKTOP_PET_E_EVENT = "desktop-pet-e-event";
+export const DESKTOP_PET_E_ACTION_EVENT = "desktop-pet-e-action";
 export const DESKTOP_PET_E_RUNTIME_STATE_EVENT = "desktop-pet-e-runtime-state";
 export const DESKTOP_PET_E_SIZE_MIN_PERCENT = 50;
 export const DESKTOP_PET_E_SIZE_MAX_PERCENT = 200;
