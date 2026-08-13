@@ -929,3 +929,36 @@ OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 87: 修复 Diff 回退确认与折叠项目交互
+
+**Date**: 2026-08-13
+**Task**: 修复 Diff 回退确认与折叠项目交互
+**Branch**: `master`
+
+### Summary
+
+修复 Diff 文件级与代码块级回滚确认层级导致的卡死/不可见问题；统一折叠侧边栏项目的 CLI 图标、单击跳转、双击启动行为并提高浮层不透明度；同步中英文文案、规格、功能清单与 V1.3.6 变更记录。通过 npx tsc --noEmit 与 git diff --check。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `47661dcc` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
