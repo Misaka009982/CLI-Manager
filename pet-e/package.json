@@ -1,0 +1,17 @@
+{
+  "name": "cli-manager-desktop-pet-e",
+  "private": true,
+  "version": "1.0.0",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "electron": "41.10.2",
+    "typescript": "~5.8.3"
+  }
+}

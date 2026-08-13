@@ -372,6 +372,7 @@ export function DesktopPetSettingsPage() {
   const { language, t } = useI18n();
   const { confirm, confirmDialog } = useAppConfirm();
   const desktopPet = useSettingsStore((state) => state.desktopPet);
+  const desktopPetEEnabled = useSettingsStore((state) => state.desktopPetE.enabled);
   const updateSetting = useSettingsStore((state) => state.update);
   const [catalog, setCatalog] = useState<PetCatalogResponse | null>(null);
   const [installedPets, setInstalledPets] = useState<InstalledPet[]>([]);
@@ -645,6 +646,7 @@ export function DesktopPetSettingsPage() {
               size="md"
               color="cliPrimary"
               checked={desktopPet.enabled}
+              disabled={desktopPetEEnabled && !desktopPet.enabled}
               aria-label={
                 desktopPet.enabled
                   ? t("desktopPet.settings.disableAria")

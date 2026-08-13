@@ -119,6 +119,7 @@ export const SETTING_BACKUP_POLICY = {
   projectScopedTerminalViewEnabled: "preferences",
   workspanEnabled: "excluded",
   desktopPet: "excluded",
+  desktopPetE: "excluded",
 } as const satisfies Record<keyof Settings, BackupSettingDomain>;
 
 function keysForDomain<D extends BackupSettingDomain>(domain: D) {

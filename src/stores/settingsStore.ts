@@ -29,6 +29,13 @@ import {
   type DesktopPetSizePercent,
 } from "../lib/desktopPetSize";
 import {
+  DEFAULT_DESKTOP_PET_E_SETTINGS,
+  canEnableDesktopPet,
+  canEnableDesktopPetE,
+  normalizeDesktopPetESettings,
+  type DesktopPetESettings,
+} from "../lib/desktopPetE";
+import {
   normalizeCliArgsHistory,
   recordCliArgsUsage,
   type CliArgsHistoryEntry,
@@ -83,6 +90,7 @@ export type LinuxGraphicsMode = (typeof LINUX_GRAPHICS_MODES)[number];
 type LastSettingsTab =
   | "general"
   | "desktop-pet"
+  | "desktop-pet-e"
   | "developer"
   | "sidebar"
   | "terminal-theme"
@@ -465,6 +473,7 @@ export interface Settings {
   projectScopedTerminalViewEnabled: boolean;
   workspanEnabled: boolean;
   desktopPet: DesktopPetSettings;
+  desktopPetE: DesktopPetESettings;
 }
 
 interface SettingsStore extends Settings {
@@ -660,6 +669,7 @@ const DEFAULTS: Settings = {
     lockPosition: false,
     position: null,
   },
+  desktopPetE: { ...DEFAULT_DESKTOP_PET_E_SETTINGS },
 };
 
 const LEGACY_LIGHT_PALETTE_MAP: Partial<Record<string, LightThemePalette>> = {
@@ -679,6 +689,7 @@ const LEGACY_TERMINAL_THEME_MAP: Partial<Record<string, string>> = {
 const LAST_SETTINGS_TABS: readonly LastSettingsTab[] = [
   "general",
   "desktop-pet",
+  "desktop-pet-e",
   "developer",
   "sidebar",
   "terminal-theme",
@@ -1075,6 +1086,10 @@ export function migrateTerminalBackground(value: unknown): TerminalBackgroundSet
   return { enabled, imagePath, imageSizeBytes, opacity, fit, position, blur, overlayDarken };
 }
 
+export function migrateDesktopPetESettings(value: unknown): DesktopPetESettings {
+  return normalizeDesktopPetESettings(value, DEFAULTS.desktopPetE);
+}
+
 export function migrateDesktopPetSettings(value: unknown): DesktopPetSettings {
   const defaults = DEFAULTS.desktopPet;
   if (!value || typeof value !== "object") {
@@ -1314,6 +1329,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.systemResourceCardOrder = migrateSystemResourceCardOrder(entries.systemResourceCardOrder);
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
     entries.desktopPet = migrateDesktopPetSettings(entries.desktopPet);
+    entries.desktopPetE = migrateDesktopPetESettings(entries.desktopPetE);
+    if (entries.desktopPet.enabled && entries.desktopPetE.enabled) {
+      entries.desktopPetE = { ...entries.desktopPetE, enabled: false };
+      persistSetting("desktopPetE", entries.desktopPetE);
+    }
     entries.terminalShellProfiles = migrateTerminalShellProfiles(entries.terminalShellProfiles);
     entries.terminalSettingsSectionsExpanded = migrateTerminalSettingsSectionsExpanded(
       entries.terminalSettingsSectionsExpanded
@@ -1657,11 +1677,28 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   update: async (key, value) => {
+    const nextValue = key === "desktopPetE"
+      ? normalizeDesktopPetESettings(value, get().desktopPetE)
+      : value;
+    if (
+      key === "desktopPet" &&
+      (nextValue as DesktopPetSettings).enabled &&
+      !canEnableDesktopPet(get().desktopPetE.enabled)
+    ) {
+      throw new Error("desktop_pet_mutual_exclusion");
+    }
+    if (
+      key === "desktopPetE" &&
+      (nextValue as DesktopPetESettings).enabled &&
+      !canEnableDesktopPetE(get().desktopPet.enabled)
+    ) {
+      throw new Error("desktop_pet_e_mutual_exclusion");
+    }
     const s = await getStore();
-    await s.set(key, value);
-    set({ [key]: value } as Partial<SettingsStore>);
+    await s.set(key, nextValue);
+    set({ [key]: nextValue } as Partial<SettingsStore>);
     if (key === "debugMode") {
-      void applyDebugMode(value as boolean);
+      void applyDebugMode(nextValue as boolean);
     }
   },
 

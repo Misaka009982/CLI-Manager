@@ -38,6 +38,7 @@ import { ProviderSettingsPage } from "./settings/pages/ProviderSettingsPage";
 import { ModelPricingSettingsPage } from "./settings/pages/ModelPricingSettingsPage";
 import { AboutSettingsPage } from "./settings/pages/AboutSettingsPage";
 import { DesktopPetSettingsPage } from "./settings/pages/DesktopPetSettingsPage";
+import { DesktopPetESettingsPage } from "./settings/pages/DesktopPetESettingsPage";
 import { CcConnectSettingsPage } from "./settings/pages/CcConnectSettingsPage";
 import { SshHostsSettingsPage } from "./settings/pages/SshHostsSettingsPage";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -47,6 +48,7 @@ import { normalizeFontFamilyStack } from "../lib/systemFonts";
 export type SettingsTab =
   | "general"
   | "desktop-pet"
+  | "desktop-pet-e"
   | "developer"
   | "sidebar"
   | "terminal-theme"
@@ -87,6 +89,7 @@ const SETTINGS_TAB_ORDER: SettingsTab[] = [
   "command-suggestions",
   "sidebar",
   "desktop-pet",
+  "desktop-pet-e",
   "developer",
   "about",
 ];
@@ -103,6 +106,12 @@ const SETTINGS_TAB_CONFIG: Record<SettingsTab, SettingsTabConfig> = {
     title: "settings.tabs.desktopPet.title",
     description: "settings.tabs.desktopPet.description",
     icon: PawPrint,
+  },
+  "desktop-pet-e": {
+    label: "settings.tabs.desktopPetE.label",
+    title: "settings.tabs.desktopPetE.title",
+    description: "settings.tabs.desktopPetE.description",
+    icon: Sparkles,
   },
   developer: {
     label: "settings.tabs.developer.label",
@@ -279,6 +288,7 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
   const activeContent = (() => {
     if (activeTab === "general") return <GeneralSettingsPage />;
     if (activeTab === "desktop-pet") return <DesktopPetSettingsPage />;
+    if (activeTab === "desktop-pet-e") return <DesktopPetESettingsPage />;
     if (activeTab === "developer") return <DeveloperSettingsPage />;
     if (activeTab === "sidebar") return <SidebarSettingsPage />;
     if (activeTab === "terminal-theme") return <ThemeSettingsPage />;
