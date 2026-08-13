@@ -178,17 +178,22 @@ fn log_history_stats_oom_diagnostic(
 pub(crate) struct HistoryRoots {
     claude_config_dir: Option<PathBuf>,
     codex_config_dir: Option<PathBuf>,
+    grok_session_root: Option<PathBuf>,
 }
 
 impl HistoryRoots {
     fn cache_key(&self) -> String {
         format!(
-            "claude={}|codex={}",
+            "claude={}|codex={}|grok={}",
             self.claude_config_dir
                 .as_deref()
                 .map(path_to_key)
                 .unwrap_or_else(|| "__default__".to_string()),
             self.codex_config_dir
+                .as_deref()
+                .map(path_to_key)
+                .unwrap_or_else(|| "__default__".to_string()),
+            self.grok_session_root
                 .as_deref()
                 .map(path_to_key)
                 .unwrap_or_else(|| "__default__".to_string())
@@ -206,6 +211,7 @@ pub(crate) struct SessionFileRef {
 #[derive(Clone)]
 struct SessionSummaryScan {
     session_id: Option<String>,
+    parent_session_id: Option<String>,
     message_count: usize,
     first_user_message: Option<String>,
     first_message: Option<String>,
@@ -273,6 +279,8 @@ struct CachedSessionComputation {
     created_at: i64,
     updated_at: i64,
     session_id: String,
+    #[serde(default)]
+    parent_session_id: Option<String>,
     title: String,
     message_count: usize,
     branch: Option<String>,
@@ -486,6 +494,8 @@ pub struct HistoryMessage {
 #[serde(rename_all = "camelCase")]
 pub struct HistorySessionSummary {
     pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
     pub source: String,
     pub project_key: String,
     pub title: String,
@@ -888,6 +898,16 @@ pub struct HistoryStatsResponse {
     pub source_distribution: Vec<HistoryStatsSourceItem>,
     pub project_efficiency: Vec<HistoryStatsProjectEfficiencyItem>,
     pub hourly_activity: Vec<HistoryStatsHourlyActivityItem>,
+    pub data_quality: HistoryStatsDataQuality,
+}
+
+#[derive(Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryStatsDataQuality {
+    pub route_records: usize,
+    pub session_fallback_records: usize,
+    pub unattributed_records: usize,
+    pub missing_usage_records: usize,
 }
 
 #[derive(Default)]
@@ -950,12 +970,17 @@ pub async fn history_list_sessions(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     project_path: Option<String>,
     query: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<HistorySessionSummary>, String> {
-    let roots = history_roots(claude_config_dir.clone(), codex_config_dir.clone());
+    let roots = history_roots(
+        claude_config_dir.clone(),
+        codex_config_dir.clone(),
+        grok_session_root.clone(),
+    );
     match catalog::list_sessions(
         &roots,
         source.clone(),
@@ -983,9 +1008,10 @@ pub async fn history_list_sessions(
                     .unwrap_or_default()
                     .to_string();
                 let target_project_path = project_path.clone();
+                let grok_history_root = resolve_grok_history_root(&roots);
                 let direct = tokio::task::spawn_blocking(move || {
                     find_exact_grok_session_in_root(
-                        &resolve_grok_history_root(),
+                        &grok_history_root,
                         &session_id,
                         target_project_path.as_deref(),
                     )
@@ -1025,6 +1051,7 @@ pub async fn history_list_sessions(
                 source,
                 claude_config_dir,
                 codex_config_dir,
+                grok_session_root,
                 project_path,
                 query,
                 limit,
@@ -1039,13 +1066,14 @@ async fn history_list_sessions_legacy(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     project_path: Option<String>,
     query: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<HistorySessionSummary>, String> {
     tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let source_filter = source.map(|v| v.to_lowercase());
         let target_project_path = project_path
             .map(|v| normalize_history_path(&v))
@@ -1273,6 +1301,7 @@ pub async fn history_get_session(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
     aggregate_subtasks: Option<bool>,
@@ -1283,7 +1312,11 @@ pub async fn history_get_session(
     let fresh = fresh.unwrap_or(false);
     if !aggregate_subtasks && !fresh {
         let started_at = Instant::now();
-        let roots = history_roots(claude_config_dir.clone(), codex_config_dir.clone());
+        let roots = history_roots(
+            claude_config_dir.clone(),
+            codex_config_dir.clone(),
+            grok_session_root.clone(),
+        );
         match catalog::get_session_detail_from_v2(
             &roots,
             &file_path,
@@ -1306,7 +1339,11 @@ pub async fn history_get_session(
     }
     if source_normalized == "opencode" {
         let started_at = Instant::now();
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(
+            claude_config_dir,
+            codex_config_dir,
+            grok_session_root.clone(),
+        );
         let summary =
             catalog::get_session_by_file_path(&roots, &file_path, "opencode", &project_key)
                 .await?
@@ -1321,7 +1358,7 @@ pub async fn history_get_session(
     }
     tokio::task::spawn_blocking(move || {
         let started_at = Instant::now();
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         debug!(
             "history_get_session request: source={}, project_key={}, file_path={}, claude_root={}, codex_root={}",
             source,
@@ -1411,12 +1448,13 @@ pub async fn history_convert_session(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
     target_source: String,
 ) -> Result<HistoryConversionResult, String> {
     let (result, codex_registration) = tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let file_ref =
             validate_session_file_ref_for_conversion(&file_path, &source, &project_key, &roots)?;
         ensure_source_mutation_unlocked(&target_source)?;
@@ -1503,7 +1541,7 @@ fn history_source_base(source: &str, roots: &HistoryRoots) -> Result<PathBuf, St
         "gemini" => Ok(resolve_gemini_history_root()),
         "copilot" => Ok(resolve_copilot_history_root()),
         "antigravity" => Ok(resolve_antigravity_history_root()),
-        "grok" => Ok(resolve_grok_history_root()),
+        "grok" => Ok(resolve_grok_history_root(roots)),
         "pi" => Ok(resolve_pi_history_root()),
         "kiro" => Ok(resolve_kiro_history_root()),
         "cursor" => Ok(resolve_cursor_history_root()),
@@ -1699,11 +1737,12 @@ pub async fn history_delete_session(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let source = source.trim().to_lowercase();
         if !matches!(source.as_str(), "claude" | "codex") {
             return Err("unsupported_history_mutation_source".to_string());
@@ -1725,13 +1764,14 @@ pub async fn history_search(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     project_path: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<HistorySearchResult>, String> {
     if query.trim().chars().count() < 3 {
         return Ok(Vec::new());
     }
-    let roots = history_roots(claude_config_dir, codex_config_dir);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
     let hits = catalog::search_sessions(&roots, &query, source, project_path, limit).await?;
     let _ = catalog::ensure_refresh(app, roots, false, false).await;
     Ok(hits)
@@ -1742,8 +1782,9 @@ pub async fn history_get_index_status(
     app: tauri::AppHandle,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
 ) -> Result<HistoryIndexStatus, String> {
-    let roots = history_roots(claude_config_dir, codex_config_dir);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
     catalog::ensure_refresh(app, roots, false, false).await
 }
 
@@ -1756,12 +1797,13 @@ pub async fn history_get_index_v2_status() -> Result<HistoryIndexV2Status, Strin
 pub async fn history_index_v2_preview_adapter_sessions(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: Option<String>,
     project_key: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<HistoryIndexV2AdapterSession>, String> {
     tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let source_filter = source
             .map(|value| value.trim().to_lowercase())
             .filter(|value| !value.is_empty());
@@ -2416,9 +2458,10 @@ pub async fn history_refresh_index(
     app: tauri::AppHandle,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     wait: Option<bool>,
 ) -> Result<HistoryIndexStatus, String> {
-    let roots = history_roots(claude_config_dir, codex_config_dir);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
     catalog::ensure_refresh(app, roots, true, wait.unwrap_or(true)).await
 }
 
@@ -2428,6 +2471,7 @@ pub async fn history_list_prompts(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     project_key: Option<String>,
     file_path: Option<String>,
     query: Option<String>,
@@ -2440,7 +2484,7 @@ pub async fn history_list_prompts(
     let query_for_opencode = query.clone();
     let max_items = limit.unwrap_or(200).clamp(1, 2000);
     let mut prompts: Vec<HistoryPromptItem> = tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let scope = scope
             .as_deref()
             .map(|v| v.trim().to_lowercase())
@@ -2573,10 +2617,11 @@ pub async fn history_list_stats_projects(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
 ) -> Result<Vec<String>, String> {
     let source_for_opencode = source.clone();
     let mut projects: Vec<String> = tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let source_filter = source.map(|v| v.to_lowercase());
         let mut projects = BTreeSet::new();
 
@@ -2614,6 +2659,7 @@ pub async fn history_get_stats(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     project_key: Option<String>,
     project_path: Option<String>,
     project_paths: Option<Vec<String>>,
@@ -2624,7 +2670,7 @@ pub async fn history_get_stats(
     force: Option<bool>,
 ) -> Result<HistoryStatsResponse, String> {
     let started_at = Instant::now();
-    let roots = history_roots(claude_config_dir, codex_config_dir);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
     let source_filter = source.map(|v| v.to_lowercase());
     let target_project = project_key
         .map(|v| v.trim().to_string())
@@ -2660,6 +2706,7 @@ pub async fn history_get_stats(
         target_source_instance.as_deref(),
         bounds,
         index_generation,
+        crate::usage::route_usage_generation(),
     );
 
     if !force && !include_opencode {
@@ -2754,7 +2801,20 @@ pub async fn history_get_stats(
         Err(err) => warn!("history v2 stats fallback: {err}"),
     }
 
-    let response = build_history_stats_response(&days, bounds);
+    let mut response = build_history_stats_response(&days, bounds);
+    if target_source_instance.is_none() {
+        merge_route_usage_into_history_stats(
+            &mut response,
+            &mut days,
+            bounds,
+            source_filter.as_deref(),
+            target_project.as_deref(),
+            &target_project_paths,
+        )
+        .await?;
+    }
+    response.data_quality =
+        load_history_stats_data_quality(bounds, source_filter.as_deref()).await?;
     log_history_stats_oom_diagnostic(
         "history_get_stats",
         &response,
@@ -2922,6 +2982,7 @@ async fn opencode_stats_facts(
 fn opencode_summary_from_parsed(parsed: &OpenCodeParsedSession) -> HistorySessionSummary {
     HistorySessionSummary {
         session_id: parsed.computed.session_id.clone(),
+        parent_session_id: parsed.computed.parent_session_id.clone(),
         source: "opencode".to_string(),
         project_key: parsed.file_ref.project_key.clone(),
         title: parsed.computed.title.clone(),
@@ -3378,6 +3439,7 @@ fn build_history_stats_response(
         source_distribution,
         project_efficiency,
         hourly_activity,
+        data_quality: HistoryStatsDataQuality::default(),
     }
 }
 
@@ -3512,9 +3574,10 @@ fn make_history_stats_aggregation_cache_key(
     target_source_instance: Option<&str>,
     bounds: StatsTimeBounds,
     index_generation: u64,
+    route_usage_generation: u64,
 ) -> String {
     format!(
-        "{}|source={}|project={}|project_paths={}|source_instance={}|start={}|end={}|gen={}",
+        "{}|source={}|project={}|project_paths={}|source_instance={}|start={}|end={}|gen={}|route_gen={}",
         roots.cache_key(),
         source_filter.unwrap_or("__all__"),
         target_project.unwrap_or("__all__"),
@@ -3522,7 +3585,8 @@ fn make_history_stats_aggregation_cache_key(
         target_source_instance.unwrap_or("__all__"),
         bounds.start_at,
         bounds.end_at,
-        index_generation
+        index_generation,
+        route_usage_generation
     )
 }
 
@@ -3984,6 +4048,7 @@ fn summary_from_computation(
 ) -> HistorySessionSummary {
     HistorySessionSummary {
         session_id: computed.session_id.clone(),
+        parent_session_id: computed.parent_session_id.clone(),
         source: file_ref.source.clone(),
         project_key: file_ref.project_key.clone(),
         title: computed.title.clone(),
@@ -4063,6 +4128,7 @@ fn build_session_computation(
         created_at: computed_created_at,
         updated_at: computed_updated_at.max(computed_created_at),
         session_id,
+        parent_session_id: summary_scan.parent_session_id,
         title,
         message_count: summary_scan.message_count,
         branch: summary_scan.branch,
@@ -4673,6 +4739,7 @@ fn merge_session_detail_parts(
             },
             updated_at,
             session_id: parent_session_id,
+            parent_session_id: None,
             title: parent_title,
             message_count: messages.len(),
             branch,
@@ -4778,6 +4845,7 @@ fn convert_history_session(
     let title = codex_history_index_text(detail).unwrap_or_else(|| detail.title.clone());
     let summary = HistorySessionSummary {
         session_id: session_id.clone(),
+        parent_session_id: None,
         source: target_source.clone(),
         project_key: file_ref.project_key.clone(),
         title,
@@ -5388,10 +5456,12 @@ pub(crate) fn is_subagent_transcript_path(path: &Path) -> bool {
 pub(crate) fn history_roots(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
 ) -> HistoryRoots {
     HistoryRoots {
         claude_config_dir: normalize_config_dir(claude_config_dir),
         codex_config_dir: normalize_config_dir(codex_config_dir),
+        grok_session_root: normalize_config_dir(grok_session_root),
     }
 }
 
@@ -5403,24 +5473,30 @@ fn normalize_config_dir(value: Option<String>) -> Option<PathBuf> {
 }
 
 fn resolve_claude_history_root(roots: &HistoryRoots) -> PathBuf {
-    roots
-        .claude_config_dir
-        .clone()
-        .or_else(|| detect_home_dir().map(|home| home.join(".claude")))
-        .unwrap_or_else(|| PathBuf::from(".claude"))
-        .join("projects")
+    if let Some(dir) = roots.claude_config_dir.clone() {
+        return dir.join("projects");
+    }
+    crate::provider::home::default_history_root("claude")
+        .or_else(|| detect_home_dir().map(|home| home.join(".claude").join("projects")))
+        .unwrap_or_else(|| PathBuf::from(".claude").join("projects"))
 }
 
 fn resolve_codex_config_root(roots: &HistoryRoots) -> PathBuf {
     roots
         .codex_config_dir
         .clone()
+        .or_else(|| crate::provider::home::default_config_root("codex"))
         .or_else(|| detect_home_dir().map(|home| home.join(".codex")))
         .unwrap_or_else(|| PathBuf::from(".codex"))
 }
 
 fn resolve_codex_history_root(roots: &HistoryRoots) -> PathBuf {
-    resolve_codex_config_root(roots).join("sessions")
+    if roots.codex_config_dir.is_some() {
+        return resolve_codex_config_root(roots).join("sessions");
+    }
+    crate::provider::home::default_history_root("codex")
+        .or_else(|| detect_home_dir().map(|home| home.join(".codex").join("sessions")))
+        .unwrap_or_else(|| PathBuf::from(".codex").join("sessions"))
 }
 
 fn resolve_codex_state_db_path(roots: &HistoryRoots) -> PathBuf {
@@ -5465,10 +5541,12 @@ fn resolve_antigravity_history_root() -> PathBuf {
     }
 }
 
-fn resolve_grok_history_root() -> PathBuf {
-    detect_home_dir()
-        .map(|home| home.join(".grok"))
-        .unwrap_or_else(|| PathBuf::from(".grok"))
+fn resolve_grok_history_root(roots: &HistoryRoots) -> PathBuf {
+    roots.grok_session_root.clone().unwrap_or_else(|| {
+        crate::provider::home::default_history_root("grok")
+            .or_else(|| detect_home_dir().map(|home| home.join(".grok").join("sessions")))
+            .unwrap_or_else(|| PathBuf::from(".grok").join("sessions"))
+    })
 }
 
 fn resolve_pi_history_root() -> PathBuf {
@@ -5898,6 +5976,7 @@ async fn parse_opencode_session_row(
         created_at,
         updated_at,
         session_id,
+        parent_session_id: None,
         title,
         message_count: messages.len(),
         branch: None,
@@ -6244,7 +6323,9 @@ fn scan_session_files(source_filter: Option<&str>, roots: &HistoryRoots) -> Vec<
         ));
     }
     if source_filter.as_ref().map(|v| v == "grok").unwrap_or(true) {
-        files.extend(collect_grok_session_files(&resolve_grok_history_root()));
+        files.extend(collect_grok_session_files(&resolve_grok_history_root(
+            roots,
+        )));
     }
     if source_filter.as_ref().map(|v| v == "pi").unwrap_or(true) {
         files.extend(collect_pi_session_files(&resolve_pi_history_root()));
@@ -6717,12 +6798,11 @@ fn collect_antigravity_session_files(root: &Path) -> Vec<SessionFileRef> {
 }
 
 fn collect_grok_session_files(root: &Path) -> Vec<SessionFileRef> {
-    let sessions = root.join("sessions");
-    if !sessions.exists() {
+    if !root.exists() {
         return Vec::new();
     }
     let mut files = Vec::new();
-    collect_files_recursive(&sessions, &mut files, &looks_like_grok_updates_file);
+    collect_files_recursive(root, &mut files, &looks_like_grok_updates_file);
     files
         .into_iter()
         .map(|path| SessionFileRef {
@@ -6745,7 +6825,7 @@ fn find_exact_grok_session_in_root(
     let target_project_path = project_path
         .map(normalize_history_path)
         .filter(|value| !value.is_empty());
-    for workspace in read_dir_entries(&root.join("sessions")) {
+    for workspace in read_dir_entries(root) {
         let path = workspace.path().join(session_id).join("updates.jsonl");
         if !looks_like_grok_updates_file(&path) {
             continue;
@@ -7975,6 +8055,335 @@ fn extract_session_meta_id(value: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+async fn load_history_stats_data_quality(
+    bounds: StatsTimeBounds,
+    source_filter: Option<&str>,
+) -> Result<HistoryStatsDataQuality, String> {
+    let path = crate::app_paths::db_path()?;
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(false)
+        .busy_timeout(Duration::from_secs(15));
+    let mut connection = SqliteConnection::connect_with(&options)
+        .await
+        .map_err(|err| format!("usage_quality_db_open_failed: {err}"))?;
+    let row = sqlx::query(
+        "SELECT
+            SUM(CASE WHEN data_source = 'route' THEN 1 ELSE 0 END) AS route_records,
+            SUM(CASE WHEN data_source = 'session_log' THEN 1 ELSE 0 END) AS session_fallback_records,
+            SUM(CASE WHEN data_source = 'route' AND attribution_status <> 'resolved' THEN 1 ELSE 0 END) AS unattributed_records,
+            SUM(CASE WHEN usage_status IN ('missing', 'invalid') THEN 1 ELSE 0 END) AS missing_usage_records
+         FROM usage_records
+         WHERE started_at_ms BETWEEN ?1 AND ?2
+           AND (?3 IS NULL OR source = ?3)",
+    )
+    .bind(bounds.start_at)
+    .bind(bounds.end_at)
+    .bind(source_filter)
+    .fetch_one(&mut connection)
+    .await
+    .map_err(|err| format!("usage_quality_query_failed: {err}"))?;
+    Ok(HistoryStatsDataQuality {
+        route_records: row.try_get::<i64, _>("route_records").unwrap_or(0).max(0) as usize,
+        session_fallback_records: row
+            .try_get::<i64, _>("session_fallback_records")
+            .unwrap_or(0)
+            .max(0) as usize,
+        unattributed_records: row
+            .try_get::<i64, _>("unattributed_records")
+            .unwrap_or(0)
+            .max(0) as usize,
+        missing_usage_records: row
+            .try_get::<i64, _>("missing_usage_records")
+            .unwrap_or(0)
+            .max(0) as usize,
+    })
+}
+
+async fn merge_route_usage_into_history_stats(
+    response: &mut HistoryStatsResponse,
+    _days: &mut BTreeMap<i64, Vec<HistoryStatsSessionFact>>,
+    bounds: StatsTimeBounds,
+    source_filter: Option<&str>,
+    target_project: Option<&str>,
+    target_project_paths: &[String],
+) -> Result<(), String> {
+    let route_records =
+        crate::usage::load_route_usage_records(bounds.start_at, bounds.end_at).await?;
+    if route_records.is_empty() {
+        return Ok(());
+    }
+    let selected_records = route_records
+        .into_iter()
+        .filter(|record| {
+            source_filter.is_none_or(|source| source == record.source)
+                && target_project
+                    .is_none_or(|project| record.project_key.as_deref() == Some(project))
+                && (target_project_paths.is_empty()
+                    || record.session_id.as_deref().is_some_and(|session_id| {
+                        _days.values().flatten().any(|fact| {
+                            fact.summary.session_id == session_id
+                                && target_project_paths.iter().any(|path| {
+                                    session_matches_project_path(
+                                        &SessionFileRef {
+                                            source: fact.summary.source.clone(),
+                                            project_key: fact.summary.project_key.clone(),
+                                            path: PathBuf::from(&fact.summary.file_path),
+                                        },
+                                        path,
+                                    )
+                                })
+                        })
+                    }))
+                && (record.usage_status == "complete" || record.usage_status == "partial")
+        })
+        .collect::<Vec<_>>();
+    if selected_records.is_empty() {
+        return Ok(());
+    }
+    let mut matched_route_records = HashSet::new();
+    if !selected_records.is_empty() {
+        for facts in _days.values_mut() {
+            for fact in facts.iter_mut() {
+                if let Some((index, record)) =
+                    selected_records.iter().enumerate().find(|(index, record)| {
+                        !matched_route_records.contains(index)
+                            && route_record_matches_fact(record, fact)
+                    })
+                {
+                    matched_route_records.insert(index);
+                    fact.stats = reprice_usage_stats(
+                        record.model.as_deref(),
+                        UsageStatsScan {
+                            input_tokens: record.usage.input_tokens,
+                            output_tokens: record.usage.output_tokens,
+                            cache_read_tokens: record.usage.cache_read_tokens,
+                            cache_creation_tokens: record.usage.cache_creation_tokens,
+                            total_cost_usd: 0.0,
+                            unpriced_tokens: 0,
+                        },
+                    );
+                    fact.model = record.model.clone();
+                }
+            }
+        }
+        // Rebuild all dimensions from the original session facts with only the matched
+        // usage fields replaced by route truth.
+        *response = build_history_stats_response(_days, bounds);
+    }
+    let mut route_total = UsageStatsScan::default();
+    let mut route_models: HashMap<String, UsageStatsScan> = HashMap::new();
+    let mut route_sources: HashMap<String, UsageStatsScan> = HashMap::new();
+    for (index, record) in selected_records.into_iter().enumerate() {
+        if matched_route_records.contains(&index) {
+            continue;
+        }
+        let usage = UsageTokenScan {
+            input_tokens: record.usage.input_tokens,
+            output_tokens: record.usage.output_tokens,
+            cache_read_tokens: record.usage.cache_read_tokens,
+            cache_creation_tokens: record.usage.cache_creation_tokens,
+            explicit_cost_usd: None,
+        };
+        let priced = calculate_usage_cost(record.model.as_deref(), usage);
+        route_total.input_tokens = route_total.input_tokens.saturating_add(priced.input_tokens);
+        route_total.output_tokens = route_total
+            .output_tokens
+            .saturating_add(priced.output_tokens);
+        route_total.cache_read_tokens = route_total
+            .cache_read_tokens
+            .saturating_add(priced.cache_read_tokens);
+        route_total.cache_creation_tokens = route_total
+            .cache_creation_tokens
+            .saturating_add(priced.cache_creation_tokens);
+        route_total.total_cost_usd += priced.total_cost_usd;
+        route_total.unpriced_tokens = route_total
+            .unpriced_tokens
+            .saturating_add(priced.unpriced_tokens);
+        if let Some(model) = record.model.clone() {
+            let entry = route_models.entry(model).or_default();
+            entry.input_tokens = entry.input_tokens.saturating_add(priced.input_tokens);
+            entry.output_tokens = entry.output_tokens.saturating_add(priced.output_tokens);
+            entry.cache_read_tokens = entry
+                .cache_read_tokens
+                .saturating_add(priced.cache_read_tokens);
+            entry.cache_creation_tokens = entry
+                .cache_creation_tokens
+                .saturating_add(priced.cache_creation_tokens);
+            entry.total_cost_usd += priced.total_cost_usd;
+            entry.unpriced_tokens = entry.unpriced_tokens.saturating_add(priced.unpriced_tokens);
+        }
+        let entry = route_sources.entry(record.source).or_default();
+        entry.input_tokens = entry.input_tokens.saturating_add(priced.input_tokens);
+        entry.output_tokens = entry.output_tokens.saturating_add(priced.output_tokens);
+        entry.cache_read_tokens = entry
+            .cache_read_tokens
+            .saturating_add(priced.cache_read_tokens);
+        entry.cache_creation_tokens = entry
+            .cache_creation_tokens
+            .saturating_add(priced.cache_creation_tokens);
+        entry.total_cost_usd += priced.total_cost_usd;
+        entry.unpriced_tokens = entry.unpriced_tokens.saturating_add(priced.unpriced_tokens);
+    }
+    response.total_input_tokens = response
+        .total_input_tokens
+        .saturating_add(route_total.input_tokens);
+    response.total_output_tokens = response
+        .total_output_tokens
+        .saturating_add(route_total.output_tokens);
+    response.total_cache_read_tokens = response
+        .total_cache_read_tokens
+        .saturating_add(route_total.cache_read_tokens);
+    response.total_cache_creation_tokens = response
+        .total_cache_creation_tokens
+        .saturating_add(route_total.cache_creation_tokens);
+    response.total_cost_usd += route_total.total_cost_usd;
+    response.total_unpriced_tokens = response
+        .total_unpriced_tokens
+        .saturating_add(route_total.unpriced_tokens);
+    for (model, usage) in route_models {
+        if let Some(item) = response
+            .model_distribution
+            .iter_mut()
+            .find(|item| item.model == model)
+        {
+            item.input_tokens = item.input_tokens.saturating_add(usage.input_tokens);
+            item.output_tokens = item.output_tokens.saturating_add(usage.output_tokens);
+            item.cache_read_tokens = item
+                .cache_read_tokens
+                .saturating_add(usage.cache_read_tokens);
+            item.cache_creation_tokens = item
+                .cache_creation_tokens
+                .saturating_add(usage.cache_creation_tokens);
+            item.total_cost_usd += usage.total_cost_usd;
+            item.unpriced_tokens = item.unpriced_tokens.saturating_add(usage.unpriced_tokens);
+        } else {
+            response.model_distribution.push(HistoryStatsModelItem {
+                model,
+                sessions: 0,
+                ratio: 0.0,
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_tokens: usage.cache_read_tokens,
+                cache_creation_tokens: usage.cache_creation_tokens,
+                total_cost_usd: usage.total_cost_usd,
+                unpriced_tokens: usage.unpriced_tokens,
+            });
+        }
+    }
+    response.model_distribution.sort_by(|left, right| {
+        history_stats_total_tokens(right)
+            .cmp(&history_stats_total_tokens(left))
+            .then(left.model.cmp(&right.model))
+    });
+    for (source, usage) in route_sources {
+        if let Some(item) = response
+            .source_distribution
+            .iter_mut()
+            .find(|item| item.source == source)
+        {
+            item.input_tokens = item.input_tokens.saturating_add(usage.input_tokens);
+            item.output_tokens = item.output_tokens.saturating_add(usage.output_tokens);
+            item.cache_read_tokens = item
+                .cache_read_tokens
+                .saturating_add(usage.cache_read_tokens);
+            item.cache_creation_tokens = item
+                .cache_creation_tokens
+                .saturating_add(usage.cache_creation_tokens);
+            item.total_cost_usd += usage.total_cost_usd;
+            item.unpriced_tokens = item.unpriced_tokens.saturating_add(usage.unpriced_tokens);
+        } else {
+            response.source_distribution.push(HistoryStatsSourceItem {
+                source,
+                sessions: 0,
+                messages: 0,
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_tokens: usage.cache_read_tokens,
+                cache_creation_tokens: usage.cache_creation_tokens,
+                total_cost_usd: usage.total_cost_usd,
+                unpriced_tokens: usage.unpriced_tokens,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn route_record_matches_fact(
+    record: &crate::usage::RouteUsageRecord,
+    fact: &HistoryStatsSessionFact,
+) -> bool {
+    let Some(session_id) = record.session_id.as_deref() else {
+        return false;
+    };
+    if session_id.trim().is_empty()
+        || record.source != fact.summary.source
+        || fact.summary.session_id != session_id
+    {
+        return false;
+    }
+    let route_event_at = record.completed_at_ms.unwrap_or(record.timestamp_ms);
+    if (route_event_at - fact.occurred_at).unsigned_abs() > 120_000 {
+        return false;
+    }
+    if record
+        .model
+        .as_deref()
+        .zip(fact.model.as_deref())
+        .is_some_and(|(route_model, session_model)| {
+            !route_model.eq_ignore_ascii_case("unknown")
+                && !session_model.eq_ignore_ascii_case("unknown")
+                && !route_model.eq_ignore_ascii_case(session_model)
+        })
+    {
+        return false;
+    }
+    let session_total_input = fact
+        .stats
+        .input_tokens
+        .saturating_add(fact.stats.cache_read_tokens)
+        .saturating_add(fact.stats.cache_creation_tokens);
+    let route_total_input = record
+        .usage
+        .input_tokens
+        .saturating_add(record.usage.cache_read_tokens)
+        .saturating_add(record.usage.cache_creation_tokens);
+    record.usage.output_tokens == fact.stats.output_tokens
+        && (record.usage.input_tokens == fact.stats.input_tokens
+            || record.usage.input_tokens == session_total_input
+            || route_total_input == fact.stats.input_tokens)
+}
+
+fn extract_session_meta_parent_id(value: &Value) -> Option<String> {
+    if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return None;
+    }
+    let payload = value.get("payload")?;
+    let source_parent = payload
+        .get("source")
+        .and_then(|source| source.get("subagent"))
+        .and_then(|subagent| subagent.get("thread_spawn"))
+        .and_then(|spawn| {
+            spawn
+                .get("parent_thread_id")
+                .or_else(|| spawn.get("parentThreadId"))
+        })
+        .and_then(Value::as_str);
+    [
+        payload.get("parent_thread_id"),
+        payload.get("parentThreadId"),
+        payload.get("forked_from_id"),
+        payload.get("forkedFromId"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .chain(source_parent)
+    .map(str::trim)
+    .find(|id| !id.is_empty())
+    .map(str::to_string)
+}
+
 /// 单遍扫描会话文件，产出 summary 与 stats；`collect_messages` 为 true 时同时收集完整消息列表
 /// （供 detail 复用同一次 IO/解析，避免二次读取）。消息的 model 回填与重复 usage 行清空语义
 /// 与 `iter_session_messages` 保持一致。
@@ -8007,6 +8416,7 @@ fn scan_session_inner(
             return (
                 SessionSummaryScan {
                     session_id: None,
+                    parent_session_id: None,
                     message_count: 0,
                     first_user_message: None,
                     first_message: None,
@@ -8021,6 +8431,7 @@ fn scan_session_inner(
     };
 
     let mut session_id: Option<String> = None;
+    let mut parent_session_id: Option<String> = None;
     let mut message_count = 0usize;
     let mut first_user_message: Option<String> = None;
     let mut first_message: Option<String> = None;
@@ -8078,6 +8489,9 @@ fn scan_session_inner(
         }
         if session_id.is_none() {
             session_id = extract_session_meta_id(&value);
+        }
+        if parent_session_id.is_none() {
+            parent_session_id = extract_session_meta_parent_id(&value);
         }
 
         let line_reasoning_effort = extract_reasoning_effort(&value);
@@ -8248,6 +8662,7 @@ fn scan_session_inner(
     (
         SessionSummaryScan {
             session_id,
+            parent_session_id,
             message_count,
             first_user_message,
             first_message,
@@ -9429,6 +9844,7 @@ fn empty_session_scan() -> (SessionSummaryScan, SessionStatsScan, Vec<HistoryMes
     (
         SessionSummaryScan {
             session_id: None,
+            parent_session_id: None,
             message_count: 0,
             first_user_message: None,
             first_message: None,
@@ -9711,6 +10127,7 @@ fn json_session_scan_result(
                 .map(str::trim)
                 .filter(|id| !id.is_empty())
                 .map(str::to_string),
+            parent_session_id: None,
             message_count: messages.len(),
             first_user_message,
             first_message,
@@ -12626,6 +13043,105 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn request_log_dedup_fixture(
+        source: &str,
+        session_id: &str,
+        occurred_at: i64,
+        model: &str,
+        usage: UsageStatsScan,
+    ) -> HistoryStatsSessionFact {
+        HistoryStatsSessionFact {
+            summary: HistorySessionSummary {
+                session_id: session_id.to_string(),
+                parent_session_id: None,
+                source: source.to_string(),
+                project_key: "project".to_string(),
+                title: "session".to_string(),
+                file_path: "session.jsonl".to_string(),
+                cwd: None,
+                created_at: occurred_at,
+                updated_at: occurred_at,
+                message_count: 1,
+                branch: None,
+            },
+            occurred_at,
+            stats: usage,
+            model: Some(model.to_string()),
+        }
+    }
+
+    #[test]
+    fn route_usage_matches_cache_split_session_fact_at_completion_time() {
+        let fact = request_log_dedup_fixture(
+            "codex",
+            "session-a",
+            30_100,
+            "gpt-test",
+            UsageStatsScan {
+                input_tokens: 100,
+                output_tokens: 20,
+                cache_read_tokens: 900,
+                cache_creation_tokens: 0,
+                total_cost_usd: 0.0,
+                unpriced_tokens: 0,
+            },
+        );
+        let record = crate::usage::RouteUsageRecord {
+            source: "codex".to_string(),
+            session_id: Some("session-a".to_string()),
+            project_key: Some("project".to_string()),
+            file_path: Some("session.jsonl".to_string()),
+            timestamp_ms: 10_000,
+            completed_at_ms: Some(30_000),
+            model: Some("gpt-test".to_string()),
+            usage: crate::usage::UsageTokens {
+                input_tokens: 1_000,
+                output_tokens: 20,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+            },
+            usage_status: "complete".to_string(),
+        };
+
+        assert!(route_record_matches_fact(&record, &fact));
+    }
+
+    #[test]
+    fn route_usage_does_not_replace_another_source_or_token_event() {
+        let fact = request_log_dedup_fixture(
+            "claude",
+            "session-a",
+            30_100,
+            "gpt-test",
+            UsageStatsScan {
+                input_tokens: 100,
+                output_tokens: 21,
+                cache_read_tokens: 900,
+                cache_creation_tokens: 0,
+                total_cost_usd: 0.0,
+                unpriced_tokens: 0,
+            },
+        );
+        let record = crate::usage::RouteUsageRecord {
+            source: "codex".to_string(),
+            session_id: Some("session-a".to_string()),
+            project_key: Some("project".to_string()),
+            file_path: Some("session.jsonl".to_string()),
+            timestamp_ms: 10_000,
+            completed_at_ms: Some(30_000),
+            model: Some("gpt-test".to_string()),
+            usage: crate::usage::UsageTokens {
+                input_tokens: 1_000,
+                output_tokens: 20,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+            },
+            usage_status: "complete".to_string(),
+        };
+
+        assert!(!route_record_matches_fact(&record, &fact));
+    }
+
     fn write_file(path: &Path) {
         write_text(path, "{}\n");
     }
@@ -12633,6 +13149,65 @@ mod tests {
     fn write_text(path: &Path, content: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn explicit_grok_history_root_overrides_default_root() {
+        let roots = history_roots(None, None, Some(r"C:\history\grok\sessions".to_string()));
+        assert_eq!(
+            resolve_grok_history_root(&roots),
+            PathBuf::from(r"C:\history\grok\sessions")
+        );
+    }
+
+    #[test]
+    fn default_grok_history_root_is_the_real_session_root() {
+        let roots = history_roots(None, None, None);
+        let expected = crate::provider::home::default_history_root("grok")
+            .or_else(|| detect_home_dir().map(|home| home.join(".grok").join("sessions")))
+            .unwrap_or_else(|| PathBuf::from(".grok").join("sessions"));
+
+        assert_eq!(resolve_grok_history_root(&roots), expected);
+    }
+
+    #[test]
+    fn explicit_grok_session_root_is_scanned_without_appending_sessions() {
+        let temp_dir = TempDir::new().unwrap();
+        let session_root = temp_dir.path().join(".grok").join("sessions");
+        let session_dir = session_root.join("project").join("session-1");
+        write_text(
+            &session_dir.join("summary.json"),
+            &json!({
+                "info": { "id": "session-1", "cwd": r"F:\project" },
+                "session_summary": "Explicit root"
+            })
+            .to_string(),
+        );
+        write_text(
+            &session_dir.join("updates.jsonl"),
+            &json!({
+                "method": "session/update",
+                "params": {
+                    "sessionId": "session-1",
+                    "update": {
+                        "sessionUpdate": "user_message_chunk",
+                        "content": { "type": "text", "text": "hello" }
+                    }
+                }
+            })
+            .to_string(),
+        );
+
+        let roots = history_roots(
+            None,
+            None,
+            Some(session_root.to_string_lossy().into_owned()),
+        );
+        assert_eq!(resolve_grok_history_root(&roots), session_root);
+        let files = collect_grok_session_files(&resolve_grok_history_root(&roots));
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, session_dir.join("updates.jsonl"));
     }
 
     fn expect_string_err<T>(result: Result<T, String>) -> String {
@@ -13160,9 +13735,8 @@ mod tests {
     #[test]
     fn grok_updates_parser_covers_history_pipeline() {
         let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().join(".grok");
+        let root = temp_dir.path().join(".grok").join("sessions");
         let path = root
-            .join("sessions")
             .join("F%3A%5Cidea-work%5Cbusiness-center")
             .join("grok-session")
             .join("updates.jsonl");
@@ -13331,10 +13905,9 @@ mod tests {
     #[test]
     fn exact_grok_session_lookup_bypasses_catalog_miss() {
         let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().join(".grok");
+        let root = temp_dir.path().join(".grok").join("sessions");
         let session_id = "019f8f73-cf03-7eb1-88bd-ae350e2cb327";
         let path = root
-            .join("sessions")
             .join("F%3A%5Cgithub%5CCLI-Manager")
             .join(session_id)
             .join("updates.jsonl");
@@ -13784,6 +14357,7 @@ mod tests {
             created_at: 1,
             updated_at: 2,
             session_id: "session-a".to_string(),
+            parent_session_id: None,
             title: "session-a".to_string(),
             message_count: 0,
             branch: None,
@@ -14068,6 +14642,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
+            grok_session_root: None,
         };
         if cfg!(target_os = "windows") {
             std::fs::create_dir_all(
@@ -14126,6 +14701,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
+            grok_session_root: None,
         };
         write_text(
             &resolve_codex_config_root(&roots).join("config.toml"),
@@ -14272,6 +14848,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
+            grok_session_root: None,
         };
         let file = resolve_claude_history_root(&roots)
             .join("proj")
@@ -14312,6 +14889,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
+            grok_session_root: None,
         };
         write_text(
             &resolve_codex_config_root(&roots).join("config.toml"),
@@ -14439,6 +15017,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             session_id: "g2".to_string(),
+            parent_session_id: None,
             title: "g2".to_string(),
             message_count: 0,
             branch: None,
@@ -14880,6 +15459,7 @@ mod tests {
                 created_at: DAY_MS,
                 updated_at: DAY_MS,
                 session_id: "session-1".to_string(),
+                parent_session_id: None,
                 title: "priced session".to_string(),
                 message_count: 1,
                 branch: None,
@@ -15006,6 +15586,24 @@ mod tests {
         assert_eq!(
             computed.updated_at,
             parse_timestamp_millis_str("2026-06-17T16:12:00Z").unwrap()
+        );
+    }
+
+    #[test]
+    fn build_session_computation_extracts_codex_parent_thread_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("rollout-child.jsonl");
+        write_text(
+            &file,
+            r#"{"type":"session_meta","payload":{"id":"child-session","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-session","depth":1}}}}}"#,
+        );
+
+        let computed = scan_session_computation(&file, 1, 2);
+
+        assert_eq!(computed.session_id, "child-session");
+        assert_eq!(
+            computed.parent_session_id.as_deref(),
+            Some("parent-session")
         );
     }
 

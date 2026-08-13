@@ -202,13 +202,12 @@ fn load_registered_worktree(worktree_id: &str) -> Result<Option<RegisteredWorktr
     })
 }
 
-fn load_provider_catalog_sync(profile: &CcConnectProfile) -> Result<ProviderCatalog, String> {
-    let database_path = configured_cc_switch_db_path(Some(profile));
+fn load_provider_catalog_sync() -> Result<ProviderCatalog, String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|err| format!("create Provider query runtime failed: {err}"))?;
-    Ok(runtime.block_on(load_provider_catalog(database_path.as_deref())))
+    Ok(runtime.block_on(load_provider_catalog()))
 }
 
 fn provider_display_name(language: CcConnectLanguage, project: &RegisteredProject) -> String {
@@ -306,7 +305,7 @@ fn resolve_handoff_target(
         }
         let overrides = worktree.provider_overrides.trim();
         if !overrides.is_empty() && overrides != "{}" {
-            let catalog = load_provider_catalog_sync(base_profile)?;
+            let catalog = load_provider_catalog_sync()?;
             let (provider_id, provider_name, provider_is_global) =
                 project_provider(CcConnectAgent::Codex, overrides, &catalog);
             project.provider_id = provider_id.clone();
@@ -350,7 +349,7 @@ fn resolve_handoff_target(
 fn standby_target(base_profile: &CcConnectProfile) -> Result<ResolvedHandoffTarget, String> {
     let mut profile = base_profile.clone();
     apply_control_profile(&mut profile)?;
-    let catalog = load_provider_catalog_sync(&profile)?;
+    let catalog = load_provider_catalog_sync()?;
     let (provider_id, provider_name, provider_is_global) =
         project_provider(CcConnectAgent::Codex, "{}", &catalog);
     let project = RegisteredProject {

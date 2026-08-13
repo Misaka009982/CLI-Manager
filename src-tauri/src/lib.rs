@@ -18,6 +18,7 @@ pub mod hook_client;
 mod linux_graphics;
 mod log_rotation;
 mod process_job;
+pub(crate) mod provider;
 pub mod pty;
 mod runtime_diagnostics;
 mod shell_resolver;
@@ -31,6 +32,7 @@ pub mod statusline_profiles;
 mod sync;
 mod text_encoding;
 mod third_party_notification;
+pub mod usage;
 mod webdav;
 mod wsl;
 
@@ -422,6 +424,231 @@ const MIGRATION_EXTEND_SSH_AGENT_INSTALLATIONS_SQL: &str = "
                 ALTER TABLE ssh_agent_installations ADD COLUMN artifact_sha256 TEXT NOT NULL DEFAULT '';
                 ALTER TABLE ssh_agent_installations ADD COLUMN previous_version TEXT NOT NULL DEFAULT '';
               ";
+
+const MIGRATION_CREATE_USAGE_RECORDS_VERSION: i64 = 27;
+const MIGRATION_CREATE_USAGE_RECORDS_SQL: &str = "
+                CREATE TABLE IF NOT EXISTS usage_records (
+                    record_id              TEXT PRIMARY KEY,
+                    logical_request_id     TEXT NOT NULL,
+                    data_source            TEXT NOT NULL CHECK (data_source IN ('route', 'session_log')),
+                    source                 TEXT NOT NULL,
+                    event_key              TEXT NOT NULL DEFAULT '',
+                    file_path             TEXT,
+                    event_index           INTEGER NOT NULL DEFAULT 0,
+                    session_id             TEXT,
+                    project_key            TEXT,
+                    project_path           TEXT,
+                    attribution_status     TEXT NOT NULL DEFAULT 'pending',
+                    provider_id            TEXT,
+                    provider_name          TEXT,
+                    requested_model        TEXT,
+                    outbound_model         TEXT,
+                    response_model         TEXT,
+                    pricing_model          TEXT,
+                    input_tokens           INTEGER NOT NULL DEFAULT 0,
+                    output_tokens          INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+                    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                    usage_status           TEXT NOT NULL DEFAULT 'complete',
+                    status_code            INTEGER,
+                    outcome                TEXT NOT NULL DEFAULT 'success',
+                    error_code             TEXT,
+                    is_streaming           INTEGER NOT NULL DEFAULT 0,
+                    started_at_ms          INTEGER NOT NULL,
+                    completed_at_ms       INTEGER,
+                    duration_ms            INTEGER NOT NULL DEFAULT 0,
+                    attempt_index         INTEGER NOT NULL DEFAULT 0,
+                    attempt_count         INTEGER NOT NULL DEFAULT 1,
+                    degraded              INTEGER NOT NULL DEFAULT 0,
+                    created_at_ms         INTEGER NOT NULL,
+                    updated_at_ms         INTEGER NOT NULL,
+                    UNIQUE(data_source, logical_request_id, event_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_usage_records_time ON usage_records(started_at_ms DESC);
+                CREATE INDEX IF NOT EXISTS idx_usage_records_project ON usage_records(project_key, started_at_ms DESC);
+                CREATE INDEX IF NOT EXISTS idx_usage_records_session ON usage_records(session_id, started_at_ms DESC);
+                CREATE INDEX IF NOT EXISTS idx_usage_records_provider ON usage_records(provider_id, started_at_ms DESC);
+                CREATE INDEX IF NOT EXISTS idx_usage_records_source ON usage_records(source, data_source, started_at_ms DESC);
+                INSERT OR IGNORE INTO usage_records(
+                    record_id, logical_request_id, data_source, source, event_key,
+                    file_path, event_index, session_id, project_key, attribution_status,
+                    response_model, pricing_model, input_tokens, output_tokens,
+                    cache_read_tokens, cache_creation_tokens, usage_status, outcome,
+                    started_at_ms, completed_at_ms, duration_ms, created_at_ms, updated_at_ms
+                )
+                SELECT request_id, request_id, 'session_log', source, event_key,
+                       file_path, event_index, session_id, project_key, 'resolved',
+                       model, model, input_tokens, output_tokens, cache_read_tokens,
+                       cache_creation_tokens, 'complete', 'success', timestamp_ms,
+                       timestamp_ms, 0, updated_at_ms, updated_at_ms
+                FROM request_logs;
+                DROP VIEW IF EXISTS unified_usage_records;
+                CREATE VIEW unified_usage_records AS
+                SELECT
+                    u.record_id AS request_id,
+                    u.source,
+                    COALESCE(u.project_key, '') AS project_key,
+                    COALESCE(u.session_id, '') AS session_id,
+                    COALESCE(u.file_path, '') AS file_path,
+                    u.event_index,
+                    u.started_at_ms AS timestamp_ms,
+                    COALESCE(u.outbound_model, u.response_model, u.requested_model, u.pricing_model) AS model,
+                    u.input_tokens,
+                    u.output_tokens,
+                    u.cache_read_tokens,
+                    u.cache_creation_tokens,
+                    u.data_source,
+                    u.provider_id,
+                    u.provider_name,
+                    u.requested_model,
+                    u.outbound_model,
+                    u.response_model,
+                    u.usage_status,
+                    u.status_code,
+                    u.outcome,
+                    u.duration_ms,
+                    u.attempt_count,
+                    u.degraded
+                FROM usage_records u
+                WHERE u.data_source = 'route'
+                   OR NOT EXISTS (
+                        SELECT 1
+                        FROM usage_records r
+                        WHERE r.data_source = 'route'
+                          AND r.usage_status IN ('complete', 'partial')
+                          AND NULLIF(r.session_id, '') IS NOT NULL
+                          AND r.session_id = u.session_id
+                          AND ABS(r.started_at_ms - u.started_at_ms) <= 120000
+                          AND COALESCE(r.outbound_model, r.response_model, r.requested_model)
+                              = COALESCE(u.response_model, u.pricing_model)
+                          AND r.input_tokens = u.input_tokens
+                          AND r.output_tokens = u.output_tokens
+                          AND r.cache_read_tokens = u.cache_read_tokens
+                          AND r.cache_creation_tokens = u.cache_creation_tokens
+                   );
+                CREATE TABLE IF NOT EXISTS usage_daily_rollups (
+                    day_start_ms          INTEGER NOT NULL,
+                    source                TEXT NOT NULL,
+                    project_key           TEXT NOT NULL DEFAULT '',
+                    provider_id           TEXT NOT NULL DEFAULT '',
+                    outbound_model        TEXT NOT NULL DEFAULT '',
+                    request_count         INTEGER NOT NULL DEFAULT 0,
+                    input_tokens          INTEGER NOT NULL DEFAULT 0,
+                    output_tokens         INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+                    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(day_start_ms, source, project_key, provider_id, outbound_model)
+                );
+              ";
+const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_VERSION: i64 = 28;
+const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL: &str = "
+                DROP VIEW IF EXISTS unified_usage_records;
+                CREATE VIEW unified_usage_records AS
+                SELECT
+                    u.record_id AS request_id,
+                    u.source,
+                    COALESCE(u.project_key, '') AS project_key,
+                    COALESCE(u.session_id, '') AS session_id,
+                    COALESCE(u.file_path, '') AS file_path,
+                    u.event_index,
+                    u.started_at_ms AS timestamp_ms,
+                    COALESCE(u.outbound_model, u.response_model, u.requested_model, u.pricing_model) AS model,
+                    u.input_tokens,
+                    u.output_tokens,
+                    u.cache_read_tokens,
+                    u.cache_creation_tokens,
+                    u.data_source,
+                    u.provider_id,
+                    u.provider_name,
+                    u.requested_model,
+                    u.outbound_model,
+                    u.response_model,
+                    u.usage_status,
+                    u.status_code,
+                    u.outcome,
+                    u.duration_ms,
+                    u.attempt_count,
+                    u.degraded
+                FROM usage_records u
+                WHERE u.data_source = 'route'
+                   OR NOT EXISTS (
+                        SELECT 1
+                        FROM usage_records r
+                        WHERE r.data_source = 'route'
+                          AND r.usage_status IN ('complete', 'partial')
+                          AND NULLIF(TRIM(r.session_id), '') IS NOT NULL
+                          AND r.source = u.source
+                          AND r.session_id = u.session_id
+                          AND ABS(COALESCE(r.completed_at_ms, r.started_at_ms) - u.started_at_ms) <= 120000
+                          AND LOWER(COALESCE(r.outbound_model, r.response_model, r.requested_model, ''))
+                              = LOWER(COALESCE(u.response_model, u.pricing_model, ''))
+                          AND r.output_tokens = u.output_tokens
+                          AND (
+                              r.input_tokens = u.input_tokens
+                              OR r.input_tokens = u.input_tokens + u.cache_read_tokens + u.cache_creation_tokens
+                              OR u.input_tokens = r.input_tokens + r.cache_read_tokens + r.cache_creation_tokens
+                          )
+                   );
+              ";
+const MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_VERSION: i64 = 29;
+const MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_SQL: &str = "
+                CREATE INDEX IF NOT EXISTS idx_usage_records_route_dedup
+                ON usage_records(
+                    source,
+                    data_source,
+                    session_id,
+                    output_tokens,
+                    COALESCE(completed_at_ms, started_at_ms)
+                );
+                DROP VIEW IF EXISTS unified_usage_records;
+                CREATE VIEW unified_usage_records AS
+                SELECT
+                    u.record_id AS request_id,
+                    u.source,
+                    COALESCE(u.project_key, '') AS project_key,
+                    COALESCE(u.session_id, '') AS session_id,
+                    COALESCE(u.file_path, '') AS file_path,
+                    u.event_index,
+                    u.started_at_ms AS timestamp_ms,
+                    COALESCE(u.outbound_model, u.response_model, u.requested_model, u.pricing_model) AS model,
+                    u.input_tokens,
+                    u.output_tokens,
+                    u.cache_read_tokens,
+                    u.cache_creation_tokens,
+                    u.data_source,
+                    u.provider_id,
+                    u.provider_name,
+                    u.requested_model,
+                    u.outbound_model,
+                    u.response_model,
+                    u.usage_status,
+                    u.status_code,
+                    u.outcome,
+                    u.duration_ms,
+                    u.attempt_count,
+                    u.degraded
+                FROM usage_records u
+                WHERE u.data_source = 'route'
+                   OR NOT EXISTS (
+                        SELECT 1
+                        FROM usage_records r
+                        WHERE r.data_source = 'route'
+                          AND r.usage_status IN ('complete', 'partial')
+                          AND NULLIF(TRIM(r.session_id), '') IS NOT NULL
+                          AND r.source = u.source
+                          AND r.session_id = u.session_id
+                          AND COALESCE(r.completed_at_ms, r.started_at_ms)
+                              BETWEEN u.started_at_ms - 120000 AND u.started_at_ms + 120000
+                          AND LOWER(COALESCE(r.outbound_model, r.response_model, r.requested_model, ''))
+                              = LOWER(COALESCE(u.response_model, u.pricing_model, ''))
+                          AND r.output_tokens = u.output_tokens
+                          AND (
+                              r.input_tokens = u.input_tokens
+                              OR r.input_tokens = u.input_tokens + u.cache_read_tokens + u.cache_creation_tokens
+                              OR u.input_tokens = r.input_tokens + r.cache_read_tokens + r.cache_creation_tokens
+                          )
+                   );
+              ";
 fn migrations() -> Vec<Migration> {
     vec![
         Migration {
@@ -672,6 +899,36 @@ fn migrations() -> Vec<Migration> {
             sql: MIGRATION_EXTEND_SSH_AGENT_INSTALLATIONS_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: provider::MIGRATION_LEGACY_PROVIDERS_VERSION,
+            description: provider::MIGRATION_LEGACY_PROVIDERS_DESCRIPTION,
+            sql: provider::MIGRATION_LEGACY_PROVIDERS_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: provider::MIGRATION_CREATE_NATIVE_PROVIDERS_VERSION,
+            description: provider::MIGRATION_CREATE_NATIVE_PROVIDERS_DESCRIPTION,
+            sql: provider::MIGRATION_CREATE_NATIVE_PROVIDERS_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: MIGRATION_CREATE_USAGE_RECORDS_VERSION,
+            description: "create_unified_usage_records",
+            sql: MIGRATION_CREATE_USAGE_RECORDS_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_VERSION,
+            description: "deduplicate_routed_session_usage",
+            sql: MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_VERSION,
+            description: "optimize_unified_usage_record_queries",
+            sql: MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_SQL,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -810,6 +1067,7 @@ pub fn run() {
                 .level_for("hyper_util", LevelFilter::Warn)
                 .level_for("reqwest", LevelFilter::Warn)
                 .level_for("sqlx", LevelFilter::Info)
+                .level_for("keyring_core", LevelFilter::Warn)
                 .timezone_strategy(TimezoneStrategy::UseLocal)
                 .targets(targets)
                 .build()
@@ -826,6 +1084,23 @@ pub fn run() {
             }
             if let Err(err) = app_paths::migrate_legacy_app_files(app.handle()) {
                 log::warn!("CLI-Manager data migration skipped: {err}");
+            }
+            if let Err(err) = tauri::async_runtime::block_on(provider::initialize()) {
+                log::warn!("provider database initialization skipped: {err}");
+            } else {
+                if let Err(err) = tauri::async_runtime::block_on(
+                    provider::network_client::reload_from_persisted(),
+                ) {
+                    log::warn!("global proxy client initialization skipped: {err}");
+                }
+                if let Err(err) = tauri::async_runtime::block_on(provider::initialize_cache()) {
+                    log::warn!("provider Home cache initialization skipped: {err}");
+                }
+                if let Err(err) =
+                    tauri::async_runtime::block_on(provider::global::recover_pending())
+                {
+                    log::warn!("provider apply recovery skipped: {err}");
+                }
             }
             if let Ok(pets_dir) = app_paths::pets_dir() {
                 if let Err(err) = app.asset_protocol_scope().allow_directory(pets_dir, true) {
@@ -946,6 +1221,11 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            commands::agent_capabilities::agent_capabilities_inspect,
+            commands::agent_capabilities::agent_capabilities_probe,
+            commands::opencode_hook::opencode_hook_status,
+            commands::opencode_hook::opencode_hook_install,
+            commands::opencode_hook::opencode_hook_uninstall,
             commands::terminal::pty_prepare_create,
             commands::terminal::pty_reconcile_active_sessions,
             commands::terminal::pty_status,
@@ -1138,16 +1418,66 @@ pub fn run() {
             commands::ccusage::ccusage_get_status,
             commands::ccusage::ccusage_install_tools,
             commands::ccusage::ccusage_refresh_report,
-            commands::ccswitch::ccswitch_list_providers,
-            commands::ccswitch::ccswitch_get_project_provider,
-            commands::ccswitch::ccswitch_apply_provider,
-            commands::ccswitch::ccswitch_reset_project_provider,
-            commands::ccswitch::ccswitch_prepare_claude_provider,
-            commands::ccswitch::ccswitch_prepare_codex_provider,
-            commands::ccswitch::ccswitch_test_provider_model,
-            commands::ccswitch::ccswitch_cleanup_codex_profiles,
-            commands::ccswitch::ccswitch_probe_projects,
-            commands::ccswitch::ccswitch_list_common_configs,
+            commands::provider::provider_catalog_list,
+            commands::provider::provider_catalog_get,
+            commands::provider::provider_fetch_models,
+            commands::provider::provider_catalog_create,
+            commands::provider::provider_catalog_update,
+            commands::provider::provider_document_update,
+            commands::provider::provider_catalog_duplicate,
+            commands::provider::provider_catalog_delete,
+            commands::provider::provider_catalog_set_enabled,
+            commands::provider::provider_catalog_reorder,
+            commands::provider::provider_key_list,
+            commands::provider::provider_key_create,
+            commands::provider::provider_key_update,
+            commands::provider::provider_key_delete,
+            commands::provider::provider_key_set_enabled,
+            commands::provider::provider_key_activate,
+            commands::provider::provider_key_reorder,
+            commands::provider::provider_key_reveal,
+            commands::provider::provider_common_config_get,
+            commands::provider::provider_common_config_set,
+            commands::provider::provider_common_config_validate,
+            commands::provider::provider_home_get,
+            commands::provider::provider_home_active_get,
+            commands::provider::provider_home_cached_get,
+            commands::provider::provider_wsl_list_distros,
+            commands::provider::provider_home_preview,
+            commands::provider::provider_home_select,
+            commands::provider::provider_home_reset,
+            commands::provider::provider_global_preview,
+            commands::provider::provider_global_current,
+            commands::provider::provider_global_apply,
+            commands::provider::provider_environment_inspect,
+            commands::provider::provider_environment_open_target,
+            commands::provider::provider_global_repair,
+            commands::provider::provider_scope_resolve,
+            commands::provider::provider_scope_prepare,
+            commands::provider::provider_scope_release_snapshot,
+            commands::provider::provider_scope_gc_snapshots,
+            commands::provider::provider_import_preview,
+            commands::provider::provider_import_commit,
+            commands::provider::provider_import_issues,
+            commands::provider::provider_import_resolve_issue,
+            commands::routing::routing_get_state,
+            commands::routing::routing_get_failover_queue,
+            commands::routing::routing_set_service_enabled,
+            commands::routing::routing_set_preferred_port,
+            commands::routing::routing_set_failover_enabled,
+            commands::routing::routing_set_failover_queue,
+            commands::routing::routing_update_failover_config,
+            commands::routing::routing_get_global_proxy,
+            commands::routing::routing_set_global_proxy,
+            commands::routing::routing_scan_global_proxy,
+            commands::routing::routing_test_global_proxy,
+            commands::routing::routing_get_rectifier_config,
+            commands::routing::routing_set_rectifier_config,
+            commands::routing::routing_get_optimizer_config,
+            commands::routing::routing_set_optimizer_config,
+            commands::routing::routing_reset_circuit,
+            commands::routing::routing_set_quick_controls,
+            commands::routing::routing_set_takeover,
             commands::command_suggestion::command_suggestion_test_model,
             commands::command_suggestion::command_suggestion_generate,
             commands::command_suggestion::command_suggestion_list_path_entries,
@@ -1205,13 +1535,11 @@ pub fn run() {
             statusline::statusline_render_preview,
             statusline::statusline_install,
             statusline::statusline_uninstall,
-            statusline::statusline_sync_ccswitch,
             statusline::statusline_get_catalog,
             statusline::statusline_powerline_font_status,
             statusline::statusline_powerline_install_fonts,
             codex_statusline::codex_statusline_load,
             codex_statusline::codex_statusline_save,
-            codex_statusline::codex_statusline_sync_ccswitch,
             statusline_profiles::statusline_profiles_load,
             statusline_profiles::statusline_backup_export,
             statusline_profiles::statusline_backup_restore,
@@ -1483,5 +1811,29 @@ mod ssh_migration_tests {
             .await
             .unwrap();
         assert_eq!(row.get::<String, _>("config_file"), "");
+    }
+}
+
+#[cfg(test)]
+mod provider_migration_tests {
+    use super::migrations;
+    use crate::provider::{
+        MIGRATION_CREATE_NATIVE_PROVIDERS_VERSION, MIGRATION_LEGACY_PROVIDERS_VERSION,
+    };
+
+    #[test]
+    fn registry_keeps_legacy_v25_before_native_v26() {
+        let registry = migrations();
+        let legacy = registry
+            .iter()
+            .find(|migration| migration.version == MIGRATION_LEGACY_PROVIDERS_VERSION)
+            .expect("legacy provider migration must remain registered");
+        let native = registry
+            .iter()
+            .find(|migration| migration.version == MIGRATION_CREATE_NATIVE_PROVIDERS_VERSION)
+            .expect("native provider migration must be registered");
+        assert_eq!(legacy.description, "create_providers_and_keys_tables");
+        assert_eq!(native.description, "create_native_provider_management");
+        assert!(legacy.version < native.version);
     }
 }

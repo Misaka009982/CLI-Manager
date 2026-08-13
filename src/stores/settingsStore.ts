@@ -88,7 +88,7 @@ type LastSettingsTab =
   | "terminal-theme"
   | "shortcuts"
   | "templates"
-  | "providers"
+  | "native-providers"
   | "model-pricing"
   | "cc-connect"
   | "ssh-hosts"
@@ -106,6 +106,7 @@ export type TerminalStatsCardKey =
   | "tokenTrend"
   | "modelContext"
   | "tools"
+  | "agentCapabilities"
   | "latestChanges"
   | "todayUsage";
 export type SystemResourceCardKey =
@@ -116,7 +117,7 @@ export type SystemResourceCardKey =
   | "disk"
   | "gpu"
   | "processes";
-export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "files" | "systemResources";
+export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "files" | "systemResources" | "providers";
 export type TerminalPanelWidthSettings = Record<TerminalPanelWidthKey, number>;
 export type TerminalSettingsSectionKey = "behavior" | "paneMarker" | "shells" | "themes" | "background";
 export type TerminalSettingsSectionsExpanded = Record<TerminalSettingsSectionKey, boolean>;
@@ -139,6 +140,7 @@ export const TERMINAL_PANEL_WIDTH_DEFAULTS: TerminalPanelWidthSettings = {
   replay: 300,
   files: 220,
   systemResources: 300,
+  providers: 320,
 };
 export const TERMINAL_SETTINGS_SECTION_KEYS: readonly TerminalSettingsSectionKey[] = [
   "behavior",
@@ -246,6 +248,7 @@ export interface TerminalToolbarVisibilitySettings {
   stats: boolean;
   gitChanges: boolean;
   systemResources: boolean;
+  providers: boolean;
   backgroundTasks: boolean;
   showText: boolean;
 }
@@ -266,6 +269,7 @@ export const TERMINAL_STATS_CARD_KEYS: readonly TerminalStatsCardKey[] = [
   "tokenTrend",
   "modelContext",
   "tools",
+  "agentCapabilities",
   "latestChanges",
   "todayUsage",
 ];
@@ -526,6 +530,7 @@ const DEFAULTS: Settings = {
     stats: true,
     gitChanges: true,
     systemResources: false,
+    providers: true,
     backgroundTasks: true,
     showText: false,
   },
@@ -533,7 +538,7 @@ const DEFAULTS: Settings = {
     stats: true,
     gitChanges: true,
   },
-  terminalToolbarOrder: ["new", "templates", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "systemResources", "backgroundTasks"],
+  terminalToolbarOrder: ["new", "templates", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "providers", "systemResources", "backgroundTasks"],
   terminalSidePanelMerged: true,
   terminalSidePanelSingleOpen: true,
   terminalSidePanelSkin: "terminal",
@@ -544,6 +549,7 @@ const DEFAULTS: Settings = {
     tokenTrend: true,
     modelContext: true,
     tools: true,
+    agentCapabilities: true,
     latestChanges: true,
     todayUsage: true,
   },
@@ -684,7 +690,7 @@ const LAST_SETTINGS_TABS: readonly LastSettingsTab[] = [
   "terminal-theme",
   "shortcuts",
   "templates",
-  "providers",
+  "native-providers",
   "model-pricing",
   "cc-connect",
   "ssh-hosts",
@@ -757,6 +763,7 @@ function migrateTaskbarAttentionFlashCount(value: unknown): number {
 }
 
 function migrateLastSettingsTab(value: unknown): LastSettingsTab {
+  if (value === "providers") return "native-providers";
   return typeof value === "string" && LAST_SETTINGS_TABS.includes(value as LastSettingsTab)
     ? (value as LastSettingsTab)
     : DEFAULTS.lastSettingsTab;
@@ -799,6 +806,7 @@ export function migrateTerminalToolbarVisibility(value: unknown): TerminalToolba
     stats: typeof raw.stats === "boolean" ? raw.stats : defaults.stats,
     gitChanges: typeof raw.gitChanges === "boolean" ? raw.gitChanges : defaults.gitChanges,
     systemResources: typeof raw.systemResources === "boolean" ? raw.systemResources : defaults.systemResources,
+    providers: typeof raw.providers === "boolean" ? raw.providers : defaults.providers,
     backgroundTasks: typeof raw.backgroundTasks === "boolean" ? raw.backgroundTasks : defaults.backgroundTasks,
     showText: typeof raw.showText === "boolean" ? raw.showText : defaults.showText,
   };
@@ -847,6 +855,7 @@ export function migrateTerminalPanelWidths(value: unknown): TerminalPanelWidthSe
     replay: clampNumber(raw.replay, TERMINAL_PANEL_WIDTH_DEFAULTS.replay, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.replay),
     files: clampNumber(raw.files, TERMINAL_PANEL_WIDTH_DEFAULTS.files, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.files),
     systemResources: clampNumber(raw.systemResources, TERMINAL_PANEL_WIDTH_DEFAULTS.systemResources, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.systemResources),
+    providers: clampNumber(raw.providers, TERMINAL_PANEL_WIDTH_DEFAULTS.providers, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.providers),
   };
 }
 

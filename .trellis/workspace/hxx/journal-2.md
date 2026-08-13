@@ -699,8 +699,6 @@ OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 
 ### Next Steps
 
 - None - task complete
-
-
 ## Session 80: 同步 master 并发布版本 1.3.5
 
 **Date**: 2026-08-10
@@ -786,6 +784,139 @@ OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 
 | Hash | Message |
 |------|---------|
 | `ad1e2a26` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 83: 修复 Codex 供应商启动覆盖真实 Home
+
+**Date**: 2026-08-06
+**Task**: 修复 Codex 供应商启动覆盖真实 Home
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+修复原生 Codex 全局、项目与 Worktree 供应商启动错误替换 CODEX_HOME 的回归；全局使用真实 Home，scope 使用安全配置覆盖与子进程密钥，恢复 MCP、Hook、沙箱、历史和实时统计链路。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b8a41dee` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 84: 修复 Grok 供应商真实 Home 启动
+
+**Date**: 2026-08-06
+**Task**: 修复 Grok 供应商真实 Home 启动
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+修复 Grok 全局、项目、Worktree 与显式供应商启动覆盖 GROK_HOME 的回归；改用进程级 endpoint/key/model 覆盖，恢复 Hook、MCP、历史与实时统计可见性，并补齐跨层测试和供应商合同。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f38bd412` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 85: 修复 Grok Home 隔离并恢复旧会话
+
+**Date**: 2026-08-06
+**Task**: 修复 Grok Home 隔离并恢复旧会话
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+所有供应商作用域保留真实 GROK_HOME；endpoint/key/model 改用进程级覆盖，并在清理旧快照前备份和恢复历史会话。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f38bd412` | (see git log) |
+| `f4ae4c5e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 86: 修复 Grok 会话历史路径并提交任务
+
+**Date**: 2026-08-07
+**Task**: 修复 Grok 会话历史路径并提交任务
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+修复 Grok 历史读取把 sessionRoot 重复追加 sessions 的根因；统一默认与显式 session root，补充回归测试、规范、变更日志和产品文档，并提交对应 Trellis 任务。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0fc7f495` | (see git log) |
 
 ### Testing
 

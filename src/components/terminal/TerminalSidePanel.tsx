@@ -1,7 +1,9 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Activity, BarChart3, Cpu, Folder, GitBranch } from "../icons";
+import { Activity, ArrowLeftRight, BarChart3, Cpu, Folder, GitBranch } from "../icons";
 import { TERM_PANEL, getTerminalSidePanelSkinStyle, panelColorTint } from "../stats/termStatsUi";
 import { SystemResourcesPanel } from "./SystemResourcesPanel";
+import { ProviderQuickSwitchPanel } from "./ProviderQuickSwitchPanel";
+import type { NativeProviderAppType } from "../settings/providers/nativeProviderTypes";
 import { useI18n } from "../../lib/i18n";
 import {
   TERMINAL_PANEL_WIDTH_DEFAULTS,
@@ -22,7 +24,7 @@ const SessionReplayPanel = lazy(() =>
   import("./SessionReplayPanel").then((module) => ({ default: module.SessionReplayPanel }))
 );
 
-export type TerminalSidePanelTab = "stats" | "replay" | "git" | "files" | "systemResources";
+export type TerminalSidePanelTab = "stats" | "replay" | "git" | "files" | "providers" | "systemResources";
 
 export const TERMINAL_SIDE_PANEL_TAB_ORDER: readonly TerminalSidePanelTab[] = [
   "stats",
@@ -30,6 +32,7 @@ export const TERMINAL_SIDE_PANEL_TAB_ORDER: readonly TerminalSidePanelTab[] = [
   "replay",
   "git",
   "files",
+  "providers",
 ];
 
 interface TerminalSidePanelProps {
@@ -41,8 +44,10 @@ interface TerminalSidePanelProps {
   projectId?: string | null;
   filesTabDisabled?: boolean;
   systemResourcesEnabled?: boolean;
+  providerDefaultAppType?: NativeProviderAppType;
   filesPanelContent?: ReactNode;
   onTabChange: (tab: TerminalSidePanelTab) => void;
+  onOpenProviderSettings?: () => void;
 }
 
 const MERGED_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-side-panel-width";
@@ -51,12 +56,14 @@ const TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-stats-panel
 const TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-git-panel-width";
 const TERMINAL_FILES_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-files-panel-width";
 const TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-replay-panel-width";
+const TERMINAL_PROVIDER_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-provider-panel-width";
 const LEGACY_WIDTH_STORAGE_KEYS: Partial<Record<TerminalPanelWidthKey, string>> = {
   merged: MERGED_PANEL_WIDTH_STORAGE_KEY,
   stats: TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY,
   git: TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY,
   replay: TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY,
   files: TERMINAL_FILES_PANEL_WIDTH_STORAGE_KEY,
+  providers: TERMINAL_PROVIDER_PANEL_WIDTH_STORAGE_KEY,
 };
 
 interface ResizableTerminalPanelFrameProps {
@@ -247,8 +254,10 @@ export function TerminalSidePanel({
   projectId,
   filesTabDisabled = false,
   systemResourcesEnabled = false,
+  providerDefaultAppType = "claude",
   filesPanelContent = null,
   onTabChange,
+  onOpenProviderSettings,
 }: TerminalSidePanelProps) {
   const { t } = useI18n();
   const tabListRef = useRef<HTMLDivElement | null>(null);
@@ -258,6 +267,7 @@ export function TerminalSidePanel({
   const replayEnabled = visibleTabs.includes("replay");
   const gitEnabled = visibleTabs.includes("git");
   const filesEnabled = visibleTabs.includes("files");
+  const providersEnabled = visibleTabs.includes("providers");
   const allTabs = [
     { key: "stats" as const, label: t("terminal.panel.sideStats"), color: TERM_PANEL.cyan, icon: <BarChart3 size={12} strokeWidth={1.8} /> },
     ...(systemResourcesEnabled
@@ -266,6 +276,7 @@ export function TerminalSidePanel({
     { key: "replay" as const, label: t("terminal.panel.replay"), color: TERM_PANEL.magenta, icon: <Activity size={12} strokeWidth={1.8} /> },
     { key: "git" as const, label: t("terminal.panel.gitChanges"), color: TERM_PANEL.yellow, icon: <GitBranch size={12} strokeWidth={1.8} /> },
     { key: "files" as const, label: t("terminal.panel.files"), color: TERM_PANEL.blue, icon: <Folder size={12} strokeWidth={1.8} />, disabled: filesTabDisabled },
+    { key: "providers" as const, label: t("terminal.panel.providers"), color: TERM_PANEL.green, icon: <ArrowLeftRight size={12} strokeWidth={1.8} /> },
   ];
   const tabs = allTabs.filter((tab) => visibleTabs.includes(tab.key));
   const tabLayoutKey = tabs.map((tab) => `${tab.key}:${tab.label}`).join("|");
@@ -381,6 +392,9 @@ export function TerminalSidePanel({
           </Suspense>
         )}
         {filesEnabled && activeTab === "files" ? filesPanelContent : null}
+        {providersEnabled && activeTab === "providers" && (
+          <ProviderQuickSwitchPanel open={open} defaultAppType={providerDefaultAppType} onOpenSettings={onOpenProviderSettings} />
+        )}
       </div>
     </ResizableTerminalPanelFrame>
   );

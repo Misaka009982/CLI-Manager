@@ -625,7 +625,7 @@ fn deliver(
             return DeliveryOutcome::Failed(delivery_failure("profile_read_failed", &err, &[]))
         }
     };
-    let secrets = delivery_redaction_secrets(&profile, &job.record);
+    let secrets = delivery_redaction_secrets(&job.record);
     let requested_path = profile.executable_path.clone();
     let binary = match cached_binary {
         Some((cached_path, binary)) if cached_path == &requested_path => binary.clone(),
@@ -705,10 +705,7 @@ fn redact_delivery_detail(detail: &str, secrets: &[String]) -> String {
         .collect()
 }
 
-fn delivery_redaction_secrets(
-    profile: &CcConnectProfile,
-    record: &PersistedHandoffRecord,
-) -> Vec<String> {
+fn delivery_redaction_secrets(record: &PersistedHandoffRecord) -> Vec<String> {
     let mut secrets = Vec::new();
     for account in [
         TELEGRAM_TOKEN_ACCOUNT,
@@ -722,19 +719,13 @@ fn delivery_redaction_secrets(
             secrets.push(value);
         }
     }
-    if let (Some(provider_id), Some(database_path)) = (
-        record.provider_id.as_deref(),
-        configured_cc_switch_db_path(Some(profile)),
-    ) {
+    if let Some(provider_id) = record.provider_id.as_deref() {
         if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
         {
             if let Ok(provider) = runtime.block_on(
-                crate::commands::ccswitch::load_codex_runtime_config_from_path(
-                    provider_id,
-                    &database_path,
-                ),
+                crate::provider::runtime::load_codex_runtime_config(provider_id),
             ) {
                 secrets.push(provider.secret_value);
             }

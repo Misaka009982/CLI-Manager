@@ -68,6 +68,17 @@ For each boundary:
 
 **Good**: Each layer only knows its neighbors
 
+### Mistake 4: Dropping Relationship Metadata at a Boundary
+
+**Bad**: A source transcript contains a parent/child identifier, but the
+parser, catalog schema, or frontend normalizer omits it; the UI then falls
+back to a path convention that only works for one provider.
+
+**Good**: Treat relationship metadata as part of the session summary
+contract. Trace it through source parsing, cache/catalog persistence, API
+serialization, frontend normalization, and tree construction. Keep provider
+specific path inference only as an explicit compatibility fallback.
+
 ---
 
 ## Checklist for Cross-Layer Features
@@ -82,6 +93,7 @@ After implementation:
 - [ ] Tested with edge cases (null, empty, invalid)
 - [ ] Verified error handling at each boundary
 - [ ] Checked data survives round-trip
+- [ ] For parent/child data, verified the relationship survives source file → parser → catalog/cache → API → frontend tree
 
 ---
 

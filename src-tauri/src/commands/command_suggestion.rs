@@ -1,13 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::shell_resolver::silent_command;
+use crate::{provider::network_client, shell_resolver::silent_command};
 
 const MODEL_TEST_TIMEOUT_SECS: u64 = 4;
 const MODEL_TEST_SLOW_THRESHOLD_MS: u64 = 1500;
@@ -114,7 +113,7 @@ pub async fn command_suggestion_test_model(
         MODEL_TEST_TIMEOUT_SECS * 1000
     );
     let result = post_model_request(
-        client,
+        &client,
         api_type,
         &base_url,
         &api_key,
@@ -164,7 +163,7 @@ pub async fn command_suggestion_generate(
         SUGGESTION_TIMEOUT_MS
     );
     let (status, body) = match post_model_request(
-        client,
+        &client,
         api_type,
         &request.base_url,
         &request.api_key,
@@ -494,20 +493,12 @@ fn wsl_directory_exists(distro: &str, linux_dir: &str) -> Result<bool, String> {
     Ok(output.status.success())
 }
 
-fn shared_client() -> Result<&'static reqwest::Client, String> {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    if let Some(client) = CLIENT.get() {
-        return Ok(client);
-    }
-    let client = reqwest::Client::builder()
+fn shared_client() -> Result<reqwest::Client, String> {
+    network_client::configure_builder(reqwest::Client::builder())?
         .user_agent("CLI-Manager command suggestion")
         .timeout(Duration::from_secs(MODEL_TEST_TIMEOUT_SECS))
         .build()
-        .map_err(|err| format!("http_client_create_failed: {err}"))?;
-    let _ = CLIENT.set(client);
-    CLIENT
-        .get()
-        .ok_or_else(|| "http_client_create_failed: shared_client_unavailable".to_string())
+        .map_err(|err| format!("http_client_create_failed: {err}"))
 }
 
 fn endpoint_url(base_url: &str, versioned_path: &str) -> String {

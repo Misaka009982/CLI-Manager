@@ -46,6 +46,33 @@ function tokenizeCliArgs(cliArgs: string): CliArgToken[] {
   return tokens;
 }
 
+export function replaceGrokModelArg(command: string, model: string): string {
+  const normalizedModel = model.trim();
+  if (!/^[A-Za-z0-9._:/@+-]+$/.test(normalizedModel)) {
+    throw new Error("provider_grok_model_invalid");
+  }
+  const tokens = tokenizeCliArgs(command);
+  if (tokens.length === 0) return command.trim();
+  const kept: string[] = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const name = optionName(token);
+    if (name === "-m" || name === "--model") {
+      if (!token.raw.includes("=") && tokens[index + 1]) index += 1;
+      continue;
+    }
+    kept.push(token.raw);
+  }
+
+  kept.splice(1, 0, "--model", quoteCliArg(normalizedModel));
+  return kept.join(" ");
+}
+
+function quoteCliArg(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 function isOptionToken(token: CliArgToken | undefined): boolean {
   return Boolean(token?.raw.startsWith("-"));
 }

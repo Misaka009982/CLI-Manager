@@ -4,7 +4,7 @@
 
 Apply this contract when changing `cli-manager-ssh-agent`, shared SSH transport generation, one-shot Agent probes, Agent installation metadata, bridge framing, or the SSH Host CLI Integration status UI.
 
-The delivered scope includes explicit one-shot probe/install lifecycle, remote Claude/Codex Hook configuration, the one-shot Hook runtime, remote history/resume RPCs, and daemon-owned protocol `1.10` bridges per active SSH Host. Protocol 1.5 introduced read-only file RPCs; protocol 1.7 Git RPCs expose the full Git panel through a dedicated serialized Git lane, protocol 1.8 adds negotiated Diff generation options, protocol 1.9 adds bounded terminal image attachments outside project roots, and protocol 1.10 generalizes attachment upload to arbitrary regular files. Realtime/historical stats remain separate stages.
+The delivered scope includes explicit one-shot probe/install lifecycle, remote Claude/Codex Hook configuration, the one-shot Hook runtime, remote history/resume RPCs, and daemon-owned protocol `1.11` bridges per active SSH Host. Protocol 1.5 introduced read-only file RPCs; protocol 1.7 Git RPCs expose the full Git panel through a dedicated serialized Git lane, protocol 1.8 adds negotiated Diff generation options, protocol 1.9 adds bounded terminal image attachments outside project roots, protocol 1.10 generalizes attachment upload to arbitrary regular files, and protocol 1.11 adds session-bound Agent MCP/Skill diagnostics through `agentCapabilitiesV1`. Realtime/historical stats remain separate stages.
 
 ### Agent Release Identity
 
@@ -22,7 +22,8 @@ The delivered scope includes explicit one-shot probe/install lifecycle, remote C
   Agent `0.1.6` reports protocol `1.9` and adds the negotiated `fileAttach` capability for
   chunked terminal image uploads into the remote user's XDG cache. Agent `0.1.7` reports
   protocol `1.10` and adds `fileAttachAny` for arbitrary regular files up to 20 MiB while
-  preserving the original safe basename.
+  preserving the original safe basename. Agent `0.1.8` reports protocol `1.11` and
+  advertises `agentCapabilitiesV1` for fixed-command, redacted MCP/Skill inspection and probes.
 - The independent Agent release tag is exactly `ssh-agent-v<agent-version>`. Its signed manifest
   must carry that Agent version and point only to assets on that same tag.
 - Independent Agent releases are GitHub prereleases with `make_latest: false`. The desktop
@@ -142,6 +143,11 @@ Protocol 1.10 arbitrary-file attachments use the parallel `fileAttachAnyBegin`,
 `fileAttachAnyChunk`, `fileAttachAnyFinish`, and `fileAttachAnyAbort` request kinds. The separate
 capability keeps legacy image uploads usable with Agent 0.1.6 while allowing the daemon to reject
 unsupported arbitrary-file requests before writing a frame.
+
+Protocol 1.11 Agent diagnostics use `agentCapabilitiesInspect` and
+`agentCapabilitiesProbe`. Both require `agentCapabilitiesV1`, run in the exact remote project
+cwd, and return only normalized/redacted snapshots. Capability absence is an actionable upgrade
+state and must never fall back to desktop-local inspection.
 
 Remote Git Diff responses contain:
 

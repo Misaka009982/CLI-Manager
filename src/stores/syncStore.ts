@@ -39,6 +39,17 @@ interface WorkspaceBackup {
   commandTemplates: Record<string, unknown>[];
 }
 
+interface NativeProviderBackupMetadata {
+  id: string;
+  appType: string;
+  name: string;
+  baseUrl: string | null;
+  model: string | null;
+  keyCount: number;
+  activeKeyLabel: string | null;
+  keyReentryRequired: boolean;
+}
+
 export interface BackupSnapshotV3 {
   version: 3;
   manifest: BackupManifest;
@@ -51,6 +62,7 @@ export interface BackupSnapshotV3 {
       targets: unknown[];
     };
     statusline: unknown;
+    nativeProviders?: NativeProviderBackupMetadata[];
   };
 }
 
@@ -190,6 +202,15 @@ async function collectBackupData(db: Awaited<ReturnType<typeof getDb>>): Promise
     db.select<Record<string, unknown>[]>(MODEL_PRICE_SELECT),
     invoke<unknown>("statusline_backup_export"),
   ]);
+  const nativeProviders = await invoke<Array<{
+    id: string;
+    appType: string;
+    name: string;
+    baseUrl: string | null;
+    model: string | null;
+    keyCount: number;
+    activeKeyLabel: string | null;
+  }>>("provider_catalog_list", { appType: null }).catch(() => []);
   const settings = useSettingsStore.getState();
   return {
     workspace: {
@@ -207,6 +228,10 @@ async function collectBackupData(db: Awaited<ReturnType<typeof getDb>>): Promise
       targets: sanitizeThirdPartyHookTargets(settings.thirdPartyHookTargets),
     },
     statusline,
+    nativeProviders: nativeProviders.map((provider) => ({
+      ...provider,
+      keyReentryRequired: provider.keyCount > 0,
+    })),
   };
 }
 
@@ -272,6 +297,7 @@ async function normalizeImportedSnapshot(value: unknown, deviceId: string, devic
       targets: sanitizeThirdPartyHookTargets(settings.thirdPartyHookTargets),
     },
     statusline: await invoke("statusline_backup_export"),
+    nativeProviders: [],
   };
   return {
     version: 3,

@@ -2,7 +2,7 @@ import type { GitTreeNode, Project } from "../../lib/types";
 import { GitTreeNodeComponent } from "./GitTreeNode";
 
 interface GitChangesTreeProps {
-  project: Pick<Project, "name"> | null;
+  project: Pick<Project, "name" | "path" | "remote_path" | "environment_type"> | null;
   nodes: GitTreeNode[];
   treeId: string;
   onFileClick: (filePath: string) => void;
