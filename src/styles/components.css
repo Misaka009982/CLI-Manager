@@ -5695,8 +5695,15 @@
 }
 
 .ui-history-conversation-detail-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
   border: 1px solid transparent;
   border-radius: 12px;
+}
+
+.ui-history-conversation-detail-row .ui-history-message-stack {
+  align-items: flex-start;
 }
 
 .ui-history-conversation-message .ui-history-message-stack {

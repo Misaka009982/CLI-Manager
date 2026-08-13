@@ -307,6 +307,7 @@ function ConversationDetails({
 
 function ConversationRowCard({
   row,
+  virtualIndex,
   isMatched,
   isFocused,
   query,
@@ -314,6 +315,7 @@ function ConversationRowCard({
   measureElement,
 }: {
   row: ConversationRow;
+  virtualIndex: number;
   isMatched: boolean;
   isFocused: boolean;
   query: string;
@@ -344,6 +346,7 @@ function ConversationRowCard({
   return (
     <div
       ref={setCardRef}
+      data-index={virtualIndex}
       className={row.type === "message"
         ? "ui-history-message-card ui-history-conversation-message absolute left-0 top-0 w-full px-2.5 py-2"
         : "ui-history-conversation-detail-row absolute left-0 top-0 w-full px-2.5 py-2"}
@@ -353,7 +356,12 @@ function ConversationRowCard({
       }}
     >
       {row.type === "details" ? (
-        <ConversationDetails parts={details} query={query} forceOpen={forceOpen} onSizeChange={remeasure} />
+        <>
+          <span className="ui-history-message-avatar" aria-hidden="true"><img src={avatarUrl} alt="" /></span>
+          <div className="ui-history-message-stack">
+            <ConversationDetails parts={details} query={query} forceOpen={forceOpen} onSizeChange={remeasure} />
+          </div>
+        </>
       ) : (
         <>
           {roleKind !== "user" && (
@@ -1302,6 +1310,7 @@ export function SessionDetailPane({
                 <div key={virtualRow.key} className="absolute left-0 top-0 w-full" style={{ transform: `translateY(${virtualRow.start}px)` }}>
                   <ConversationRowCard
                     row={row}
+                    virtualIndex={virtualRow.index}
                     isMatched={isMatched}
                     isFocused={isFocused}
                     query={sessionQuery}

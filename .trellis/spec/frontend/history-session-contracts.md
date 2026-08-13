@@ -28,6 +28,7 @@
 - Local, WSL, and SSH use the same kind names. SSH remains read-only and this view contract never routes remote messages into local mutation commands.
 - V2 catalog writes every parsed part and rehydrates it in `part_index` order. Old catalog rows without part records fall back from role/content; parser version changes must invalidate/rebuild derived rows when classification changes.
 - Outside batch selection, the complete session row is one keyboard-accessible open target. Tree toggles, selection checkboxes, delete, and other explicit actions stop propagation. The existing detail request sequence remains the last-request-wins boundary.
+- Every virtualized Conversation row must expose the configured index attribute (`data-index`) on the same node passed to `measureElement`; otherwise expanded details keep the estimate height and overlap or leave blank gaps. Conversation rows reuse the Transcript avatar/stack/bubble layout so visible text and detail sections share the same geometry.
 
 ### 4. Validation & Error Matrix
 
@@ -49,6 +50,7 @@
 - Bad: derive Conversation only from role after structured parts exist, because mixed reasoning/tool content would remain merged into the visible answer.
 - Bad: remove or filter messages in the backend, because message-index links from Diff/Tools would shift.
 - Bad: classify only a user block whose first line says `Agents.md instructions for ...`; this leaks injected context that begins with a normal heading into the visible conversation.
+- Bad: measure a virtualized Conversation row without its `data-index`, or render detail-only rows outside the avatar/stack wrapper; expansion then produces stale heights or a layout unlike the Transcript tab.
 
 ### 6. Tests Required
 

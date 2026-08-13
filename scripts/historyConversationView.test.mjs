@@ -25,6 +25,8 @@ test("conversation is the default view and transcript remains independent", () =
   assert.match(detailSource, /id: "conversation", labelKey: "history\.detail\.view\.conversation"/);
   assert.match(detailSource, /id: "transcript", labelKey: "history\.detail\.view\.transcript"/);
   assert.match(detailSource, /detailView === "transcript" && visibleMessages\.length > 0/);
+  assert.match(detailSource, /data-index=\{virtualIndex\}/);
+  assert.match(detailSource, /virtualIndex=\{virtualRow\.index\}/);
 });
 
 test("legacy messages fall back by role and adjacent hidden rows are grouped", () => {
