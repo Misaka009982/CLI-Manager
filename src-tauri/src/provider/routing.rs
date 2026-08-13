@@ -802,6 +802,10 @@ fn prioritize_current_provider(provider_ids: &mut Vec<String>, current_id: Optio
     }
 }
 
+fn should_seed_failover_queue(enabled: bool, previous_ids: &[String]) -> bool {
+    enabled && previous_ids.is_empty()
+}
+
 pub(crate) async fn set_failover_enabled(
     app_type: &str,
     enabled: bool,
@@ -817,7 +821,6 @@ pub(crate) async fn set_failover_enabled(
         .filter(|provider| provider.in_failover_queue)
         .map(|provider| provider.id.clone())
         .collect();
-    let mut normalized_queue = false;
 
     if enabled {
         let persisted = load_persisted_state().await?;
@@ -829,20 +832,14 @@ pub(crate) async fn set_failover_enabled(
             return Err("routing_failover_requires_takeover".to_string());
         }
         ensure_current_provider_ready(&app_type).await?;
-        if previous_ids.is_empty() {
+        if should_seed_failover_queue(enabled, &previous_ids) {
             let current_id = current_provider_id(&app_type).await?;
             set_failover_queue(&app_type, std::slice::from_ref(&current_id)).await?;
-        }
-    } else {
-        let current_id = current_provider_id(&app_type).await?;
-        if previous_ids != vec![current_id.clone()] {
-            set_failover_queue(&app_type, std::slice::from_ref(&current_id)).await?;
-            normalized_queue = true;
         }
     }
     config.auto_failover_enabled = enabled;
     if let Err(error) = save_failover_config(&app_type, &config).await {
-        if (enabled && previous_ids.is_empty()) || normalized_queue {
+        if should_seed_failover_queue(enabled, &previous_ids) {
             let _ = set_failover_queue(&app_type, &previous_ids).await;
         }
         return Err(error);
@@ -1836,6 +1833,14 @@ mod tests {
         assert_eq!(provider_ids, vec!["c", "a", "b"]);
         prioritize_current_provider(&mut provider_ids, Some("missing"));
         assert_eq!(provider_ids, vec!["c", "a", "b"]);
+    }
+
+    #[test]
+    fn disabling_failover_does_not_rewrite_existing_queue() {
+        let previous_ids = vec!["provider-a".to_string(), "provider-b".to_string()];
+        assert!(!should_seed_failover_queue(false, &previous_ids));
+        assert!(!should_seed_failover_queue(true, &previous_ids));
+        assert!(should_seed_failover_queue(true, &[]));
     }
 
     #[test]

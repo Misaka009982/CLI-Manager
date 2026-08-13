@@ -397,3 +397,42 @@ form must not hide URL, key or model in a generic configuration textarea.
   subscribers immediately apply it, and newly mounted subscribers replay the
   latest successful snapshot. Polling remains the authoritative backend
   reconciliation path rather than the only cross-surface synchronization path.
+
+## Failover ordering persistence (2026-08-13)
+
+- `routing_get_failover_queue` is the authoritative complete snapshot for a
+  CLI app type: consumers must apply its `providers` collection, including
+  `inFailoverQueue` and `sortIndex`, after successful mutations and polling.
+- `provider_catalog_reorder` persists the complete provider ID list through
+  `providers.sort_index`; do not introduce a second frontend-only failover
+  ordering array. Queue grouping is display derivation only.
+- The terminal quick panel hides duplicate per-row up/down buttons while
+  automatic failover is enabled. It keeps the dnd-kit drag handle and keyboard
+  sensor as the precision reorder affordance. Settings may retain dedicated
+  up/down controls.
+- Disabling automatic failover changes the mode only. It must not rewrite an
+  existing non-empty queue or directory order; enabling failover may seed an
+  empty queue with the current ready provider.
+
+### Good / Bad
+
+```typescript
+// Good: apply the returned snapshot after a successful reorder or poll.
+setSnapshot((current) => ({ ...current, failover: next }));
+
+// Bad: keep only circuit fields and retain stale providers after another
+// surface has changed sortIndex or queue membership.
+setSnapshot((current) => ({
+  ...current,
+  failover: current.failover && { ...current.failover, circuit: next.circuit },
+}));
+```
+
+### Required regression checks
+
+- Side panel automatic mode has no up/down buttons, while drag/keyboard
+  ordering remains available.
+- A queue/order mutation made in either side panel or Settings is visible in
+  the other consumer after the next snapshot publication or poll.
+- Toggling automatic failover off and on preserves an existing queue and its
+  `sortIndex` order; empty queue seeding remains covered separately.

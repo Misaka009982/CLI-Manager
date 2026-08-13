@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowDown, ArrowLeftRight, ArrowUp, Boxes, CircleAlert, GripVertical, RefreshCw, Settings } from "../icons";
+import { ArrowLeftRight, Boxes, CircleAlert, GripVertical, RefreshCw, Settings } from "../icons";
 import { useI18n } from "../../lib/i18n";
 import type { NativeProviderAppType, NativeProviderFailoverProvider } from "../settings/providers/nativeProviderTypes";
 import { orderFailoverProviders } from "../settings/providers/providerFailoverOrder";
@@ -317,28 +317,6 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
     }
   };
 
-  const handleMove = async (provider: ProviderRow, direction: -1 | 1) => {
-    if (quickSwitch.action || !failover || !autoFailover || !provider.inFailoverQueue) return;
-    const position = queuePosition.get(provider.id);
-    if (position === undefined) return;
-    const nextPosition = position + direction;
-    if (nextPosition < 0 || nextPosition >= queuedIds.length) return;
-    const nextQueued = [...queuedIds];
-    [nextQueued[position], nextQueued[nextPosition]] = [nextQueued[nextPosition], nextQueued[position]];
-    const nextAll = [...rows].sort((a, b) => a.sortIndex - b.sortIndex).map((item) => item.id);
-    const ordered = [...nextAll];
-    const queuedPositions = ordered.reduce<number[]>((positions, id, index) => {
-      if (queuedIds.includes(id)) positions.push(index);
-      return positions;
-    }, []);
-    queuedPositions.forEach((position, index) => { ordered[position] = nextQueued[index]; });
-    try {
-      await quickSwitch.reorderFailoverQueue(ordered);
-    } catch {
-      toast.error(t("providerQuickSwitch.queueUpdateFailed"));
-    }
-  };
-
   // 后端 provider_catalog_reorder 要求 ID 覆盖该 appType 全量供应商，否则报
   // provider_reorder_mismatch；rows 就是全量列表，直接整体重排后提交。
   const handleReorderDragEnd = async (event: DragEndEvent) => {
@@ -546,12 +524,6 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                               <button type="button" className="ui-focus-ring rounded px-1.5 py-1 text-[10px] disabled:opacity-35" style={{ color: provider.inFailoverQueue ? TERM_PANEL.green : TERM_PANEL.dim }} aria-pressed={provider.inFailoverQueue} aria-label={t("providerCatalog.failover.queueToggle", { name: provider.name })} disabled={Boolean(quickSwitch.action) || !provider.ready} onClick={() => void handleQueueToggle(provider)}>
                                 {provider.inFailoverQueue ? "✓" : "+"}
                               </button>
-                              {provider.inFailoverQueue && (
-                                <>
-                                  <button type="button" className="ui-focus-ring rounded p-1 disabled:opacity-35" style={{ color: TERM_PANEL.dim }} aria-label={t("providerCatalog.failover.moveUp", { name: provider.name })} disabled={Boolean(quickSwitch.action) || queuePosition.get(provider.id) === 0} onClick={() => void handleMove(provider, -1)}><ArrowUp size={12} /></button>
-                                  <button type="button" className="ui-focus-ring rounded p-1 disabled:opacity-35" style={{ color: TERM_PANEL.dim }} aria-label={t("providerCatalog.failover.moveDown", { name: provider.name })} disabled={Boolean(quickSwitch.action) || queuePosition.get(provider.id) === queuedIds.length - 1} onClick={() => void handleMove(provider, 1)}><ArrowDown size={12} /></button>
-                                </>
-                              )}
                             </>
                           )}
                         </>
