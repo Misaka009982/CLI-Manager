@@ -1584,3 +1584,36 @@ Aligned sidebar provider switching with settings global CLI Home apply flow, add
 ### Next Steps
 
 - None - task complete
+
+
+## Session 48: 修复供应商故障转移排序持久化
+
+**Date**: 2026-08-13
+**Task**: 修复供应商故障转移排序持久化
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+移除供应商侧栏重复上下移动图标；关闭自动故障转移时保留已有队列和 sort_index 顺序；补充前后端回归测试、功能清单、CHANGELOG 与供应商域契约。验证通过 npx tsc --noEmit、cargo check、provider routing focused tests 22/22。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d4df1777` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
