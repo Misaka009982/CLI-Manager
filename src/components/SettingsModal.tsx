@@ -11,7 +11,6 @@ import {
   RadioTower,
   Server,
   RefreshCw,
-  ServerCog,
   Settings2,
   Sparkles,
   Terminal,
@@ -34,7 +33,7 @@ import { HistorySourceSettingsPage } from "./settings/pages/HistorySourceSetting
 import { HookSettingsPage } from "./settings/pages/HookSettingsPage";
 import { StatuslineSettingsPage } from "./settings/pages/StatuslineSettingsPage";
 import { CommandSuggestionSettingsPage } from "./settings/pages/CommandSuggestionSettingsPage";
-import { ProviderSettingsPage } from "./settings/pages/ProviderSettingsPage";
+import { NativeProviderSettingsPage } from "./settings/pages/NativeProviderSettingsPage";
 import { ModelPricingSettingsPage } from "./settings/pages/ModelPricingSettingsPage";
 import { AboutSettingsPage } from "./settings/pages/AboutSettingsPage";
 import { DesktopPetSettingsPage } from "./settings/pages/DesktopPetSettingsPage";
@@ -52,7 +51,7 @@ export type SettingsTab =
   | "terminal-theme"
   | "shortcuts"
   | "templates"
-  | "providers"
+  | "native-providers"
   | "model-pricing"
   | "cc-connect"
   | "ssh-hosts"
@@ -76,7 +75,7 @@ const SETTINGS_TAB_ORDER: SettingsTab[] = [
   "terminal-theme",
   "shortcuts",
   "templates",
-  "providers",
+  "native-providers",
   "model-pricing",
   "cc-connect",
   "ssh-hosts",
@@ -136,12 +135,12 @@ const SETTINGS_TAB_CONFIG: Record<SettingsTab, SettingsTabConfig> = {
     icon: ClipboardList,
     searchPlaceholder: "settings.tabs.templates.search",
   },
-  providers: {
-    label: "settings.tabs.providers.label",
-    title: "settings.tabs.providers.title",
-    description: "settings.tabs.providers.description",
-    icon: ServerCog,
-    searchPlaceholder: "settings.tabs.providers.search",
+  "native-providers": {
+    label: "settings.tabs.nativeProviders.label",
+    title: "settings.tabs.nativeProviders.title",
+    description: "settings.tabs.nativeProviders.description",
+    icon: Sparkles,
+    searchPlaceholder: "settings.tabs.nativeProviders.search",
   },
   "model-pricing": {
     label: "settings.tabs.modelPricing.label",
@@ -214,6 +213,21 @@ function isLikelyMacOs() {
   return typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 }
 
+/**
+ * 设置页之上是否还压着别的弹框层。
+ *
+ * Mantine `Modal`（`role="dialog"` + `aria-modal`）与 Radix `Dialog` 都在捕获阶段处理 Escape，
+ * 早于设置页挂在 document 上的冒泡监听；两者都不会 stopPropagation，
+ * 因此设置页必须自己判断「Escape 是否已经被上层弹框接管」，否则会连带整个设置页一起关掉。
+ */
+function hasOverlayAboveSettings(settingsDialog: HTMLElement | null): boolean {
+  const layers = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+  for (const layer of Array.from(layers)) {
+    if (layer !== settingsDialog) return true;
+  }
+  return false;
+}
+
 export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiveTabChange }: Props) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? "general");
   const [searchValue, setSearchValue] = useState("");
@@ -260,7 +274,9 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
   useEffect(() => {
     if (!mounted || closing) return;
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || event.isComposing) return;
+      // 上层还有弹框（供应商维护、SSH 主机维护、插件安装等）时，Escape 归它处理，设置页不参与
+      if (hasOverlayAboveSettings(dialogRef.current)) return;
       event.preventDefault();
       requestClose("escape");
     };
@@ -284,7 +300,7 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
     if (activeTab === "terminal-theme") return <ThemeSettingsPage />;
     if (activeTab === "shortcuts") return <ShortcutSettingsPage searchValue={searchValue} />;
     if (activeTab === "templates") return <TemplateSettingsPage searchValue={searchValue} />;
-    if (activeTab === "providers") return <ProviderSettingsPage searchValue={searchValue} />;
+    if (activeTab === "native-providers") return <NativeProviderSettingsPage searchValue={searchValue} />;
     if (activeTab === "model-pricing") return <ModelPricingSettingsPage searchValue={searchValue} />;
     if (activeTab === "cc-connect") return <CcConnectSettingsPage />;
     if (activeTab === "ssh-hosts") return <SshHostsSettingsPage searchValue={searchValue} onTerminalOpened={onClose} />;

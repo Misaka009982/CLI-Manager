@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 40
-- **Last Active**: 2026-08-08
+- **Total Sessions**: 49
+- **Last Active**: 2026-08-13
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1355 | Active |
+| `journal-1.md` | ~1652 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,7 +29,16 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
-| 40 | 2026-08-08 | 修复持续输出时终端右键清屏 | `d1a7c244` | `master` |
+| 49 | 2026-08-13 | 修复路由请求日志重复与布局 | `16b3e051` | `feat/native-provider-management` |
+| 48 | 2026-08-13 | 修复供应商故障转移排序持久化 | `d4df1777` | `feat/native-provider-management` |
+| 47 | 2026-08-12 | 修复路径复制菜单交互与图标 | `72538d0d` | `feat/native-provider-management` |
+| 46 | 2026-08-12 | 修复文件面板路径复制二级菜单裁剪 | `af5403f7` | `feat/native-provider-management` |
+| 45 | 2026-08-11 | Unify sidebar provider switching with CLI Home | `22c8b8b6` | `feat/native-provider-management` |
+| 44 | 2026-08-11 | 修复 Codex 历史 sub-agent 层级 | `c266572a` | `feat/native-provider-management` |
+| 43 | 2026-08-11 | Fix WSL Home cold-start detection | `cd1930b6` | `feat/native-provider-management` |
+| 42 | 2026-08-11 | 修复 WSL CLI Home 自动解析与目录选择 | `68be1e60` | `feat/native-provider-management` |
+| 41 | 2026-08-11 | 修复 WSL CLI Home 手动输入 | `ee8b4b98` | `feat/native-provider-management` |
+| 40 | 2026-08-10 | 对齐供应商快捷侧边栏 | `16e7b9e8` | `feat/native-provider-management` |
 | 39 | 2026-08-06 | 彻底修复多会话终端输出卡死 | `e46052c2` | `master` |
 | 38 | 2026-08-06 | 统一终端侧边栏标题与缓存命中率 | `fb89406a` | `master` |
 | 37 | 2026-08-05 | 修复项目切换丢失文件预览与 Tab 卡死 | `f5544d3b` | `master` |

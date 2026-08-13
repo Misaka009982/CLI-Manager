@@ -827,10 +827,11 @@ fn validated_file_ref(
     file_path: &str,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: &str,
     project_key: &str,
 ) -> Result<SessionFileRef, String> {
-    let roots = history_roots(claude_config_dir, codex_config_dir);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
     let file_ref = validate_session_file_ref(file_path, source, project_key, &roots)?;
     ensure_source_mutation_unlocked(source)?;
     if is_subagent_transcript_path(&file_ref.path) {
@@ -844,6 +845,7 @@ pub async fn history_update_message(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
     line_index: usize,
@@ -857,6 +859,7 @@ pub async fn history_update_message(
             &file_path,
             claude_config_dir,
             codex_config_dir,
+            grok_session_root,
             &source,
             &project_key,
         )?;
@@ -880,6 +883,7 @@ pub async fn history_delete_message(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
     line_index: usize,
@@ -892,6 +896,7 @@ pub async fn history_delete_message(
             &file_path,
             claude_config_dir,
             codex_config_dir,
+            grok_session_root,
             &source,
             &project_key,
         )?;
@@ -914,6 +919,7 @@ pub async fn history_delete_messages(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
     targets: Vec<HistoryDeleteTarget>,
@@ -924,6 +930,7 @@ pub async fn history_delete_messages(
             &file_path,
             claude_config_dir,
             codex_config_dir,
+            grok_session_root,
             &source,
             &project_key,
         )?;
@@ -939,6 +946,7 @@ pub async fn history_insert_message(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
     after_line_index: usize,
@@ -951,6 +959,7 @@ pub async fn history_insert_message(
             &file_path,
             claude_config_dir,
             codex_config_dir,
+            grok_session_root,
             &source,
             &project_key,
         )?;
@@ -973,6 +982,7 @@ pub async fn history_reinsert_message(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
     line_index_hint: usize,
@@ -985,6 +995,7 @@ pub async fn history_reinsert_message(
             &file_path,
             claude_config_dir,
             codex_config_dir,
+            grok_session_root,
             &source,
             &project_key,
         )?;
@@ -1007,6 +1018,7 @@ pub async fn history_restore_session_backup(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
 ) -> Result<HistoryEditOutcome, String> {
@@ -1015,6 +1027,7 @@ pub async fn history_restore_session_backup(
             &file_path,
             claude_config_dir,
             codex_config_dir,
+            grok_session_root,
             &source,
             &project_key,
         )?;
@@ -1030,11 +1043,12 @@ pub async fn history_get_backup_status(
     file_path: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    grok_session_root: Option<String>,
     source: String,
     project_key: String,
 ) -> Result<HistoryBackupStatus, String> {
     tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
         let file_ref = validate_session_file_ref(&file_path, &source, &project_key, &roots)?;
         let backups_dir = resolve_backups_dir()?;
         Ok(backup_status_for_file(&file_ref, &backups_dir))

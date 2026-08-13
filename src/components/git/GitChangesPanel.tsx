@@ -346,6 +346,13 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
     if (project.environment_type === "ssh" || !projectPath) return project;
     return project.path === projectPath ? project : { ...project, path: projectPath };
   }, [project, projectPath]);
+  const gitTreeProject = useMemo<Project | null>(() => {
+    if (!panelProject || !activeRepoPath) return panelProject;
+    if (panelProject.environment_type === "ssh") {
+      return panelProject.remote_path === activeRepoPath ? panelProject : { ...panelProject, remote_path: activeRepoPath };
+    }
+    return panelProject.path === activeRepoPath ? panelProject : { ...panelProject, path: activeRepoPath };
+  }, [activeRepoPath, panelProject]);
   const setTransport = useGitStore((state) => state.setTransport);
   const transport = useGitStore((state) => state.transport);
   const {
@@ -1041,7 +1048,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
                   {t("git.section.changed")}
                 </div>
                 <GitChangesTree
-                  project={project}
+                  project={gitTreeProject}
                   nodes={tree}
                   treeId="tracked"
                   onFileClick={handleFileClick}
@@ -1060,7 +1067,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
                   {t("git.section.untracked")}
                 </div>
                 <GitChangesTree
-                  project={project}
+                  project={gitTreeProject}
                   nodes={untrackedTree}
                   treeId="untracked"
                   onFileClick={handleFileClick}

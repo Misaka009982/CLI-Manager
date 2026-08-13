@@ -14,6 +14,7 @@ const DATA_ROOT_BOOTSTRAP_FILE_NAME: &str = "data-root.json";
 const DATA_ROOT_BOOTSTRAP_VERSION: u32 = 1;
 const WINDOWS_APP_IDENTIFIER: &str = "com.cli-manager.app";
 const DB_FILE_NAME: &str = "cli-manager.db";
+const PROVIDERS_DB_FILE_NAME: &str = "providers.db";
 const SETTINGS_STORE_FILE_NAME: &str = "settings.json";
 const SESSIONS_STORE_FILE_NAME: &str = "sessions.json";
 const DEV_SESSIONS_STORE_FILE_NAME: &str = "sessions.dev.json";
@@ -834,6 +835,14 @@ pub fn db_path() -> Result<PathBuf, String> {
 
 fn sqlite_url_for_path(path: &Path) -> String {
     format!("sqlite:{}", path.to_string_lossy())
+}
+
+pub fn providers_db_path() -> Result<PathBuf, String> {
+    Ok(cli_manager_data_dir()?.join(PROVIDERS_DB_FILE_NAME))
+}
+
+pub fn providers_db_url() -> Result<String, String> {
+    Ok(sqlite_url_for_path(&providers_db_path()?))
 }
 
 pub fn db_url() -> Result<String, String> {

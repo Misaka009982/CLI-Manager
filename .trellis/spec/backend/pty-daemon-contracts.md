@@ -2,6 +2,89 @@
 
 > Issue #123 Phase 2。把 PTY 宿主从主进程抽为独立守护进程 `cli-manager-daemon`：UI 是客户端，应用真退出后任务继续跑，重启 attach 回放。前置 Phase 1（`background-task-continuation-contracts.md`）已上线。**本契约经用户确认后方可实施。**
 
+## Scenario: Reserve the Local Routing Control Plane
+
+### 1. Scope / Trigger
+
+- Trigger: 修改 daemon routing capability、控制帧、routing event、transport 门禁或相关 Tauri relay。
+- 本协议只负责主进程与 daemon 的控制面；provider 配置、queue、takeover intent 和 secret 由 Tauri command 与 provider DB 管理，不通过 frame 传输。
+
+### 2. Signatures
+
+```text
+FEATURE_LOCAL_ROUTING_V1 = "local_routing_v1"
+
+RoutingReload { id }
+RoutingStatus { id }
+RoutingStart { id }
+RoutingStop { id }
+RoutingResetCircuit { id, app_type, provider_id }
+
+RoutingEvent { event: { requestId?, kind, error? } }
+RoutingError { code, params, hint }
+```
+
+稳定错误码：
+
+- `routing_feature_not_supported`
+- `routing_protocol_unsupported`
+- `routing_service_unavailable`
+
+### 3. Contracts
+
+- `CONTROL_PROTOCOL_VERSION` 保持 `3`；旧 daemon 通过缺少 `local_routing_v1` 被识别，调用方不得向其发送 routing frame。
+- Routing control 仅允许 Tauri 主进程持有的 NDJSON `DaemonClient` 发送。WebView WebSocket `/pty` 与 `pty_legacy_request` 必须返回 `routing_protocol_unsupported`。
+- Frame 只携带 request id 和最小 app/provider identity；禁止携带 API key、proxy password、credential URL、完整 provider document、request body 或 header。
+- `RoutingError.params` 只允许白名单脱敏值；未知 transport 固定归一化为 `unknown`。
+- 未知 frame type 仍按前向兼容错误处理，但 server/client 的返回值与日志不得回显原始 type；malformed reason 同样不得进入生产日志。
+- 单帧继续使用 8 MiB 上限，超限在反序列化前拒绝。
+- 在 routing runtime 尚未接入时，已识别的 NDJSON routing control 返回 `routing_service_unavailable`；这不表示 listener、forwarder 或用户可见路由功能已可用。
+- 带 `requestId` 的 `RoutingEvent` 回到对应 pending request；无 `requestId` 的 daemon 主动事件通过 Tauri `routing-event` 发给前端。
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| daemon features 缺少 `local_routing_v1` | `routing_feature_not_supported`；不发送控制帧 |
+| WebSocket 或 legacy relay 收到 routing control | `routing_protocol_unsupported`；不进入 daemon routing dispatch |
+| daemon 理解 frame 但 runtime 未初始化 | `routing_service_unavailable`；不回显 app/provider 输入 |
+| routing frame 含未知 secret 字段 | serde 忽略；重编码和错误响应不含该字段 |
+| 未知 type | 固定 `unknown frame type`；保持连接 |
+| malformed/超长 frame | 脱敏 warning 后断连 |
+
+### 5. Good / Base / Bad Cases
+
+- Good: 新 daemon 握手返回 capability；主进程发送 `routing_status` 并按 request id 收到 `routing_event`。
+- Base: runtime 尚未实现时返回稳定 unavailable event，且未注册 route listener 或用户可达 routing command。
+- Base: 旧 daemon 继续承载已有 PTY，GUI 识别 capability 缺失并提示重启，不强杀活动 daemon。
+- Bad: 把 API key 或 proxy password 放入 routing frame。
+- Bad: 允许 WebView 通过 `/pty` 或 `pty_legacy_request` 直接 start/stop route。
+- Bad: 把攻击者提供的未知 type、provider id 或 malformed JSON 原文写入日志/错误。
+
+### 6. Tests Required
+
+- Protocol：routing frame round-trip、未知 secret 字段丢弃、错误 DTO 稳定、capability missing、未知 daemon type、8 MiB 上限。
+- Server：NDJSON routing unavailable、NDJSON/WebSocket unknown type 脱敏、WebSocket routing rejection。
+- Terminal relay：`pty_legacy_request` 在转发前拒绝 routing control。
+- Discovery/client：握手 capability 持久化；correlated/unsolicited routing event 分发随 runtime 接线验证。
+- 回归：daemon protocol/server/client/discovery/terminal focused tests、`cargo check`、provider tests。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+WebView -> /pty -> routing_start { provider: fullDocument, apiKey, proxyPassword }
+```
+
+#### Correct
+
+```text
+WebView -> Tauri routing command -> validate + persist provider DB
+  -> main-process NDJSON DaemonClient -> routing_start { id }
+  -> routing_event { requestId, error?: { code, sanitized params, hint } }
+```
+
 ## Scenario: VS Code-style PtyHost Direct Transport (Current Contract)
 
 > 本节覆盖并取代下文旧的“进程内 PTY fallback / Tauri output re-emit / raw ring buffer”条款；旧段落仅保留历史背景。

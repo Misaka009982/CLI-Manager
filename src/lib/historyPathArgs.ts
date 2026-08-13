@@ -1,7 +1,11 @@
 import { useHistorySourceSettingsStore } from "../stores/historySourceSettingsStore";
 import { useSettingsStore } from "../stores/settingsStore";
 
-export type HistoryPathArgs = { claudeConfigDir: string | null; codexConfigDir: string | null };
+export type HistoryPathArgs = {
+  claudeConfigDir: string | null;
+  codexConfigDir: string | null;
+  grokSessionRoot: string | null;
+};
 
 let historySourceSettingsLoadPromise: Promise<void> | null = null;
 
@@ -9,6 +13,12 @@ function activeHistoryConfigRoot(sourceId: "claude" | "codex"): string | null {
   const source = useHistorySourceSettingsStore.getState().settings[sourceId];
   const configRoot = source?.enabled ? source.activeInstance?.locations.configRoot?.trim() : "";
   return configRoot || null;
+}
+
+function activeHistorySessionRoot(sourceId: "grok"): string | null {
+  const source = useHistorySourceSettingsStore.getState().settings[sourceId];
+  const sessionRoot = source?.enabled ? source.activeInstance?.locations.sessionRoot?.trim() : "";
+  return sessionRoot || null;
 }
 
 export async function ensureHistorySourceSettingsLoaded(): Promise<void> {
@@ -27,6 +37,7 @@ export function getHistoryPathArgsSync(): HistoryPathArgs {
   return {
     claudeConfigDir: (activeHistoryConfigRoot("claude") ?? settings.claudeHookConfigDir?.trim()) || null,
     codexConfigDir: (activeHistoryConfigRoot("codex") ?? settings.codexHookConfigDir?.trim()) || null,
+    grokSessionRoot: activeHistorySessionRoot("grok"),
   };
 }
 

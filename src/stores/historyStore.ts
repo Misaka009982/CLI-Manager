@@ -317,6 +317,7 @@ function normalizeSummary(raw: unknown): HistorySessionSummary {
     project_key: asString(rec.project_key ?? rec.projectKey),
     title: asString(rec.title),
     file_path: asString(rec.file_path ?? rec.filePath),
+    parent_session_id: asString(rec.parent_session_id ?? rec.parentSessionId ?? "") || null,
     cwd: asString(rec.cwd ?? "") || null,
     created_at: asNumber(rec.created_at ?? rec.createdAt),
     updated_at: asNumber(rec.updated_at ?? rec.updatedAt),
@@ -726,6 +727,15 @@ function normalizeStats(raw: unknown): HistoryStatsPayload {
     source_distribution: sourceRaw.map((item) => normalizeSourceDistribution(item)),
     project_efficiency: efficiencyRaw.map((item) => normalizeProjectEfficiency(item)),
     hourly_activity: hourlyRaw.map((item) => normalizeHourlyActivity(item)),
+    data_quality: (() => {
+      const quality = (rec.data_quality ?? rec.dataQuality ?? {}) as Record<string, unknown>;
+      return {
+        route_records: asNumber(quality.route_records ?? quality.routeRecords),
+        session_fallback_records: asNumber(quality.session_fallback_records ?? quality.sessionFallbackRecords),
+        unattributed_records: asNumber(quality.unattributed_records ?? quality.unattributedRecords),
+        missing_usage_records: asNumber(quality.missing_usage_records ?? quality.missingUsageRecords),
+      };
+    })(),
   };
 }
 
@@ -753,6 +763,10 @@ export interface TodayProjectStats {
   cacheReadTokens: number;
   cacheCreationTokens: number;
   unpricedTokens: number;
+  routeRecords?: number;
+  sessionFallbackRecords?: number;
+  unattributedRecords?: number;
+  missingUsageRecords?: number;
 }
 
 export interface FetchHistoryStatsOptions {
@@ -1050,6 +1064,7 @@ export async function fetchTodayProjectStats(
   const normalizedProjectPaths = normalizeHistoryProjectPaths(projectPaths ?? []);
   const hasProjectPaths = normalizedProjectPaths.length > 0;
   try {
+    await syncHistoryRequestLogs(false);
     const raw = await invoke<unknown>("history_get_stats", {
       source: source ?? null,
       ...(await getHistoryPathArgs()),
@@ -1076,6 +1091,10 @@ export async function fetchTodayProjectStats(
       cacheReadTokens: stats.total_cache_read_tokens,
       cacheCreationTokens: stats.total_cache_creation_tokens,
       unpricedTokens: stats.total_unpriced_tokens,
+      routeRecords: stats.data_quality?.route_records ?? 0,
+      sessionFallbackRecords: stats.data_quality?.session_fallback_records ?? 0,
+      unattributedRecords: stats.data_quality?.unattributed_records ?? 0,
+      missingUsageRecords: stats.data_quality?.missing_usage_records ?? 0,
     };
   } catch {
     return null;
@@ -1131,6 +1150,10 @@ export async function fetchRemoteTodayProjectStats(
       cacheReadTokens: stats.total_cache_read_tokens,
       cacheCreationTokens: stats.total_cache_creation_tokens,
       unpricedTokens: stats.total_unpriced_tokens,
+      routeRecords: stats.data_quality?.route_records ?? 0,
+      sessionFallbackRecords: stats.data_quality?.session_fallback_records ?? 0,
+      unattributedRecords: stats.data_quality?.unattributed_records ?? 0,
+      missingUsageRecords: stats.data_quality?.missing_usage_records ?? 0,
     },
   };
 }

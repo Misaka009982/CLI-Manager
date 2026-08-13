@@ -1,12 +1,19 @@
 import type { Project } from "./types";
-import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchAppType, isExactCodexProject } from "./providerSwitching";
-import { stripResumeCliArgs } from "./resumeCliArgs";
+import {
+  getClaudeProviderOverride,
+  getCodexProviderOverride,
+  getProviderSwitchAppType,
+  isExactCodexProject,
+  isNativeProviderReference,
+} from "./providerSwitching";
+import { replaceGrokModelArg, stripResumeCliArgs } from "./resumeCliArgs";
 import { normalizeShellKey } from "./shell";
 
 const CODEX_PROFILE_ARG = "--profile";
 const CLAUDE_SETTINGS_ARG = "--settings";
 const CODEX_LIGHT_TUI_THEME_ARG = "-c theme=catppuccin-latte";
 const DIRECT_CODEX_COMMAND_PATTERN = /^(\s*codex(?:\.(?:cmd|exe|ps1))?)(?=\s|$)/i;
+const DIRECT_GROK_COMMAND_PATTERN = /^(\s*grok(?:\.(?:cmd|exe|ps1))?)(?=\s|$)/i;
 
 export function isDirectCodexStartupCommand(command?: string | null): boolean {
   const trimmed = command?.trim();
@@ -64,25 +71,76 @@ export function withCodexLightTuiTheme(command?: string): string | undefined {
   return `${match[1]} ${CODEX_LIGHT_TUI_THEME_ARG}${normalized.slice(match[1].length)}`;
 }
 
+export function withCodexConfigOverrides(
+  command: string | undefined,
+  overrides: string[],
+): string | undefined {
+  const normalized = normalizeDirectCodexStartupCommand(command);
+  if (!normalized || overrides.length === 0) return normalized;
+  const match = DIRECT_CODEX_COMMAND_PATTERN.exec(normalized);
+  if (!match) return undefined;
+
+  const args = overrides.map((override) => {
+    if (!override.trim() || /["\r\n\0$`%!^&|<>]/.test(override)) {
+      throw new Error("provider_codex_override_invalid");
+    }
+    return `-c "${override}"`;
+  });
+  return `${match[1]} ${args.join(" ")}${normalized.slice(match[1].length)}`;
+}
+
+export function withCodexProfile(command: string | undefined, profileName: string): string | undefined {
+  const normalized = normalizeDirectCodexStartupCommand(command);
+  const profile = profileName.trim();
+  if (!normalized || !profile || hasProfileArg(normalized)) return normalized;
+  const match = DIRECT_CODEX_COMMAND_PATTERN.exec(normalized);
+  if (!match) return undefined;
+  return match[1] + " " + CODEX_PROFILE_ARG + " " + profile + normalized.slice(match[1].length);
+}
+
+export function withGrokModelOverride(
+  command: string | undefined,
+  model: string,
+): string | undefined {
+  const normalized = command?.trim();
+  if (!normalized) return undefined;
+  if (!DIRECT_GROK_COMMAND_PATTERN.test(normalized)) return undefined;
+  return replaceGrokModelArg(normalized, model);
+}
+
 function appendProviderOverrideArgs(
   baseCommand: string,
   project: Pick<Project, "cli_tool" | "provider_overrides" | "shell">,
   options: { includeCodexProviderProfile?: boolean; includeProviderOverrides?: boolean } = {}
 ): string {
+  if (options.includeProviderOverrides === false) return baseCommand;
   let command = baseCommand;
   if (options.includeCodexProviderProfile !== false && isExactCodexProject(project)) {
     const override = getCodexProviderOverride(project);
-    if (override && !hasProfileArg(command)) {
+    if (override && isNativeProviderReference(override) && override.profileName && !hasProfileArg(command)) {
       command = `${command} ${CODEX_PROFILE_ARG} ${override.profileName}`;
     }
   }
   if (getProviderSwitchAppType(project) === "claude") {
     const override = getClaudeProviderOverride(project);
-    if (override && !hasClaudeSettingsArg(command)) {
+    if (override && isNativeProviderReference(override) && override.settingsPath && !hasClaudeSettingsArg(command)) {
       command = `${command} ${CLAUDE_SETTINGS_ARG} ${quoteCliArg(settingsPathForShell(override.settingsPath, project.shell))}`;
     }
   }
   return command;
+}
+
+export function withClaudeSettingsPath(
+  command: string | undefined,
+  settingsPath: string | undefined,
+  shell?: string | null,
+): string | undefined {
+  const normalizedCommand = command?.trim();
+  const normalizedPath = settingsPath?.trim();
+  if (!normalizedCommand || !normalizedPath || hasClaudeSettingsArg(normalizedCommand)) {
+    return normalizedCommand || undefined;
+  }
+  return `${normalizedCommand} ${CLAUDE_SETTINGS_ARG} ${quoteCliArg(settingsPathForShell(normalizedPath, shell))}`;
 }
 
 export function resolveProjectStartupCommand(
@@ -109,7 +167,8 @@ export function resolveProjectStartupCommand(
 export function appendResumeCliArgs(
   baseCommand: string,
   source: "claude" | "codex" | "grok",
-  project: Pick<Project, "cli_tool" | "cli_args" | "startup_cmd" | "provider_overrides" | "shell"> | null | undefined
+  project: Pick<Project, "cli_tool" | "cli_args" | "startup_cmd" | "provider_overrides" | "shell"> | null | undefined,
+  options: { includeProviderOverrides?: boolean } = {},
 ): string {
   if (!project || project.startup_cmd.trim()) return baseCommand;
   const matchesSource =
@@ -121,5 +180,9 @@ export function appendResumeCliArgs(
   if (!matchesSource) return baseCommand;
 
   const cliArgs = stripResumeCliArgs(project.cli_args);
-  return appendProviderOverrideArgs(cliArgs ? `${baseCommand} ${cliArgs}` : baseCommand, project);
+  return appendProviderOverrideArgs(
+    cliArgs ? `${baseCommand} ${cliArgs}` : baseCommand,
+    project,
+    options,
+  );
 }

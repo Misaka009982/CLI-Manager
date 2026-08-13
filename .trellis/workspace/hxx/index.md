@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 82
+- **Total Sessions**: 86
 - **Last Active**: 2026-08-12
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~800 | Active |
+| `journal-2.md` | ~950 | Active |
 | `journal-1.md` | ~2014 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,10 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 86 | 2026-08-07 | 修复 Grok 会话历史路径并提交任务 | `0fc7f495` | `feat/native-provider-management` |
+| 85 | 2026-08-06 | 修复 Grok Home 隔离并恢复旧会话 | `f38bd412`, `f4ae4c5e` | `feat/native-provider-management` |
+| 84 | 2026-08-06 | 修复 Grok 供应商真实 Home 启动 | `f38bd412` | `feat/native-provider-management` |
+| 83 | 2026-08-06 | 修复 Codex 供应商启动覆盖真实 Home | `b8a41dee` | `feat/native-provider-management` |
 | 82 | 2026-08-12 | 修复历史索引压缩迁移检测 | `ad1e2a26` | `master` |
 | 81 | 2026-08-12 | 优化历史会话索引数据库体积 | `d6e10b19` | `master` |
 | 80 | 2026-08-10 | 同步 master 并发布版本 1.3.5 | `eabf83fc` | `master` |

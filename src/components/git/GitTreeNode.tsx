@@ -1,4 +1,4 @@
-import { ChevronRight, Undo2, Check, Minus, Copy, FileCode, Trash2 } from "../icons";
+import { ChevronRight, Undo2, Check, Minus, FileCode, Trash2 } from "../icons";
 import type { GitTreeNode, GitFileChange, Project } from "../../lib/types";
 import { GitStatusIcon } from "./GitStatusIcon";
 import { useGitStore } from "../../stores/gitStore";
@@ -7,8 +7,7 @@ import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } 
 import { getMaterialFileIcon, getMaterialFolderIcon } from "@baybreezy/file-extension-icon";
 import { StageCheckbox, type StageState } from "./StageCheckbox";
 import { useI18n } from "../../lib/i18n";
-import { copyAiText } from "../../lib/aiClipboard";
-import { formatAiPathBlock } from "../../lib/aiPathFormatter";
+import { PathCopyMenu } from "../PathCopyMenu";
 
 // 收集某节点下所有文件变更（含子目录），用于目录级三态勾选框与批量操作。
 function collectFileChanges(node: GitTreeNode): GitFileChange[] {
@@ -40,7 +39,7 @@ function collectCompactDirectoryChain(node: GitTreeNode): { suffixParts: string[
 }
 
 interface GitTreeNodeProps {
-  project: Pick<Project, "name"> | null;
+  project: Pick<Project, "name" | "path" | "remote_path" | "environment_type"> | null;
   node: GitTreeNode;
   depth: number;
   treeId: string;
@@ -192,17 +191,7 @@ export function GitTreeNodeComponent({ project, node, depth, treeId, onFileClick
             <FileCode size={12} />
             {t("git.tree.openSourceFile")}
           </ContextMenuItem>
-          <ContextMenuItem
-            className="flex items-center gap-2"
-            disabled={!project}
-            onSelect={() => {
-              if (!project) return;
-              void copyAiText(formatAiPathBlock(node.path, "file"), t("files.toast.aiPathCopied"));
-            }}
-          >
-            <Copy size={12} />
-            {t("files.menu.copyAiPath")}
-          </ContextMenuItem>
+          {project && <PathCopyMenu project={project} relativePath={node.path} kind="file" />}
           {isUntracked ? (
             <>
               {/* 未跟踪文件右键：真实「加入跟踪（git add）」立即操作（与复选框的「选中」区分开）。 */}
@@ -355,17 +344,7 @@ export function GitTreeNodeComponent({ project, node, depth, treeId, onFileClick
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem
-            className="flex items-center gap-2"
-            disabled={!project}
-            onSelect={() => {
-              if (!project) return;
-              void copyAiText(formatAiPathBlock(displayNode.path, "directory"), t("files.toast.aiPathCopied"));
-            }}
-          >
-            <Copy size={12} />
-            {t("files.menu.copyAiPath")}
-          </ContextMenuItem>
+          {project && <PathCopyMenu project={project} relativePath={displayNode.path} kind="directory" />}
           <ContextMenuItem
             className="flex items-center gap-2"
             disabled={dirFiles.length === 0}

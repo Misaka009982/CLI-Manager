@@ -725,7 +725,7 @@ export function ProjectTree({
             aria-label={t("sidebar.tree.aria")}
             aria-multiselectable="true"
             tabIndex={-1}
-            className={`${shouldFillTreeArea ? "min-h-full" : ""} outline-none`}
+            className={`${shouldFillTreeArea ? "min-h-full" : ""} ui-project-tree-root outline-none`}
             onKeyDown={handleTreeKeyDown}
             onClickCapture={(event) => {
               if (performance.now() > suppressClickAfterDragUntilRef.current) return;

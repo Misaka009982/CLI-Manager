@@ -2233,10 +2233,7 @@ fn normalize_profile(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .map(crate::commands::ccswitch::validate_ccswitch_db_path)
-        .transpose()?
-        .map(|path| user_path_string(&path));
+        .map(str::to_string);
     profile.codex_config_dir = profile
         .codex_config_dir
         .as_deref()
@@ -2364,19 +2361,6 @@ fn user_home_dir() -> Option<PathBuf> {
         .filter(|value| !value.is_empty())
         .or_else(|| env::var_os("HOME").filter(|value| !value.is_empty()))
         .map(PathBuf::from)
-}
-
-fn default_cc_switch_db_path() -> Option<PathBuf> {
-    Some(user_home_dir()?.join(".cc-switch").join("cc-switch.db"))
-}
-
-fn configured_cc_switch_db_path(profile: Option<&CcConnectProfile>) -> Option<PathBuf> {
-    profile
-        .and_then(|profile| profile.cc_switch_db_path.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(default_cc_switch_db_path)
 }
 
 struct RemoteCodexProviderLaunch {
@@ -2898,17 +2882,12 @@ fn prepare_remote_codex_launch(
         .transpose()?;
     let provider = match (ssh_launch.is_none(), project.codex_provider_id.as_deref()) {
         (true, Some(provider_id)) => {
-            let database_path = configured_cc_switch_db_path(Some(profile))
-                .ok_or_else(|| "home_dir_unavailable".to_string())?;
             let query_runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|err| format!("create provider query runtime failed: {err}"))?;
             let runtime = query_runtime.block_on(
-                crate::commands::ccswitch::load_codex_runtime_config_from_path(
-                    provider_id,
-                    &database_path,
-                ),
+                crate::provider::runtime::load_codex_runtime_config(provider_id),
             )?;
             let proxy = resolve_proxy_url_if_enabled(
                 profile.proxy_enabled,
@@ -3130,15 +3109,8 @@ fn redact_remote_codex_probe_output(
     redact_log_line(&output_text(stdout, stderr), &secrets)
 }
 
-async fn load_provider_catalog(database_path: Option<&Path>) -> ProviderCatalog {
-    let Some(database_path) = database_path.filter(|path| path.is_file()) else {
-        return ProviderCatalog::default();
-    };
-    let options = SqliteConnectOptions::new()
-        .filename(&database_path)
-        .read_only(true)
-        .busy_timeout(Duration::from_secs(1));
-    let Ok(mut connection) = SqliteConnection::connect_with(&options).await else {
+async fn load_provider_catalog() -> ProviderCatalog {
+    let Ok(mut connection) = crate::provider::open_connection().await else {
         return ProviderCatalog::default();
     };
     let rows = sqlx::query(
@@ -3465,10 +3437,9 @@ fn order_registered_projects(
 }
 
 fn load_registered_projects(
-    profile: Option<&CcConnectProfile>,
+    _profile: Option<&CcConnectProfile>,
 ) -> Result<Vec<RegisteredProject>, String> {
     let database_path = crate::app_paths::db_path()?;
-    let provider_database_path = configured_cc_switch_db_path(profile);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -3571,7 +3542,7 @@ fn load_registered_projects(
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let provider_catalog = load_provider_catalog(provider_database_path.as_deref()).await;
+        let provider_catalog = load_provider_catalog().await;
         Ok(order_registered_projects(
             groups,
             projects,

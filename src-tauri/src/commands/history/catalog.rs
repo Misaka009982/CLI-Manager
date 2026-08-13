@@ -156,6 +156,7 @@ async fn ensure_schema(conn: &mut SqliteConnection) -> Result<(), String> {
             session_id TEXT NOT NULL,
             title TEXT NOT NULL,
             branch TEXT,
+            parent_session_id TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             message_count INTEGER NOT NULL,
@@ -287,6 +288,7 @@ async fn ensure_v2_schema(conn: &mut SqliteConnection, current_version: i64) -> 
             cwd_normalized TEXT,
             title TEXT NOT NULL,
             branch TEXT,
+            parent_session_id TEXT,
             lifecycle_state TEXT NOT NULL DEFAULT 'active',
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
@@ -591,6 +593,7 @@ async fn ensure_v2_schema(conn: &mut SqliteConnection, current_version: i64) -> 
         ),
         ("history_sessions", "as_of", "INTEGER"),
         ("history_sessions", "tombstoned_at", "INTEGER"),
+        ("history_sessions", "parent_session_id", "TEXT"),
     ] {
         ensure_column(conn, table, column, definition).await?;
     }
@@ -1095,7 +1098,8 @@ pub(super) async fn get_session_by_file_path(
     let roots_key = roots.cache_key();
     let row = sqlx::query(
         "SELECT session_id, source, project_key, title, file_path, cwd,
-                created_at, updated_at, message_count, branch
+                created_at, updated_at, message_count, branch,
+                NULL AS parent_session_id
          FROM history_catalog_sessions
          WHERE roots_key = ?1 AND file_path = ?2 AND source = ?3 AND project_key = ?4",
     )
@@ -1123,6 +1127,9 @@ pub(super) async fn get_session_by_file_path(
             .map_err(|err| err.to_string())?
             .max(0) as usize,
         branch: row.try_get("branch").map_err(|err| err.to_string())?,
+        parent_session_id: row
+            .try_get("parent_session_id")
+            .map_err(|err| err.to_string())?,
     };
     if catalog_path_within_roots(&summary.source, &summary.file_path, roots) {
         Ok(Some(summary))
@@ -1270,6 +1277,9 @@ fn session_summary_from_row(row: SqliteRow) -> Result<HistorySessionSummary, Str
             .map_err(|err| err.to_string())?
             .max(0) as usize,
         branch: row.try_get("branch").map_err(|err| err.to_string())?,
+        parent_session_id: row
+            .try_get("parent_session_id")
+            .map_err(|err| err.to_string())?,
     })
 }
 
@@ -1312,13 +1322,14 @@ async fn list_sessions_from_v2(
 ) -> Result<Vec<HistorySessionSummary>, String> {
     let mut builder = QueryBuilder::<Sqlite>::new(
         "SELECT s.session_id, s.source, s.project_key, s.title, s.file_path, s.cwd,
-                s.created_at, s.updated_at, s.message_count, s.branch
+                s.created_at, s.updated_at, s.message_count, s.branch,
+                s.parent_session_id
          FROM (
             SELECT hs.source_session_id AS session_id, i.source_id AS source,
                    hs.project_key, hs.title,
                    COALESCE(hs.primary_path, hs.database_path, hs.raw_key, hs.source_session_id) AS file_path,
                    hs.cwd, hs.cwd_normalized, hs.created_at, hs.updated_at,
-                   hs.message_count, hs.branch
+                   hs.message_count, hs.branch, hs.parent_session_id
             FROM history_sessions hs
             JOIN history_source_instances i ON i.id = hs.source_instance_id
             WHERE i.activation_state = 'active' AND hs.parse_status = 'ok'
@@ -1380,7 +1391,8 @@ async fn list_sessions_from_legacy_catalog(
     let roots_key = roots.cache_key();
     let mut builder = QueryBuilder::<Sqlite>::new(
         "SELECT s.session_id, s.source, s.project_key, s.title, s.file_path, s.cwd,
-                s.created_at, s.updated_at, s.message_count, s.branch
+                s.created_at, s.updated_at, s.message_count, s.branch,
+                NULL AS parent_session_id
          FROM history_catalog_sessions s WHERE s.roots_key = ",
     );
     builder.push_bind(&roots_key);
@@ -1822,6 +1834,7 @@ async fn stats_session_facts_from_v2(
                 hs.project_key, hs.title,
                 COALESCE(hs.primary_path, hs.database_path, hs.raw_key, hs.source_session_id) AS file_path,
                 hs.cwd, hs.created_at, hs.updated_at, hs.message_count, hs.branch,
+                hs.parent_session_id,
                 hs.input_tokens AS session_input_tokens,
                 hs.output_tokens AS session_output_tokens,
                 hs.cache_read_tokens AS session_cache_read_tokens,
@@ -1882,6 +1895,9 @@ async fn stats_session_facts_from_v2(
                 .map_err(|err| err.to_string())?
                 .max(0) as usize,
             branch: row.try_get("branch").map_err(|err| err.to_string())?,
+            parent_session_id: row
+                .try_get("parent_session_id")
+                .map_err(|err| err.to_string())?,
         };
         if !target_project_paths.is_empty()
             && !target_project_paths
@@ -2395,7 +2411,9 @@ fn collect_catalog_files(roots: &HistoryRoots) -> Vec<CatalogFile> {
     files.extend(collect_antigravity_session_files(
         &resolve_antigravity_history_root(),
     ));
-    files.extend(collect_grok_session_files(&resolve_grok_history_root()));
+    files.extend(collect_grok_session_files(&resolve_grok_history_root(
+        roots,
+    )));
     files.extend(collect_pi_session_files(&resolve_pi_history_root()));
     files.extend(collect_kiro_session_files(&resolve_kiro_history_root()));
     for root in resolve_cline_history_roots() {
@@ -3309,14 +3327,14 @@ async fn replace_v2_session(
             total_cost_usd, usage_quality, cost_kind, fingerprint_kind, fingerprint_value,
             dominant_model, current_model, context_window, last_context_tokens, reasoning_effort,
             tool_call_count, parser_version, model_version, parse_status, raw_pointers_json,
-            last_seen_generation, indexed_at
+            parent_session_id, last_seen_generation, indexed_at
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
             'active', ?12, ?13, 'reported', ?14,
             ?15, ?16, ?17, ?18,
             ?19, ?20, ?21, 'file-stat', ?22,
             ?23, ?24, ?25, ?26, ?27,
-            ?28, ?29, ?30, 'ok', ?31, ?32, ?33
+            ?28, ?29, ?30, 'ok', ?31, ?32, ?33, ?34
          )",
     )
     .bind(source_instance_id)
@@ -3364,6 +3382,7 @@ async fn replace_v2_session(
     .bind(HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION)
     .bind(HISTORY_INDEX_V2_ADAPTER_MODEL_VERSION)
     .bind(raw_pointers_json)
+    .bind(&parts.computed.parent_session_id)
     .bind(generation as i64)
     .bind(now)
     .execute(&mut *tx)
@@ -4208,6 +4227,7 @@ mod tests {
             codex_config_dir: Some(PathBuf::from(
                 r"\\wsl.localhost\Ubuntu-22.04\home\dministrator\.codex",
             )),
+            grok_session_root: None,
         };
         let wsl_file = r"\\wsl.localhost\Ubuntu-22.04\home\dministrator\.codex\sessions\2026\07\14\rollout.jsonl";
         let native_file = r"\\?\C:\Users\Administrator\.codex\sessions\2026\07\02\rollout.jsonl";
@@ -4226,6 +4246,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: None,
             codex_config_dir: Some(codex_dir),
+            grok_session_root: None,
         };
 
         assert!(catalog_path_within_roots(
@@ -4925,6 +4946,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(claude_root.clone()),
             codex_config_dir: None,
+            grok_session_root: None,
         };
         let roots_key = roots.cache_key();
         let v2_file = claude_root
@@ -5017,6 +5039,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(claude_root.clone()),
             codex_config_dir: None,
+            grok_session_root: None,
         };
         let roots_key = roots.cache_key();
         let v2_file = claude_root
@@ -5114,6 +5137,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(claude_root.clone()),
             codex_config_dir: None,
+            grok_session_root: None,
         };
         let file = claude_root
             .join("projects")
@@ -5292,6 +5316,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(claude_root.clone()),
             codex_config_dir: None,
+            grok_session_root: None,
         };
         let file = claude_root
             .join("projects")
@@ -5417,6 +5442,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
+            grok_session_root: None,
         };
         let roots_key = roots.cache_key();
         let file = resolve_claude_history_root(&roots)
@@ -5587,6 +5613,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
+            grok_session_root: None,
         };
         let roots_key = roots.cache_key();
         let file = resolve_codex_history_root(&roots)
@@ -5688,6 +5715,7 @@ mod tests {
         let roots = HistoryRoots {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
+            grok_session_root: None,
         };
         let roots_key = roots.cache_key();
         let file = temp_dir.path().join("gemini-session.json");

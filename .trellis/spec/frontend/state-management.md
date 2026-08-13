@@ -72,6 +72,26 @@ useEffect(() => {
 
 **Tests**: Run `npx tsc --noEmit` and `npm run build`. Manually verify historical stats filter changes, manual refresh, empty/error states, and bucket session drilldown in the desktop app.
 
+### Convention: Realtime project aggregates use exact-scope stale-while-refresh caching
+
+**What**: The terminal realtime panel may keep a small in-memory cache for the local “today project usage” aggregate because switching tabs can start a slow history aggregation. The cache key must include the project identity, history source, parent project key, and the canonical parent/Worktree path set. A cached value is shown immediately for that exact scope while a fresh request runs in the background.
+
+**Why**: Clearing a valid aggregate on every project switch creates an avoidable blank state, but reusing one unscoped value displays another project's usage. Failed refreshes must retain the last successful value for the same scope.
+
+```tsx
+const scopeKey = JSON.stringify([projectId, source, projectKey, projectPaths]);
+const cached = todayProjectStatsCache.get(scopeKey);
+setTodayStatsState({ scopeKey, value: cached ?? null });
+```
+
+**Contracts**:
+
+- Never read a cached aggregate unless its key exactly matches the current project scope.
+- Store only successful results; a failed refresh may fall back to the previous successful result for that same key.
+- Keep realtime terminal stats on this existing component path; historical dashboard server state continues to use TanStack Query.
+
+**Tests**: Assert that the rendered scope key gates both state and cache reads, and that a failed refresh does not replace a same-scope cached result with an empty state.
+
 ---
 
 ## Patterns

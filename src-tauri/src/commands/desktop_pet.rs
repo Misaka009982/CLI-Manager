@@ -1,4 +1,4 @@
-use crate::app_paths;
+use crate::{app_paths, provider::network_client};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -682,7 +682,7 @@ fn write_catalog_cache(root: &Path, text: &str) -> Result<(), String> {
 }
 
 async fn fetch_remote_catalog() -> Result<(PetCatalog, String), String> {
-    let client = reqwest::Client::builder()
+    let client = network_client::configure_builder(reqwest::Client::builder())?
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|err| format!("pet_catalog_client_failed: {err}"))?;
@@ -760,7 +760,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 async fn download_package(entry: &PetCatalogEntry) -> Result<Vec<u8>, String> {
-    let client = reqwest::Client::builder()
+    let client = network_client::configure_builder(reqwest::Client::builder())?
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|err| format!("pet_download_client_failed: {err}"))?;

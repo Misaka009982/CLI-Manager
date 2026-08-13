@@ -4,7 +4,13 @@ import { getDb, batchUpdateSortOrder, batchUpdateProjectShell as dbBatchUpdatePr
 import { resolveProjectFetchPolicy, type ProjectFetchReason } from "../lib/projectLoadPolicy";
 import { useSettingsStore } from "./settingsStore";
 import { logWarn } from "../lib/logger";
-import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchAppType } from "../lib/providerSwitching";
+import {
+  getClaudeProviderOverride,
+  getCodexProviderOverride,
+  getGrokProviderOverride,
+  getProviderSwitchAppType,
+  isNativeProviderReference,
+} from "../lib/providerSwitching";
 import { defaultShellForOs, getOsPlatform, normalizeShellForOs, normalizeShellKey } from "../lib/shell";
 import { projectSupportsCapability } from "../lib/projectCapabilities";
 import { validateSshToolConfigRoot } from "../lib/sshToolIntegration";
@@ -16,19 +22,8 @@ import type {
 let inflightFetchAll: Promise<void> | null = null;
 let providerBadgeRefreshSeq = 0;
 
-interface CcSwitchProjectBadge {
-  path: string;
-  hasOverride: boolean;
-  providerName: string | null;
-  vendorHint: string | null;
-}
-
-interface CodexProfileCleanupResult {
-  deletedProfileNames: string[];
-}
-
 export interface ProviderBadge {
-  /** 匹配到的 cc-switch 供应商名；null 表示有覆盖但未匹配到（自定义配置） */
+  /** 项目或 Worktree 的原生供应商覆盖。 */
   providerName: string | null;
   vendorHint?: string | null;
 }
@@ -49,7 +44,6 @@ interface ProjectStore {
   fetchGroups: () => Promise<void>;
   refreshProjectDiagnostics: () => Promise<void>;
   refreshProviderBadges: () => Promise<void>;
-  cleanupUnusedCodexProfiles: () => Promise<void>;
   createProject: (input: CreateProjectInput) => Promise<Project>;
   updateProject: (id: string, input: UpdateProjectInput) => Promise<void>;
   batchUpdateProjectShell: (ids: string[], shell: string) => Promise<void>;
@@ -163,27 +157,6 @@ async function selectWorktreesOrEmpty(db: Awaited<ReturnType<typeof getDb>>): Pr
   }
 }
 
-function collectActiveCodexProfileNames(projects: Project[], worktrees: WorktreeRecord[] = []): string[] {
-  const profileNames = new Set<string>();
-  for (const project of projects) {
-    if (getProviderSwitchAppType(project) !== "codex") continue;
-    const override = getCodexProviderOverride(project);
-    if (override?.profileName) {
-      profileNames.add(override.profileName);
-    }
-  }
-  const projectsById = new Map(projects.map((project) => [project.id, project]));
-  for (const worktree of worktrees) {
-    const project = projectsById.get(worktree.project_id);
-    if (!project || getProviderSwitchAppType(project) !== "codex") continue;
-    const override = getCodexProviderOverride(worktree);
-    if (override?.profileName) {
-      profileNames.add(override.profileName);
-    }
-  }
-  return Array.from(profileNames);
-}
-
 export const useProjectStore = create<ProjectStore>((set, get) => ({
   projects: [],
   groups: [],
@@ -262,24 +235,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const projects = get().projects;
     const providerProjects = projects.filter((project) => projectSupportsCapability(project, "providerSwitch"));
     const worktrees = get().worktrees;
-    const claudeProjects = providerProjects.filter((p) => getProviderSwitchAppType(p) === "claude");
-    const codexProjects = providerProjects.filter((p) => getProviderSwitchAppType(p) === "codex");
     const projectsById = new Map(projects.map((project) => [project.id, project]));
     const providerBadges: Record<string, ProviderBadge> = {};
 
-    for (const project of codexProjects) {
-      const override = getCodexProviderOverride(project);
-      if (override) {
-        providerBadges[project.id] = {
-          providerName: override.providerName,
-          vendorHint: override.vendorHint,
-        };
-      }
-    }
-
-    for (const project of claudeProjects) {
-      const override = getClaudeProviderOverride(project);
-      if (override) {
+    for (const project of providerProjects) {
+      const appType = getProviderSwitchAppType(project);
+      const override = appType === "claude"
+        ? getClaudeProviderOverride(project)
+        : appType === "codex"
+          ? getCodexProviderOverride(project)
+          : appType === "grokbuild"
+            ? getGrokProviderOverride(project)
+            : undefined;
+      if (override && isNativeProviderReference(override)) {
         providerBadges[project.id] = {
           providerName: override.providerName,
           vendorHint: override.vendorHint,
@@ -295,8 +263,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         ? getCodexProviderOverride(worktree)
         : appType === "claude"
           ? getClaudeProviderOverride(worktree)
-          : null;
-      if (override) {
+          : appType === "grokbuild"
+            ? getGrokProviderOverride(worktree)
+            : undefined;
+      if (override && isNativeProviderReference(override)) {
         providerBadges[`wt:${worktree.id}`] = {
           providerName: override.providerName,
           vendorHint: override.vendorHint,
@@ -304,42 +274,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       }
     }
 
-    const legacyClaudeProjects = claudeProjects.filter((project) => !getClaudeProviderOverride(project));
-    if (legacyClaudeProjects.length > 0) {
-      try {
-        const badges = await invoke<CcSwitchProjectBadge[]>("ccswitch_probe_projects", {
-          projectPaths: legacyClaudeProjects.map((p) => p.path),
-          dbPath: useSettingsStore.getState().ccSwitchDbPath ?? undefined,
-        });
-        const byPath = new Map(badges.map((b) => [b.path, b]));
-        for (const p of legacyClaudeProjects) {
-          const badge = byPath.get(p.path);
-          if (badge?.hasOverride) {
-            providerBadges[p.id] = {
-              providerName: badge.providerName,
-              vendorHint: badge.vendorHint,
-            };
-          }
-        }
-      } catch (err) {
-        // db 不存在等任何失败：静默清空 claude 徽标，绝不打扰用户；codex 本地覆盖仍保留
-        logWarn("ccswitch probe projects failed", err);
-      }
-    }
-
     if (refreshSeq === providerBadgeRefreshSeq) {
       set({ providerBadges });
-    }
-  },
-
-  cleanupUnusedCodexProfiles: async () => {
-    try {
-      await invoke<CodexProfileCleanupResult>("ccswitch_cleanup_codex_profiles", {
-        keepProfileNames: collectActiveCodexProfileNames(get().projects, get().worktrees),
-        codexConfigDir: useSettingsStore.getState().codexHookConfigDir ?? undefined,
-      });
-    } catch (err) {
-      logWarn("ccswitch cleanup codex profiles failed", err);
     }
   },
 
@@ -464,7 +400,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     );
     await get().fetchAll();
     if (shouldCleanupCodexProfiles) {
-      await get().cleanupUnusedCodexProfiles();
     }
   },
 
@@ -490,7 +425,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     await db.execute("DELETE FROM projects WHERE id = $1", [id]);
     await get().fetchAll();
     if (shouldCleanupCodexProfiles) {
-      await get().cleanupUnusedCodexProfiles();
     }
   },
 
