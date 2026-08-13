@@ -821,20 +821,9 @@ async fn list_request_logs_with_connection(
     }
     let page_size = page_size.clamp(1, MAX_PAGE_SIZE);
 
-    let mut count_builder =
-        QueryBuilder::<Sqlite>::new("SELECT COUNT(*) AS total FROM unified_usage_records");
-    push_filters(&mut count_builder, &filters, allowed_paths);
-    let total = count_builder
-        .build()
-        .fetch_one(&mut *conn)
-        .await
-        .map_err(|err| format!("request_logs_count_failed: {err}"))?
-        .try_get::<i64, _>("total")
-        .map_err(|err| err.to_string())?
-        .max(0) as u64;
-
     let mut summary_builder = QueryBuilder::<Sqlite>::new(
         "SELECT model,
+            COUNT(*) AS record_count,
             SUM(input_tokens) AS input_tokens,
             SUM(output_tokens) AS output_tokens,
             SUM(cache_read_tokens) AS cache_read_tokens,
@@ -848,11 +837,17 @@ async fn list_request_logs_with_connection(
         .fetch_all(&mut *conn)
         .await
         .map_err(|err| format!("request_logs_summary_failed: {err}"))?;
+    let mut total = 0_u64;
     let mut summary = RequestLogSummary {
-        total,
+        total: 0,
         ..RequestLogSummary::default()
     };
     for row in summary_rows {
+        total = total.saturating_add(
+            row.try_get::<i64, _>("record_count")
+                .map_err(|err| err.to_string())?
+                .max(0) as u64,
+        );
         let model: Option<String> = row.try_get("model").map_err(|err| err.to_string())?;
         let usage = UsageTokenScan {
             input_tokens: row
@@ -894,6 +889,7 @@ async fn list_request_logs_with_connection(
             .unpriced_tokens
             .saturating_add(priced.unpriced_tokens);
     }
+    summary.total = total;
     summary.cache_hit_rate = request_log_cache_hit_rate(
         summary.total_input_tokens,
         summary.total_cache_read_tokens,
@@ -1256,6 +1252,12 @@ mod tests {
             }
         }
         for statement in crate::MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL.split(';') {
+            let statement = statement.trim();
+            if !statement.is_empty() {
+                sqlx::query(statement).execute(&mut conn).await.unwrap();
+            }
+        }
+        for statement in crate::MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_SQL.split(';') {
             let statement = statement.trim();
             if !statement.is_empty() {
                 sqlx::query(statement).execute(&mut conn).await.unwrap();
