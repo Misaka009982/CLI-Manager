@@ -1253,6 +1253,37 @@ Selected variants may keep overriding `border-color`, but the base rule must own
 
 **Prevention**: When a Mantine-backed settings card appears borderless, inspect the computed `border-width` and `border-style` before changing colors.
 
+### Gotcha: Keep the xterm 6.1 Beta DOM character-measure fallback hidden
+
+**Symptom**: A terminal opened in an older WebView shows 32 uppercase `W` characters above the canvas.
+
+**Cause**: `@xterm/xterm` `6.1.0-beta.288` falls back from `OffscreenCanvas` font metrics to a DOM span when the WebView does not expose `fontBoundingBoxAscent` and `fontBoundingBoxDescent`. The fallback span contains `"W".repeat(32)`, but that beta package removed the `.xterm-char-measure-element` hiding rule from its bundled CSS.
+
+**Contract**: While this xterm version remains pinned, `src/App.css` must keep a scoped `.xterm .xterm-char-measure-element` rule with `visibility: hidden`, absolute positioning, and offscreen placement. Keep `display: inline-block`; `display: none` would make `offsetWidth` and `offsetHeight` zero and break cell measurement.
+
+**Wrong**:
+
+```css
+.xterm .xterm-char-measure-element {
+  display: none;
+}
+```
+
+**Correct**:
+
+```css
+.xterm .xterm-char-measure-element {
+  display: inline-block;
+  visibility: hidden;
+  position: absolute;
+  top: 0;
+  left: -9999em;
+  line-height: normal;
+}
+```
+
+**Tests**: Statically assert that the complete rule remains in `src/App.css`; manually verify an older macOS WebView shows no measurement text and that terminal columns, IME placement, file-link hover icons, and normal glyph alignment remain correct.
+
 ### Gotcha: xterm.js `allowTransparency` is a construction-time option
 
 **Symptom**: After toggling a "transparent background" feature on a live `Terminal` instance, the background stays opaque even though `theme.background` was updated to `rgba(...)`.
