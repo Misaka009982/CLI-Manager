@@ -586,9 +586,27 @@ export interface HistorySessionSummary {
   usage?: HistorySessionUsage;
 }
 
+export type HistoryMessagePartKind =
+  | "text"
+  | "tool_call"
+  | "tool_result"
+  | "reasoning"
+  | "system"
+  | "metadata"
+  | "unknown";
+
+export interface HistoryMessagePart {
+  kind: HistoryMessagePartKind;
+  content: string;
+  tool_name?: string;
+  call_id?: string;
+}
+
 export interface HistoryMessage {
   role: string;
   content: string;
+  /** 可选结构化内容；旧快照缺失时由前端按 role 保守回退。 */
+  parts?: HistoryMessagePart[];
   timestamp?: string | null;
   model?: string;
   input_tokens?: number;

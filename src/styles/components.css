@@ -5694,6 +5694,76 @@
   background-color: color-mix(in srgb, var(--surface-container-low) 54%, var(--surface) 46%);
 }
 
+.ui-history-conversation-detail-row {
+  border: 1px solid transparent;
+  border-radius: 12px;
+}
+
+.ui-history-conversation-message .ui-history-message-stack {
+  gap: 0.45rem;
+}
+
+.ui-history-conversation-details {
+  width: min(100%, 780px);
+  border: 1px dashed color-mix(in srgb, var(--border) 58%, transparent);
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--surface-container-low) 72%, transparent);
+}
+
+.ui-history-conversation-details-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.42rem 0.55rem;
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.ui-history-conversation-details-toggle:hover {
+  color: var(--text-secondary);
+}
+
+.ui-history-conversation-details-toggle:focus-visible {
+  outline: 2px solid var(--interactive-focus-ring);
+  outline-offset: 2px;
+}
+
+.ui-history-conversation-details-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px dashed color-mix(in srgb, var(--border) 46%, transparent);
+  padding: 0.55rem;
+}
+
+.ui-history-conversation-part {
+  border-left: 2px solid color-mix(in srgb, var(--text-muted) 44%, transparent);
+  padding-left: 0.55rem;
+}
+
+.ui-history-conversation-part[data-kind="tool_call"],
+.ui-history-conversation-part[data-kind="tool_result"] {
+  border-left-color: color-mix(in srgb, var(--accent) 66%, transparent);
+}
+
+.ui-history-conversation-part[data-kind="reasoning"] {
+  border-left-color: color-mix(in srgb, var(--warning) 70%, transparent);
+}
+
+.ui-history-conversation-part-label {
+  margin-bottom: 0.28rem;
+  color: var(--text-muted);
+  font-family: var(--font-ui-mono);
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
 .ui-history-message-card {
   display: flex;
   align-items: flex-start;

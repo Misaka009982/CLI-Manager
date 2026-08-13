@@ -246,7 +246,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const diffOpen = diffFileChanges !== null;
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [diffContainer, setDiffContainer] = useState<HTMLElement | null>(null);
-  const [detailView, setDetailView] = useState<HistoryDetailView>("transcript");
+  const [detailView, setDetailView] = useState<HistoryDetailView>("conversation");
   const [visibleSessionCount, setVisibleSessionCount] = useState(SESSION_PAGE_SIZE);
   const [visibleMessageCount, setVisibleMessageCount] = useState(MESSAGE_PAGE_SIZE);
   const [debouncedSessionQuery, setDebouncedSessionQuery] = useState(sessionQuery);
@@ -559,7 +559,8 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
     const matcher = new RegExp(escapeRegExp(query), "i");
     const indices: number[] = [];
     for (let i = 0; i < activeSession.messages.length; i++) {
-      if (matcher.test(activeSession.messages[i].content)) {
+      const message = activeSession.messages[i];
+      if (matcher.test(message.content) || message.parts?.some((part) => matcher.test(part.content))) {
         indices.push(i);
       }
     }
@@ -572,7 +573,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
 
   useEffect(() => {
     setVisibleMessageCount(MESSAGE_PAGE_SIZE);
-    setDetailView("transcript");
+    setDetailView("conversation");
     setDiffFileChanges(null);
     pendingScrollMessageRef.current = null;
     messageRefs.current = {};
@@ -585,7 +586,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
 
   const processModel = useMemo(() => {
     if (!activeSession) return EMPTY_PROCESS_MODEL;
-    if (detailView === "transcript" || detailView === "context") return EMPTY_PROCESS_MODEL;
+    if (detailView === "conversation" || detailView === "transcript" || detailView === "context") return EMPTY_PROCESS_MODEL;
     const cached = processModelCacheRef.current;
     if (cached?.session === activeSession && cached.language === language) {
       return cached.model;
@@ -1138,7 +1139,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const jumpToMessage = async (messageIndex: number) => {
     if (!activeView) return;
     try {
-      setDetailView("transcript");
+      setDetailView("conversation");
       await openSessionAtMessage(activeView.sessionKey, messageIndex);
     } catch (err) {
       toast.error("定位消息失败", { description: String(err) });

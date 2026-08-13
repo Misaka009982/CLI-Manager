@@ -39,7 +39,7 @@ const OOM_HISTORY_DETAIL_WARN_BYTES: usize = 10 * 1024 * 1024;
 const OOM_HISTORY_STATS_WARN_BYTES: usize = 5 * 1024 * 1024;
 const OOM_HISTORY_MESSAGES_WARN_COUNT: usize = 2_000;
 const CODEX_HISTORY_INDEX_TEXT_MAX_CHARS: usize = 4_000;
-const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 3;
+const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 4;
 const HISTORY_INDEX_V2_ADAPTER_MODEL_VERSION: i64 = 1;
 const OPENCODE_SESSION_LOCATOR_MARKER: &str = "#session=";
 const DAEMON_READY_WAIT_ATTEMPTS: usize = 60;
@@ -460,9 +460,22 @@ fn remote_history_detail_cache() -> &'static Mutex<RemoteHistoryDetailCache> {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct HistoryMessagePart {
+    pub kind: String,
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HistoryMessage {
     pub role: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<HistoryMessagePart>,
     pub timestamp: Option<String>,
     pub model: Option<String>,
     pub input_tokens: Option<u64>,
@@ -733,6 +746,7 @@ pub struct HistoryIndexV2MessageRef {
     pub cache_creation_tokens: Option<u64>,
     pub editable: bool,
     pub raw_pointers: Vec<HistoryIndexV2RawPointer>,
+    pub parts: Vec<HistoryMessagePart>,
 }
 
 #[derive(Clone, Serialize)]
@@ -4367,6 +4381,7 @@ fn build_v2_adapter_session_from_parts(
             cache_creation_tokens: message.cache_creation_tokens,
             editable: message.editable,
             raw_pointers: v2_message_raw_pointers(file_ref, message),
+            parts: message.parts.clone(),
         })
         .collect();
 
@@ -5789,9 +5804,11 @@ async fn parse_opencode_session_row(
 
         let parts = opencode_message_parts(conn, &session_id, &message_id).await?;
         let mut content_parts = Vec::new();
+        let mut message_parts = Vec::new();
         for part in &parts {
             if let Some(text) = opencode_part_text(part) {
-                content_parts.push(text);
+                content_parts.push(text.clone());
+                message_parts.push(opencode_history_message_part(part, &role, text));
             }
             if let Some(event) = opencode_tool_event(part, message_index, timestamp.clone()) {
                 tool_events.push(event);
@@ -5856,6 +5873,7 @@ async fn parse_opencode_session_row(
         messages.push(HistoryMessage {
             role,
             content,
+            parts: message_parts,
             timestamp,
             model,
             input_tokens: positive_usage_token(usage.input_tokens),
@@ -6001,6 +6019,31 @@ fn opencode_part_text(part: &Value) -> Option<String> {
     }?;
     let text = normalize_text(&text);
     (!text.is_empty()).then_some(text)
+}
+
+fn opencode_history_message_part(part: &Value, role: &str, content: String) -> HistoryMessagePart {
+    let part_type = part.get("type").and_then(Value::as_str).unwrap_or_default();
+    let kind = match part_type {
+        "reasoning" => "reasoning",
+        "tool-result" => "tool_result",
+        "tool" | "tool-invocation" | "patch" => "tool_call",
+        "text" if is_injected_prompt_content(&content) => "system",
+        "text" => "text",
+        _ => fallback_message_part_kind(role, &content),
+    };
+    HistoryMessagePart {
+        kind: kind.to_string(),
+        content,
+        tool_name: opencode_tool_name(part),
+        call_id: part
+            .get("callID")
+            .or_else(|| part.get("call_id"))
+            .or_else(|| part.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+    }
 }
 
 fn opencode_tool_name(part: &Value) -> Option<String> {
@@ -9789,9 +9832,11 @@ fn json_history_message(
     timestamp: Option<String>,
     model: Option<String>,
 ) -> HistoryMessage {
+    let parts = vec![fallback_history_message_part(&role, &content)];
     HistoryMessage {
         role,
         content,
+        parts,
         timestamp,
         model: model.filter(|model| !is_synthetic_model(model)),
         input_tokens: None,
@@ -11969,6 +12014,12 @@ pub(crate) fn parse_message(value: &Value) -> Option<HistoryMessage> {
             }
             return Some(HistoryMessage {
                 role: "tool".to_string(),
+                parts: vec![HistoryMessagePart {
+                    kind: "tool_result".to_string(),
+                    content: content.clone(),
+                    tool_name: None,
+                    call_id: None,
+                }],
                 content,
                 timestamp: extract_timestamp(value),
                 model: None,
@@ -12017,9 +12068,11 @@ pub(crate) fn parse_message(value: &Value) -> Option<HistoryMessage> {
     let cache_creation_tokens = positive_usage_token(usage.cache_creation_tokens);
     let cache_read_tokens = positive_usage_token(usage.cache_read_tokens);
 
+    let parts = extract_message_parts(value, &role, &content);
     Some(HistoryMessage {
         role,
         content,
+        parts,
         timestamp,
         model: extract_model(value).filter(|model| !is_synthetic_model(model)),
         input_tokens,
@@ -12351,6 +12404,145 @@ fn extract_role(value: &Value) -> Option<String> {
         }
     }
     None
+}
+
+fn is_injected_prompt_content(content: &str) -> bool {
+    let trimmed = content.trim_start();
+    let lower = trimmed.to_lowercase();
+    let first_line = lower
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches('#')
+        .trim();
+    is_injected_prompt_title_line(first_line)
+        || lower.starts_with("<system-reminder")
+        || lower.starts_with("<codex_internal_context")
+        || lower.starts_with("<session-context")
+}
+
+fn fallback_message_part_kind(role: &str, content: &str) -> &'static str {
+    if is_injected_prompt_content(content) {
+        return "system";
+    }
+    match role {
+        "user" | "assistant" => "text",
+        "tool" => "tool_result",
+        "system" => "system",
+        _ => "unknown",
+    }
+}
+
+fn fallback_history_message_part(role: &str, content: &str) -> HistoryMessagePart {
+    HistoryMessagePart {
+        kind: fallback_message_part_kind(role, content).to_string(),
+        content: content.to_string(),
+        tool_name: None,
+        call_id: None,
+    }
+}
+
+fn message_part_kind(value: &Value, role: &str, content: &str) -> &'static str {
+    let part_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .replace('-', "_");
+    match part_type.as_str() {
+        "text" | "input_text" | "output_text" => fallback_message_part_kind(role, content),
+        "thinking" | "reasoning" | "reasoning_summary" | "analysis" => "reasoning",
+        "tool_use" | "tool_call" | "toolcall" | "function_call" | "custom_tool_call"
+        | "mcp_tool_call" => "tool_call",
+        "tool_result"
+        | "toolresult"
+        | "function_call_output"
+        | "custom_tool_call_output"
+        | "mcp_tool_call_output" => "tool_result",
+        "system" | "developer" => "system",
+        "metadata" | "session_meta" | "turn_context" => "metadata",
+        "" => fallback_message_part_kind(role, content),
+        _ => "unknown",
+    }
+}
+
+fn message_part_tool_name(value: &Value) -> Option<String> {
+    value
+        .get("name")
+        .or_else(|| value.get("tool_name"))
+        .or_else(|| value.get("toolName"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+fn message_part_call_id(value: &Value) -> Option<String> {
+    value
+        .get("call_id")
+        .or_else(|| value.get("callId"))
+        .or_else(|| value.get("tool_use_id"))
+        .or_else(|| value.get("toolUseId"))
+        .or_else(|| value.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|call_id| !call_id.is_empty())
+        .map(str::to_string)
+}
+
+fn extract_message_part_content(value: &Value) -> Option<String> {
+    [
+        "text",
+        "thinking",
+        "reasoning",
+        "content",
+        "input_text",
+        "output_text",
+    ]
+    .into_iter()
+    .filter_map(|key| value.get(key))
+    .find_map(extract_text_from_value)
+    .or_else(|| extract_text_from_value(value))
+    .or_else(|| summarize_json_value(value))
+    .map(|content| normalize_text(&content))
+    .filter(|content| !content.is_empty())
+}
+
+fn extract_message_parts(value: &Value, role: &str, flat_content: &str) -> Vec<HistoryMessagePart> {
+    let content_value = value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .or_else(|| value.get("content"));
+    let Some(content_value) = content_value else {
+        return vec![HistoryMessagePart {
+            kind: message_part_kind(value, role, flat_content).to_string(),
+            content: flat_content.to_string(),
+            tool_name: message_part_tool_name(value),
+            call_id: message_part_call_id(value),
+        }];
+    };
+
+    let values: Vec<&Value> = match content_value {
+        Value::Array(items) => items.iter().collect(),
+        other => vec![other],
+    };
+    let parts: Vec<HistoryMessagePart> = values
+        .into_iter()
+        .filter_map(|part| {
+            let content = extract_message_part_content(part)?;
+            Some(HistoryMessagePart {
+                kind: message_part_kind(part, role, &content).to_string(),
+                content,
+                tool_name: message_part_tool_name(part),
+                call_id: message_part_call_id(part),
+            })
+        })
+        .collect();
+    if parts.is_empty() {
+        vec![fallback_history_message_part(role, flat_content)]
+    } else {
+        parts
+    }
 }
 
 fn extract_content(value: &Value) -> Option<String> {
@@ -12723,6 +12915,7 @@ mod tests {
                 HistoryMessage {
                     role: "user".to_string(),
                     content: "hello".to_string(),
+                    parts: vec![fallback_history_message_part("user", "hello")],
                     timestamp: Some("2026-01-01T00:00:00Z".to_string()),
                     model: None,
                     input_tokens: None,
@@ -12736,6 +12929,7 @@ mod tests {
                 HistoryMessage {
                     role: "assistant".to_string(),
                     content: "world".to_string(),
+                    parts: vec![fallback_history_message_part("assistant", "world")],
                     timestamp: Some("2026-01-01T00:00:01Z".to_string()),
                     model: None,
                     input_tokens: None,
@@ -15612,14 +15806,67 @@ mod tests {
             r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
         )
         .unwrap();
-        assert_eq!(parse_message(&tool_result_line).unwrap().role, "tool");
+        let tool_result = parse_message(&tool_result_line).unwrap();
+        assert_eq!(tool_result.role, "tool");
+        assert_eq!(tool_result.parts.len(), 1);
+        assert_eq!(tool_result.parts[0].kind, "tool_result");
+        assert_eq!(tool_result.parts[0].call_id.as_deref(), Some("t1"));
 
         // 真实用户输入保持 user
         let user_line: Value = serde_json::from_str(
             r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}"#,
         )
         .unwrap();
-        assert_eq!(parse_message(&user_line).unwrap().role, "user");
+        let user = parse_message(&user_line).unwrap();
+        assert_eq!(user.role, "user");
+        assert_eq!(user.parts[0].kind, "text");
+    }
+
+    #[test]
+    fn parse_message_preserves_mixed_content_part_kinds() {
+        let line: Value = serde_json::from_str(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"inspect state"},{"type":"text","text":"done"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"README.md"}}]}}"#,
+        )
+        .unwrap();
+
+        let message = parse_message(&line).unwrap();
+
+        assert_eq!(message.parts.len(), 3);
+        assert_eq!(message.parts[0].kind, "reasoning");
+        assert_eq!(message.parts[1].kind, "text");
+        assert_eq!(message.parts[2].kind, "tool_call");
+        assert_eq!(message.parts[2].tool_name.as_deref(), Some("Read"));
+        assert_eq!(message.parts[2].call_id.as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn parse_message_preserves_codex_response_item_part_kinds() {
+        let line: Value = serde_json::from_str(
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"reasoning","text":"inspect state"},{"type":"output_text","text":"done"},{"type":"custom_tool_call","call_id":"c1","name":"shell_command","input":"Get-ChildItem"}]}}"#,
+        )
+        .unwrap();
+
+        let message = parse_message(&line).unwrap();
+
+        assert_eq!(message.parts.len(), 3);
+        assert_eq!(message.parts[0].kind, "reasoning");
+        assert_eq!(message.parts[1].kind, "text");
+        assert_eq!(message.parts[2].kind, "tool_call");
+        assert_eq!(message.parts[2].tool_name.as_deref(), Some("shell_command"));
+        assert_eq!(message.parts[2].call_id.as_deref(), Some("c1"));
+    }
+
+    #[test]
+    fn parse_message_marks_injected_user_prompt_as_system_part() {
+        let line: Value = serde_json::from_str(
+            r#"{"type":"user","message":{"role":"user","content":"<system-reminder>internal context</system-reminder>"}}"#,
+        )
+        .unwrap();
+
+        let message = parse_message(&line).unwrap();
+
+        assert_eq!(message.role, "user");
+        assert_eq!(message.parts[0].kind, "system");
     }
 
     #[test]

@@ -128,7 +128,8 @@ function SelectionCheckbox({
         e.stopPropagation();
         onToggle();
       }}
-      className="ui-focus-ring mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors"
+      onKeyDown={(e) => e.stopPropagation()}
+      className="ui-focus-ring relative z-10 mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors"
       style={{
         borderColor: checked ? "var(--primary)" : "color-mix(in srgb, var(--border) 82%, transparent)",
         backgroundColor: checked ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
@@ -1019,16 +1020,28 @@ export function HistoryListPane({
                     )}
                     <div
                       onContextMenu={(e) => handleSessionContextMenu(e, row.item)}
-                      onClick={selectionMode ? () => onToggleSessionSelection(row.item.sessionKey) : undefined}
                       className={[
-                        "ui-list-row group/session-row flex w-full items-center gap-2 border text-left",
+                        "ui-list-row group/session-row relative flex w-full items-center gap-2 border text-left",
                         row.depth > 0
                           ? "min-h-[58px] rounded-lg border-border/45 bg-surface-container-low px-2 py-1.5"
                           : "min-h-[68px] rounded-xl border-border/70 bg-surface-container-lowest px-2.5 py-2",
-                        selectionMode ? "cursor-pointer" : "",
+                        "cursor-pointer",
                       ].join(" ")}
                       style={{ backgroundColor: row.item.sessionKey === activeSessionKey ? "var(--bg-tertiary)" : undefined }}
                     >
+                      <button
+                        type="button"
+                        role={selectionMode ? "checkbox" : undefined}
+                        aria-checked={selectionMode ? selectedSessionKeys.has(row.item.sessionKey) : undefined}
+                        aria-label={t(
+                          selectionMode ? "history.bulk.selectSessionNamed" : "history.openSessionNamed",
+                          { title: sessionDisplayTitle }
+                        )}
+                        onClick={() => selectionMode
+                          ? onToggleSessionSelection(row.item.sessionKey)
+                          : onOpenSession(row.item.sessionKey)}
+                        className="ui-focus-ring absolute inset-0 rounded-[inherit] border-0 bg-transparent"
+                      />
                       {row.childCount > 0 && (
                         <button
                           type="button"
@@ -1036,7 +1049,7 @@ export function HistoryListPane({
                             e.stopPropagation();
                             toggleSessionParent(row.item.sessionKey);
                           }}
-                          className="ui-history-tree-toggle mt-0.5"
+                          className="ui-history-tree-toggle relative z-10 mt-0.5"
                           aria-expanded={!collapsedSessionParents.has(row.item.sessionKey)}
                           aria-label={t(
                             collapsedSessionParents.has(row.item.sessionKey)
@@ -1067,7 +1080,7 @@ export function HistoryListPane({
                         />
                       )}
                       {selectionMode ? (
-                        <div className="min-w-0 flex-1 overflow-hidden text-left">
+                        <div className="pointer-events-none relative z-[1] min-w-0 flex-1 overflow-hidden text-left">
                           <div className="flex min-w-0 items-center gap-1.5">
                             <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-primary">
                               <SessionSourceIcon source={row.item.source} size={14} />
@@ -1110,11 +1123,7 @@ export function HistoryListPane({
                           </div>
                         </div>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => onOpenSession(row.item.sessionKey)}
-                          className="min-w-0 flex-1 overflow-hidden text-left"
-                        >
+                        <div className="pointer-events-none relative z-[1] min-w-0 flex-1 overflow-hidden text-left">
                           <div className="flex min-w-0 items-center gap-1.5">
                             <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-primary">
                               <SessionSourceIcon source={row.item.source} size={14} />
@@ -1155,13 +1164,17 @@ export function HistoryListPane({
                               {t("history.messageCount", { count: row.item.message_count })}
                             </span>
                           </div>
-                        </button>
+                        </div>
                       )}
                       {!selectionMode && (
                         <button
                           type="button"
-                          onClick={() => onDeleteSession(row.item)}
-                          className="ui-history-row-delete"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onDeleteSession(row.item);
+                          }}
+                          onKeyDown={(event) => event.stopPropagation()}
+                          className="ui-history-row-delete relative z-10"
                           aria-label={t("history.deleteSessionNamed", { title: sessionDisplayTitle })}
                           title={t("history.deleteSession")}
                         >

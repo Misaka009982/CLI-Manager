@@ -342,9 +342,27 @@ function normalizeDetail(raw: unknown): HistorySessionDetail {
     const m = msg as Record<string, unknown>;
     const rawLineIndex = m.line_index ?? m.lineIndex;
     const rawEditableText = m.editable_text ?? m.editableText;
+    const rawParts = Array.isArray(m.parts) ? m.parts : [];
+    const parts = rawParts.flatMap((part) => {
+      if (!part || typeof part !== "object") return [];
+      const value = part as Record<string, unknown>;
+      const kind = asString(value.kind);
+      if (!["text", "tool_call", "tool_result", "reasoning", "system", "metadata", "unknown"].includes(kind)) {
+        return [];
+      }
+      const content = asString(value.content);
+      if (!content.trim()) return [];
+      return [{
+        kind: kind as NonNullable<HistoryMessage["parts"]>[number]["kind"],
+        content,
+        tool_name: asString(value.tool_name ?? value.toolName) || undefined,
+        call_id: asString(value.call_id ?? value.callId) || undefined,
+      }];
+    });
     return {
       role: normalizeRole(m.role),
       content: asString(m.content),
+      parts: parts.length > 0 ? parts : undefined,
       timestamp: asString(m.timestamp ?? "") || null,
       model: asString(m.model ?? "") || undefined,
       input_tokens: asNumber(m.input_tokens ?? m.inputTokens),

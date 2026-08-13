@@ -2103,7 +2103,7 @@ async fn get_session_detail_from_v2_with_conn(
     }
 
     let message_rows = sqlx::query(
-        "SELECT message_index, role, display_content, timestamp_ms, model,
+        "SELECT id, message_index, role, display_content, timestamp_ms, model,
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                 editable, raw_pointers_json
          FROM history_messages
@@ -2114,50 +2114,95 @@ async fn get_session_detail_from_v2_with_conn(
     .fetch_all(&mut *conn)
     .await
     .map_err(|err| err.to_string())?;
-    let messages = message_rows
-        .into_iter()
-        .map(|message_row| {
-            let timestamp_ms = message_row
-                .try_get::<Option<i64>, _>("timestamp_ms")
-                .map_err(|err| err.to_string())?;
-            Ok(HistoryMessage {
-                role: message_row.try_get("role").map_err(|err| err.to_string())?,
-                content: message_row
-                    .try_get("display_content")
+    let part_rows = sqlx::query(
+        "SELECT p.message_id, p.kind, p.text_content, p.tool_name, p.tool_call_id
+         FROM history_message_parts p
+         INNER JOIN history_messages m ON m.id = p.message_id
+         WHERE m.session_id = ?1
+         ORDER BY m.message_index ASC, p.part_index ASC",
+    )
+    .bind(session_row_id)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|err| err.to_string())?;
+    let mut parts_by_message_id: HashMap<i64, Vec<HistoryMessagePart>> = HashMap::new();
+    for part_row in part_rows {
+        let Some(content) = part_row
+            .try_get::<Option<String>, _>("text_content")
+            .map_err(|err| err.to_string())?
+            .filter(|content| !content.trim().is_empty())
+        else {
+            continue;
+        };
+        let message_id: i64 = part_row
+            .try_get("message_id")
+            .map_err(|err| err.to_string())?;
+        parts_by_message_id
+            .entry(message_id)
+            .or_default()
+            .push(HistoryMessagePart {
+                kind: part_row.try_get("kind").map_err(|err| err.to_string())?,
+                content,
+                tool_name: part_row
+                    .try_get("tool_name")
                     .map_err(|err| err.to_string())?,
-                timestamp: timestamp_ms.and_then(timestamp_millis_to_rfc3339),
-                model: message_row
-                    .try_get("model")
+                call_id: part_row
+                    .try_get("tool_call_id")
                     .map_err(|err| err.to_string())?,
-                input_tokens: message_row
-                    .try_get::<Option<i64>, _>("input_tokens")
-                    .map_err(|err| err.to_string())?
-                    .map(|value| value.max(0) as u64),
-                output_tokens: message_row
-                    .try_get::<Option<i64>, _>("output_tokens")
-                    .map_err(|err| err.to_string())?
-                    .map(|value| value.max(0) as u64),
-                cache_read_tokens: message_row
-                    .try_get::<Option<i64>, _>("cache_read_tokens")
-                    .map_err(|err| err.to_string())?
-                    .map(|value| value.max(0) as u64),
-                cache_creation_tokens: message_row
-                    .try_get::<Option<i64>, _>("cache_creation_tokens")
-                    .map_err(|err| err.to_string())?
-                    .map(|value| value.max(0) as u64),
-                line_index: v2_raw_pointer_line_index(
-                    message_row
-                        .try_get("raw_pointers_json")
-                        .map_err(|err| err.to_string())?,
-                ),
-                editable: message_row
-                    .try_get::<i64, _>("editable")
-                    .map_err(|err| err.to_string())?
-                    != 0,
-                editable_text: None,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+            });
+    }
+    let mut messages = Vec::with_capacity(message_rows.len());
+    for message_row in message_rows {
+        let timestamp_ms = message_row
+            .try_get::<Option<i64>, _>("timestamp_ms")
+            .map_err(|err| err.to_string())?;
+        let message_row_id: i64 = message_row.try_get("id").map_err(|err| err.to_string())?;
+        let role: String = message_row.try_get("role").map_err(|err| err.to_string())?;
+        let content: String = message_row
+            .try_get("display_content")
+            .map_err(|err| err.to_string())?;
+        let mut parts = parts_by_message_id
+            .remove(&message_row_id)
+            .unwrap_or_default();
+        if parts.is_empty() {
+            parts.push(fallback_history_message_part(&role, &content));
+        }
+        messages.push(HistoryMessage {
+            parts,
+            role,
+            content,
+            timestamp: timestamp_ms.and_then(timestamp_millis_to_rfc3339),
+            model: message_row
+                .try_get("model")
+                .map_err(|err| err.to_string())?,
+            input_tokens: message_row
+                .try_get::<Option<i64>, _>("input_tokens")
+                .map_err(|err| err.to_string())?
+                .map(|value| value.max(0) as u64),
+            output_tokens: message_row
+                .try_get::<Option<i64>, _>("output_tokens")
+                .map_err(|err| err.to_string())?
+                .map(|value| value.max(0) as u64),
+            cache_read_tokens: message_row
+                .try_get::<Option<i64>, _>("cache_read_tokens")
+                .map_err(|err| err.to_string())?
+                .map(|value| value.max(0) as u64),
+            cache_creation_tokens: message_row
+                .try_get::<Option<i64>, _>("cache_creation_tokens")
+                .map_err(|err| err.to_string())?
+                .map(|value| value.max(0) as u64),
+            line_index: v2_raw_pointer_line_index(
+                message_row
+                    .try_get("raw_pointers_json")
+                    .map_err(|err| err.to_string())?,
+            ),
+            editable: message_row
+                .try_get::<i64, _>("editable")
+                .map_err(|err| err.to_string())?
+                != 0,
+            editable_text: None,
+        });
+    }
 
     let tool_rows = sqlx::query(
         "SELECT te.call_id, te.name, te.category, hm.message_index, te.timestamp_ms,
@@ -3326,7 +3371,7 @@ async fn replace_v2_session(
     .map_err(|err| err.to_string())?;
     let session_row_id = result.last_insert_rowid();
     for message in adapted.messages {
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO history_messages(
                 session_id, message_index, role, display_content, timestamp_ms,
                 model, input_tokens, output_tokens, cache_read_tokens,
@@ -3348,6 +3393,23 @@ async fn replace_v2_session(
         .execute(&mut *tx)
         .await
         .map_err(|err| err.to_string())?;
+        let message_row_id = result.last_insert_rowid();
+        for (part_index, part) in message.parts.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO history_message_parts(
+                    message_id, part_index, kind, text_content, tool_call_id, tool_name
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .bind(message_row_id)
+            .bind(part_index as i64)
+            .bind(&part.kind)
+            .bind(&part.content)
+            .bind(&part.call_id)
+            .bind(&part.tool_name)
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| err.to_string())?;
+        }
     }
     for event in &stats.usage_events {
         sqlx::query(
@@ -5295,6 +5357,16 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
+            "INSERT INTO history_message_parts(
+                message_id, part_index, kind, text_content, tool_call_id, tool_name
+             ) VALUES (?1, 0, 'reasoning', 'inspect detail', NULL, NULL),
+                      (?1, 1, 'text', 'hello detail', NULL, NULL)",
+        )
+        .bind(message_result.last_insert_rowid())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query(
             "INSERT INTO history_tool_events(
                 session_id, message_id, event_index, call_id, name, category, status,
                 timestamp_ms, duration_ms, input_summary, output_summary
@@ -5327,6 +5399,9 @@ mod tests {
         assert_eq!(detail.session_id, "detail-v2");
         assert_eq!(detail.messages.len(), 1);
         assert_eq!(detail.messages[0].line_index, Some(7));
+        assert_eq!(detail.messages[0].parts.len(), 2);
+        assert_eq!(detail.messages[0].parts[0].kind, "reasoning");
+        assert_eq!(detail.messages[0].parts[1].kind, "text");
         assert_eq!(detail.usage.token_trend.len(), 1);
         assert_eq!(detail.tool_events[0].message_index, Some(0));
         assert_eq!(detail.usage.builtin_calls[0].name, "Edit");

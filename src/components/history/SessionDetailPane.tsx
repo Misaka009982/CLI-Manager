@@ -20,11 +20,18 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { toast } from "sonner";
 import aiAvatarUrl from "../../assets/history-ai-avatar.svg";
 import userAvatarUrl from "../../assets/history-user-avatar.svg";
-import type { HistoryFileChangeSummary, HistoryMessage, HistorySessionDetail, HistorySessionView } from "../../lib/types";
+import type {
+  HistoryFileChangeSummary,
+  HistoryMessage,
+  HistoryMessagePart,
+  HistoryMessagePartKind,
+  HistorySessionDetail,
+  HistorySessionView,
+} from "../../lib/types";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { resolveHistorySourceIconKey } from "../../lib/cliTools";
 import { CliToolIcon } from "../CliToolIcon";
@@ -40,7 +47,7 @@ import { SessionToolDiagnosticsView } from "./SessionToolDiagnosticsView";
 import { SessionSubtaskTreeView } from "./SessionSubtaskTreeView";
 import type { SessionProcessModel } from "./sessionEvents";
 
-export type HistoryDetailView = "transcript" | "timeline" | "canvas" | "context" | "changes" | "tools" | "subtasks";
+export type HistoryDetailView = "conversation" | "transcript" | "timeline" | "canvas" | "context" | "changes" | "tools" | "subtasks";
 
 interface SessionDetailPaneProps {
   activeView: HistorySessionView | null;
@@ -94,6 +101,7 @@ interface SessionDetailPaneProps {
 }
 
 const DETAIL_VIEWS: Array<{ id: HistoryDetailView; labelKey: TranslationKey }> = [
+  { id: "conversation", labelKey: "history.detail.view.conversation" },
   { id: "transcript", labelKey: "history.detail.view.transcript" },
   { id: "timeline", labelKey: "history.detail.view.timeline" },
   { id: "canvas", labelKey: "history.detail.view.canvas" },
@@ -127,6 +135,240 @@ function normalizeMessageRole(role: string): "user" | "assistant" | "other" {
   if (normalized === "user" || normalized.includes("human")) return "user";
   if (normalized === "assistant" || normalized.includes("model") || normalized.includes("llm")) return "assistant";
   return "other";
+}
+
+type ConversationMessageRow = {
+  type: "message";
+  key: string;
+  messageIndex: number;
+  message: HistoryMessage;
+  content: string;
+  details: HistoryMessagePart[];
+};
+
+type ConversationDetailRow = {
+  type: "details";
+  key: string;
+  messageIndices: number[];
+  details: HistoryMessagePart[];
+};
+
+type ConversationRow = ConversationMessageRow | ConversationDetailRow;
+
+function fallbackMessageParts(message: HistoryMessage): HistoryMessagePart[] {
+  const role = normalizeMessageRole(message.role);
+  let kind: HistoryMessagePartKind = "unknown";
+  if (isInjectedPromptContent(message.content)) kind = "system";
+  else if (role === "user" || role === "assistant") kind = "text";
+  else if (message.role.toLowerCase().includes("tool")) kind = "tool_result";
+  else if (message.role.toLowerCase().includes("system")) kind = "system";
+  return [{ kind, content: message.content }];
+}
+
+function effectiveMessageParts(message: HistoryMessage): HistoryMessagePart[] {
+  return message.parts?.length ? message.parts : fallbackMessageParts(message);
+}
+
+export function buildConversationRows(messages: HistoryMessage[]): ConversationRow[] {
+  const rows: ConversationRow[] = [];
+  let pendingDetails: ConversationDetailRow | null = null;
+  const flushDetails = () => {
+    if (!pendingDetails) return;
+    rows.push(pendingDetails);
+    pendingDetails = null;
+  };
+
+  messages.forEach((message, messageIndex) => {
+    const parts = effectiveMessageParts(message);
+    const textParts = parts.filter((part) => part.kind === "text");
+    const details = parts.filter((part) => part.kind !== "text");
+    if (textParts.length > 0) {
+      flushDetails();
+      rows.push({
+        type: "message",
+        key: `message:${messageIndex}`,
+        messageIndex,
+        message,
+        content: textParts.map((part) => part.content).join("\n\n"),
+        details,
+      });
+      return;
+    }
+
+    if (!pendingDetails) {
+      pendingDetails = {
+        type: "details",
+        key: `details:${messageIndex}`,
+        messageIndices: [],
+        details: [],
+      };
+    }
+    pendingDetails.messageIndices.push(messageIndex);
+    pendingDetails.details.push(...parts);
+  });
+  flushDetails();
+  return rows;
+}
+
+function conversationRowMessageIndices(row: ConversationRow): number[] {
+  return row.type === "message" ? [row.messageIndex] : row.messageIndices;
+}
+
+function findConversationRowIndex(rows: ConversationRow[], messageIndex: number): number {
+  return rows.findIndex((row) => conversationRowMessageIndices(row).includes(messageIndex));
+}
+
+function partLabelKey(kind: HistoryMessagePartKind): TranslationKey {
+  switch (kind) {
+    case "tool_call": return "history.detail.part.tool_call";
+    case "tool_result": return "history.detail.part.tool_result";
+    case "reasoning": return "history.detail.part.reasoning";
+    case "system": return "history.detail.part.system";
+    case "metadata": return "history.detail.part.metadata";
+    default: return "history.detail.part.unknown";
+  }
+}
+
+function containsPartQuery(parts: HistoryMessagePart[], query: string): boolean {
+  const normalized = query.trim();
+  if (!normalized) return false;
+  const matcher = new RegExp(normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  return parts.some((part) => matcher.test(part.content));
+}
+
+function ConversationDetails({
+  parts,
+  query,
+  forceOpen,
+  onSizeChange,
+}: {
+  parts: HistoryMessagePart[];
+  query: string;
+  forceOpen: boolean;
+  onSizeChange: () => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(forceOpen);
+  const counts = useMemo(() => {
+    const result = new Map<HistoryMessagePartKind, number>();
+    for (const part of parts) result.set(part.kind, (result.get(part.kind) ?? 0) + 1);
+    return result;
+  }, [parts]);
+  const summary = Array.from(counts.entries())
+    .map(([kind, count]) => `${t(partLabelKey(kind))} ${count}`)
+    .join(" · ");
+
+  useEffect(() => {
+    setOpen(forceOpen);
+  }, [parts]);
+
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen]);
+
+  useEffect(() => {
+    onSizeChange();
+  }, [onSizeChange, open]);
+
+  return (
+    <div className="ui-history-conversation-details" data-open={open ? "true" : undefined}>
+      <button
+        type="button"
+        className="ui-history-conversation-details-toggle"
+        aria-expanded={open}
+        aria-label={t(open ? "history.detail.hiddenSectionCollapse" : "history.detail.hiddenSectionExpand")}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span aria-hidden="true">{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
+        {t("history.detail.hiddenSection", { summary })}
+      </button>
+      {open && (
+        <div className="ui-history-conversation-details-content">
+          {parts.map((part, index) => (
+            <section key={`${part.kind}:${index}`} className="ui-history-conversation-part" data-kind={part.kind}>
+              <div className="ui-history-conversation-part-label">
+                {t(partLabelKey(part.kind))}
+                {part.tool_name ? ` · ${part.tool_name}` : ""}
+              </div>
+              <SessionTranscriptContent content={part.content} query={query} />
+            </section>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConversationRowCard({
+  row,
+  isMatched,
+  isFocused,
+  query,
+  messageRefs,
+  measureElement,
+}: {
+  row: ConversationRow;
+  isMatched: boolean;
+  isFocused: boolean;
+  query: string;
+  messageRefs: RefObject<Record<number, HTMLDivElement | null>>;
+  measureElement: (element: Element) => void;
+}) {
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const message = row.type === "message" ? row.message : null;
+  const roleKind = message ? normalizeMessageRole(message.role) : "other";
+  const avatarUrl = roleKind === "user" ? userAvatarUrl : aiAvatarUrl;
+  const details = row.details;
+  const detailsMatched = containsPartQuery(details, query);
+  const forceOpen = isFocused || detailsMatched;
+  const messageMeta = message ? formatMessageMeta(message) : null;
+
+  const setCardRef = (element: HTMLDivElement | null) => {
+    cardRef.current = element;
+    for (const messageIndex of conversationRowMessageIndices(row)) {
+      messageRefs.current[messageIndex] = element;
+    }
+    if (element) measureElement(element);
+  };
+
+  const remeasure = useCallback(() => {
+    if (cardRef.current) measureElement(cardRef.current);
+  }, [measureElement]);
+
+  return (
+    <div
+      ref={setCardRef}
+      className={row.type === "message"
+        ? "ui-history-message-card ui-history-conversation-message absolute left-0 top-0 w-full px-2.5 py-2"
+        : "ui-history-conversation-detail-row absolute left-0 top-0 w-full px-2.5 py-2"}
+      data-role={roleKind}
+      style={{
+        borderColor: isFocused ? "var(--warning)" : isMatched ? "var(--accent)" : "transparent",
+      }}
+    >
+      {row.type === "details" ? (
+        <ConversationDetails parts={details} query={query} forceOpen={forceOpen} onSizeChange={remeasure} />
+      ) : (
+        <>
+          {roleKind !== "user" && (
+            <span className="ui-history-message-avatar" aria-hidden="true"><img src={avatarUrl} alt="" /></span>
+          )}
+          <div className="ui-history-message-stack">
+            {messageMeta && <div className="ui-history-message-meta" title={messageMeta}>{messageMeta}</div>}
+            <div className="ui-history-message-bubble">
+              <SessionTranscriptContent content={row.content} query={query} />
+            </div>
+            {details.length > 0 && (
+              <ConversationDetails parts={details} query={query} forceOpen={forceOpen} onSizeChange={remeasure} />
+            )}
+          </div>
+          {roleKind === "user" && (
+            <span className="ui-history-message-avatar" aria-hidden="true"><img src={avatarUrl} alt="" /></span>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 function shouldCollapseMessage(message: HistoryMessage): boolean {
@@ -633,25 +875,39 @@ export function SessionDetailPane({
   // 当匹配数 N 和可见消息数 M 都达到几百时累计 O(N·M)。改 Set 后是 O(1) lookup。
   const matchSet = useMemo(() => new Set(matchIndices), [matchIndices]);
   const activeMatchIndex = matchIndices[Math.min(matchCursor, Math.max(0, matchIndices.length - 1))];
+  const conversationRows = useMemo(() => buildConversationRows(visibleMessages), [visibleMessages]);
+  const isConversationView = detailView === "conversation";
+  const virtualRowCount = isConversationView ? conversationRows.length : visibleMessages.length;
   const messageVirtualizer = useVirtualizer({
-    count: visibleMessages.length,
+    count: virtualRowCount,
     getScrollElement: () => messageListRef.current,
     estimateSize: () => 220,
     overscan: 6,
-    getItemKey: (index) => `${visibleMessages[index]?.role ?? "message"}:${index}`,
+    getItemKey: (index) => isConversationView
+      ? conversationRows[index]?.key ?? `conversation:${index}`
+      : `${visibleMessages[index]?.role ?? "message"}:${index}`,
   });
 
   useEffect(() => {
     if (activeMatchIndex === undefined) return;
-    if (detailView === "transcript" && activeMatchIndex < visibleMessages.length) {
-      messageVirtualizer.scrollToIndex(activeMatchIndex, { align: "center" });
+    if (activeMatchIndex >= visibleMessages.length) return;
+    const rowIndex = isConversationView
+      ? findConversationRowIndex(conversationRows, activeMatchIndex)
+      : activeMatchIndex;
+    if ((isConversationView || detailView === "transcript") && rowIndex >= 0) {
+      messageVirtualizer.scrollToIndex(rowIndex, { align: "center" });
     }
-  }, [activeMatchIndex, detailView, messageVirtualizer, visibleMessages.length]);
+  }, [activeMatchIndex, conversationRows, detailView, isConversationView, messageVirtualizer, visibleMessages.length]);
 
   useEffect(() => {
     if (focusedMessageIndex === null || focusedMessageIndex >= visibleMessages.length) return;
-    if (detailView === "transcript") messageVirtualizer.scrollToIndex(focusedMessageIndex, { align: "center" });
-  }, [detailView, focusedMessageIndex, focusedMessageSeq, messageVirtualizer, visibleMessages.length]);
+    const rowIndex = isConversationView
+      ? findConversationRowIndex(conversationRows, focusedMessageIndex)
+      : focusedMessageIndex;
+    if ((isConversationView || detailView === "transcript") && rowIndex >= 0) {
+      messageVirtualizer.scrollToIndex(rowIndex, { align: "center" });
+    }
+  }, [conversationRows, detailView, focusedMessageIndex, focusedMessageSeq, isConversationView, messageVirtualizer, visibleMessages.length]);
 
   if (!activeView) {
     return (
@@ -965,7 +1221,7 @@ export function SessionDetailPane({
         ref={messageListRef}
         onScroll={onMessageListScroll}
         className={`[grid-row:2] min-h-0 h-full overflow-x-hidden overflow-y-auto p-3 ${
-          detailView === "transcript" ? "ui-history-transcript-chat-surface" : ""
+          detailView === "transcript" || detailView === "conversation" ? "ui-history-transcript-chat-surface" : ""
         }`}
       >
         {loadingSessionDetail && <div className="text-xs text-text-muted">{t("history.detail.loading")}</div>}
@@ -1028,6 +1284,30 @@ export function SessionDetailPane({
           </div>
         )}
 
+        {!loadingSessionDetail && detailView === "conversation" && conversationRows.length > 0 && (
+          <div className="relative w-full" style={{ height: messageVirtualizer.getTotalSize() }}>
+            {messageVirtualizer.getVirtualItems().map((virtualRow) => {
+              const row = conversationRows[virtualRow.index];
+              if (!row) return null;
+              const indices = conversationRowMessageIndices(row);
+              const isMatched = indices.some((index) => matchSet.has(index));
+              const isFocused = focusedMessageIndex !== null && indices.includes(focusedMessageIndex);
+              return (
+                <div key={virtualRow.key} className="absolute left-0 top-0 w-full" style={{ transform: `translateY(${virtualRow.start}px)` }}>
+                  <ConversationRowCard
+                    row={row}
+                    isMatched={isMatched}
+                    isFocused={isFocused}
+                    query={sessionQuery}
+                    messageRefs={messageRefs}
+                    measureElement={messageVirtualizer.measureElement}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {!loadingSessionDetail && detailView === "timeline" && (
           <SessionTimelineView model={processModel} onJumpToMessage={onJumpToMessage} />
         )}
@@ -1067,7 +1347,7 @@ export function SessionDetailPane({
           <SessionSubtaskTreeView model={processModel} onJumpToMessage={onJumpToMessage} />
         )}
 
-        {!loadingSessionDetail && detailView === "transcript" && hasMoreMessages && (
+        {!loadingSessionDetail && (detailView === "transcript" || detailView === "conversation") && hasMoreMessages && (
           <button onClick={onLoadMoreMessages} className="ui-btn mt-2.5 w-full" aria-label={t("history.detail.loadMoreMessages")}>
             {t("history.detail.loadMoreMessagesCount", { visible: visibleMessageCount, total: totalMessageCount })}
           </button>
