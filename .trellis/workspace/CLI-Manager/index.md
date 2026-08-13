@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 48
+- **Total Sessions**: 49
 - **Last Active**: 2026-08-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1619 | Active |
+| `journal-1.md` | ~1652 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 49 | 2026-08-13 | 修复路由请求日志重复与布局 | `16b3e051` | `feat/native-provider-management` |
 | 48 | 2026-08-13 | 修复供应商故障转移排序持久化 | `d4df1777` | `feat/native-provider-management` |
 | 47 | 2026-08-12 | 修复路径复制菜单交互与图标 | `72538d0d` | `feat/native-provider-management` |
 | 46 | 2026-08-12 | 修复文件面板路径复制二级菜单裁剪 | `af5403f7` | `feat/native-provider-management` |

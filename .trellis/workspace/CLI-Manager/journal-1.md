@@ -1617,3 +1617,36 @@ Aligned sidebar provider switching with settings global CLI Home apply flow, add
 ### Next Steps
 
 - None - task complete
+
+
+## Session 49: 修复路由请求日志重复与布局
+
+**Date**: 2026-08-13
+**Task**: 修复路由请求日志重复与布局
+**Branch**: `feat/native-provider-management`
+
+### Summary
+
+对照 CC Switch 的代理权威/会话回退策略，修复路由归属与缓存语义跨源去重，统一历史统计匹配，并让五张请求日志汇总卡片同排自适应。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `16b3e051` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
