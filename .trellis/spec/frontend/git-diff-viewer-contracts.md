@@ -272,12 +272,31 @@ findAdjacentGitDiffChange(order, currentKey, side, direction): GitDiffSelectable
 | Unified Shift target changes side | Clear the previous range and select the target only |
 | Non-UTF-8, non-exact, untracked, or backend-disabled payload | No interactive gutter; partial mutation remains guarded |
 | Escape while IME is composing | Keep the Dialog open |
-| Nested confirmation Dialog is open | Only Radix's top dismissable layer handles Escape |
+| Nested confirmation Dialog is open | Only Radix's top dismissable layer handles Escape; file and Hunk destructive actions confirm before mutation |
+
+### Common Mistake: Mounting a nested confirmation below the Diff Dialog
+
+**Symptom**: Clicking file-level or Hunk revert from the Git Diff Dialog appears to freeze the UI; the confirmation prompt is hidden and the Diff Dialog cannot be interacted with.
+
+**Cause**: `GitDiffDialogFrame` renders its overlay/content at `z-index` 100/101, while a confirmation dialog mounted by the parent Git panel uses the shared `ConfirmDialog` default of 50. Two Radix modal focus scopes remain active, but the lower confirmation layer cannot receive visible interaction.
+
+**Fix**: Set the higher layer only at each Git Diff confirmation call site. The shared `ConfirmDialog` accepts `zIndex` and applies it to both overlay and content; use a value above the Diff Dialog layer (currently 220). Do not change the shared default because unrelated consumers would inherit the behavior change. The Hunk button must open this confirmation first and invoke `controller.revertHunk` only after confirmation.
+
+```tsx
+<ConfirmDialog
+  open={discardTarget !== null}
+  zIndex={220}
+  onConfirm={confirmDiscard}
+  onClose={closeConfirm}
+/>
+```
 
 ### 5. Tests Required
 
 - Unit-test toggle, split anchors, unified cross-side reset, same-side range filtering, and keyboard adjacency.
 - Assert the Dialog has Radix autofocus/restore hooks and no `window` key listener.
+- Assert file-level revert confirmation is above `GitDiffDialogFrame` and that confirm/cancel/Escape returns interaction to the underlying Diff Dialog.
+- Assert Hunk revert opens a second confirmation, does not mutate before confirmation, and uses the same top-layer behavior.
 - Assert focusable gutters expose marker, check, and pressed semantics; selection count uses `aria-live`.
 - Run shared Viewer architecture, navigation, generation-option, settings, and pinned-editor regressions.
 

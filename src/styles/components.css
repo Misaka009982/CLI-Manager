@@ -1675,6 +1675,14 @@
   transition: background-color var(--animate-duration-fast);
 }
 
+.ui-collapsed-flyout {
+  background-color: color-mix(in srgb, var(--surface-container-lowest) 94%, var(--surface) 6%);
+  border-color: color-mix(in srgb, var(--border) 34%, transparent);
+  box-shadow:
+    0 16px 36px color-mix(in srgb, var(--on-surface) 24%, transparent),
+    0 2px 8px color-mix(in srgb, var(--on-surface) 10%, transparent);
+}
+
 .ui-collapsed-flyout-item:hover {
   background-color: var(--interactive-hover-bg);
   color: var(--on-surface);

@@ -1336,6 +1336,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
         confirmText={t("git.confirm.revert")}
         cancelText={t("common.cancel")}
         danger
+        zIndex={220}
         onConfirm={() => {
           if (discardTarget) void discardFile(discardTarget.path, discardTarget.status);
           setDiscardTarget(null);

@@ -809,6 +809,43 @@ const badge = await invoke("ccswitch_probe_projects", { projectPaths: [project.p
 
 **Tests**: Run `npx tsc --noEmit`; manually switch a Claude provider and a Codex provider and verify the project tree chip appears/clears immediately and after a fresh `fetchAll()`.
 
+### Convention: Collapsed project tree preserves expanded project semantics
+
+**What**: The collapsed project strip and group flyout must use the same CLI identity and interaction contract as the expanded project tree. Resolve the project CLI with `resolveCliToolIconKey` and render it with `CliToolIcon`; a single click selects the project and activates an existing terminal Tab, while a double click calls `onOpenProject` to start a new terminal. The running-session count remains a badge and must not replace the CLI icon with a status dot.
+
+**Why**: The collapsed tree is a presentation variant of the same project navigator, not a separate launch surface. Divergent click handlers caused a single click to start terminals, and status-first rendering hid the configured CLI tool identity.
+
+**Correct**:
+
+```tsx
+const cliIcon = resolveCliToolIconKey(project.cli_tool);
+
+<button
+  onClick={(event) => actions.onSelectProject(event, project)}
+  onDoubleClick={() => actions.onOpenProject(project)}
+>
+  {cliIcon ? <CliToolIcon icon={cliIcon} size={15} /> : <Terminal size={15} />}
+</button>
+```
+
+**Wrong**:
+
+```tsx
+// Collapsed-only behavior: single click starts a new terminal and status hides the CLI icon.
+<button onClick={() => actions.onOpenProject(project)}>
+  {status ? <StatusDot /> : <VendorIcon vendor={vendor} />}
+</button>
+```
+
+**Contracts**:
+
+- Expanded and collapsed project rows use the same `onSelectProject`/`onOpenProject` semantic boundary.
+- Group flyout project rows also reserve single click for selection and only close the flyout after the double-click launch path.
+- CLI icon lookup is shared with `TreeNodeItem`, project creation, history, and terminal Tab rendering; do not introduce a second vendor-to-icon map.
+- The collapsed flyout background is opaque enough to keep project names and icons legible over the terminal content.
+
+**Tests**: Run `npx tsc --noEmit`; manually verify a running Claude/Codex project and a stopped project in collapsed and expanded modes: single click switches to an existing Tab, double click starts a new Tab, the CLI icon stays visible, the terminal-count badge remains, and the group flyout does not show terminal content through its background.
+
 ### Convention: Terminal tab drag uses overlay plus explicit pane drop zones
 
 **What**: Terminal tab drag interactions use dnd-kit `DragOverlay` for the cursor-following tab, while pane movement/splitting is driven by explicit drop ids:
