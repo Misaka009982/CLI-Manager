@@ -699,3 +699,102 @@ OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 80: 同步 master 并发布版本 1.3.5
+
+**Date**: 2026-08-10
+**Task**: 同步 master 并发布版本 1.3.5
+**Branch**: `master`
+
+### Summary
+
+拉取 origin/master，将 package.json、package-lock.json、src-tauri/Cargo.toml、Cargo.lock 和 tauri.conf.json 的应用版本统一更新为 1.3.5；cargo check 通过，版本一致性校验通过，未推送远端。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eabf83fc` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 81: 优化历史会话索引数据库体积
+
+**Date**: 2026-08-12
+**Task**: 优化历史会话索引数据库体积
+**Branch**: `master`
+
+### Summary
+
+新建并完成 Trellis 任务：将历史 catalog FTS 升级为 detail=none，使用三元组候选加正文连续匹配，兼容 v5→v6 迁移并回收碎片；156 个 history 测试、cargo check 和 fmt 检查通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d6e10b19` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 82: 修复历史索引压缩迁移检测
+
+**Date**: 2026-08-12
+**Task**: 修复历史索引压缩迁移检测
+**Branch**: `master`
+
+### Summary
+
+确认发布后打开历史 catalog 会自动检查 user_version 与真实 FTS schema；修复版本号已为 6 但 FTS 仍为旧 detail 模式时跳过迁移的问题。新增真实 schema 检测和回归测试，更新历史索引契约与 TEMP changelog；cargo fmt、cargo check、cargo test history 157/157 通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ad1e2a26` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

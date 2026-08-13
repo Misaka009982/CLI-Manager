@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 79
-- **Last Active**: 2026-08-07
+- **Total Sessions**: 82
+- **Last Active**: 2026-08-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~701 | Active |
+| `journal-2.md` | ~800 | Active |
 | `journal-1.md` | ~2014 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,9 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 82 | 2026-08-12 | 修复历史索引压缩迁移检测 | `ad1e2a26` | `master` |
+| 81 | 2026-08-12 | 优化历史会话索引数据库体积 | `d6e10b19` | `master` |
+| 80 | 2026-08-10 | 同步 master 并发布版本 1.3.5 | `eabf83fc` | `master` |
 | 79 | 2026-08-07 | 补齐 Tab CLI 工具图标并新增 Kimi | `d6036889` | `master` |
 | 78 | 2026-08-07 | 支持 Windows 便携版与自定义数据目录 | `eafe5da3` | `master` |
 | 77 | 2026-08-07 | 修复 Tab 图标在项目 CLI 工具变更后不刷新 | `9bf48abf` | `master` |

@@ -47,6 +47,7 @@ import { useTerminalOsc } from "../hooks/useTerminalOsc";
 import { useTerminalDisplay } from "../hooks/useTerminalDisplay";
 import { useTerminalInput, type TerminalSuggestionGhostState } from "../hooks/useTerminalInput";
 import { getTerminalCellWidth } from "../lib/terminalCellWidth";
+import { resolveClaudeImeCompositionAnchor } from "../lib/terminalImeAnchor";
 import { copyTextToClipboard } from "../lib/systemClipboard";
 import { hasCodexTuiViewport } from "../lib/terminalTuiDisplay";
 import { createTerminalTuiColorSyncController } from "../lib/terminalTuiColorSync";
@@ -75,6 +76,7 @@ import {
 } from "./terminal/TerminalMarkdownPreview";
 import {
   createTerminalCliContext,
+  isClaudeTerminalContext,
   isCodexTerminalContext,
 } from "../terminal/browser/TerminalCliContext";
 import { createTerminalMouseInteractionOptions } from "../terminal/browser/TerminalMouseInteraction";
@@ -1697,7 +1699,12 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       forwarding: inputForwarding,
       osPlatformRef,
       scheduleFit,
-      resolveCompositionAnchor: piTerminalCompatibilityRef.current?.resolveImeCompositionAnchor,
+      resolveCompositionAnchor: (runtimeTerminal, anchor) => {
+        const piAnchor = piTerminalCompatibilityRef.current?.resolveImeCompositionAnchor(runtimeTerminal, anchor) ?? anchor;
+        return isClaudeTerminalContext(getSessionToolContext())
+          ? resolveClaudeImeCompositionAnchor(runtimeTerminal, piAnchor)
+          : piAnchor;
+      },
       resolveTextareaAnchor: piTerminalCompatibilityRef.current?.resolveImeTextareaAnchor,
       shouldRefreshCompositionAnchor: piTerminalCompatibilityRef.current?.shouldRefreshImeCompositionAnchor,
       onCompositionCommitted: (textareaValue) => {

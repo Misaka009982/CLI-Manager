@@ -22,10 +22,16 @@ import {
   hasDataTransferType,
 } from "../lib/terminalClipboardImage";
 import {
+  appendTerminalFileDragSeparator,
   endTerminalFileDrag,
   getTerminalFileDropZoneIdAtPoint,
+  getTerminalFileDragPayload,
   getTerminalFileDragText,
+  parseTerminalFileDragPayload,
+  markTerminalFileDragPanelSyncSuppression,
   registerTerminalDropZone,
+  TERMINAL_FILE_DRAG_MIME,
+  type TerminalFileDragPayload,
   updateTerminalFileDragPointFromEvent,
 } from "../lib/terminalFileDrag";
 import {
@@ -70,6 +76,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 import { terminalProcessManager } from "../terminal/core/TerminalProcessManager";
 import { useTemplateStore } from "../stores/templateStore";
 import { useTerminalStore } from "../stores/terminalStore";
+import { findProjectByPath, isSameProjectFileLocation, projectWithWorktreePath } from "../lib/terminalProject";
 
 const SUGGESTION_CONTEXT_CACHE_TTL_MS = 2_000;
 const SUGGESTION_LOCAL_DEBOUNCE_MS = 80;
@@ -1155,6 +1162,28 @@ export function useTerminalInput({
     return { session, project };
   };
 
+  const getCurrentTerminalProject = () => {
+    const terminalState = useTerminalStore.getState();
+    const session = terminalState.sessions.find((item) => item.id === sessionId) ?? null;
+    const projectState = useProjectStore.getState();
+    const project = session?.projectId
+      ? projectState.projects.find((item) => item.id === session.projectId) ?? null
+      : findProjectByPath(projectState.projects, session?.cwd);
+    if (!project) return null;
+
+    const worktree = session?.worktreeId
+      ? projectState.worktrees.find((item) => item.id === session.worktreeId && item.project_id === project.id)
+      : null;
+    return worktree ? projectWithWorktreePath(project, worktree) : project;
+  };
+
+  const resolveTerminalFileDragText = (payload: TerminalFileDragPayload) => {
+    const targetProject = getCurrentTerminalProject();
+    return targetProject && isSameProjectFileLocation(payload.source, targetProject)
+      ? payload.text
+      : payload.absolutePath || payload.text;
+  };
+
   const isSshPasteContext = (context: ReturnType<typeof getCurrentPasteContext>) => (
     context.session?.environmentType === "ssh" || context.project?.environment_type === "ssh"
   );
@@ -1225,12 +1254,17 @@ export function useTerminalInput({
       return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
     };
     const hasTerminalFileDragData = (dataTransfer: DataTransfer | null) => (
-      Boolean(getTerminalFileDragText()) || hasDataTransferType(dataTransfer, TERMINAL_FILE_PATH_MIME)
+      Boolean(getTerminalFileDragPayload())
+      || hasDataTransferType(dataTransfer, TERMINAL_FILE_DRAG_MIME)
+      || hasDataTransferType(dataTransfer, TERMINAL_FILE_PATH_MIME)
     );
     const unregisterTerminalDropZone = registerTerminalDropZone({
       id: sessionId,
       getRect: () => (isVisibleRef.current ? pasteTarget.getBoundingClientRect() : null),
-      paste: pasteIntoTerminal,
+      paste: (payload) => {
+        markTerminalFileDragPanelSyncSuppression();
+        pasteIntoTerminal(appendTerminalFileDragSeparator(resolveTerminalFileDragText(payload)));
+      },
       focus: () => terminal.focus(),
     });
     const onPaste = (event: ClipboardEvent) => {
@@ -1296,14 +1330,18 @@ export function useTerminalInput({
     };
     const onDrop = (event: DragEvent) => {
       if (!isPointInsidePasteTarget(event.clientX, event.clientY) || !hasTerminalFileDragData(event.dataTransfer)) return;
-      const text = getTerminalFileDragText()
-        || event.dataTransfer?.getData(TERMINAL_FILE_PATH_MIME)
-        || event.dataTransfer?.getData("text/plain")
-        || "";
+      const payload = getTerminalFileDragPayload()
+        || parseTerminalFileDragPayload(event.dataTransfer?.getData(TERMINAL_FILE_DRAG_MIME));
+      const text = payload
+        ? resolveTerminalFileDragText(payload)
+        : event.dataTransfer?.getData(TERMINAL_FILE_PATH_MIME)
+          || event.dataTransfer?.getData("text/plain")
+          || "";
       event.preventDefault();
       event.stopPropagation();
       if (!text) return;
-      pasteIntoTerminal(text);
+      if (payload) markTerminalFileDragPanelSyncSuppression();
+      pasteIntoTerminal(payload ? appendTerminalFileDragSeparator(text) : text);
       endTerminalFileDrag();
       terminal.focus();
     };

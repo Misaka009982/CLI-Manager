@@ -14,15 +14,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { copyAiText } from "../../lib/aiClipboard";
-import { formatAiPathBlock, formatAiRootTree, formatAiTree, TERMINAL_FILE_PATH_MIME } from "../../lib/aiPathFormatter";
+import { formatAbsoluteProjectFilePath, formatAiPathBlock, formatAiRootTree, formatAiTree, formatRelativeProjectFilePath, TERMINAL_FILE_PATH_MIME } from "../../lib/aiPathFormatter";
 import { debugConsoleWarn } from "../../lib/debugConsole";
 import { POINTER_DRAG_START_PX } from "../../lib/dragInteraction";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import {
   beginTerminalFileDrag,
   commitTerminalFileDragDrop,
+  createTerminalFileDragPayload,
   endTerminalFileDrag,
   getTerminalFileDropZoneIdAtPoint,
+  TERMINAL_FILE_DRAG_MIME,
   updateTerminalFileDragPointFromEvent,
 } from "../../lib/terminalFileDrag";
 import {
@@ -32,7 +34,7 @@ import {
   isFileExplorerIgnoreCaseInsensitive,
   type FileExplorerIgnoreMatcher,
 } from "../../lib/fileExplorerIgnore";
-import type { GitFileChange, ProjectFileContentMatch, ProjectFileEntry, ProjectFileSearchMode } from "../../lib/types";
+import type { GitFileChange, Project, ProjectFileContentMatch, ProjectFileEntry, ProjectFileSearchMode } from "../../lib/types";
 import { isDefaultCollapsedDirectoryName, useFileExplorerStore } from "../../stores/fileExplorerStore";
 import {
   createGitDiffWorkspaceContext,
@@ -74,6 +76,30 @@ type FileDisplayStatus =
 
 type DraggedFileEntry = Pick<ProjectFileEntry, "kind" | "name" | "path">;
 type Translate = ReturnType<typeof useI18n>["t"];
+
+function FilePathCopyMenuItems({
+  project,
+  path,
+  kind,
+  t,
+}: {
+  project: Project;
+  path: string;
+  kind: ProjectFileEntry["kind"];
+  t: Translate;
+}) {
+  return (
+    <>
+      <ContextMenuSeparator />
+      <ContextMenuItem onSelect={() => void copyAiText(formatRelativeProjectFilePath(path, kind), t("files.toast.relativePathCopied"))}>
+        <Copy size={13} /> {t("files.menu.copyRelativePath")}
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => void copyAiText(formatAbsoluteProjectFilePath(project, path, kind), t("files.toast.absolutePathCopied"))}>
+        <Copy size={13} /> {t("files.menu.copyAbsolutePath")}
+      </ContextMenuItem>
+    </>
+  );
+}
 
 const FILE_EXPLORER_ENTRY_MIME = "application/x-cli-manager-file-entry";
 const FILE_WATCH_REFRESH_DEBOUNCE_MS = 600;
@@ -645,7 +671,7 @@ function FileNode({
               {!readOnly && <ContextMenuItem onSelect={() => void openFileBrowserFolder(project.path, displayEntry.path, t)}>
                 <FolderOpen size={13} /> {t("files.menu.openContainingFolder")}
               </ContextMenuItem>}
-              <ContextMenuSeparator />
+              <FilePathCopyMenuItems project={project} path={displayEntry.path} kind={displayEntry.kind} t={t} />
               <ContextMenuItem onSelect={() => void copyAiText(formatAiPathBlock(displayEntry.path, displayEntry.kind), t("files.toast.aiPathCopied"))}>
                 <Copy size={13} /> {t("files.menu.copyAiPath")}
               </ContextMenuItem>
@@ -1289,13 +1315,14 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
 
   const handleFileDragStart = useCallback((event: ReactDragEvent<HTMLElement>, entry: ProjectFileEntry) => {
     if (!project) return;
-    const text = formatAiPathBlock(entry.path, entry.kind);
-    beginTerminalFileDrag(text);
+    const payload = createTerminalFileDragPayload(project, entry.path, entry.kind);
+    beginTerminalFileDrag(payload);
     updateTerminalFileDragPointFromEvent(event);
     event.dataTransfer.effectAllowed = "copyMove";
     event.dataTransfer.setData(FILE_EXPLORER_ENTRY_MIME, JSON.stringify({ kind: entry.kind, name: entry.name, path: entry.path }));
-    event.dataTransfer.setData(TERMINAL_FILE_PATH_MIME, text);
-    event.dataTransfer.setData("text/plain", text);
+    event.dataTransfer.setData(TERMINAL_FILE_DRAG_MIME, JSON.stringify(payload));
+    event.dataTransfer.setData(TERMINAL_FILE_PATH_MIME, payload.text);
+    event.dataTransfer.setData("text/plain", payload.text);
   }, [project]);
 
   const handleFileDrag = useCallback((event: ReactDragEvent<HTMLElement>) => {
@@ -1355,7 +1382,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
         resetPointerDrag();
         return;
       }
-      beginTerminalFileDrag(formatAiPathBlock(state.entry.path, state.entry.kind));
+      beginTerminalFileDrag(createTerminalFileDragPayload(project, state.entry.path, state.entry.kind));
       setDragPreview({
         x: event.clientX - state.preview.offsetX,
         y: event.clientY - state.preview.offsetY,
@@ -1487,6 +1514,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
           {!readOnly && <ContextMenuItem onSelect={() => void openFileBrowserFolder(project.path, match.path, t)}>
             <FolderOpen size={13} /> {t("files.menu.openContainingFolder")}
           </ContextMenuItem>}
+          <FilePathCopyMenuItems project={project} path={match.path} kind="file" t={t} />
           <ContextMenuItem onSelect={() => void copyAiText(formatAiPathBlock(match.path, "file"), t("files.toast.aiPathCopied"))}>
             <Copy size={13} /> {t("files.menu.copyAiPath")}
           </ContextMenuItem>
@@ -1578,6 +1606,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
         {!readOnly && <ContextMenuItem onSelect={() => void openFileBrowserFolder(project.path, entry.path, t)}>
           <FolderOpen size={13} /> {t("files.menu.openContainingFolder")}
         </ContextMenuItem>}
+          <FilePathCopyMenuItems project={project} path={entry.path} kind={entry.kind} t={t} />
           <ContextMenuItem onSelect={() => void copyAiText(formatAiPathBlock(entry.path, entry.kind), t("files.toast.aiPathCopied"))}>
             <Copy size={13} /> {t("files.menu.copyAiPath")}
           </ContextMenuItem>

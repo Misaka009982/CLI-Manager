@@ -262,6 +262,34 @@ const handleOpenProjectFiles = async (project: Project) => {
 
 **Tests**: Run `npx tsc --noEmit`; manually verify opening the right Files panel leaves the left project tree visible, while the left context-menu Browse Files action still opens a file tree with a working return button.
 
+### Convention: Internal terminal file drops preserve the source file panel context
+
+**What**: A file dragged from the file panel into any terminal uses a one-shot suppression marker while the target terminal receives focus. `TerminalTabs` must consume that marker before synchronizing the shared file explorer project, so the source project's selected directory remains visible after a cross-project drop.
+
+**Why**: Focusing a split terminal normally changes the active session and would otherwise replace the shared file panel project before the user can continue selecting files from the source directory.
+
+**Contracts**:
+
+- The suppression marker is set only after an internal file drag has resolved a terminal drop zone.
+- It is consumed once by `syncFilePanelProject`; ordinary terminal activation and explicit Files-panel navigation continue to synchronize normally.
+- Internal file-drag text appends one trailing space unless it already ends in whitespace; ordinary paste and system file drops keep their existing text behavior.
+
+**Tests**: Run `node --test scripts/fileExplorerPathActions.test.mjs` and `npx tsc --noEmit`; manually verify a file panel drag to another split project's terminal keeps the source project and directory, then verify the next explicit Files-panel switch still follows the selected terminal.
+
+### Convention: Terminal Tab CLI icons inherit Tab foreground color
+
+**What**: CLI-specific icons rendered inside terminal Tabs must receive `className="text-current"` so monochrome icons such as OpenCode and Pi follow the Tab's theme-aware foreground color.
+
+**Why**: The shared `CliToolIcon` default is suitable for normal application surfaces but can become low-contrast inside terminal chrome, whose foreground color is scoped by the active terminal theme.
+
+**Correct**:
+
+```tsx
+<CliToolIcon icon={cliToolIcon} size={14} className="text-current" />
+```
+
+**Tests**: Run `npx tsc --noEmit`; manually verify OpenCode and Pi Tabs in dark, light, and split-pane terminal themes.
+
 ### Convention: Optional-container Radix dialogs pick positioning by portal target
 
 **What**: A Radix `Dialog.Portal` that accepts an optional `container` must use container-relative `absolute inset-0` positioning only when a container is supplied. When the portal falls back to `document.body`, the overlay and content must use viewport-relative `fixed inset-0`.
@@ -1225,6 +1253,37 @@ Selected variants may keep overriding `border-color`, but the base rule must own
 
 **Prevention**: When a Mantine-backed settings card appears borderless, inspect the computed `border-width` and `border-style` before changing colors.
 
+### Gotcha: Keep the xterm 6.1 Beta DOM character-measure fallback hidden
+
+**Symptom**: A terminal opened in an older WebView shows 32 uppercase `W` characters above the canvas.
+
+**Cause**: `@xterm/xterm` `6.1.0-beta.288` falls back from `OffscreenCanvas` font metrics to a DOM span when the WebView does not expose `fontBoundingBoxAscent` and `fontBoundingBoxDescent`. The fallback span contains `"W".repeat(32)`, but that beta package removed the `.xterm-char-measure-element` hiding rule from its bundled CSS.
+
+**Contract**: While this xterm version remains pinned, `src/App.css` must keep a scoped `.xterm .xterm-char-measure-element` rule with `visibility: hidden`, absolute positioning, and offscreen placement. Keep `display: inline-block`; `display: none` would make `offsetWidth` and `offsetHeight` zero and break cell measurement.
+
+**Wrong**:
+
+```css
+.xterm .xterm-char-measure-element {
+  display: none;
+}
+```
+
+**Correct**:
+
+```css
+.xterm .xterm-char-measure-element {
+  display: inline-block;
+  visibility: hidden;
+  position: absolute;
+  top: 0;
+  left: -9999em;
+  line-height: normal;
+}
+```
+
+**Tests**: Statically assert that the complete rule remains in `src/App.css`; manually verify an older macOS WebView shows no measurement text and that terminal columns, IME placement, file-link hover icons, and normal glyph alignment remain correct.
+
 ### Gotcha: xterm.js `allowTransparency` is a construction-time option
 
 **Symptom**: After toggling a "transparent background" feature on a live `Terminal` instance, the background stays opaque even though `theme.background` was updated to `rgba(...)`.
@@ -1564,6 +1623,67 @@ invoke("pty_write", { sessionId, data });
 - [ ] Claude Code multi-line paste preserves line order and is not submitted line-by-line.
 - [ ] CMD still accepts normal paste and Enter behavior.
 - [ ] Browser text/image paste, app-internal file drag, and system file drop all focus the intended visible terminal only once.
+
+### Scenario: File explorer path actions and cross-project terminal drag
+
+#### 1. Scope / Trigger
+
+- Trigger: the file explorer adds relative/absolute path copy actions and sends a file or directory to an in-app terminal through drag-and-drop.
+- Boundary: the file explorer is the producer, `terminalFileDrag` is the in-memory/DataTransfer contract, and `useTerminalInput` resolves the payload for the target terminal session.
+
+#### 2. Signatures
+
+- `formatRelativeProjectFilePath(relativePath, kind)` returns the normalized project-relative path.
+- `formatAbsoluteProjectFilePath(project, relativePath, kind)` joins the local project root or SSH `remote_path` with the relative path.
+- `TerminalFileDragPayload` contains `text`, `absolutePath`, and `source` (`id`, `path`, `remote_path`, `environment_type`, `ssh_host_id`).
+- `TERMINAL_FILE_DRAG_MIME` carries the serialized payload across the browser drag boundary.
+- A registered terminal drop zone accepts `paste(payload)`, not a pre-resolved string.
+
+#### 3. Contracts
+
+- The source keeps the existing CLI-specific relative drag text for same-location drops.
+- The target compares the source location with its current project/worktree location using `isSameProjectFileLocation`.
+- Same project location uses `payload.text`; a different project, worktree, SSH host, or SSH remote root uses `payload.absolutePath`.
+- Local/WSL absolute paths use `project.path`; SSH absolute paths use `project.remote_path`.
+- The custom MIME payload is supplementary to `TERMINAL_FILE_PATH_MIME` and `text/plain`; older text-only drags remain accepted.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Behavior |
+| --- | --- |
+| Same local/WSL root | Paste the relative drag text |
+| Different local/WSL root or worktree | Paste the source absolute path |
+| Same SSH host and remote root | Paste the relative drag text |
+| Different SSH host or remote root | Paste the source remote absolute path |
+| Malformed custom payload | Ignore its metadata and fall back to legacy text data |
+| Empty source root | Keep the normalized relative path as the absolute-path fallback |
+
+#### 5. Good / Base / Bad Cases
+
+- Good: a file from project B is dropped into project A in a split pane and the terminal receives B's absolute path.
+- Base: a file from the current project's file panel is dropped into another pane for the same project and keeps the existing relative CLI format.
+- Bad: resolving the path when the drag starts and storing only one string; the target pane cannot detect that the source and target roots differ.
+- Bad: comparing only project IDs; two worktrees or two SSH roots can have different filesystem locations while sharing a project identity.
+
+#### 6. Tests Required
+
+- Static regression test asserts all file explorer context-menu variants expose both copy actions.
+- Static regression test asserts the drag payload includes source context, absolute fallback data, and the custom MIME field.
+- Static regression test asserts terminal drop resolution uses project/worktree location comparison and absolute fallback.
+- `npx tsc --noEmit` must cover the payload, drop-zone callback, and i18n keys.
+- Manually verify same-project pane, cross-project pane, cross-worktree pane, local/WSL, SSH same-root, SSH different-root, directory drag, and both `zh-CN`/`en-US` UI languages.
+
+#### 7. Wrong vs Correct
+
+```tsx
+// Wrong: the target terminal cannot distinguish project B from project A.
+beginTerminalFileDrag(relativeText);
+dropZone.paste(relativeText);
+
+// Correct: resolve at the target boundary using the source and target roots.
+beginTerminalFileDrag({ text: relativeText, absolutePath, source });
+dropZone.paste(payload);
+```
 
 ### Convention: Terminal input selection state stays in the Input controller
 
