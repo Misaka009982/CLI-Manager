@@ -12,10 +12,18 @@ test("today project usage never renders stats from another project scope", () =>
   assert.match(panelSource, /const todayUsageScopeKey = useMemo/);
   assert.match(
     panelSource,
-    /const todayStats = todayStatsState\?\.scopeKey === todayUsageScopeKey\s*\? todayStatsState\.value\s*: null/,
+    /const todayStats = todayStatsState\?\.scopeKey === todayUsageScopeKey[\s\S]*todayProjectStatsCache\.get\(todayUsageScopeKey\)/,
   );
   assert.match(
     panelSource,
-    /setTodayStatsState\(\{ scopeKey: todayUsageScopeKey, value: result \}\)/,
+    /const todayProjectStatsCache = new Map<string, TodayProjectStats>\(\)/,
+  );
+  assert.match(
+    panelSource,
+    /if \(result\) todayProjectStatsCache\.set\(todayUsageScopeKey, result\)/,
+  );
+  assert.match(
+    panelSource,
+    /value: result \?\? todayProjectStatsCache\.get\(todayUsageScopeKey\) \?\? null/,
   );
 });

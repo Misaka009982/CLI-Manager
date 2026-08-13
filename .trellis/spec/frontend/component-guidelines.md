@@ -1300,28 +1300,36 @@ invoke("pty_write", { sessionId, data: `${clearBeforeLaunch}${command}\r` });
 
 **Prevention**: When a TUI appears to scroll inside a partial screen, reproduce with prior shell output still visible. If old output remains above the TUI, fix the launch input sequence before changing scrollbar styles, TERM, alternate-screen flags, or xterm construction.
 
-### Common Mistake: Clearing xterm directly for user-facing clear screen
+### Common Mistake: Making user-facing clear screen depend on only one side of the PTY boundary
 
-**Symptom**: After a right-click "clear screen" action, the terminal output is cleared but IME candidate windows still open at the old pre-clear cursor position.
+**Symptom**: Calling `terminal.clear()` makes IME candidate windows open at the old pre-clear cursor position. Sending only Ctrl+L works at an idle shell, but right-click clear does nothing while a foreground process such as `tail -f` owns the PTY and ignores that byte.
 
-**Cause**: `terminal.clear()` mutates the xterm buffer directly and bypasses the normal PTY/shell input path. In `XTermTerminal`, IME positioning depends on xterm's helper textarea and composition anchoring. Bypassing the input path can leave the helper textarea anchored to stale pre-clear geometry.
+**Cause**: `terminal.clear()` mutates the xterm buffer directly without parser cursor events, while Ctrl+L is only PTY input and cannot require every foreground process to implement shell clear behavior. The display must clear locally through xterm's parser, then the process may redraw through the existing input path.
+
+**Fix**: Enqueue ED2 + cursor-home before sending Ctrl+L. This gives the emulator an immediate, process-independent clear and still lets a cooperating shell or TUI redraw its own prompt or screen.
 
 **Wrong**:
 
 ```tsx
 terminal.clear();
 terminal.focus();
+
+// Ctrl+L alone is ignored by foreground programs such as tail -f.
+terminalProcessManager.write(sessionId, "\x0c");
 ```
 
 **Correct**:
 
 ```tsx
 useTerminalStore.getState().markAttentionInputHandled(sessionId);
-invoke("pty_write", { sessionId, data: "\x0c" });
-terminal.focus();
+enqueueActiveWrite("\x1b[2J\x1b[H");
+terminalProcessManager.write(sessionId, "\x0c");
+focusTerminalWithCodexCursorPolicy(terminal);
 ```
 
-**Prevention**: For user-facing terminal clear actions, send Ctrl+L (`\x0c`) through `pty_write` so the shell/TUI clears or redraws through the same path as keyboard input. Reserve `terminal.clear()` for internal buffer maintenance where IME/helper textarea position is irrelevant.
+**Prevention**: For user-facing terminal clear actions, enqueue ED2 + cursor-home through the normal xterm write parser so foreground-process behavior cannot block the clear, then send Ctrl+L (`\x0c`) so shells and TUIs can redraw. Do not add ED3: context-menu clear preserves scrollback. Reserve `terminal.clear()` for internal buffer maintenance where IME/helper textarea position is irrelevant.
+
+**Tests**: Run `node --test scripts/terminalContextMenuClear.test.mjs scripts/terminalImeComposition.test.mjs` and `npx tsc --noEmit`; manually verify an idle shell, `tail -f`, a full-screen TUI, scrollback retention, and IME input after clearing.
 
 ### Convention: Keep application cursor visibility sequences intact by default
 

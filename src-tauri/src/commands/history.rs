@@ -216,6 +216,8 @@ struct SessionSummaryScan {
     first_user_message: Option<String>,
     first_message: Option<String>,
     branch: Option<String>,
+    first_timestamp_ms: Option<i64>,
+    last_timestamp_ms: Option<i64>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -3697,7 +3699,7 @@ pub(crate) fn invalidate_history_stats_caches() {
 // 内存索引（HISTORY_SESSION_INDEX）每次 App 启动后为空，首个 history_get_stats 必须
 // 全量解析所有 JSONL（可能上千个），冷启动耗时不可接受。这里把 per-file 解析结果落盘，
 // 重启后载入作为 build_history_index 的 previous，按 fingerprint 仅重解析变更文件。
-const HISTORY_INDEX_CACHE_VERSION: u32 = 11;
+const HISTORY_INDEX_CACHE_VERSION: u32 = 12;
 const HISTORY_INDEX_CACHE_FILE: &str = "history-index-cache.json";
 
 static HISTORY_INDEX_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -4088,6 +4090,8 @@ fn build_session_computation(
     summary_scan: SessionSummaryScan,
     stats: SessionStatsScan,
 ) -> CachedSessionComputation {
+    let computed_created_at = summary_scan.first_timestamp_ms.unwrap_or(created_at);
+    let computed_updated_at = summary_scan.last_timestamp_ms.unwrap_or(updated_at);
     let is_cursor_transcript = looks_like_cursor_agent_transcript_file(path);
     let cursor_metadata = if is_cursor_transcript {
         cursor_metadata_from_path(path)
@@ -4121,8 +4125,8 @@ fn build_session_computation(
         .unwrap_or_else(|| session_id.clone());
 
     let mut computed = CachedSessionComputation {
-        created_at,
-        updated_at,
+        created_at: computed_created_at,
+        updated_at: computed_updated_at.max(computed_created_at),
         session_id,
         parent_session_id: summary_scan.parent_session_id,
         title,
@@ -8417,6 +8421,8 @@ fn scan_session_inner(
                     first_user_message: None,
                     first_message: None,
                     branch: None,
+                    first_timestamp_ms: None,
+                    last_timestamp_ms: None,
                 },
                 SessionStatsScan::default(),
                 Vec::new(),
@@ -8430,6 +8436,8 @@ fn scan_session_inner(
     let mut first_user_message: Option<String> = None;
     let mut first_message: Option<String> = None;
     let mut branch: Option<String> = None;
+    let mut first_timestamp_ms: Option<i64> = None;
+    let mut last_timestamp_ms: Option<i64> = None;
     let mut input_tokens = 0u64;
     let mut output_tokens = 0u64;
     let mut cache_read_tokens = 0u64;
@@ -8473,6 +8481,8 @@ fn scan_session_inner(
         let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
             continue;
         };
+
+        update_timestamp_bounds(&value, &mut first_timestamp_ms, &mut last_timestamp_ms);
 
         if branch.is_none() {
             branch = extract_branch(&value);
@@ -8657,6 +8667,8 @@ fn scan_session_inner(
             first_user_message,
             first_message,
             branch,
+            first_timestamp_ms,
+            last_timestamp_ms,
         },
         SessionStatsScan {
             input_tokens,
@@ -9837,6 +9849,8 @@ fn empty_session_scan() -> (SessionSummaryScan, SessionStatsScan, Vec<HistoryMes
             first_user_message: None,
             first_message: None,
             branch: None,
+            first_timestamp_ms: None,
+            last_timestamp_ms: None,
         },
         SessionStatsScan::default(),
         Vec::new(),
@@ -10066,6 +10080,27 @@ fn json_session_scan_result(
     messages: Vec<HistoryMessage>,
     collect_messages: bool,
 ) -> (SessionSummaryScan, SessionStatsScan, Vec<HistoryMessage>) {
+    let (first_timestamp_ms, last_timestamp_ms) = messages
+        .iter()
+        .filter_map(|message| {
+            message
+                .timestamp
+                .as_deref()
+                .and_then(parse_timestamp_millis_str)
+        })
+        .fold((None::<i64>, None::<i64>), |(first, last), timestamp_ms| {
+            (
+                Some(
+                    first
+                        .map(|current| current.min(timestamp_ms))
+                        .unwrap_or(timestamp_ms),
+                ),
+                Some(
+                    last.map(|current| current.max(timestamp_ms))
+                        .unwrap_or(timestamp_ms),
+                ),
+            )
+        });
     let first_message = messages
         .iter()
         .find_map(message_title_candidate)
@@ -10097,6 +10132,8 @@ fn json_session_scan_result(
             first_user_message,
             first_message,
             branch: None,
+            first_timestamp_ms,
+            last_timestamp_ms,
         },
         stats,
         if collect_messages {
@@ -12871,6 +12908,51 @@ fn extract_timestamp_millis(value: &Value) -> Option<i64> {
         .find_map(parse_timestamp_millis_value)
 }
 
+fn update_timestamp_bounds(
+    value: &Value,
+    first_timestamp_ms: &mut Option<i64>,
+    last_timestamp_ms: &mut Option<i64>,
+) {
+    for candidate in [
+        value.get("timestamp"),
+        value.get("time"),
+        value.get("created_at"),
+        value.get("createdAt"),
+        value.get("message").and_then(|v| v.get("timestamp")),
+    ] {
+        update_timestamp_bound(candidate, first_timestamp_ms, last_timestamp_ms);
+    }
+    for nested in [value.get("payload"), value.get("data")] {
+        for candidate in [
+            nested.and_then(|v| v.get("timestamp")),
+            nested.and_then(|v| v.get("time")),
+            nested.and_then(|v| v.get("created_at")),
+            nested.and_then(|v| v.get("createdAt")),
+        ] {
+            update_timestamp_bound(candidate, first_timestamp_ms, last_timestamp_ms);
+        }
+    }
+}
+
+fn update_timestamp_bound(
+    candidate: Option<&Value>,
+    first_timestamp_ms: &mut Option<i64>,
+    last_timestamp_ms: &mut Option<i64>,
+) {
+    if let Some(timestamp_ms) = candidate.and_then(parse_timestamp_millis_value) {
+        *first_timestamp_ms = Some(
+            first_timestamp_ms
+                .map(|current| current.min(timestamp_ms))
+                .unwrap_or(timestamp_ms),
+        );
+        *last_timestamp_ms = Some(
+            last_timestamp_ms
+                .map(|current| current.max(timestamp_ms))
+                .unwrap_or(timestamp_ms),
+        );
+    }
+}
+
 fn parse_timestamp_millis_value(value: &Value) -> Option<i64> {
     match value {
         Value::Number(number) => number.as_f64().and_then(normalize_unix_timestamp_millis),
@@ -15475,6 +15557,36 @@ mod tests {
         let computed = scan_session_computation(&file, 1, 2);
 
         assert_eq!(computed.session_id, "019ed4a1-d197-75d0-950c-28cb3bbed404");
+        assert_eq!(computed.created_at, 1);
+        assert_eq!(computed.updated_at, 2);
+    }
+
+    #[test]
+    fn build_session_computation_uses_codex_transcript_timestamps_for_duration() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir
+            .path()
+            .join("rollout-2026-06-17T16-10-35-019ed4a1-d197-75d0-950c-28cb3bbed404.jsonl");
+        write_text(
+            &file,
+            concat!(
+                r#"{"timestamp":"2026-06-17T16:10:36Z","type":"session_meta","payload":{"id":"019ed4a1-d197-75d0-950c-28cb3bbed404","timestamp":"2026-06-17T16:10:35Z"}}"#,
+                "\n",
+                r#"{"timestamp":"2026-06-17T16:12:00Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+                "\n",
+            ),
+        );
+
+        let computed = scan_session_computation(&file, 1, 2);
+
+        assert_eq!(
+            computed.created_at,
+            parse_timestamp_millis_str("2026-06-17T16:10:35Z").unwrap()
+        );
+        assert_eq!(
+            computed.updated_at,
+            parse_timestamp_millis_str("2026-06-17T16:12:00Z").unwrap()
+        );
     }
 
     #[test]
