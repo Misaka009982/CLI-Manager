@@ -135,6 +135,9 @@ interface TerminalSession {
 - Stats aggregation and daily-index cache keys must include the canonical sorted/deduplicated project-path set, so ordering and duplicates reuse the same cache while different path sets remain isolated.
 - Route-backed stats must include a route-usage generation in the aggregation cache key. Writing a new `usage_records(data_source='route')` row must make the next `history_get_stats` call observe it without requiring a history-file refresh or `force=true`.
 - Route/session deduplication must replace only the matching local usage fact (session id plus bounded event-time match), then rebuild all dimensions from the retained session facts. Removing an entire session fact loses sessions, messages, heatmap, hourly, project, and efficiency dimensions.
+- `unified_usage_records` is the request-log billing source of truth. Route rows with usable usage are authoritative; a same-source local session row is hidden only when `source + session_id + model + output_tokens` match within 120 seconds of route completion (fall back to route start time) and input tokens match either directly or after folding cache read/write into input. This cache-inclusive compatibility is required for Codex/Gemini-style route responses whose `input_tokens` semantics differ from normalized local history rows.
+- The same cache-inclusive token compatibility and completion-time anchor apply when `merge_route_usage_into_history_stats` replaces a local fact. The request-log table, summary cards, request-log stats, and history overview must not use divergent route/session dedup rules.
+- Route request-log attribution must join `usage_records(data_source='route')` to `request_logs` by both normalized `source` and non-empty `session_id`. A resolved row must copy `project_key` and the history transcript path into `usage_records.file_path`, because `unified_usage_records` and the request-log UI read `file_path` for project/session display and session opening; `project_path` alone is not sufficient. Attribution SQL errors must propagate from `history_sync_request_logs` instead of being discarded.
 - SSE usage collectors must accept both `\n\n` and standard `\r\n\r\n` event delimiters. A streaming body Drop caused by client cancellation must finish the usage commit with an explicit interruption error.
 - Every failed provider/key attempt in a failover sequence writes a status-only route record with the shared logical request id and attempt index; the final response writes its own attempt record.
 - Heatmap-compatible buckets must include `sessions`, `messages`, `level`, and `session_refs`. Daily heatmap buckets use `day_start_utc`; hourly activity buckets use `hour_start_utc` plus `hour` so the frontend can render 24-hour drilldowns without guessing local bucket anchors.
@@ -202,6 +205,11 @@ interface TerminalSession {
 | Claude/Codex log exposes an explicit positive context limit field | Return that value as `context_window`; most recent exposed value wins during a scan. |
 | Same session switches model after earlier usage dominates totals | Keep `dominant_model` as the aggregate/dominant model, but return the latest model as `current_model` for realtime display. |
 | History cache invalidation runs | Clear file, stats, project, and aggregate caches together. |
+| Route row has `source + session_id` match in `request_logs` | Set `project_key`, `file_path`, and `attribution_status='resolved'`; the request-log row becomes openable. |
+| Route row has a non-empty session id but no same-source match | Keep project/file fields empty and set `attribution_status='unattributed'`. |
+| Route attribution SQL fails | Return the error from `history_sync_request_logs`; do not silently leave rows `pending`. |
+| Route and local rows share source/session/model/output, but route input equals local input plus cache tokens | Treat them as the same request and retain only route usage. |
+| Route/local source, session, model, output, input semantics, or 120-second completion-time window do not match | Keep both records; do not suppress unrelated local usage. |
 
 ### 5. Good/Base/Bad Cases
 
@@ -219,12 +227,16 @@ interface TerminalSession {
 - Good: a session where `claude-old` appears in more usage rows but the last assistant row uses `claude-new` returns `dominant_model = "claude-old"` and `current_model = "claude-new"`.
 - Good: StatsPanel selects a configured project path such as `D:\work\pythonProject\CLI-Manager`; frontend sends `projectPath`, backend matches Claude/Codex sessions through `session_matches_project_path`, and cache keys stay distinct from raw `projectKey` queries.
 - Good: TerminalStatsPanel on the main or Worktree tab sends the same parent + active Worktree path set and displays one deduplicated project total.
+- Good: a Codex route row sharing `source + session_id` with a local request-log row inherits its project key and transcript file, so the request-log table shows and can open the owning session.
+- Good: a Codex route row stores `input_tokens=1000`, while its local history row stores `input_tokens=100` plus `cache_read_tokens=900`; the unified request log keeps the route row and suppresses the local duplicate.
 - Base: a Codex session without model pricing still appears in stats with token totals and `unpriced_tokens`; a single-day stats view can map `hourly_activity` into 24 hourly trend and heatmap buckets.
 - Bad: frontend assumes a newly added numeric field is always present and renders `NaN` when older cached payloads omit it; realtime stats uses only project latest-session lookup and shows another window's current context.
 - Bad: a stats panel open passes `force=true` unconditionally, causing `history_get_stats` to rebuild indexes and repeatedly recompute fixed historical data.
 - Bad: realtime stats concatenates parent and child `token_trend` arrays directly or derives tool totals from merged `tool_events`, causing out-of-order trend points or inflated tool-call counts.
 - Bad: StatsPanel populates its dropdown from raw `history_list_stats_projects` values and sends those opaque keys for user-created project selection; this diverges from the left project tree and fails for path-normalized Claude/WSL/Codex sessions.
 - Bad: realtime today-usage reuses `latestSession.project_key` as the only filter after the session was found by Worktree path; the path context is lost and usage may be omitted.
+- Bad: route attribution writes only `project_path` or swallows a failed update; `unified_usage_records.file_path` stays empty and the UI shows an unknown project with no session action.
+- Bad: route/session dedup compares all four stored token columns for equality, so cache-inclusive route input never matches normalized local input and both rows are billed and displayed.
 
 ### 6. Tests Required
 
@@ -248,6 +260,8 @@ interface TerminalSession {
   - Tool event extraction returns bounded diagnostic rows for Claude `tool_use`, Codex `function_call`, `function_call_output`, and MCP end/error events without changing aggregate tool counts.
   - Claude explicit context-window fields populate `SessionStatsScan.context_window`; Claude usage without those fields keeps it `None`.
   - Same-session model switching keeps `dominant_model` unchanged for aggregate stats while exposing the latest model as `current_model`.
+  - Route attribution resolves `project_key + file_path` for a same-source session match and marks unmatched non-empty session IDs as `unattributed`.
+  - Unified request logs and history overview replace a cache-split local fact with its same-source/session/model/output route row using route completion time; mismatched source or token events remain separate.
 - Frontend checks:
   - `npm run build` must pass after payload/type changes.
   - Stats UI must render missing token/cost fields as zero, not `NaN`.
@@ -349,3 +363,41 @@ await fetchTodayProjectStatsMerged(
 ```
 
 The store sends one canonical `projectPaths` request. Backend path matching owns WSL/UNC normalization and ensures a session matching multiple paths is aggregated once.
+
+#### Wrong
+
+```rust
+let _ = crate::usage::reconcile_route_attribution().await;
+```
+
+Discarding the error leaves matching route rows permanently pending and makes a backend failure look like missing user data.
+
+#### Correct
+
+```rust
+crate::usage::reconcile_route_attribution().await?;
+```
+
+The attribution update matches `source + session_id`, copies the history transcript into `file_path`, and propagates SQL failures through the existing sync command.
+
+#### Wrong
+
+```sql
+AND route.input_tokens = session.input_tokens
+AND route.cache_read_tokens = session.cache_read_tokens
+```
+
+Codex-compatible route responses may report cache-inclusive input while local history normalizes cache into a separate column, so exact column equality preserves a duplicate.
+
+#### Correct
+
+```sql
+AND route.output_tokens = session.output_tokens
+AND (
+  route.input_tokens = session.input_tokens
+  OR route.input_tokens = session.input_tokens
+      + session.cache_read_tokens + session.cache_creation_tokens
+)
+```
+
+Keep output/model/session/time as identity guards, then normalize the known input-token semantic difference at the unified data boundary.

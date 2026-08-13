@@ -643,7 +643,7 @@ pub async fn history_sync_request_logs(
         force.unwrap_or(false),
     )
     .await?;
-    let _ = crate::usage::reconcile_route_attribution().await;
+    crate::usage::reconcile_route_attribution().await?;
     Ok(result)
 }
 
@@ -1255,6 +1255,12 @@ mod tests {
                 sqlx::query(statement).execute(&mut conn).await.unwrap();
             }
         }
+        for statement in crate::MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL.split(';') {
+            let statement = statement.trim();
+            if !statement.is_empty() {
+                sqlx::query(statement).execute(&mut conn).await.unwrap();
+            }
+        }
         conn
     }
 
@@ -1383,6 +1389,53 @@ mod tests {
         assert_eq!(page.summary.total_cache_creation_tokens, 1);
         assert!((page.summary.cache_hit_rate - (2.0 / 13.0)).abs() < f64::EPSILON);
         assert!(!page.data[0].session_available);
+    }
+
+    #[tokio::test]
+    async fn route_usage_replaces_cache_split_session_record() {
+        let mut conn = test_connection().await;
+        sqlx::query(
+            "INSERT INTO usage_records(
+                record_id, logical_request_id, data_source, source, event_key, file_path,
+                event_index, session_id, project_key, attribution_status, response_model,
+                pricing_model, input_tokens, output_tokens, cache_read_tokens,
+                cache_creation_tokens, usage_status, outcome, started_at_ms, completed_at_ms,
+                duration_ms, created_at_ms, updated_at_ms
+             ) VALUES ('session-row', 'session-row', 'session_log', 'codex', 'event-1',
+                'missing.jsonl', 0, 'session-a', 'project-a', 'resolved', 'gpt-test',
+                'gpt-test', 100, 20, 900, 0, 'complete', 'success', 30100, 30100,
+                0, 30100, 30100)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO usage_records(
+                record_id, logical_request_id, data_source, source, event_key, file_path,
+                event_index, session_id, project_key, attribution_status, provider_id,
+                provider_name, requested_model, outbound_model, response_model, pricing_model,
+                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                usage_status, status_code, outcome, started_at_ms, completed_at_ms, duration_ms,
+                created_at_ms, updated_at_ms
+             ) VALUES ('route-row', 'route-row', 'route', 'codex', '', 'missing.jsonl',
+                0, 'session-a', 'project-a', 'resolved', 'provider-a', 'Provider A',
+                'gpt-test', 'gpt-test', 'gpt-test', 'gpt-test', 1000, 20, 0, 0,
+                'complete', 200, 'success', 10000, 30000, 20000, 10000, 30000)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        let page =
+            list_request_logs_with_connection(&mut conn, RequestLogFilters::default(), 0, 20, None)
+                .await
+                .unwrap();
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.data[0].request_id, "route-row");
+        assert_eq!(page.data[0].data_source, "route");
+        assert_eq!(page.summary.total_input_tokens, 1000);
+        assert_eq!(page.summary.total_output_tokens, 20);
     }
 
     #[test]

@@ -540,6 +540,56 @@ const MIGRATION_CREATE_USAGE_RECORDS_SQL: &str = "
                     PRIMARY KEY(day_start_ms, source, project_key, provider_id, outbound_model)
                 );
               ";
+const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_VERSION: i64 = 28;
+const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL: &str = "
+                DROP VIEW IF EXISTS unified_usage_records;
+                CREATE VIEW unified_usage_records AS
+                SELECT
+                    u.record_id AS request_id,
+                    u.source,
+                    COALESCE(u.project_key, '') AS project_key,
+                    COALESCE(u.session_id, '') AS session_id,
+                    COALESCE(u.file_path, '') AS file_path,
+                    u.event_index,
+                    u.started_at_ms AS timestamp_ms,
+                    COALESCE(u.outbound_model, u.response_model, u.requested_model, u.pricing_model) AS model,
+                    u.input_tokens,
+                    u.output_tokens,
+                    u.cache_read_tokens,
+                    u.cache_creation_tokens,
+                    u.data_source,
+                    u.provider_id,
+                    u.provider_name,
+                    u.requested_model,
+                    u.outbound_model,
+                    u.response_model,
+                    u.usage_status,
+                    u.status_code,
+                    u.outcome,
+                    u.duration_ms,
+                    u.attempt_count,
+                    u.degraded
+                FROM usage_records u
+                WHERE u.data_source = 'route'
+                   OR NOT EXISTS (
+                        SELECT 1
+                        FROM usage_records r
+                        WHERE r.data_source = 'route'
+                          AND r.usage_status IN ('complete', 'partial')
+                          AND NULLIF(TRIM(r.session_id), '') IS NOT NULL
+                          AND r.source = u.source
+                          AND r.session_id = u.session_id
+                          AND ABS(COALESCE(r.completed_at_ms, r.started_at_ms) - u.started_at_ms) <= 120000
+                          AND LOWER(COALESCE(r.outbound_model, r.response_model, r.requested_model, ''))
+                              = LOWER(COALESCE(u.response_model, u.pricing_model, ''))
+                          AND r.output_tokens = u.output_tokens
+                          AND (
+                              r.input_tokens = u.input_tokens
+                              OR r.input_tokens = u.input_tokens + u.cache_read_tokens + u.cache_creation_tokens
+                              OR u.input_tokens = r.input_tokens + r.cache_read_tokens + r.cache_creation_tokens
+                          )
+                   );
+              ";
 fn migrations() -> Vec<Migration> {
     vec![
         Migration {
@@ -806,6 +856,12 @@ fn migrations() -> Vec<Migration> {
             version: MIGRATION_CREATE_USAGE_RECORDS_VERSION,
             description: "create_unified_usage_records",
             sql: MIGRATION_CREATE_USAGE_RECORDS_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_VERSION,
+            description: "deduplicate_routed_session_usage",
+            sql: MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL,
             kind: MigrationKind::Up,
         },
     ]

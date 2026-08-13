@@ -65,6 +65,7 @@ pub struct RouteUsageRecord {
     pub project_key: Option<String>,
     pub file_path: Option<String>,
     pub timestamp_ms: i64,
+    pub completed_at_ms: Option<i64>,
     pub model: Option<String>,
     pub usage: UsageTokens,
     pub usage_status: String,
@@ -444,7 +445,7 @@ pub async fn load_route_usage_records(
         .await
         .map_err(|err| format!("usage_db_open_failed: {err}"))?;
     let rows = sqlx::query(
-        "SELECT source, session_id, project_key, file_path, started_at_ms,
+        "SELECT source, session_id, project_key, file_path, started_at_ms, completed_at_ms,
                 COALESCE(outbound_model, response_model, requested_model) AS model,
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                 usage_status
@@ -467,6 +468,9 @@ pub async fn load_route_usage_records(
                 file_path: row.try_get("file_path").map_err(|err| err.to_string())?,
                 timestamp_ms: row
                     .try_get("started_at_ms")
+                    .map_err(|err| err.to_string())?,
+                completed_at_ms: row
+                    .try_get("completed_at_ms")
                     .map_err(|err| err.to_string())?,
                 model: row.try_get("model").map_err(|err| err.to_string())?,
                 usage: UsageTokens {
@@ -502,35 +506,69 @@ pub async fn reconcile_route_attribution() -> Result<u64, String> {
     let mut connection = SqliteConnection::connect_with(&options)
         .await
         .map_err(|err| format!("usage_db_open_failed: {err}"))?;
-    let result = sqlx::query(
-        "UPDATE usage_records
+    reconcile_route_attribution_with_connection(
+        &mut connection,
+        crate::provider::routing::now_millis(),
+    )
+    .await
+}
+
+async fn reconcile_route_attribution_with_connection(
+    connection: &mut SqliteConnection,
+    updated_at_ms: i64,
+) -> Result<u64, String> {
+    let resolved = sqlx::query(
+        "UPDATE usage_records AS target
          SET project_key = (
                  SELECT rl.project_key FROM request_logs rl
-                 WHERE rl.session_id = usage_records.session_id
-                 ORDER BY ABS(rl.timestamp_ms - usage_records.started_at_ms), rl.updated_at_ms DESC
+                 WHERE rl.source = target.source AND rl.session_id = target.session_id
+                 ORDER BY rl.updated_at_ms DESC
                  LIMIT 1
              ),
-             project_path = (
+             file_path = (
                  SELECT rl.file_path FROM request_logs rl
-                 WHERE rl.session_id = usage_records.session_id
-                 ORDER BY ABS(rl.timestamp_ms - usage_records.started_at_ms), rl.updated_at_ms DESC
+                 WHERE rl.source = target.source AND rl.session_id = target.session_id
+                 ORDER BY rl.updated_at_ms DESC
                  LIMIT 1
              ),
-             attribution_status = CASE WHEN EXISTS (
-                 SELECT 1 FROM request_logs rl
-                 WHERE rl.session_id = usage_records.session_id
-             ) THEN 'resolved' ELSE 'unattributed' END,
+             attribution_status = 'resolved',
              updated_at_ms = ?1
-         WHERE data_source = 'route'
-           AND (attribution_status <> 'resolved' OR project_key IS NULL)
-           AND session_id IS NOT NULL
-           AND trim(session_id) <> ''",
+         WHERE target.data_source = 'route'
+           AND (
+                target.attribution_status <> 'resolved'
+                OR target.project_key IS NULL
+                OR NULLIF(trim(target.file_path), '') IS NULL
+           )
+           AND target.session_id IS NOT NULL
+           AND trim(target.session_id) <> ''
+           AND EXISTS (
+                SELECT 1 FROM request_logs rl
+                WHERE rl.source = target.source AND rl.session_id = target.session_id
+           )",
     )
-    .bind(crate::provider::routing::now_millis())
-    .execute(&mut connection)
+    .bind(updated_at_ms)
+    .execute(&mut *connection)
     .await
     .map_err(|err| format!("usage_attribution_update_failed: {err}"))?;
-    Ok(result.rows_affected())
+    let unattributed = sqlx::query(
+        "UPDATE usage_records AS target
+         SET attribution_status = 'unattributed', updated_at_ms = ?1
+         WHERE target.data_source = 'route'
+           AND target.attribution_status NOT IN ('resolved', 'unattributed')
+           AND target.session_id IS NOT NULL
+           AND trim(target.session_id) <> ''
+           AND NOT EXISTS (
+                SELECT 1 FROM request_logs rl
+                WHERE rl.source = target.source AND rl.session_id = target.session_id
+           )",
+    )
+    .bind(updated_at_ms)
+    .execute(&mut *connection)
+    .await
+    .map_err(|err| format!("usage_attribution_update_failed: {err}"))?;
+    Ok(resolved
+        .rows_affected()
+        .saturating_add(unattributed.rows_affected()))
 }
 
 #[cfg(test)]
@@ -574,5 +612,76 @@ mod tests {
         let capture = collector.finish();
         assert_eq!(capture.usage.output_tokens, 6);
         assert!(capture.completed);
+    }
+
+    #[tokio::test]
+    async fn route_attribution_resolves_project_and_session_file() {
+        let mut connection = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE usage_records(
+                record_id TEXT PRIMARY KEY, data_source TEXT NOT NULL, source TEXT NOT NULL,
+                session_id TEXT, project_key TEXT, file_path TEXT,
+                attribution_status TEXT NOT NULL, updated_at_ms INTEGER NOT NULL
+             )",
+        )
+        .execute(&mut connection)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE request_logs(
+                request_id TEXT PRIMARY KEY, source TEXT NOT NULL, session_id TEXT NOT NULL,
+                project_key TEXT NOT NULL, file_path TEXT NOT NULL, updated_at_ms INTEGER NOT NULL
+             )",
+        )
+        .execute(&mut connection)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO usage_records VALUES
+                ('route:matched', 'route', 'codex', 'session-a', NULL, NULL, 'pending', 1),
+                ('route:missing', 'route', 'codex', 'session-missing', NULL, NULL, 'pending', 1)",
+        )
+        .execute(&mut connection)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO request_logs VALUES
+                ('local:matched', 'codex', 'session-a', 'project-a', 'session-a.jsonl', 10)",
+        )
+        .execute(&mut connection)
+        .await
+        .unwrap();
+
+        let changed = reconcile_route_attribution_with_connection(&mut connection, 20)
+            .await
+            .unwrap();
+        let matched = sqlx::query(
+            "SELECT project_key, file_path, attribution_status FROM usage_records
+             WHERE record_id = 'route:matched'",
+        )
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+        let missing: String = sqlx::query_scalar(
+            "SELECT attribution_status FROM usage_records WHERE record_id = 'route:missing'",
+        )
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+
+        assert_eq!(changed, 2);
+        assert_eq!(
+            matched.try_get::<String, _>("project_key").unwrap(),
+            "project-a"
+        );
+        assert_eq!(
+            matched.try_get::<String, _>("file_path").unwrap(),
+            "session-a.jsonl"
+        );
+        assert_eq!(
+            matched.try_get::<String, _>("attribution_status").unwrap(),
+            "resolved"
+        );
+        assert_eq!(missing, "unattributed");
     }
 }

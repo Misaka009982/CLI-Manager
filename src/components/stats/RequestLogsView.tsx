@@ -399,7 +399,7 @@ export function RequestLogsView({ onOpenSession, globalFilters }: RequestLogsVie
         {syncError && <div className="mt-2 text-[12px] text-danger" role="alert">{t("requestLogs.syncFailed", { error: syncError })}</div>}
       </Card>
 
-      <div className="grid grid-cols-2 gap-2 xl:grid-cols-5">
+      <div className="grid grid-cols-5 gap-2">
         {[
           { icon: FileText, label: t("requestLogs.summary.records"), value: formatCount(result?.summary.total ?? 0, language) },
           { icon: Layers3, label: t("requestLogs.summary.tokens"), value: formatCompact(result?.summary.total_tokens ?? 0, language) },
@@ -561,7 +561,9 @@ export function RequestLogsView({ onOpenSession, globalFilters }: RequestLogsVie
                       <td className="px-3 py-2.5 text-text-muted">
                         <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                           <span className={`h-1.5 w-1.5 rounded-full ${item.usage_status === "complete" ? "bg-primary/55" : "bg-warning"}`} aria-hidden="true" />
-                          {item.usage_status === "complete" ? t("requestLogs.status.recorded") : t(`requestLogs.usageStatus.${item.usage_status ?? "missing"}`)}
+                          {item.usage_status === "complete"
+                            ? t(item.data_source === "route" ? "requestLogs.dataSource.route" : "requestLogs.status.recorded")
+                            : t(`requestLogs.usageStatus.${item.usage_status ?? "missing"}`)}
                         </span>
                         {item.degraded && <div className="mt-1 text-[10px] text-warning">{t("requestLogs.status.degraded", { count: item.attempt_count ?? 1 })}</div>}
                       </td>

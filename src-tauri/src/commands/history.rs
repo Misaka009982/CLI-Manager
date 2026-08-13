@@ -8312,16 +8312,42 @@ fn route_record_matches_fact(
     let Some(session_id) = record.session_id.as_deref() else {
         return false;
     };
-    if session_id.trim().is_empty() || fact.summary.session_id != session_id {
+    if session_id.trim().is_empty()
+        || record.source != fact.summary.source
+        || fact.summary.session_id != session_id
+    {
         return false;
     }
-    if (record.timestamp_ms - fact.occurred_at).unsigned_abs() > 120_000 {
+    let route_event_at = record.completed_at_ms.unwrap_or(record.timestamp_ms);
+    if (route_event_at - fact.occurred_at).unsigned_abs() > 120_000 {
         return false;
     }
-    record.usage.input_tokens == fact.stats.input_tokens
-        && record.usage.output_tokens == fact.stats.output_tokens
-        && record.usage.cache_read_tokens == fact.stats.cache_read_tokens
-        && record.usage.cache_creation_tokens == fact.stats.cache_creation_tokens
+    if record
+        .model
+        .as_deref()
+        .zip(fact.model.as_deref())
+        .is_some_and(|(route_model, session_model)| {
+            !route_model.eq_ignore_ascii_case("unknown")
+                && !session_model.eq_ignore_ascii_case("unknown")
+                && !route_model.eq_ignore_ascii_case(session_model)
+        })
+    {
+        return false;
+    }
+    let session_total_input = fact
+        .stats
+        .input_tokens
+        .saturating_add(fact.stats.cache_read_tokens)
+        .saturating_add(fact.stats.cache_creation_tokens);
+    let route_total_input = record
+        .usage
+        .input_tokens
+        .saturating_add(record.usage.cache_read_tokens)
+        .saturating_add(record.usage.cache_creation_tokens);
+    record.usage.output_tokens == fact.stats.output_tokens
+        && (record.usage.input_tokens == fact.stats.input_tokens
+            || record.usage.input_tokens == session_total_input
+            || route_total_input == fact.stats.input_tokens)
 }
 
 fn extract_session_meta_parent_id(value: &Value) -> Option<String> {
@@ -12934,6 +12960,105 @@ fn system_time_to_millis(time: SystemTime) -> i64 {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    fn request_log_dedup_fixture(
+        source: &str,
+        session_id: &str,
+        occurred_at: i64,
+        model: &str,
+        usage: UsageStatsScan,
+    ) -> HistoryStatsSessionFact {
+        HistoryStatsSessionFact {
+            summary: HistorySessionSummary {
+                session_id: session_id.to_string(),
+                parent_session_id: None,
+                source: source.to_string(),
+                project_key: "project".to_string(),
+                title: "session".to_string(),
+                file_path: "session.jsonl".to_string(),
+                cwd: None,
+                created_at: occurred_at,
+                updated_at: occurred_at,
+                message_count: 1,
+                branch: None,
+            },
+            occurred_at,
+            stats: usage,
+            model: Some(model.to_string()),
+        }
+    }
+
+    #[test]
+    fn route_usage_matches_cache_split_session_fact_at_completion_time() {
+        let fact = request_log_dedup_fixture(
+            "codex",
+            "session-a",
+            30_100,
+            "gpt-test",
+            UsageStatsScan {
+                input_tokens: 100,
+                output_tokens: 20,
+                cache_read_tokens: 900,
+                cache_creation_tokens: 0,
+                total_cost_usd: 0.0,
+                unpriced_tokens: 0,
+            },
+        );
+        let record = crate::usage::RouteUsageRecord {
+            source: "codex".to_string(),
+            session_id: Some("session-a".to_string()),
+            project_key: Some("project".to_string()),
+            file_path: Some("session.jsonl".to_string()),
+            timestamp_ms: 10_000,
+            completed_at_ms: Some(30_000),
+            model: Some("gpt-test".to_string()),
+            usage: crate::usage::UsageTokens {
+                input_tokens: 1_000,
+                output_tokens: 20,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+            },
+            usage_status: "complete".to_string(),
+        };
+
+        assert!(route_record_matches_fact(&record, &fact));
+    }
+
+    #[test]
+    fn route_usage_does_not_replace_another_source_or_token_event() {
+        let fact = request_log_dedup_fixture(
+            "claude",
+            "session-a",
+            30_100,
+            "gpt-test",
+            UsageStatsScan {
+                input_tokens: 100,
+                output_tokens: 21,
+                cache_read_tokens: 900,
+                cache_creation_tokens: 0,
+                total_cost_usd: 0.0,
+                unpriced_tokens: 0,
+            },
+        );
+        let record = crate::usage::RouteUsageRecord {
+            source: "codex".to_string(),
+            session_id: Some("session-a".to_string()),
+            project_key: Some("project".to_string()),
+            file_path: Some("session.jsonl".to_string()),
+            timestamp_ms: 10_000,
+            completed_at_ms: Some(30_000),
+            model: Some("gpt-test".to_string()),
+            usage: crate::usage::UsageTokens {
+                input_tokens: 1_000,
+                output_tokens: 20,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+            },
+            usage_status: "complete".to_string(),
+        };
+
+        assert!(!route_record_matches_fact(&record, &fact));
+    }
 
     fn write_file(path: &Path) {
         write_text(path, "{}\n");
