@@ -20,7 +20,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { toast } from "sonner";
 import aiAvatarUrl from "../../assets/history-ai-avatar.svg";
 import userAvatarUrl from "../../assets/history-user-avatar.svg";
@@ -149,17 +149,9 @@ type ConversationMessageRow = {
   messageIndex: number;
   message: HistoryMessage;
   content: string;
-  details: HistoryMessagePart[];
 };
 
-type ConversationDetailRow = {
-  type: "details";
-  key: string;
-  messageIndices: number[];
-  details: HistoryMessagePart[];
-};
-
-type ConversationRow = ConversationMessageRow | ConversationDetailRow;
+type ConversationRow = ConversationMessageRow;
 
 function fallbackMessageParts(message: HistoryMessage): HistoryMessagePart[] {
   const role = normalizeMessageRole(message.role);
@@ -175,134 +167,37 @@ function effectiveMessageParts(message: HistoryMessage): HistoryMessagePart[] {
   return message.parts?.length ? message.parts : fallbackMessageParts(message);
 }
 
+export function isConversationVisibleMessage(message: HistoryMessage): boolean {
+  const role = normalizeMessageRole(message.role);
+  if (role !== "user" && role !== "assistant") return false;
+  return effectiveMessageParts(message).some((part) => part.kind === "text" && part.content.trim().length > 0);
+}
+
 export function buildConversationRows(messages: HistoryMessage[]): ConversationRow[] {
   const rows: ConversationRow[] = [];
-  let pendingDetails: ConversationDetailRow | null = null;
-  const flushDetails = () => {
-    if (!pendingDetails) return;
-    rows.push(pendingDetails);
-    pendingDetails = null;
-  };
 
   messages.forEach((message, messageIndex) => {
+    if (!isConversationVisibleMessage(message)) return;
     const parts = effectiveMessageParts(message);
     const textParts = parts.filter((part) => part.kind === "text");
-    const details = parts.filter((part) => part.kind !== "text");
-    if (textParts.length > 0) {
-      flushDetails();
-      rows.push({
-        type: "message",
-        key: `message:${messageIndex}`,
-        messageIndex,
-        message,
-        content: textParts.map((part) => part.content).join("\n\n"),
-        details,
-      });
-      return;
-    }
-
-    if (!pendingDetails) {
-      pendingDetails = {
-        type: "details",
-        key: `details:${messageIndex}`,
-        messageIndices: [],
-        details: [],
-      };
-    }
-    pendingDetails.messageIndices.push(messageIndex);
-    pendingDetails.details.push(...parts);
+    if (textParts.length === 0) return;
+    rows.push({
+      type: "message",
+      key: `message:${messageIndex}`,
+      messageIndex,
+      message,
+      content: textParts.map((part) => part.content).join("\n\n"),
+    });
   });
-  flushDetails();
   return rows;
 }
 
 function conversationRowMessageIndices(row: ConversationRow): number[] {
-  return row.type === "message" ? [row.messageIndex] : row.messageIndices;
+  return [row.messageIndex];
 }
 
 function findConversationRowIndex(rows: ConversationRow[], messageIndex: number): number {
   return rows.findIndex((row) => conversationRowMessageIndices(row).includes(messageIndex));
-}
-
-function partLabelKey(kind: HistoryMessagePartKind): TranslationKey {
-  switch (kind) {
-    case "tool_call": return "history.detail.part.tool_call";
-    case "tool_result": return "history.detail.part.tool_result";
-    case "reasoning": return "history.detail.part.reasoning";
-    case "system": return "history.detail.part.system";
-    case "metadata": return "history.detail.part.metadata";
-    default: return "history.detail.part.unknown";
-  }
-}
-
-function containsPartQuery(parts: HistoryMessagePart[], query: string): boolean {
-  const normalized = query.trim();
-  if (!normalized) return false;
-  const matcher = new RegExp(normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-  return parts.some((part) => matcher.test(part.content));
-}
-
-function ConversationDetails({
-  parts,
-  query,
-  forceOpen,
-  onSizeChange,
-}: {
-  parts: HistoryMessagePart[];
-  query: string;
-  forceOpen: boolean;
-  onSizeChange: () => void;
-}) {
-  const { t } = useI18n();
-  const [open, setOpen] = useState(forceOpen);
-  const counts = useMemo(() => {
-    const result = new Map<HistoryMessagePartKind, number>();
-    for (const part of parts) result.set(part.kind, (result.get(part.kind) ?? 0) + 1);
-    return result;
-  }, [parts]);
-  const summary = Array.from(counts.entries())
-    .map(([kind, count]) => `${t(partLabelKey(kind))} ${count}`)
-    .join(" · ");
-
-  useEffect(() => {
-    setOpen(forceOpen);
-  }, [parts]);
-
-  useEffect(() => {
-    if (forceOpen) setOpen(true);
-  }, [forceOpen]);
-
-  useEffect(() => {
-    onSizeChange();
-  }, [onSizeChange, open]);
-
-  return (
-    <div className="ui-history-conversation-details" data-open={open ? "true" : undefined}>
-      <button
-        type="button"
-        className="ui-history-conversation-details-toggle"
-        aria-expanded={open}
-        aria-label={t(open ? "history.detail.hiddenSectionCollapse" : "history.detail.hiddenSectionExpand")}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span aria-hidden="true">{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
-        {t("history.detail.hiddenSection", { summary })}
-      </button>
-      {open && (
-        <div className="ui-history-conversation-details-content">
-          {parts.map((part, index) => (
-            <section key={`${part.kind}:${index}`} className="ui-history-conversation-part" data-kind={part.kind}>
-              <div className="ui-history-conversation-part-label">
-                {t(partLabelKey(part.kind))}
-                {part.tool_name ? ` · ${part.tool_name}` : ""}
-              </div>
-              <SessionTranscriptContent content={part.content} query={query} />
-            </section>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 function ConversationRowCard({
@@ -326,9 +221,6 @@ function ConversationRowCard({
   const message = row.type === "message" ? row.message : null;
   const roleKind = message ? normalizeMessageRole(message.role) : "other";
   const avatarUrl = roleKind === "user" ? userAvatarUrl : aiAvatarUrl;
-  const details = row.details;
-  const detailsMatched = containsPartQuery(details, query);
-  const forceOpen = isFocused || detailsMatched;
   const messageMeta = message ? formatMessageMeta(message) : null;
 
   const setCardRef = (element: HTMLDivElement | null) => {
@@ -339,47 +231,27 @@ function ConversationRowCard({
     if (element) measureElement(element);
   };
 
-  const remeasure = useCallback(() => {
-    if (cardRef.current) measureElement(cardRef.current);
-  }, [measureElement]);
-
   return (
     <div
       ref={setCardRef}
       data-index={virtualIndex}
-      className={row.type === "message"
-        ? "ui-history-message-card ui-history-conversation-message absolute left-0 top-0 w-full px-2.5 py-2"
-        : "ui-history-conversation-detail-row absolute left-0 top-0 w-full px-2.5 py-2"}
+      className="ui-history-message-card ui-history-conversation-message absolute left-0 top-0 w-full px-2.5 py-2"
       data-role={roleKind}
       style={{
         borderColor: isFocused ? "var(--warning)" : isMatched ? "var(--accent)" : "transparent",
       }}
     >
-      {row.type === "details" ? (
-        <>
-          <span className="ui-history-message-avatar" aria-hidden="true"><img src={avatarUrl} alt="" /></span>
-          <div className="ui-history-message-stack">
-            <ConversationDetails parts={details} query={query} forceOpen={forceOpen} onSizeChange={remeasure} />
-          </div>
-        </>
-      ) : (
-        <>
-          {roleKind !== "user" && (
-            <span className="ui-history-message-avatar" aria-hidden="true"><img src={avatarUrl} alt="" /></span>
-          )}
-          <div className="ui-history-message-stack">
-            {messageMeta && <div className="ui-history-message-meta" title={messageMeta}>{messageMeta}</div>}
-            <div className="ui-history-message-bubble">
-              <SessionTranscriptContent content={row.content} query={query} />
-            </div>
-            {details.length > 0 && (
-              <ConversationDetails parts={details} query={query} forceOpen={forceOpen} onSizeChange={remeasure} />
-            )}
-          </div>
-          {roleKind === "user" && (
-            <span className="ui-history-message-avatar" aria-hidden="true"><img src={avatarUrl} alt="" /></span>
-          )}
-        </>
+      {roleKind !== "user" && (
+        <span className="ui-history-message-avatar" aria-hidden="true"><img src={avatarUrl} alt="" /></span>
+      )}
+      <div className="ui-history-message-stack">
+        {messageMeta && <div className="ui-history-message-meta" title={messageMeta}>{messageMeta}</div>}
+        <div className="ui-history-message-bubble">
+          <SessionTranscriptContent content={row.content} query={query} />
+        </div>
+      </div>
+      {roleKind === "user" && (
+        <span className="ui-history-message-avatar" aria-hidden="true"><img src={avatarUrl} alt="" /></span>
       )}
     </div>
   );

@@ -29,19 +29,20 @@ test("conversation is the default view and transcript remains independent", () =
   assert.match(detailSource, /virtualIndex=\{virtualRow\.index\}/);
 });
 
-test("legacy messages fall back by role and adjacent hidden rows are grouped", () => {
+test("conversation keeps only visible user and assistant text", () => {
   assert.match(detailSource, /message\.parts\?\.length \? message\.parts : fallbackMessageParts\(message\)/);
   assert.match(detailSource, /role === "user" \|\| role === "assistant"/);
-  assert.match(detailSource, /pendingDetails\.messageIndices\.push\(messageIndex\)/);
-  assert.match(detailSource, /pendingDetails\.details\.push\(\.\.\.parts\)/);
+  assert.match(detailSource, /if \(role !== "user" && role !== "assistant"\) return false;/);
+  assert.match(detailSource, /if \(textParts\.length === 0\) return;/);
+  assert.match(detailSource, /isConversationVisibleMessage/);
   assert.match(storeSource, /parts: parts\.length > 0 \? parts : undefined/);
 });
 
-test("search and cross-view jumps reveal conversation details", () => {
+test("search and cross-view jumps keep the conversation view targetable", () => {
   assert.match(workspaceSource, /message\.parts\?\.some\(\(part\) => matcher\.test\(part\.content\)\)/);
-  assert.match(workspaceSource, /const jumpToMessage = async[\s\S]*setDetailView\("conversation"\)/);
-  assert.match(detailSource, /const forceOpen = isFocused \|\| detailsMatched/);
-  assert.match(detailSource, /if \(forceOpen\) setOpen\(true\)/);
+  assert.match(workspaceSource, /const jumpToMessage = async[\s\S]*setDetailView\(targetMessage && isConversationVisibleMessage\(targetMessage\) \? "conversation" : "transcript"\)/);
+  assert.match(detailSource, /findConversationRowIndex\(conversationRows, activeMatchIndex\)/);
+  assert.match(detailSource, /findConversationRowIndex\(conversationRows, focusedMessageIndex\)/);
 });
 
 test("the whole session row opens once while action buttons stop propagation", () => {

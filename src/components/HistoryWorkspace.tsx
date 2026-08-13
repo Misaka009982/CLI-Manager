@@ -28,7 +28,7 @@ import { PromptLibrary } from "./prompts/PromptLibrary";
 import { DiffModal } from "./history/DiffModal";
 import { EditAuditModal } from "./history/EditAuditModal";
 import { HistoryListPane } from "./history/HistoryListPane";
-import { SessionDetailPane, type HistoryDetailView } from "./history/SessionDetailPane";
+import { isConversationVisibleMessage, SessionDetailPane, type HistoryDetailView } from "./history/SessionDetailPane";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { buildHistorySessionChildMap, toGroupLabel, type TimeGroupLabel } from "./history/historyViewUtils";
 import { buildSessionProcessModel, type SessionProcessModel } from "./history/sessionEvents";
@@ -1139,7 +1139,8 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const jumpToMessage = async (messageIndex: number) => {
     if (!activeView) return;
     try {
-      setDetailView("conversation");
+      const targetMessage = activeSession?.messages[messageIndex];
+      setDetailView(targetMessage && isConversationVisibleMessage(targetMessage) ? "conversation" : "transcript");
       await openSessionAtMessage(activeView.sessionKey, messageIndex);
     } catch (err) {
       toast.error("定位消息失败", { description: String(err) });

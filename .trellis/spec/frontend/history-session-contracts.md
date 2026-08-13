@@ -19,8 +19,8 @@
 ### 3. Contracts
 
 - Keep `HistoryMessage.content` and original message indices stable. Search, edit, conversion, snapshots, file-change/tool-event links, and the Transcript tab still use the flat message contract.
-- The Conversation tab is the default. It displays only `text` parts as user/assistant bubbles and groups adjacent messages containing only non-text parts into one collapsed detail row.
-- Mixed messages keep text visible and attach their non-text parts as one collapsed section under the same bubble. The summary shows localized category counts.
+- The Conversation tab is the default. It displays only non-empty `text` parts from `user`/`assistant` messages as bubbles; system/developer injections, tool records, reasoning, metadata, and other roles are omitted from this view.
+- The Transcript tab remains the complete audit path for omitted non-text parts. The Conversation view must not fabricate a placeholder or empty bubble when a message has no visible text.
 - The Transcript tab remains independent and complete, including long-message folding and local message edit/delete/insert actions.
 - Search scans both flat `content` and part `content`. A hit in a collapsed part, or a jump from Timeline/Changes/Tools/Subtasks, switches to Conversation, opens the relevant detail section, and keeps the original message index as the coordinate.
 - When `parts` is absent or empty, the frontend conservatively maps user/assistant to `text`, tool to `tool_result`, system/injected prompts to `system`, and other roles to `unknown`.
@@ -46,10 +46,11 @@
 
 - Good: one assistant record contains reasoning, visible text, and a tool call; Conversation shows the answer and one expandable details section while Transcript stays byte-for-byte compatible at the message level.
 - Base: an old snapshot has only `role="user"` and `content`; Conversation displays it as ordinary text.
-- Good: consecutive tool-only records collapse into one category-count row, and a search match opens it automatically.
+- Good: consecutive system/tool/reasoning records disappear from Conversation while the same records remain available in Transcript.
 - Bad: derive Conversation only from role after structured parts exist, because mixed reasoning/tool content would remain merged into the visible answer.
 - Bad: remove or filter messages in the backend, because message-index links from Diff/Tools would shift.
 - Bad: classify only a user block whose first line says `Agents.md instructions for ...`; this leaks injected context that begins with a normal heading into the visible conversation.
+- Bad: render every `user`/`assistant` record as visible text without checking its parts; embedded system/developer context then appears as a user prompt.
 - Bad: measure a virtualized Conversation row without its `data-index`, or render detail-only rows outside the avatar/stack wrapper; expansion then produces stale heights or a layout unlike the Transcript tab.
 
 ### 6. Tests Required
