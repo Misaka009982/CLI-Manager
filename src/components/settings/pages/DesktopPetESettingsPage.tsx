@@ -30,6 +30,7 @@ import {
 } from "../../../lib/desktopPetE";
 import { useI18n } from "../../../lib/i18n";
 import { useSettingsStore } from "../../../stores/settingsStore";
+import { useDesktopPetERuntimeStore } from "../../../stores/desktopPetERuntimeStore";
 
 interface ToggleRowProps {
   icon: ReactNode;
@@ -65,6 +66,7 @@ export function DesktopPetESettingsPage() {
   const { t } = useI18n();
   const desktopPet = useSettingsStore((state) => state.desktopPet);
   const desktopPetE = useSettingsStore((state) => state.desktopPetE);
+  const runtimeError = useDesktopPetERuntimeStore((state) => state.lastError);
   const updateSetting = useSettingsStore((state) => state.update);
   const [sizeDraft, setSizeDraft] = useState(desktopPetE.size);
   const enableBlocked = desktopPet.enabled && !desktopPetE.enabled;
@@ -122,6 +124,16 @@ export function DesktopPetESettingsPage() {
               onChange={(event) => void patch({ enabled: event.currentTarget.checked })}
             />
           </Group>
+          {runtimeError ? (
+            <Alert color="red" variant="light" title={t("desktopPetE.settings.runtimeErrorTitle")}>
+              <Stack gap={4}>
+                <Text size="xs">{t("desktopPetE.settings.runtimeErrorDescription")}</Text>
+                <Text size="xs" ff="var(--font-ui-mono)" className="break-all">
+                  {runtimeError.code}{runtimeError.detail ? `: ${runtimeError.detail}` : ""}
+                </Text>
+              </Stack>
+            </Alert>
+          ) : null}
           {enableBlocked ? (
             <Alert color="blue" variant="light" title={t("desktopPetE.settings.mutualExclusionTitle")}>
               {t("desktopPetE.settings.mutualExclusionDescription")}

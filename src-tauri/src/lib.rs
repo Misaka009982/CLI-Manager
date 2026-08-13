@@ -9,6 +9,7 @@ mod commands;
 mod conpty_sideload;
 mod crash_reporter;
 mod credential_store;
+mod desktop_pet_e_bridge;
 // daemon 二进制（src/bin/cli-manager-daemon.rs）经 lib 复用以下模块，
 // 因此 app_paths 与 daemon 需 pub。
 pub mod daemon;
@@ -938,6 +939,7 @@ pub fn run() {
         .manage(git_watcher::GitWatcherBridge::new())
         .manage(commands::subagent_transcript::SubagentTranscriptBridge::new())
         .manage(commands::cc_connect::CcConnectManager::new())
+        .manage(commands::desktop_pet_e::DesktopPetEManager::new())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(
             SqlBuilder::default()
@@ -988,6 +990,8 @@ pub fn run() {
             commands::desktop_pet::desktop_pet_window_set_bounds,
             commands::desktop_pet::desktop_pet_window_hide,
             commands::desktop_pet::desktop_pet_window_reset_position,
+            commands::desktop_pet_e::desktop_pet_e_sync,
+            commands::desktop_pet_e::desktop_pet_e_runtime_state,
             commands::terminal_shell::terminal_shell_scan,
             commands::terminal_shell::terminal_shell_icon,
             commands::ssh::ssh_client_status,
@@ -1236,6 +1240,8 @@ pub fn run() {
             if let tauri::RunEvent::Exit = &event {
                 app.state::<commands::cc_connect::CcConnectManager>()
                     .shutdown();
+                app.state::<commands::desktop_pet_e::DesktopPetEManager>()
+                    .shutdown(app);
                 crash_reporter::mark_graceful_exit();
             }
 

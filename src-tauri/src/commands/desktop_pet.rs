@@ -1,4 +1,5 @@
 use crate::app_paths;
+use crate::commands::desktop_pet_e::DesktopPetEManager;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -164,6 +165,8 @@ pub struct PetPosition {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopPetWindowConfig {
     pub enabled: bool,
+    #[serde(default)]
+    pub configured_enabled: Option<bool>,
     pub always_on_top: bool,
     pub scale: f64,
     pub position: Option<PetPosition>,
@@ -1264,8 +1267,10 @@ fn place_default<R: Runtime>(window: &tauri::WebviewWindow<R>) {
 #[tauri::command]
 pub fn desktop_pet_window_sync(
     app: AppHandle,
+    manager: tauri::State<'_, DesktopPetEManager>,
     config: DesktopPetWindowConfig,
 ) -> Result<(), String> {
+    manager.synchronize_existing_desktop_pet(config.configured_enabled.unwrap_or(config.enabled))?;
     let Some(window) = app.get_webview_window(PET_WINDOW_LABEL) else {
         return if config.enabled {
             Err("pet_window_missing".to_string())

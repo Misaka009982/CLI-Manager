@@ -22,12 +22,14 @@ import {
   type BackgroundPetTask,
 } from "../lib/desktopPet";
 import { sameBackgroundPetTasks } from "../lib/desktopPetTransport";
+import { desktopPetESyncFingerprint } from "../lib/desktopPetETransport";
 import { useI18n } from "../lib/i18n";
 import { logWarn } from "../lib/logger";
 import { useProjectStore } from "../stores/projectStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useTerminalStore } from "../stores/terminalStore";
+import { useDesktopPetERuntimeStore } from "../stores/desktopPetERuntimeStore";
 import { findPaneLeafBySession } from "../stores/terminalPaneTree";
 
 interface UseDesktopPetECoordinatorOptions {
@@ -53,13 +55,29 @@ function createInstanceId(): string {
 function isDesktopPetEChildAction(value: unknown): value is DesktopPetEChildAction {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
-  const kinds = ["open-task", "clear-task", "submit-action", "open-settings", "close-pet", "window-state"];
-  return typeof candidate.actionId === "string"
-    && candidate.actionId.length > 0
-    && typeof candidate.kind === "string"
-    && kinds.includes(candidate.kind)
-    && Number.isSafeInteger(candidate.snapshotRevision)
-    && (candidate.snapshotRevision as number) >= 0;
+  if (
+    typeof candidate.actionId !== "string"
+    || candidate.actionId.length === 0
+    || typeof candidate.kind !== "string"
+    || !Number.isSafeInteger(candidate.snapshotRevision)
+    || (candidate.snapshotRevision as number) < 0
+  ) {
+    return false;
+  }
+  if (candidate.kind === "open-task" || candidate.kind === "clear-task") {
+    return typeof candidate.taskId === "string" && candidate.taskId.length > 0;
+  }
+  if (candidate.kind === "submit-action") {
+    return typeof candidate.taskId === "string"
+      && candidate.taskId.length > 0
+      && typeof candidate.pendingActionId === "string"
+      && candidate.pendingActionId.length > 0;
+  }
+  if (candidate.kind === "window-state") {
+    const position = candidate.position;
+    return Boolean(position && typeof position === "object");
+  }
+  return candidate.kind === "open-settings" || candidate.kind === "close-pet";
 }
 
 function normalizeDesktopPetEPosition(position: DesktopPetEPosition): DesktopPetEPosition | null {
@@ -86,7 +104,9 @@ export function useDesktopPetECoordinator({
 }: UseDesktopPetECoordinatorOptions) {
   const { language, t } = useI18n();
   const settings = useSettingsStore((state) => state.desktopPetE);
+  const existingDesktopPetEnabled = useSettingsStore((state) => state.desktopPet.enabled);
   const settingsLoaded = useSettingsStore((state) => state.loaded);
+  const replaceRuntimeState = useDesktopPetERuntimeStore((state) => state.replace);
   const projects = useProjectStore((state) => state.projects);
   const persistedSessions = useSessionStore((state) => state.sessions);
   const {
@@ -120,6 +140,7 @@ export function useDesktopPetECoordinator({
   const snapshotRef = useRef<DesktopPetESnapshot | null>(null);
   const onOpenSettingsRef = useRef(onOpenSettings);
   const onActivateSessionRef = useRef(onActivateSession);
+  const lastSyncKeyRef = useRef<string | null>(null);
   settingsRef.current = settings;
   onOpenSettingsRef.current = onOpenSettings;
   onActivateSessionRef.current = onActivateSession;
@@ -199,25 +220,27 @@ export function useDesktopPetECoordinator({
     viewedTerminalTaskIds,
   ]);
 
-  const contentKey = desktopPetESnapshotContentKey(unversionedSnapshot);
-  if (
-    revisionRef.current.generation !== runtimeState.generation
-    || revisionRef.current.contentKey !== contentKey
-  ) {
-    revisionRef.current = {
-      generation: runtimeState.generation,
-      contentKey,
-      revision: revisionRef.current.generation === runtimeState.generation
-        ? revisionRef.current.revision + 1
-        : 1,
-      generatedAt: Date.now(),
+  const snapshot = useMemo<DesktopPetESnapshot>(() => {
+    const contentKey = desktopPetESnapshotContentKey(unversionedSnapshot);
+    if (
+      revisionRef.current.generation !== runtimeState.generation
+      || revisionRef.current.contentKey !== contentKey
+    ) {
+      revisionRef.current = {
+        generation: runtimeState.generation,
+        contentKey,
+        revision: revisionRef.current.generation === runtimeState.generation
+          ? revisionRef.current.revision + 1
+          : 1,
+        generatedAt: Date.now(),
+      };
+    }
+    return {
+      ...unversionedSnapshot,
+      revision: revisionRef.current.revision,
+      generatedAt: revisionRef.current.generatedAt,
     };
-  }
-  const snapshot: DesktopPetESnapshot = {
-    ...unversionedSnapshot,
-    revision: revisionRef.current.revision,
-    generatedAt: revisionRef.current.generatedAt,
-  };
+  }, [runtimeState.generation, unversionedSnapshot]);
   snapshotRef.current = snapshot;
 
   const config = useMemo<DesktopPetEConfigPayload>(() => ({
@@ -276,6 +299,35 @@ export function useDesktopPetECoordinator({
     };
   }, [tracking]);
 
+  const applyRuntimeState = (nextRuntimeState: DesktopPetERuntimeState) => {
+    setRuntimeState(nextRuntimeState);
+    replaceRuntimeState(nextRuntimeState);
+    if (settingsRef.current.enabled && !nextRuntimeState.enabled) {
+      const current = useSettingsStore.getState().desktopPetE;
+      void useSettingsStore.getState().update("desktopPetE", { ...current, enabled: false })
+        .catch((error) => logWarn("Failed to persist Desktop Pet E stopped state", error));
+    }
+  };
+
+  useEffect(() => {
+    if (!appReady || !settingsLoaded || !isTauri()) return;
+    const syncPayload = {
+      enabled: settings.enabled,
+      existingDesktopPetEnabled,
+      config,
+      snapshot,
+    };
+    const syncKey = desktopPetESyncFingerprint(syncPayload);
+    if (lastSyncKeyRef.current === syncKey) return;
+    lastSyncKeyRef.current = syncKey;
+    void invoke<DesktopPetERuntimeState>("desktop_pet_e_sync", {
+      request: syncPayload,
+    }).then(applyRuntimeState).catch((error) => {
+      lastSyncKeyRef.current = null;
+      logWarn("Failed to synchronize Desktop Pet E process", error);
+    });
+  }, [appReady, config, existingDesktopPetEnabled, replaceRuntimeState, settings.enabled, settingsLoaded, snapshot]);
+
   useEffect(() => {
     if (!isTauri()) return;
     const unlistenAction = listen<unknown>(DESKTOP_PET_E_ACTION_EVENT, (event) => {
@@ -327,7 +379,7 @@ export function useDesktopPetECoordinator({
       })().catch((error) => logWarn("Failed to activate Desktop Pet E task", error));
     });
     const unlistenRuntime = listen<DesktopPetERuntimeState>(DESKTOP_PET_E_RUNTIME_STATE_EVENT, (event) => {
-      setRuntimeState(event.payload);
+      applyRuntimeState(event.payload);
     });
     return () => {
       void unlistenAction.then((unlisten) => unlisten());

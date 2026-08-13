@@ -232,6 +232,7 @@ export function useDesktopPetCoordinator({
     await invoke("desktop_pet_window_sync", {
       config: {
         enabled: petWindowVisibleRef.current,
+        configuredEnabled: current.enabled,
         alwaysOnTop: current.alwaysOnTop,
         scale: desktopPetScale(current.size),
         position: current.position,
@@ -333,7 +334,8 @@ export function useDesktopPetCoordinator({
       desktopPet.size,
       desktopPet.position,
       desktopPet.alwaysOnTop,
-      petWindowVisible
+      petWindowVisible,
+      desktopPet.enabled
     );
     // Pet-side resize/drag already applied these exact native bounds.
     if (petAppliedWindowConfigKeyRef.current === windowConfigKey) {
@@ -346,6 +348,7 @@ export function useDesktopPetCoordinator({
   }, [
     appReady,
     desktopPet.alwaysOnTop,
+    desktopPet.enabled,
     desktopPet.position,
     desktopPet.size,
     petWindowVisible,
@@ -457,7 +460,8 @@ function desktopPetWindowConfigKey(
   size: number,
   position: { x: number; y: number } | null,
   alwaysOnTop: boolean,
-  visible: boolean
+  visible: boolean,
+  configuredEnabled: boolean
 ): string {
   return [
     size,
@@ -465,5 +469,6 @@ function desktopPetWindowConfigKey(
     position?.y ?? "default",
     alwaysOnTop ? "top" : "normal",
     visible ? "visible" : "hidden",
+    configuredEnabled ? "enabled" : "disabled",
   ].join(":");
 }
