@@ -122,6 +122,8 @@ function isInjectedPromptContent(content: string): boolean {
   const firstLine = lowerTrimmed.split(/\r?\n/, 1)[0]?.replace(/^#+\s*/, "").trim() ?? "";
   return (
     firstLine.startsWith("agents.md instructions for ") ||
+    firstLine.startsWith("base directory for this skill:") ||
+    firstLine.startsWith("base directory for this skill ") ||
     firstLine.startsWith("system prompt") ||
     firstLine.startsWith("developer instructions") ||
     lowerTrimmed.startsWith("<system-reminder") ||

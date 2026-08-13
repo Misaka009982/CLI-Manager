@@ -35,6 +35,7 @@ test("conversation keeps only visible user and assistant text", () => {
   assert.match(detailSource, /if \(role !== "user" && role !== "assistant"\) return false;/);
   assert.match(detailSource, /if \(textParts\.length === 0\) return;/);
   assert.match(detailSource, /isConversationVisibleMessage/);
+  assert.match(detailSource, /firstLine\.startsWith\("base directory for this skill:"\)/);
   assert.match(storeSource, /parts: parts\.length > 0 \? parts : undefined/);
 });
 

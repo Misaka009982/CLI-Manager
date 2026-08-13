@@ -12370,6 +12370,8 @@ fn is_title_noise_line(line: &str) -> bool {
 fn is_injected_prompt_title_line(line: &str) -> bool {
     let normalized = line.trim_start_matches('#').trim().to_lowercase();
     normalized.starts_with("agents.md instructions for ")
+        || normalized.starts_with("base directory for this skill:")
+        || normalized.starts_with("base directory for this skill ")
         || normalized.starts_with("system prompt")
         || normalized.starts_with("developer instructions")
 }
@@ -12416,6 +12418,8 @@ fn is_injected_prompt_content(content: &str) -> bool {
         .trim_start_matches('#')
         .trim();
     is_injected_prompt_title_line(first_line)
+        || first_line.starts_with("base directory for this skill:")
+        || first_line.starts_with("base directory for this skill ")
         || lower.starts_with("<system-reminder")
         || lower.starts_with("<codex_internal_context")
         || lower.starts_with("<session-context")
@@ -15893,6 +15897,18 @@ mod tests {
     fn parse_message_marks_embedded_codex_context_as_system_part() {
         let line: Value = serde_json::from_str(
             r#"{"type":"user","message":{"role":"user","content":[{"type":"input_text","text":"<permissions instructions>internal context</permissions instructions>\n### Available skills\n- browser"}]}}"#,
+        )
+        .unwrap();
+
+        let message = parse_message(&line).unwrap();
+
+        assert_eq!(message.parts[0].kind, "system");
+    }
+
+    #[test]
+    fn parse_message_marks_skill_directory_context_as_system_part() {
+        let line: Value = serde_json::from_str(
+            r#"{"type":"user","message":{"role":"user","content":"Base directory for this skill: F:\\github\\CLI-Manager\\.claude\\skills\\trellis-update-spec\n\n# Update Code-Spec"}}"#,
         )
         .unwrap();
 

@@ -523,6 +523,8 @@ fn injected_prompt(content: &str) -> bool {
         .trim_start_matches('#')
         .trim();
     first_line.starts_with("agents.md instructions for ")
+        || first_line.starts_with("base directory for this skill:")
+        || first_line.starts_with("base directory for this skill ")
         || first_line.starts_with("system prompt")
         || first_line.starts_with("developer instructions")
         || lower.starts_with("<system-reminder")
@@ -1053,6 +1055,23 @@ mod tests {
             2,
             3,
             vec![r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<permissions instructions>internal context</permissions instructions>\n### Available skills\n- browser"}]}}"#.to_string()],
+        );
+
+        assert_eq!(detail.messages[0].parts[0].kind, "system");
+    }
+
+    #[test]
+    fn skill_directory_context_is_classified_as_system_part() {
+        let detail = parse_detail(
+            "claude",
+            "instance",
+            "artifact",
+            "fallback",
+            "project",
+            1,
+            2,
+            3,
+            vec![r#"{"type":"user","message":{"role":"user","content":"Base directory for this skill: F:\\github\\CLI-Manager\\.claude\\skills\\trellis-update-spec\n\n# Update Code-Spec"}}"#.to_string()],
         );
 
         assert_eq!(detail.messages[0].parts[0].kind, "system");
