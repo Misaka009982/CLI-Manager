@@ -126,7 +126,13 @@ function isInjectedPromptContent(content: string): boolean {
     firstLine.startsWith("developer instructions") ||
     lowerTrimmed.startsWith("<system-reminder") ||
     lowerTrimmed.startsWith("<codex_internal_context") ||
-    lowerTrimmed.startsWith("<session-context")
+    lowerTrimmed.startsWith("<session-context") ||
+    lowerTrimmed.includes("<skills_instructions") ||
+    lowerTrimmed.includes("<permissions instructions") ||
+    lowerTrimmed.includes("<environment_context>") ||
+    lowerTrimmed.includes("<collaboration_mode>") ||
+    lowerTrimmed.includes("<workflow-state:") ||
+    lowerTrimmed.includes("### available skills")
   );
 }
 

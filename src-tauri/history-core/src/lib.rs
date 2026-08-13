@@ -528,6 +528,12 @@ fn injected_prompt(content: &str) -> bool {
         || lower.starts_with("<system-reminder")
         || lower.starts_with("<codex_internal_context")
         || lower.starts_with("<session-context")
+        || lower.contains("<skills_instructions")
+        || lower.contains("<permissions instructions")
+        || lower.contains("<environment_context>")
+        || lower.contains("<collaboration_mode>")
+        || lower.contains("<workflow-state:")
+        || lower.contains("### available skills")
 }
 
 fn fallback_part_kind(role: &str, content: &str) -> &'static str {
@@ -895,7 +901,7 @@ fn normalize_role(value: &str) -> String {
         "user".to_string()
     } else if lower.contains("tool") {
         "tool".to_string()
-    } else if lower.contains("system") {
+    } else if lower.contains("developer") || lower.contains("system") {
         "system".to_string()
     } else {
         "assistant".to_string()
@@ -1014,6 +1020,42 @@ mod tests {
         .unwrap();
 
         assert!(message.parts.is_empty());
+    }
+
+    #[test]
+    fn developer_messages_are_normalized_as_system() {
+        let line = r#"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>internal context</skills_instructions>"}]}}"#;
+        let detail = parse_detail(
+            "codex",
+            "instance",
+            "artifact",
+            "fallback",
+            "project",
+            1,
+            2,
+            3,
+            vec![line.to_string()],
+        );
+
+        assert_eq!(detail.messages[0].role, "system");
+        assert_eq!(detail.messages[0].parts[0].kind, "system");
+    }
+
+    #[test]
+    fn embedded_codex_context_is_classified_as_system_part() {
+        let detail = parse_detail(
+            "codex",
+            "instance",
+            "artifact",
+            "fallback",
+            "project",
+            1,
+            2,
+            3,
+            vec![r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<permissions instructions>internal context</permissions instructions>\n### Available skills\n- browser"}]}}"#.to_string()],
+        );
+
+        assert_eq!(detail.messages[0].parts[0].kind, "system");
     }
 
     #[test]

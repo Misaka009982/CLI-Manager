@@ -24,6 +24,7 @@
 - The Transcript tab remains independent and complete, including long-message folding and local message edit/delete/insert actions.
 - Search scans both flat `content` and part `content`. A hit in a collapsed part, or a jump from Timeline/Changes/Tools/Subtasks, switches to Conversation, opens the relevant detail section, and keeps the original message index as the coordinate.
 - When `parts` is absent or empty, the frontend conservatively maps user/assistant to `text`, tool to `tool_result`, system/injected prompts to `system`, and other roles to `unknown`.
+- Prompt injection detection must inspect the whole normalized content, not only its first line. Codex/agent user records can start with ordinary headings such as `SKILLS` and contain `<skills_instructions>`, `<permissions instructions>`, `<environment_context>`, `<collaboration_mode>`, `[workflow-state:...]`, or `### Available skills` later in the same block; these markers classify the part as `system`.
 - Local, WSL, and SSH use the same kind names. SSH remains read-only and this view contract never routes remote messages into local mutation commands.
 - V2 catalog writes every parsed part and rehydrates it in `part_index` order. Old catalog rows without part records fall back from role/content; parser version changes must invalidate/rebuild derived rows when classification changes.
 - Outside batch selection, the complete session row is one keyboard-accessible open target. Tree toggles, selection checkboxes, delete, and other explicit actions stop propagation. The existing detail request sequence remains the last-request-wins boundary.
@@ -47,10 +48,12 @@
 - Good: consecutive tool-only records collapse into one category-count row, and a search match opens it automatically.
 - Bad: derive Conversation only from role after structured parts exist, because mixed reasoning/tool content would remain merged into the visible answer.
 - Bad: remove or filter messages in the backend, because message-index links from Diff/Tools would shift.
+- Bad: classify only a user block whose first line says `Agents.md instructions for ...`; this leaks injected context that begins with a normal heading into the visible conversation.
 
 ### 6. Tests Required
 
 - Rust parser tests: Claude/Codex mixed blocks classify text, tool call/result, reasoning, and injected system content while preserving flat content.
+- Rust parser tests: embedded Codex context markers and `developer` response messages classify as `system` for both local and SSH parsers.
 - SSH history-core tests: exact kind parity and missing-parts deserialization compatibility.
 - V2 catalog test: write/read `history_message_parts` in order and fall back for rows without parts.
 - Frontend regression: default Conversation plus independent Transcript, adjacent-detail grouping, old snapshot fallback, hidden search/jump expansion, whole-row click, and action propagation.

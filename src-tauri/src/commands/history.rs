@@ -12396,7 +12396,7 @@ fn extract_role(value: &Value) -> Option<String> {
         if lower.contains("assistant") || lower == "model" {
             return Some("assistant".to_string());
         }
-        if lower.contains("system") {
+        if lower.contains("developer") || lower.contains("system") {
             return Some("system".to_string());
         }
         if lower.contains("tool") {
@@ -12419,6 +12419,12 @@ fn is_injected_prompt_content(content: &str) -> bool {
         || lower.starts_with("<system-reminder")
         || lower.starts_with("<codex_internal_context")
         || lower.starts_with("<session-context")
+        || lower.contains("<skills_instructions")
+        || lower.contains("<permissions instructions")
+        || lower.contains("<environment_context>")
+        || lower.contains("<collaboration_mode>")
+        || lower.contains("<workflow-state:")
+        || lower.contains("### available skills")
 }
 
 fn fallback_message_part_kind(role: &str, content: &str) -> &'static str {
@@ -15823,6 +15829,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_message_classifies_codex_developer_messages_as_system() {
+        let line: Value = serde_json::from_str(
+            r#"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>internal context</skills_instructions>"}]}}"#,
+        )
+        .unwrap();
+
+        let message = parse_message(&line).unwrap();
+
+        assert_eq!(message.role, "system");
+        assert_eq!(message.parts.len(), 1);
+        assert_eq!(message.parts[0].kind, "system");
+    }
+
+    #[test]
     fn parse_message_preserves_mixed_content_part_kinds() {
         let line: Value = serde_json::from_str(
             r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"inspect state"},{"type":"text","text":"done"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"README.md"}}]}}"#,
@@ -15866,6 +15886,18 @@ mod tests {
         let message = parse_message(&line).unwrap();
 
         assert_eq!(message.role, "user");
+        assert_eq!(message.parts[0].kind, "system");
+    }
+
+    #[test]
+    fn parse_message_marks_embedded_codex_context_as_system_part() {
+        let line: Value = serde_json::from_str(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"input_text","text":"<permissions instructions>internal context</permissions instructions>\n### Available skills\n- browser"}]}}"#,
+        )
+        .unwrap();
+
+        let message = parse_message(&line).unwrap();
+
         assert_eq!(message.parts[0].kind, "system");
     }
 
