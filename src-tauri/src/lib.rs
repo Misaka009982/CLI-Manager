@@ -33,6 +33,7 @@ mod sync;
 mod text_encoding;
 mod third_party_notification;
 pub mod usage;
+pub(crate) mod usage_schema;
 mod webdav;
 mod wsl;
 
@@ -425,8 +426,8 @@ const MIGRATION_EXTEND_SSH_AGENT_INSTALLATIONS_SQL: &str = "
                 ALTER TABLE ssh_agent_installations ADD COLUMN previous_version TEXT NOT NULL DEFAULT '';
               ";
 
-const MIGRATION_CREATE_USAGE_RECORDS_VERSION: i64 = 27;
-const MIGRATION_CREATE_USAGE_RECORDS_SQL: &str = "
+pub(crate) const MIGRATION_CREATE_USAGE_RECORDS_VERSION: i64 = 27;
+pub(crate) const MIGRATION_CREATE_USAGE_RECORDS_SQL: &str = "
                 CREATE TABLE IF NOT EXISTS usage_records (
                     record_id              TEXT PRIMARY KEY,
                     logical_request_id     TEXT NOT NULL,
@@ -541,7 +542,7 @@ const MIGRATION_CREATE_USAGE_RECORDS_SQL: &str = "
                 );
               ";
 const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_VERSION: i64 = 28;
-const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL: &str = "
+pub(crate) const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL: &str = "
                 DROP VIEW IF EXISTS unified_usage_records;
                 CREATE VIEW unified_usage_records AS
                 SELECT
@@ -591,7 +592,7 @@ const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL: &str = "
                    );
               ";
 const MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_VERSION: i64 = 29;
-const MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_SQL: &str = "
+pub(crate) const MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_SQL: &str = "
                 CREATE INDEX IF NOT EXISTS idx_usage_records_route_dedup
                 ON usage_records(
                     source,

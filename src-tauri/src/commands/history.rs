@@ -8102,14 +8102,7 @@ async fn load_history_stats_data_quality(
     bounds: StatsTimeBounds,
     source_filter: Option<&str>,
 ) -> Result<HistoryStatsDataQuality, String> {
-    let path = crate::app_paths::db_path()?;
-    let options = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(false)
-        .busy_timeout(Duration::from_secs(15));
-    let mut connection = SqliteConnection::connect_with(&options)
-        .await
-        .map_err(|err| format!("usage_quality_db_open_failed: {err}"))?;
+    let mut connection = crate::usage_schema::open_usage_database().await?;
     let row = sqlx::query(
         "SELECT
             SUM(CASE WHEN data_source = 'route' THEN 1 ELSE 0 END) AS route_records,
