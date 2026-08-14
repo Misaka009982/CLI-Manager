@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowRightLeft, Bot, Check, ChevronDown, ChevronRight, Clock3, Folder, MessageSquare, RefreshCw, Search, Star, Terminal, Trash2, X } from "lucide-react";
+import { ArrowRightLeft, Bot, Check, ChevronDown, ChevronRight, Clock3, Folder, MessageSquare, RefreshCw, Search, Sparkles, Star, Terminal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import type { Group, HistoryIndexStatus, HistorySearchHit, HistorySessionView, HistorySourceFilter, Project } from "../../lib/types";
 import { useI18n } from "../../lib/i18n";
@@ -78,6 +78,10 @@ interface HistoryListPaneProps {
   selectedSessionKeys: Set<string>;
   onRefresh: () => void;
   onClose: () => void;
+  smartTitleEnabled: boolean;
+  smartTitleAvailable: boolean;
+  onToggleSmartTitle: () => void;
+  onOpenSmartTitleSettings: () => void;
   onSourceFilterChange: (value: HistorySourceFilter) => void;
   onProjectPathFilterChange: (value: string | null, projectId?: string | null) => void;
   onGlobalQueryChange: (value: string) => void;
@@ -90,6 +94,8 @@ interface HistoryListPaneProps {
   onResumeSession: (session: HistorySessionView) => void;
   canConvertSession: (session: HistorySessionView) => boolean;
   onConvertSession: (session: HistorySessionView) => void;
+  onGenerateSmartTitle: (session: HistorySessionView) => void;
+  onClearSmartTitle: (session: HistorySessionView) => void;
   onDeleteSession: (session: HistorySessionView) => void;
   onDeleteSelected: () => void;
   onOpenHit: (hit: HistorySearchHit) => void;
@@ -342,6 +348,10 @@ export function HistoryListPane({
   selectedSessionKeys,
   onRefresh,
   onClose,
+  smartTitleEnabled,
+  smartTitleAvailable,
+  onToggleSmartTitle,
+  onOpenSmartTitleSettings,
   onSourceFilterChange,
   onProjectPathFilterChange,
   onGlobalQueryChange,
@@ -354,6 +364,8 @@ export function HistoryListPane({
   onResumeSession,
   canConvertSession,
   onConvertSession,
+  onGenerateSmartTitle,
+  onClearSmartTitle,
   onDeleteSession,
   onDeleteSelected,
   onOpenHit,
@@ -504,6 +516,20 @@ export function HistoryListPane({
     onConvertSession(session);
   }, [contextMenu, onConvertSession]);
 
+  const handleContextMenuGenerateSmartTitle = useCallback(() => {
+    if (!contextMenu) return;
+    const session = contextMenu.session;
+    setContextMenu(null);
+    onGenerateSmartTitle(session);
+  }, [contextMenu, onGenerateSmartTitle]);
+
+  const handleContextMenuClearSmartTitle = useCallback(() => {
+    if (!contextMenu) return;
+    const session = contextMenu.session;
+    setContextMenu(null);
+    onClearSmartTitle(session);
+  }, [contextMenu, onClearSmartTitle]);
+
   useEffect(() => {
     if (!contextMenu) return;
     const handler = (e: Event) => {
@@ -635,7 +661,7 @@ export function HistoryListPane({
   });
 
   const menuX = contextMenu ? Math.max(8, Math.min(contextMenu.x, window.innerWidth - 200)) : 0;
-  const menuY = contextMenu ? Math.max(8, Math.min(contextMenu.y, window.innerHeight - 80)) : 0;
+  const menuY = contextMenu ? Math.max(8, Math.min(contextMenu.y, window.innerHeight - 150)) : 0;
 
   const renderProjectNode = (node: HistoryProjectTreeNode, depth = 0): ReactNode => {
     const paddingLeft = 8 + depth * 14;
@@ -775,6 +801,17 @@ export function HistoryListPane({
             title={t("history.refreshList")}
           >
             <RefreshCw size={12} className={indexBusy ? "animate-spin" : undefined} />
+          </button>
+          <button
+            type="button"
+            onClick={smartTitleAvailable ? onToggleSmartTitle : onOpenSmartTitleSettings}
+            aria-label={t(smartTitleAvailable ? "historySources.smartTitle.enabled" : "history.smartTitle.configure")}
+            aria-pressed={smartTitleEnabled}
+            className="ui-flat-action ui-toolbar-button-compact ui-history-list-action h-8 w-8 shrink-0 px-0"
+            title={t(smartTitleAvailable ? "historySources.smartTitle.enabled" : "history.smartTitle.configure")}
+            style={{ color: smartTitleEnabled ? "var(--accent)" : undefined }}
+          >
+            <Sparkles size={12} fill={smartTitleEnabled ? "currentColor" : "none"} />
           </button>
           <button
             type="button"
@@ -1105,6 +1142,15 @@ export function HistoryListPane({
                               </span>
                             )}
                             <span className="truncate text-[13px] font-semibold text-text-primary">{sessionDisplayTitle}</span>
+                            {row.item.generatedTitle?.state === "pending" && (
+                              <span title={t("history.smartTitle.pending")}>
+                                <Sparkles
+                                  size={12}
+                                  className="shrink-0 animate-pulse text-primary"
+                                  aria-label={t("history.smartTitle.pending")}
+                                />
+                              </span>
+                            )}
                             {row.childCount > 0 && (
                               <span className="shrink-0 rounded-full border border-border/70 px-1.5 py-px text-[10px] font-medium text-text-muted">
                                 {t("history.tree.childCount", { count: row.childCount })}
@@ -1148,6 +1194,15 @@ export function HistoryListPane({
                               </span>
                             )}
                             <span className="truncate text-[13px] font-semibold text-text-primary">{sessionDisplayTitle}</span>
+                            {row.item.generatedTitle?.state === "pending" && (
+                              <span title={t("history.smartTitle.pending")}>
+                                <Sparkles
+                                  size={12}
+                                  className="shrink-0 animate-pulse text-primary"
+                                  aria-label={t("history.smartTitle.pending")}
+                                />
+                              </span>
+                            )}
                             {row.childCount > 0 && (
                               <span className="shrink-0 rounded-full border border-border/70 px-1.5 py-px text-[10px] font-medium text-text-muted">
                                 {t("history.tree.childCount", { count: row.childCount })}
@@ -1221,6 +1276,29 @@ export function HistoryListPane({
               <RefreshCw size={13} aria-hidden="true" />
               <span>{t("history.menu.resumeInTerminal")}</span>
             </button>
+            <>
+              <button
+                className="context-menu-item"
+                role="menuitem"
+                onClick={handleContextMenuGenerateSmartTitle}
+                disabled={contextMenu.session.generatedTitle?.state === "pending"}
+              >
+                <Sparkles size={13} aria-hidden="true" />
+                <span>
+                  {contextMenu.session.generatedTitle?.state === "pending"
+                    ? t("history.smartTitle.pending")
+                    : contextMenu.session.generatedTitle
+                      ? t("history.smartTitle.regenerate")
+                      : t("history.smartTitle.generate")}
+                </span>
+              </button>
+              {contextMenu.session.generatedTitle?.title ? (
+                <button className="context-menu-item" role="menuitem" onClick={handleContextMenuClearSmartTitle}>
+                  <X size={13} aria-hidden="true" />
+                  <span>{t("history.smartTitle.clear")}</span>
+                </button>
+              ) : null}
+            </>
             {canConvertSession(contextMenu.session) ? (
               <button className="context-menu-item" role="menuitem" onClick={handleContextMenuConvert}>
                 <ArrowRightLeft size={13} aria-hidden="true" />

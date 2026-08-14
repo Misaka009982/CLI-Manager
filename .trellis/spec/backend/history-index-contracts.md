@@ -422,3 +422,44 @@ let deleted = delete_session_tree_with_backup_root(&file_ref, &backups_dir)?;
 // Backup restore still refuses to overwrite while the source CLI is active.
 let plan = build_file_restore_plan(&file_ref.path, &backups_dir, Some(&file_ref.source));
 ```
+
+## Scenario: Local generated history titles
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing the optional smart title provider command, generated-title persistence, title request protocols, or history deletion/recovery.
+- Goal: keep model-derived titles in the user metadata database with a strict provider-secret boundary; the history catalog and third-party transcripts remain untouched.
+
+### 2. Signatures
+
+- SQLite table: `history_generated_titles(session_key PRIMARY KEY, source identity, generated_title, generation_state, generation_revision, trigger_kind, source fingerprint, provider composite identity, failure_code, suppression state, timestamps)`.
+- Tauri commands: `history_title_list_providers`, `history_title_generate`, `history_title_clear`, and `history_title_cancel`.
+- Generate requests contain session/source identity, trigger, expected full candidate fingerprint, bounded candidate input, bounded-input fingerprint, and non-secret provider/model identifiers. They never contain API keys, OAuth tokens, base URLs, or raw provider documents.
+
+### 3. Contracts
+
+- Migration v30 is additive and authoritative. Frontend `CREATE TABLE IF NOT EXISTS` is only a compatibility repair; catalog rebuild/reset does not touch this table.
+- Provider resolution is Rust-only through the Native Provider repository/runtime and the existing network client policy. Readiness returns redacted cards and stable reason codes only.
+- Supported request protocols are Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses. Requests are non-streaming, text-only, have no tools/reasoning, bounded input/output/body/timeout, and do not log prompt, raw output, key, or endpoint secrets.
+- Auxiliary text requests share one backend protocol helper with command suggestions. For OpenAI Responses compatibility gateways, `input` is a plain string (not a nested `input_text` message array); endpoint joining must not duplicate `/v1` or a complete endpoint.
+- HTTP/request failures keep stable backend categories (timeout, rate limit, HTTP status, response-format/empty output) so the frontend can localize safe diagnostics without exposing response bodies or provider configuration.
+- Reservation increments a monotonic revision and writes `pending`. Commit requires the same revision, source identity/fingerprint, pending state, current provider selection, and (for automatic work) an empty alias and enabled setting. Zero affected rows is stale/cancelled and never overwrites a newer result.
+- Manual reservation may run for old sessions and with an alias; alias only affects display. Manual generation clears matching automatic suppression. Clear invalidates pending work, removes generated text, and suppresses the current fingerprint until explicit manual generation.
+- Pending rows are normalized to `failed/interrupted` during frontend history metadata initialization and are never auto-dispatched after restart. Cancelled automatic work is retained as a failed attempt, preventing a background retry for the same fingerprint.
+- Deleting a local session removes its generated-title row; provider deletion/disable does not remove already successful local titles. SSH may use these commands only after the desktop has loaded an online trusted detail; the command writes local metadata and never writes remotely.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Missing/disabled/keyless/invalid/unsupported provider | Return a stable redacted failure code and persist failure state; never expose credentials |
+| 429, timeout, non-2xx, oversized/invalid response, tool call, abnormal finish, or empty title | Persist a safe failure code and retain any previous generated title |
+| Alias added, clear, delete, provider switch, or switch-off while request is in flight | Revision/CAS or commit guard rejects the late result |
+| Candidate exceeds 4096 UTF-8 bytes | Hash the normalized complete text, send only a Unicode-safe bounded prefix, and validate the bounded-input fingerprint |
+| Catalog rebuild or WebDAV sync | Generated-title rows remain local and unchanged |
+
+### 5. Tests Required
+
+- Migration registry uniqueness/order and table/index presence.
+- Sanitizer/protocol tests for controls, bidi/invisible characters, CJK/emoji, tools, abnormal finish, malformed/empty response, and bounded output.
+- Targeted Rust tests plus `cargo check`; verify no secret/prompt/raw response reaches frontend state or logs.

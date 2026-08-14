@@ -80,6 +80,42 @@ const rows = buildConversationRows(messages);
 const targetRow = rows.find((row) => row.messageIndices.includes(messageIndex));
 ```
 
+## Scenario: Two-stage local smart history titles
+
+### 1. Scope / Trigger
+
+- Trigger: changing history session display titles, aliases, generated-title actions, history settings, search-hit labels, prompt-library labels, or automatic title scheduling.
+- Goal: keep the parser source title immediately available while layering an optional local generated title without mutating the source summary.
+
+### 2. Contracts
+
+- `displayTitle` precedence is exactly `alias.trim() > generatedTitle.trim() > source title.trim() > session id`.
+- Generated-title metadata is hydrated from `history_generated_titles` together with session metadata and overlaid on local summaries, favorite snapshots, cached remote summaries, search hits, and prompt-library labels. `summary.title` remains the source title.
+- Manual generation is allowed for old sessions and sessions with an alias. Alias remains the visible pin; a successful manual result is retained as the hidden fallback until the alias is cleared.
+- SSH sessions dispatch only after an online trusted detail is loaded; read-only local snapshots, summary-only cache, and offline detail never dispatch. Candidate extraction requires the first visible user text part and shares the Conversation classifier; injected context, tools, reasoning, metadata, empty, and attachment-only records do not qualify.
+- Automatic work is disabled by default, uses the persisted `enabledAt` watermark, is deduplicated by session key plus full candidate fingerprint, and is scheduled through one bounded FIFO queue. Disabling the setting cancels queued ownership and invalidates active automatic revisions.
+- The list toolbar and Settings -> History Sessions switch read and write the same persisted `historySmartTitle` object. Re-enabling records a new watermark; it does not reuse the previous one.
+- All generated-title actions use `useI18n()` keys for `zh-CN`/`en-US`; existing `zh-TW` fallback remains valid. Pending state is exposed through an icon/tooltip and disables duplicate generation without changing selection, filtering, or scroll position.
+
+### 3. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| No generated row or generated request fails | Show alias/source/session-id fallback immediately; automatic failures are silent |
+| Manual title action has no/invalid Provider or model | Preserve the source fallback, show a localized actionable reason, and open Session History settings; never expose raw provider errors |
+| Manual title request fails after dispatch | Map the stable backend failure category to a localized safe toast; do not discard the error category or expose response/config content |
+| Alias saved while a request is pending | Cancel/invalidate ownership; late result cannot become visible or overwrite the alias |
+| Generated title cleared | Remove visible generated text, preserve source title, and suppress automatic work for the current fingerprint until explicit manual generation |
+| Search or Prompt Library contains a titled session | Use the same display precedence as the list/detail view |
+| Provider/model selection is invalid | Keep the saved selection diagnosable, prevent enabling when off, and allow disabling when already on |
+| Locale changes | New title/settings copy changes language without changing time formatting |
+
+### 4. Tests Required
+
+- Frontend type-check after store/component changes.
+- Pure candidate/display tests for alias/generated/source/id precedence, Unicode-safe input truncation, injection markers, attachment-only records, old flat messages, and distinct source instances.
+- Manual desktop check for settings/toolbar synchronization, old-session manual generation, alias pin, clear suppression, automatic watermark, pending/restart behavior, and Chinese/English copy.
+
 ## Scenario: SSH Remote History Workspace
 
 ### 1. Scope / Trigger

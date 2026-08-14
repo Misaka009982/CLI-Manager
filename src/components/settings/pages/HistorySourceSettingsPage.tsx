@@ -25,7 +25,10 @@ import {
   type HistorySourceId,
 } from "../../../lib/historySources";
 import { getLanguageLocale, pickByLanguage, useI18n } from "../../../lib/i18n";
+import type { HistoryTitleProviderOption } from "../../../lib/types";
 import { useHistorySourceSettingsStore } from "../../../stores/historySourceSettingsStore";
+import { useHistoryStore } from "../../../stores/historyStore";
+import { useSettingsStore } from "../../../stores/settingsStore";
 import { VendorIcon, inferVendor } from "../../VendorIcon";
 import { useAppConfirm } from "../../ui/useAppConfirm";
 
@@ -133,11 +136,17 @@ function validationMessage(code: string, text: (zh: string, en: string) => strin
   return code;
 }
 
-export function HistorySourceSettingsPage() {
+interface HistorySourceSettingsPageProps {
+  onOpenNativeProviderSettings?: () => void;
+}
+
+export function HistorySourceSettingsPage({ onOpenNativeProviderSettings }: HistorySourceSettingsPageProps = {}) {
   const { language, t } = useI18n();
   const { confirm, confirmDialog } = useAppConfirm();
   const text = (zh: string, en: string) => pickByLanguage(language, zh, en);
   const { loaded, settings, load, setSourceSettings, clearSource } = useHistorySourceSettingsStore();
+  const cancelAutomaticSmartTitles = useHistoryStore((state) => state.cancelAutomaticSmartTitles);
+  const { historySmartTitle, update: updateSetting } = useSettingsStore();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [detectingSourceId, setDetectingSourceId] = useState<HistorySourceId | null>(null);
   const [backupStatus, setBackupStatus] = useState<HistoryBackupRootStatus | null>(null);
@@ -148,6 +157,9 @@ export function HistorySourceSettingsPage() {
   const [restoreSource, setRestoreSource] = useState("claude");
   const [restorePlan, setRestorePlan] = useState<HistoryBackupRecoveryPlan | null>(null);
   const [restoreBusy, setRestoreBusy] = useState(false);
+  const [titleProviders, setTitleProviders] = useState<HistoryTitleProviderOption[]>([]);
+  const [titleProvidersLoading, setTitleProvidersLoading] = useState(false);
+  const [titleModelDraft, setTitleModelDraft] = useState("");
 
   useEffect(() => {
     if (!loaded) void load();
@@ -180,6 +192,24 @@ export function HistorySourceSettingsPage() {
     void Promise.all([loadBackupStatus(), loadRestoreCandidates()]).catch((error) => {
       console.warn("Failed to load history backup state", error);
     });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTitleProvidersLoading(true);
+    void invoke<HistoryTitleProviderOption[]>("history_title_list_providers")
+      .then((providers) => {
+        if (!cancelled) setTitleProviders(providers);
+      })
+      .catch(() => {
+        if (!cancelled) setTitleProviders([]);
+      })
+      .finally(() => {
+        if (!cancelled) setTitleProvidersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -422,6 +452,59 @@ export function HistorySourceSettingsPage() {
     setDrafts((current) => ({ ...current, [sourceId]: "" }));
   };
 
+  const titleProviderValue = historySmartTitle.providerAppType && historySmartTitle.providerId
+    ? `${historySmartTitle.providerAppType}:${historySmartTitle.providerId}`
+    : null;
+  const titleProviderOptions = titleProviders.map((provider) => ({
+    value: `${provider.appType}:${provider.providerId}`,
+    label: provider.modelId
+      ? `${provider.providerName} · ${provider.modelId}`
+      : provider.providerName,
+    disabled: !provider.ready && provider.reasonCode !== "provider_model_missing",
+  }));
+  const selectedTitleProvider = titleProviders.find(
+    (provider) => provider.appType === historySmartTitle.providerAppType
+      && provider.providerId === historySmartTitle.providerId,
+  );
+
+  useEffect(() => {
+    setTitleModelDraft(historySmartTitle.modelId ?? "");
+  }, [historySmartTitle.providerAppType, historySmartTitle.providerId, historySmartTitle.modelId]);
+
+  const handleTitleProviderChange = async (value: string | null) => {
+    const provider = titleProviders.find(
+      (item) => `${item.appType}:${item.providerId}` === value,
+    );
+    await updateSetting("historySmartTitle", {
+      ...historySmartTitle,
+      providerAppType: provider?.appType ?? null,
+      providerId: provider?.providerId ?? null,
+      modelId: provider?.modelId ?? null,
+    });
+  };
+
+  const handleSmartTitleToggle = async (enabled: boolean) => {
+    const providerReady = selectedTitleProvider?.ready
+      || (selectedTitleProvider?.reasonCode === "provider_model_missing" && Boolean(titleModelDraft.trim()));
+    if (enabled && (!providerReady || !titleModelDraft.trim())) {
+      toast.error(t("historySources.smartTitle.providerNotReady"));
+      return;
+    }
+    if (!enabled) cancelAutomaticSmartTitles();
+    await updateSetting("historySmartTitle", {
+      ...historySmartTitle,
+      enabled,
+      modelId: titleModelDraft.trim() || historySmartTitle.modelId,
+      enabledAt: enabled ? Date.now() : historySmartTitle.enabledAt,
+    });
+  };
+
+  const handleTitleModelBlur = async () => {
+    const modelId = titleModelDraft.trim() || null;
+    if (modelId === historySmartTitle.modelId) return;
+    await updateSetting("historySmartTitle", { ...historySmartTitle, modelId });
+  };
+
   return (
     <Stack gap="md">
       <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
@@ -441,6 +524,63 @@ export function HistorySourceSettingsPage() {
             {text(`已启用 ${activeCount} 个`, `${activeCount} enabled`)}
           </Badge>
         </Group>
+      </Card>
+
+      <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
+        <Stack gap="sm">
+          <Group justify="space-between" align="flex-start" gap="sm">
+            <Stack gap={4}>
+              <Text fw={600} c="var(--on-surface)">
+                {t("historySources.smartTitle.title")}
+              </Text>
+              <Text size="sm" c="var(--on-surface-variant)">
+                {t("historySources.smartTitle.description")}
+              </Text>
+            </Stack>
+            <Switch
+              checked={historySmartTitle.enabled}
+              onChange={(event) => void handleSmartTitleToggle(event.currentTarget.checked)}
+              color="cliPrimary"
+              disabled={titleProvidersLoading || (!historySmartTitle.enabled && !selectedTitleProvider && !titleModelDraft.trim())}
+              label={t("historySources.smartTitle.enabled")}
+            />
+          </Group>
+          <Select
+            label={t("historySources.smartTitle.provider")}
+            placeholder={t("historySources.smartTitle.providerPlaceholder")}
+            data={titleProviderOptions}
+            value={titleProviderValue}
+            onChange={(value) => void handleTitleProviderChange(value)}
+            disabled={titleProvidersLoading || titleProviderOptions.length === 0}
+            nothingFoundMessage={t("historySources.smartTitle.noProvider")}
+            allowDeselect
+          />
+          <TextInput
+            label={t("historySources.smartTitle.model")}
+            placeholder={t("historySources.smartTitle.modelPlaceholder")}
+            value={titleModelDraft}
+            onChange={(event) => setTitleModelDraft(event.currentTarget.value)}
+            onBlur={() => void handleTitleModelBlur()}
+            disabled={titleProvidersLoading || !selectedTitleProvider}
+          />
+          {titleProviders.length === 0 ? (
+            <Text size="xs" c="var(--on-surface-variant)">
+              {t("historySources.smartTitle.noProvider")}
+            </Text>
+          ) : null}
+          <Text size="xs" c="var(--on-surface-variant)">
+            {t("historySources.smartTitle.manualOnly")}
+          </Text>
+          {onOpenNativeProviderSettings ? (
+            <Button
+              variant="subtle"
+              size="compact-sm"
+              onClick={onOpenNativeProviderSettings}
+            >
+              {t("historySources.smartTitle.openProviderSettings")}
+            </Button>
+          ) : null}
+        </Stack>
       </Card>
 
       <Card className="border border-border bg-surface-container-low" p="md" radius="lg">

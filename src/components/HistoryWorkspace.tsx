@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useHistoryStore } from "../stores/historyStore";
 import { useTerminalStore } from "../stores/terminalStore";
-import type { HistoryFileChangeSummary, HistoryMessage, HistorySearchHit, HistorySessionDetail, HistorySessionView, HistorySourceFilter, Project, SshRemoteResumePreflight, WorktreeRecord } from "../lib/types";
+import type { HistoryFileChangeSummary, HistoryMessage, HistorySearchHit, HistorySessionDetail, HistorySessionView, HistorySourceFilter, HistoryTitleProviderOption, Project, SshRemoteResumePreflight, WorktreeRecord } from "../lib/types";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
 import { useWorktreeStore } from "../stores/worktreeStore";
@@ -50,6 +50,24 @@ const EMPTY_PROCESS_MODEL: SessionProcessModel = {
   errorEvents: [],
   subtaskEvents: [],
 };
+
+function historyTitleErrorCode(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isHistoryTitleProviderError(code: string): boolean {
+  return (code.includes("history_title_provider_") && code !== "history_title_provider_error")
+    || code === "provider_not_found"
+    || code === "provider_not_ready"
+    || code === "provider_key_not_active";
+}
+
+function historyTitleHttpStatus(code: string): number | null {
+  const match = code.match(/^history_title_request_http_(\d{3})$/);
+  if (!match) return null;
+  const status = Number(match[1]);
+  return Number.isInteger(status) ? status : null;
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -123,6 +141,7 @@ function resolveHistoryResumeCwd(
 
 interface HistoryWorkspaceProps {
   active?: boolean;
+  onOpenSettings?: () => void;
 }
 
 type DeleteIntent =
@@ -169,7 +188,7 @@ function historySourceLabel(source: string): string {
   return HISTORY_SOURCE_DESCRIPTOR_BY_ID.get(source.trim().toLowerCase() as HistorySourceId)?.defaultLabel ?? source;
 }
 
-export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
+export function HistoryWorkspace({ active = true, onOpenSettings }: HistoryWorkspaceProps) {
   const { language, t } = useI18n();
   const { confirm, confirmDialog } = useAppConfirm();
   const loadingSessions = useHistoryStore((s) => s.loadingSessions);
@@ -202,6 +221,9 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const openSession = useHistoryStore((s) => s.openSession);
   const addConvertedSession = useHistoryStore((s) => s.addConvertedSession);
   const deleteSession = useHistoryStore((s) => s.deleteSession);
+  const cancelAutomaticSmartTitles = useHistoryStore((s) => s.cancelAutomaticSmartTitles);
+  const generateSmartTitle = useHistoryStore((s) => s.generateSmartTitle);
+  const clearSmartTitle = useHistoryStore((s) => s.clearSmartTitle);
   const openSearchHit = useHistoryStore((s) => s.openSearchHit);
   const setGlobalQuery = useHistoryStore((s) => s.setGlobalQuery);
   const runGlobalSearch = useHistoryStore((s) => s.runGlobalSearch);
@@ -214,8 +236,19 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const deleteMessages = useHistoryStore((s) => s.deleteMessages);
   const insertMessage = useHistoryStore((s) => s.insertMessage);
   const storedHistorySidebarWidth = useSettingsStore((s) => s.historySidebarWidth);
+  const historySmartTitle = useSettingsStore((s) => s.historySmartTitle);
   const historySidebarWidth = normalizeHistorySidebarWidth(storedHistorySidebarWidth);
   const updateSetting = useSettingsStore((s) => s.update);
+  const toggleSmartTitle = useCallback(() => {
+    if (historySmartTitle.enabled) cancelAutomaticSmartTitles();
+    void updateSetting("historySmartTitle", {
+      ...historySmartTitle,
+      enabled: !historySmartTitle.enabled,
+      enabledAt: !historySmartTitle.enabled
+        ? Date.now()
+        : historySmartTitle.enabledAt,
+    });
+  }, [cancelAutomaticSmartTitles, historySmartTitle, updateSetting]);
   const projects = useProjectStore((s) => s.projects);
   const historyProjects = useMemo(
     () => projects.filter((project) => projectSupportsCapability(project, "history")),
@@ -260,11 +293,38 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const [liveEditWarningOpen, setLiveEditWarningOpen] = useState(false);
   const liveEditResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const [resumeIntent, setResumeIntent] = useState<ResumeIntent | null>(null);
+  const [titleProviders, setTitleProviders] = useState<HistoryTitleProviderOption[]>([]);
   const processModelCacheRef = useRef<{
     session: HistorySessionDetail;
     language: string;
     model: SessionProcessModel;
   } | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    void invoke<HistoryTitleProviderOption[]>("history_title_list_providers")
+      .then((providers) => {
+        if (!disposed) setTitleProviders(providers);
+      })
+      .catch(() => {
+        if (!disposed) setTitleProviders([]);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  const selectedTitleProvider = titleProviders.find(
+    (provider) => provider.appType === historySmartTitle.providerAppType
+      && provider.providerId === historySmartTitle.providerId,
+  );
+  const titleProviderReady = Boolean(
+    historySmartTitle.modelId?.trim()
+      && (
+        selectedTitleProvider?.ready
+        || selectedTitleProvider?.reasonCode === "provider_model_missing"
+      ),
+  );
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSessionQuery(sessionQuery), 150);
@@ -1136,6 +1196,82 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
     [addConvertedSession, confirm, t]
   );
 
+  const handleSmartTitleError = useCallback((error: unknown) => {
+    const code = historyTitleErrorCode(error);
+    if (code.includes("history_title_pending") || code.includes("history_title_request_cancelled")) return;
+    if (isHistoryTitleProviderError(code)) {
+      toast.error(t("history.toast.smartTitleProviderNotReady"));
+      onOpenSettings?.();
+      return;
+    }
+    if (code.includes("history_title_candidate_missing")) {
+      toast.error(t("history.toast.smartTitleCandidateMissing"));
+      return;
+    }
+    if (
+      code.includes("history_title_remote_not_supported")
+      || code.includes("history_title_remote_online_required")
+      || code.includes("history_title_detail_missing")
+    ) {
+      toast.error(t("history.smartTitle.unavailable"));
+      return;
+    }
+    if (code === "history_title_request_timeout") {
+      toast.error(t("history.toast.smartTitleRequestTimeout"));
+      return;
+    }
+    if (code === "history_title_request_rate_limited") {
+      toast.error(t("history.toast.smartTitleRateLimited"));
+      return;
+    }
+    const httpStatus = historyTitleHttpStatus(code);
+    if (httpStatus === 401 || httpStatus === 403) {
+      toast.error(t("history.toast.smartTitleUnauthorized"));
+      return;
+    }
+    if (httpStatus === 404) {
+      toast.error(t("history.toast.smartTitleEndpointFailed"));
+      return;
+    }
+    if (httpStatus !== null && httpStatus >= 500) {
+      toast.error(t("history.toast.smartTitleProviderUnavailable"));
+      return;
+    }
+    if (
+      code === "history_title_request_failed"
+      || code.startsWith("history_title_response_")
+      || code === "history_title_provider_error"
+      || (httpStatus !== null && httpStatus >= 400)
+    ) {
+      toast.error(t("history.toast.smartTitleResponseInvalid"));
+      return;
+    }
+    toast.error(t("history.toast.smartTitleFailed"), {
+      description: t("history.toast.smartTitleRequestFailed"),
+    });
+  }, [onOpenSettings, t]);
+
+  const handleGenerateSmartTitle = useCallback((session: HistorySessionView) => {
+    if (
+      !historySmartTitle.providerAppType
+      || !historySmartTitle.providerId
+      || !historySmartTitle.modelId
+    ) {
+      toast.error(t("history.toast.smartTitleProviderNotReady"));
+      onOpenSettings?.();
+      return;
+    }
+    void generateSmartTitle(session.sessionKey)
+      .then(() => toast.success(t("history.toast.smartTitleGenerated")))
+      .catch(handleSmartTitleError);
+  }, [generateSmartTitle, handleSmartTitleError, historySmartTitle, onOpenSettings, t]);
+
+  const handleClearSmartTitle = useCallback((session: HistorySessionView) => {
+    void clearSmartTitle(session.sessionKey)
+      .then(() => toast.success(t("history.toast.smartTitleCleared")))
+      .catch(() => toast.error(t("history.toast.smartTitleFailed")));
+  }, [clearSmartTitle, t]);
+
   const jumpToMessage = async (messageIndex: number) => {
     if (!activeView) return;
     try {
@@ -1191,6 +1327,12 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
           selectedSessionKeys={selectedSessionKeys}
           onRefresh={handleRefreshSessions}
           onClose={closeHistory}
+          smartTitleEnabled={historySmartTitle.enabled}
+          smartTitleAvailable={Boolean(
+            historySmartTitle.enabled || titleProviderReady,
+          )}
+          onToggleSmartTitle={toggleSmartTitle}
+          onOpenSmartTitleSettings={() => onOpenSettings?.()}
           onSourceFilterChange={(value) => {
             void setSourceFilter(value as HistorySourceFilter);
           }}
@@ -1211,6 +1353,8 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
           onConvertSession={(session) => {
             void convertSession(session);
           }}
+          onGenerateSmartTitle={handleGenerateSmartTitle}
+          onClearSmartTitle={handleClearSmartTitle}
           onDeleteSession={(session) => setDeleteIntent({ type: "single", session })}
           onDeleteSelected={handleRequestBulkDelete}
           onOpenHit={(hit) => {
@@ -1265,6 +1409,12 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
             }
             onResumeSession={() => {
               void resumeConversation();
+            }}
+            onGenerateSmartTitle={() => {
+              if (activeView) handleGenerateSmartTitle(activeView);
+            }}
+            onClearSmartTitle={() => {
+              if (activeView) handleClearSmartTitle(activeView);
             }}
             canConvertSession={activeSession ? canConvertSession(activeSession) : false}
             onConvertSession={() => {

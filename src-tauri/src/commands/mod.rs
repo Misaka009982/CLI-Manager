@@ -16,6 +16,7 @@ pub mod history;
 pub mod history_backup;
 pub mod history_edit;
 pub mod history_sources;
+pub mod history_title;
 pub mod hook_settings;
 pub mod logging;
 pub mod model_pricing;

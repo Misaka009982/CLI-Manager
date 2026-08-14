@@ -843,12 +843,64 @@ export interface SessionFavoriteSnapshot {
   snapshot_at: string;
 }
 
+export type HistoryGeneratedTitleState = "idle" | "pending" | "succeeded" | "failed";
+export type HistoryGeneratedTitleTrigger = "automatic" | "manual";
+
+export interface HistoryGeneratedTitleMeta {
+  sessionKey: string;
+  sourceId: HistorySource;
+  sourceInstanceId: string;
+  sourceSessionId: string;
+  transportKind: string;
+  title: string | null;
+  state: HistoryGeneratedTitleState;
+  revision: number;
+  triggerKind: HistoryGeneratedTitleTrigger | null;
+  sourceMessageIdentity: string | null;
+  sourceContentSha256: string | null;
+  providerAppType: string | null;
+  providerId: string | null;
+  modelId: string | null;
+  failureCode: string | null;
+  autoSuppressed: boolean;
+  suppressedFingerprint: string | null;
+  requestedAt: number | null;
+  completedAt: number | null;
+  updatedAt: number;
+}
+
+export interface HistoryTitleCandidate {
+  text: string;
+  identity: string;
+  contentSha256: string;
+  inputContentSha256: string;
+}
+
+export interface HistorySmartTitleSettings {
+  enabled: boolean;
+  providerAppType: "claude" | "codex" | "grokbuild" | null;
+  providerId: string | null;
+  modelId: string | null;
+  enabledAt: number | null;
+}
+
+export interface HistoryTitleProviderOption {
+  appType: "claude" | "codex" | "grokbuild";
+  providerId: string;
+  providerName: string;
+  modelId: string | null;
+  apiFormat: string | null;
+  ready: boolean;
+  reasonCode: string | null;
+}
+
 export interface HistorySessionView extends HistorySessionSummary {
   sessionKey: string;
   alias: string;
   starred: boolean;
   tags: string[];
   displayTitle: string;
+  generatedTitle?: HistoryGeneratedTitleMeta;
   favoriteSnapshot?: boolean;
 }
 

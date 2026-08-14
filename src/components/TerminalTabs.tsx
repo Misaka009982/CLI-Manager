@@ -2446,6 +2446,7 @@ interface TerminalTabsProps {
   projectScopedTerminalViewEnabled?: boolean;
   terminalScope?: TerminalScope;
   onOpenProviderSettings?: () => void;
+  onOpenHistorySettings?: () => void;
 }
 
 export function TerminalTabs({
@@ -2454,6 +2455,7 @@ export function TerminalTabs({
   projectScopedTerminalViewEnabled = false,
   terminalScope = ALL_TERMINALS_SCOPE,
   onOpenProviderSettings,
+  onOpenHistorySettings,
 }: TerminalTabsProps = {}) {
   const { t } = useI18n();
   const { prompt, promptDialog } = useAppPrompt();
@@ -4443,7 +4445,7 @@ export function TerminalTabs({
             style={{ display: historyActive ? "block" : "none" }}
           >
             <Suspense fallback={null}>
-              <HistoryWorkspace active={historyActive} />
+              <HistoryWorkspace active={historyActive} onOpenSettings={onOpenHistorySettings} />
             </Suspense>
           </div>
         )}

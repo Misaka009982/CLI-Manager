@@ -14,6 +14,7 @@ import {
   History,
   ListChecks,
   Pencil,
+  Sparkles,
   Square,
   Star,
   Terminal,
@@ -27,13 +28,17 @@ import userAvatarUrl from "../../assets/history-user-avatar.svg";
 import type {
   HistoryFileChangeSummary,
   HistoryMessage,
-  HistoryMessagePart,
-  HistoryMessagePartKind,
   HistorySessionDetail,
   HistorySessionView,
 } from "../../lib/types";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { resolveHistorySourceIconKey } from "../../lib/cliTools";
+import {
+  effectiveHistoryMessageParts,
+  isConversationVisibleMessage,
+  isInjectedPromptContent,
+  normalizeHistoryMessageRole,
+} from "../../lib/historyConversation";
 import { CliToolIcon } from "../CliToolIcon";
 import { EmptyState } from "../ui/EmptyState";
 import { SessionTranscriptContent } from "./SessionTranscriptContent";
@@ -46,6 +51,8 @@ import { SessionFileChangesView } from "./SessionFileChangesView";
 import { SessionToolDiagnosticsView } from "./SessionToolDiagnosticsView";
 import { SessionSubtaskTreeView } from "./SessionSubtaskTreeView";
 import type { SessionProcessModel } from "./sessionEvents";
+
+export { isConversationVisibleMessage } from "../../lib/historyConversation";
 
 export type HistoryDetailView = "conversation" | "transcript" | "timeline" | "canvas" | "context" | "changes" | "tools" | "subtasks";
 
@@ -81,6 +88,8 @@ interface SessionDetailPaneProps {
   onOpenPrompt: () => void;
   onOpenDiff: (fileChanges?: HistoryFileChangeSummary[]) => void;
   onResumeSession: () => void;
+  onGenerateSmartTitle: () => void;
+  onClearSmartTitle: () => void;
   canConvertSession: boolean;
   onConvertSession: () => void;
   onJumpToMessage: (messageIndex: number) => void;
@@ -116,35 +125,6 @@ const LONG_MESSAGE_LINE_THRESHOLD = 8;
 const LONG_MESSAGE_CHAR_THRESHOLD = 900;
 const TOKEN_FORMATTER = new Intl.NumberFormat("en-US");
 
-function isInjectedPromptContent(content: string): boolean {
-  const trimmed = content.trimStart();
-  const lowerTrimmed = trimmed.toLowerCase();
-  const firstLine = lowerTrimmed.split(/\r?\n/, 1)[0]?.replace(/^#+\s*/, "").trim() ?? "";
-  return (
-    firstLine.startsWith("agents.md instructions for ") ||
-    firstLine.startsWith("base directory for this skill:") ||
-    firstLine.startsWith("base directory for this skill ") ||
-    firstLine.startsWith("system prompt") ||
-    firstLine.startsWith("developer instructions") ||
-    lowerTrimmed.startsWith("<system-reminder") ||
-    lowerTrimmed.startsWith("<codex_internal_context") ||
-    lowerTrimmed.startsWith("<session-context") ||
-    lowerTrimmed.includes("<skills_instructions") ||
-    lowerTrimmed.includes("<permissions instructions") ||
-    lowerTrimmed.includes("<environment_context>") ||
-    lowerTrimmed.includes("<collaboration_mode>") ||
-    lowerTrimmed.includes("<workflow-state:") ||
-    lowerTrimmed.includes("### available skills")
-  );
-}
-
-function normalizeMessageRole(role: string): "user" | "assistant" | "other" {
-  const normalized = role.toLowerCase();
-  if (normalized === "user" || normalized.includes("human")) return "user";
-  if (normalized === "assistant" || normalized.includes("model") || normalized.includes("llm")) return "assistant";
-  return "other";
-}
-
 type ConversationMessageRow = {
   type: "message";
   key: string;
@@ -155,32 +135,12 @@ type ConversationMessageRow = {
 
 type ConversationRow = ConversationMessageRow;
 
-function fallbackMessageParts(message: HistoryMessage): HistoryMessagePart[] {
-  const role = normalizeMessageRole(message.role);
-  let kind: HistoryMessagePartKind = "unknown";
-  if (isInjectedPromptContent(message.content)) kind = "system";
-  else if (role === "user" || role === "assistant") kind = "text";
-  else if (message.role.toLowerCase().includes("tool")) kind = "tool_result";
-  else if (message.role.toLowerCase().includes("system")) kind = "system";
-  return [{ kind, content: message.content }];
-}
-
-function effectiveMessageParts(message: HistoryMessage): HistoryMessagePart[] {
-  return message.parts?.length ? message.parts : fallbackMessageParts(message);
-}
-
-export function isConversationVisibleMessage(message: HistoryMessage): boolean {
-  const role = normalizeMessageRole(message.role);
-  if (role !== "user" && role !== "assistant") return false;
-  return effectiveMessageParts(message).some((part) => part.kind === "text" && part.content.trim().length > 0);
-}
-
 export function buildConversationRows(messages: HistoryMessage[]): ConversationRow[] {
   const rows: ConversationRow[] = [];
 
   messages.forEach((message, messageIndex) => {
     if (!isConversationVisibleMessage(message)) return;
-    const parts = effectiveMessageParts(message);
+    const parts = effectiveHistoryMessageParts(message);
     const textParts = parts.filter((part) => part.kind === "text");
     if (textParts.length === 0) return;
     rows.push({
@@ -221,7 +181,7 @@ function ConversationRowCard({
 }) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const message = row.type === "message" ? row.message : null;
-  const roleKind = message ? normalizeMessageRole(message.role) : "other";
+  const roleKind = message ? normalizeHistoryMessageRole(message.role) : "other";
   const avatarUrl = roleKind === "user" ? userAvatarUrl : aiAvatarUrl;
   const messageMeta = message ? formatMessageMeta(message) : null;
 
@@ -419,7 +379,7 @@ function HistoryMessageCard({
   onToggleSelect,
 }: HistoryMessageCardProps) {
   const { t } = useI18n();
-  const roleKind = normalizeMessageRole(message.role);
+  const roleKind = normalizeHistoryMessageRole(message.role);
   const avatarUrl = roleKind === "user" ? userAvatarUrl : aiAvatarUrl;
   const forceOpen = isMatched || isFocused;
   const collapsible = shouldCollapseMessage(message);
@@ -721,6 +681,8 @@ export function SessionDetailPane({
   onOpenPrompt,
   onOpenDiff,
   onResumeSession,
+  onGenerateSmartTitle,
+  onClearSmartTitle,
   canConvertSession,
   onConvertSession,
   onJumpToMessage,
@@ -971,6 +933,39 @@ export function SessionDetailPane({
               <Terminal size={12} />
               {t("history.detail.resume")}
             </button>
+            <>
+              <button
+                onClick={onGenerateSmartTitle}
+                disabled={loadingSessionDetail || !activeSession || activeView.generatedTitle?.state === "pending"}
+                aria-label={t(
+                  activeView.generatedTitle
+                    ? "history.smartTitle.regenerate"
+                    : "history.smartTitle.generate",
+                )}
+                className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+                style={{ color: "var(--accent)" }}
+                title={t("history.smartTitle.generate")}
+              >
+                <Sparkles size={12} />
+                {activeView.generatedTitle?.state === "pending"
+                  ? t("history.smartTitle.pending")
+                  : activeView.generatedTitle
+                    ? t("history.smartTitle.regenerate")
+                    : t("history.smartTitle.generate")}
+              </button>
+              {activeView.generatedTitle?.title ? (
+                <button
+                  onClick={onClearSmartTitle}
+                  disabled={loadingSessionDetail}
+                  aria-label={t("history.smartTitle.clear")}
+                  className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+                  title={t("history.smartTitle.clear")}
+                >
+                  <X size={12} />
+                  {t("history.smartTitle.clear")}
+                </button>
+              ) : null}
+            </>
             {canConvertSession ? (
               <button
                 onClick={onConvertSession}
