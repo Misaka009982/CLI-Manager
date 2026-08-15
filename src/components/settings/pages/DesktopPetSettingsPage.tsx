@@ -38,6 +38,7 @@ import {
   type PetCatalogEntry,
   type PetCatalogResponse,
 } from "../../../lib/desktopPet";
+import { DESKTOP_PET_E_PETS_CHANGED_EVENT } from "../../../lib/desktopPetE";
 import { formatFileSize } from "../../../lib/utils";
 import { getCliManagerDataPaths } from "../../../lib/appPaths";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
@@ -463,6 +464,7 @@ export function DesktopPetSettingsPage() {
     try {
       const nextInstalled = await invoke<InstalledPet[]>("desktop_pet_list_installed");
       setInstalledPets(nextInstalled);
+      window.dispatchEvent(new Event(DESKTOP_PET_E_PETS_CHANGED_EVENT));
       toast.success(t("desktopPet.settings.scanSuccess", { count: nextInstalled.length }));
     } catch (error) {
       toast.error(t("desktopPet.settings.operationFailed"), {
@@ -508,6 +510,7 @@ export function DesktopPetSettingsPage() {
     try {
       const installed = await invoke<InstalledPet>("desktop_pet_install", { petId: entry.id });
       setInstalledPets((pets) => upsertInstalled(pets, installed));
+      window.dispatchEvent(new Event(DESKTOP_PET_E_PETS_CHANGED_EVENT));
       await patch({ petId: entry.id });
       toast.success(
         previous
@@ -538,6 +541,7 @@ export function DesktopPetSettingsPage() {
       await invoke("desktop_pet_uninstall", { petId: pet.manifest.id });
       const remaining = await invoke<InstalledPet[]>("desktop_pet_list_installed");
       setInstalledPets(remaining);
+      window.dispatchEvent(new Event(DESKTOP_PET_E_PETS_CHANGED_EVENT));
       const replacementAvailable = remaining.some(
         (item) => item.manifest.id === pet.manifest.id
       );
@@ -582,6 +586,7 @@ export function DesktopPetSettingsPage() {
     try {
       const installed = await invoke<InstalledPet>("desktop_pet_import", { path: selected });
       setInstalledPets((pets) => upsertInstalled(pets, installed));
+      window.dispatchEvent(new Event(DESKTOP_PET_E_PETS_CHANGED_EVENT));
       await patch({ petId: installed.manifest.id });
       const name = localizedPetText(installed.manifest.name, language);
       toast.success(t("desktopPet.settings.importSuccess", { name }));

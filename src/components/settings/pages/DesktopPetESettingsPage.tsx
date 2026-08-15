@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Alert,
   Box,
   Button,
   Group,
-  SegmentedControl,
+  Select,
   Slider,
   Stack,
   Switch,
@@ -19,11 +20,17 @@ import {
   MonitorUp,
   MousePointer2,
   Palette,
+  RefreshCw,
   RotateCcw,
   Volume2,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  localizedPetText,
+  type InstalledPet,
+} from "../../../lib/desktopPet";
+import {
+  DESKTOP_PET_E_PETS_CHANGED_EVENT,
   DESKTOP_PET_E_SIZE_MAX_PERCENT,
   DESKTOP_PET_E_SIZE_MIN_PERCENT,
   type DesktopPetESettings,
@@ -63,13 +70,41 @@ function ToggleRow({ icon, title, description, checked, disabled, onChange }: To
 }
 
 export function DesktopPetESettingsPage() {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
   const desktopPet = useSettingsStore((state) => state.desktopPet);
   const desktopPetE = useSettingsStore((state) => state.desktopPetE);
   const runtimeError = useDesktopPetERuntimeStore((state) => state.lastError);
   const updateSetting = useSettingsStore((state) => state.update);
   const [sizeDraft, setSizeDraft] = useState(desktopPetE.size);
-  const enableBlocked = desktopPet.enabled && !desktopPetE.enabled;
+  const [codexPets, setCodexPets] = useState<InstalledPet[]>([]);
+  const [petsLoading, setPetsLoading] = useState(true);
+  const enableBlockedByExistingPet = desktopPet.enabled && !desktopPetE.enabled;
+  const enableBlockedByMissingPet = codexPets.length === 0 && !desktopPetE.enabled;
+  const enableBlocked = enableBlockedByExistingPet || enableBlockedByMissingPet;
+
+  const loadCodexPets = useCallback(async () => {
+    setPetsLoading(true);
+    try {
+      const installed = await invoke<InstalledPet[]>("desktop_pet_list_installed");
+      const pets = installed.filter((pet) => pet.format === "codex" && pet.manifest.engine === "codex-sprite");
+      setCodexPets(pets);
+      window.dispatchEvent(new Event(DESKTOP_PET_E_PETS_CHANGED_EVENT));
+    } catch (error) {
+      setCodexPets([]);
+      toast.error(t("desktopPetE.settings.petScanFailed"), { description: String(error) });
+    } finally {
+      setPetsLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    void loadCodexPets();
+  }, [loadCodexPets]);
+
+  const petOptions = useMemo(() => codexPets.map((pet) => ({
+    value: pet.manifest.id,
+    label: localizedPetText(pet.manifest.name, language),
+  })), [codexPets, language]);
 
   useEffect(() => setSizeDraft(desktopPetE.size), [desktopPetE.size]);
 
@@ -83,6 +118,15 @@ export function DesktopPetESettingsPage() {
       return false;
     }
   }, [t, updateSetting]);
+
+  useEffect(() => {
+    if (petsLoading || codexPets.length === 0 || desktopPetE.petId) return;
+    const availableIds = new Set(codexPets.map((pet) => pet.manifest.id));
+    const preferredId = availableIds.has(desktopPet.petId)
+      ? desktopPet.petId
+      : codexPets[0]?.manifest.id;
+    if (preferredId) void patch({ petId: preferredId });
+  }, [codexPets, desktopPet.petId, desktopPetE.petId, patch, petsLoading]);
 
   const commitSize = useCallback((value: number) => {
     const next = Math.round(Math.min(
@@ -134,9 +178,14 @@ export function DesktopPetESettingsPage() {
               </Stack>
             </Alert>
           ) : null}
-          {enableBlocked ? (
+          {enableBlockedByExistingPet ? (
             <Alert color="blue" variant="light" title={t("desktopPetE.settings.mutualExclusionTitle")}>
               {t("desktopPetE.settings.mutualExclusionDescription")}
+            </Alert>
+          ) : null}
+          {enableBlockedByMissingPet ? (
+            <Alert color="yellow" variant="light" title={t("desktopPetE.settings.noCodexPetsTitle")}>
+              {t("desktopPetE.settings.noCodexPetsDescription")}
             </Alert>
           ) : null}
         </Stack>
@@ -154,17 +203,33 @@ export function DesktopPetESettingsPage() {
             </Box>
           </Group>
           <Box>
-            <Text mb={6} size="xs" fw={500} c="var(--on-surface)">{t("desktopPetE.settings.theme")}</Text>
-            <SegmentedControl
-              fullWidth
-              value={desktopPetE.theme}
-              onChange={(value) => void patch({ theme: value as DesktopPetESettings["theme"] })}
-              data={[
-                { value: "clawd", label: "Clawd" },
-                { value: "calico", label: "Calico" },
-                { value: "cloudling", label: "Cloudling" },
-              ]}
+            <Group mb={6} justify="space-between" align="center" gap="sm">
+              <Text size="xs" fw={500} c="var(--on-surface)">{t("desktopPetE.settings.pet")}</Text>
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                leftSection={<RefreshCw size={13} />}
+                loading={petsLoading}
+                onClick={() => void loadCodexPets()}
+              >
+                {t("desktopPetE.settings.rescanPets")}
+              </Button>
+            </Group>
+            <Select
+              value={desktopPetE.petId}
+              data={petOptions}
+              disabled={petsLoading || petOptions.length === 0}
+              placeholder={t(petOptions.length === 0
+                ? "desktopPetE.settings.noCodexPets"
+                : "desktopPetE.settings.selectPet")}
+              onChange={(petId) => void patch({ petId })}
+              allowDeselect={false}
+              searchable
+              aria-label={t("desktopPetE.settings.pet")}
             />
+            <Text mt={6} size="xs" c="var(--on-surface-variant)">
+              {t("desktopPetE.settings.petDescription")}
+            </Text>
           </Box>
           <Box>
             <Group justify="space-between" align="center" gap="md">

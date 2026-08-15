@@ -3,13 +3,16 @@ export const DESKTOP_PET_E_MAX_LINE_BYTES = 1024 * 1024;
 export const DESKTOP_PET_E_EVENT = "desktop-pet-e-event";
 export const DESKTOP_PET_E_ACTION_EVENT = "desktop-pet-e-action";
 export const DESKTOP_PET_E_RUNTIME_STATE_EVENT = "desktop-pet-e-runtime-state";
+export const DESKTOP_PET_E_PETS_CHANGED_EVENT = "desktop-pet-e-pets-changed";
+export const DESKTOP_PET_E_MAX_ACTION_ID_LENGTH = 160;
+export const DESKTOP_PET_E_MAX_FIELD_ID_LENGTH = 512;
+export const DESKTOP_PET_E_MAX_ANSWERS = 32;
+export const DESKTOP_PET_E_MAX_ANSWER_VALUES = 64;
+export const DESKTOP_PET_E_MAX_ANSWER_TEXT_LENGTH = 16_384;
 export const DESKTOP_PET_E_SIZE_MIN_PERCENT = 50;
 export const DESKTOP_PET_E_SIZE_MAX_PERCENT = 200;
 export const DESKTOP_PET_E_SIZE_STEP_PERCENT = 5;
 export const DESKTOP_PET_E_SIZE_DEFAULT_PERCENT = 100;
-
-export const DESKTOP_PET_E_THEMES = ["clawd", "calico", "cloudling"] as const;
-export type DesktopPetETheme = (typeof DESKTOP_PET_E_THEMES)[number];
 
 export type DesktopPetEColor = "green" | "yellow" | "red" | "blue";
 export type DesktopPetEMood = DesktopPetEColor | "idle";
@@ -25,7 +28,7 @@ export interface DesktopPetEPosition {
 
 export interface DesktopPetESettings {
   enabled: boolean;
-  theme: DesktopPetETheme;
+  petId: string | null;
   size: number;
   position: DesktopPetEPosition | null;
   lockPosition: boolean;
@@ -42,7 +45,7 @@ export interface DesktopPetESettings {
 
 export const DEFAULT_DESKTOP_PET_E_SETTINGS: Readonly<DesktopPetESettings> = Object.freeze({
   enabled: false,
-  theme: "clawd",
+  petId: null,
   size: DESKTOP_PET_E_SIZE_DEFAULT_PERCENT,
   position: null,
   lockPosition: false,
@@ -149,10 +152,19 @@ export interface DesktopPetESnapshot {
   diagnostics: DesktopPetEDiagnostic[];
 }
 
+export interface DesktopPetEPetAsset {
+  id: string;
+  displayName: string;
+  spritePath: string;
+  spriteVersionNumber: 1 | 2;
+  states: Record<"idle" | DesktopPetEColor, { row: number; frames: number }>;
+}
+
 export interface DesktopPetEConfigPayload {
   language: "zh-CN" | "zh-TW" | "en-US";
   visible: boolean;
   settings: DesktopPetESettings;
+  pet: DesktopPetEPetAsset | null;
   labels: Record<string, string>;
 }
 
@@ -278,7 +290,7 @@ export function normalizeDesktopPetESettings(
   const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
   return {
     enabled: normalizeBoolean(raw.enabled, fallback.enabled),
-    theme: isDesktopPetETheme(raw.theme) ? raw.theme : fallback.theme,
+    petId: normalizePetId(raw.petId, fallback.petId),
     size: normalizeDesktopPetESize(raw.size, fallback.size),
     position: normalizePosition(raw.position),
     lockPosition: normalizeBoolean(raw.lockPosition, fallback.lockPosition),
@@ -294,8 +306,62 @@ export function normalizeDesktopPetESettings(
   };
 }
 
-export function isDesktopPetETheme(value: unknown): value is DesktopPetETheme {
-  return typeof value === "string" && DESKTOP_PET_E_THEMES.includes(value as DesktopPetETheme);
+function normalizePetId(value: unknown, fallback: string | null): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") return fallback;
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= 160 ? normalized : fallback;
+}
+
+export function isDesktopPetEChildAction(value: unknown): value is DesktopPetEChildAction {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  if (
+    !isBoundedString(candidate.actionId, DESKTOP_PET_E_MAX_ACTION_ID_LENGTH)
+    || !Number.isSafeInteger(candidate.snapshotRevision)
+    || (candidate.snapshotRevision as number) < 0
+  ) {
+    return false;
+  }
+  if (candidate.kind === "open-settings" || candidate.kind === "close-pet") return true;
+  if (candidate.kind === "window-state") {
+    const position = candidate.position;
+    if (!position || typeof position !== "object") return false;
+    const point = position as Record<string, unknown>;
+    return typeof point.x === "number" && Number.isFinite(point.x)
+      && typeof point.y === "number" && Number.isFinite(point.y);
+  }
+  if (candidate.kind === "open-task" || candidate.kind === "clear-task") {
+    return isBoundedString(candidate.taskId, DESKTOP_PET_E_MAX_FIELD_ID_LENGTH);
+  }
+  if (candidate.kind !== "submit-action") return false;
+  if (
+    !isBoundedString(candidate.taskId, DESKTOP_PET_E_MAX_FIELD_ID_LENGTH)
+    || !isBoundedString(candidate.pendingActionId, DESKTOP_PET_E_MAX_FIELD_ID_LENGTH)
+    || (candidate.approvalValue !== undefined
+      && !isBoundedString(candidate.approvalValue, DESKTOP_PET_E_MAX_ANSWER_TEXT_LENGTH))
+  ) {
+    return false;
+  }
+  if (candidate.answers === undefined) return true;
+  if (!Array.isArray(candidate.answers) || candidate.answers.length > DESKTOP_PET_E_MAX_ANSWERS) {
+    return false;
+  }
+  return candidate.answers.every((answer) => {
+    if (!answer || typeof answer !== "object") return false;
+    const item = answer as Record<string, unknown>;
+    return isBoundedString(item.questionId, DESKTOP_PET_E_MAX_FIELD_ID_LENGTH)
+      && Array.isArray(item.values)
+      && item.values.length <= DESKTOP_PET_E_MAX_ANSWER_VALUES
+      && item.values.every((entry) => isBoundedString(entry, DESKTOP_PET_E_MAX_ANSWER_TEXT_LENGTH))
+      && (item.customValue === undefined
+        || item.customValue === null
+        || isBoundedString(item.customValue, DESKTOP_PET_E_MAX_ANSWER_TEXT_LENGTH));
+  });
+}
+
+function isBoundedString(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength;
 }
 
 export function isDesktopPetEEnvelope(value: unknown): value is DesktopPetEEnvelope<string, unknown> {

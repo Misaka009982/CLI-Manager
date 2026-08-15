@@ -14,7 +14,7 @@ test("Desktop Pet E and the existing pet are mutually exclusive without clearing
   assert.match(settings, /desktop_pet_e_mutual_exclusion/);
   assert.match(settings, /entries\.desktopPetE = \{ \.\.\.entries\.desktopPetE, enabled: false \}/);
   assert.match(existingPage, /disabled=\{desktopPetEEnabled && !desktopPet\.enabled\}/);
-  assert.match(ePage, /const enableBlocked = desktopPet\.enabled && !desktopPetE\.enabled/);
+  assert.match(ePage, /const enableBlockedByExistingPet = desktopPet\.enabled && !desktopPetE\.enabled/);
   assert.doesNotMatch(settings, /desktopPet\s*=\s*DEFAULT_DESKTOP_PET_E_SETTINGS/);
 });
 
@@ -35,6 +35,8 @@ test("the CLI frontend reuses the pet-e protocol source", () => {
 
   assert.equal(frontendProtocol.trim(), 'export * from "../../pet-e/src/bridge/protocol";');
   assert.match(petProtocol, /DESKTOP_PET_E_PROTOCOL_VERSION = 1/);
+  assert.match(petProtocol, /petId: string \| null/);
+  assert.doesNotMatch(petProtocol, /DESKTOP_PET_E_THEMES|"clawd"|"calico"|"cloudling"/);
   assert.match(petProtocol, /instanceId: string/);
   assert.match(petProtocol, /generation: number/);
   assert.match(petProtocol, /revision: number/);

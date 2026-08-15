@@ -1,0 +1,327 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  letter-spacing: 0;
+  --green: #32d583;
+  --yellow: #f5c451;
+  --red: #f97066;
+  --blue: #53b1fd;
+  --panel: rgba(18, 21, 25, 0.96);
+  --panel-strong: rgba(10, 12, 15, 0.98);
+  --border: rgba(255, 255, 255, 0.16);
+  --text: #f4f6f8;
+  --muted: #aab2bc;
+}
+
+* { box-sizing: border-box; }
+html, body { width: 380px; min-height: 540px; margin: 0; overflow: hidden; background: transparent; }
+body { color: var(--text); user-select: none; }
+button, input, textarea { font: inherit; letter-spacing: 0; }
+button { color: inherit; }
+
+#app {
+  position: relative;
+  width: 380px;
+  height: 540px;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.pet-shell {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 232px;
+  height: 260px;
+  -webkit-app-region: drag;
+}
+
+.pet {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 232px;
+  height: 252px;
+  border: 0;
+  background: transparent;
+  -webkit-app-region: drag;
+}
+
+.pet.missing {
+  display: grid;
+  place-items: center;
+  width: 210px;
+  height: 72px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--panel);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.sprite-viewport {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  width: 192px;
+  height: 208px;
+  overflow: hidden;
+  filter: drop-shadow(0 8px 8px rgba(0, 0, 0, 0.28));
+}
+
+/* CSP 不放行内联 style，因此行、帧数和精灵表行数都使用静态 class。 */
+.sprite-sheet {
+  position: absolute;
+  left: 0;
+  width: 1536px;
+  max-width: none;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
+.sprite-rows-9 { height: 1872px; }
+.sprite-rows-11 { height: 2288px; }
+
+.sprite-row-0 { top: 0; }
+.sprite-row-1 { top: -208px; }
+.sprite-row-2 { top: -416px; }
+.sprite-row-3 { top: -624px; }
+.sprite-row-4 { top: -832px; }
+.sprite-row-5 { top: -1040px; }
+.sprite-row-6 { top: -1248px; }
+.sprite-row-7 { top: -1456px; }
+.sprite-row-8 { top: -1664px; }
+.sprite-row-9 { top: -1872px; }
+.sprite-row-10 { top: -2080px; }
+
+.sprite-sheet.animated.sprite-frames-2 { animation: sprite-cycle-2 1400ms steps(2) infinite; }
+.sprite-sheet.animated.sprite-frames-3 { animation: sprite-cycle-3 1400ms steps(3) infinite; }
+.sprite-sheet.animated.sprite-frames-4 { animation: sprite-cycle-4 1400ms steps(4) infinite; }
+.sprite-sheet.animated.sprite-frames-5 { animation: sprite-cycle-5 1400ms steps(5) infinite; }
+.sprite-sheet.animated.sprite-frames-6 { animation: sprite-cycle-6 1560ms steps(6) infinite; }
+.sprite-sheet.animated.sprite-frames-7 { animation: sprite-cycle-7 1820ms steps(7) infinite; }
+.sprite-sheet.animated.sprite-frames-8 { animation: sprite-cycle-8 2080ms steps(8) infinite; }
+
+@keyframes sprite-cycle-2 { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-384px, 0, 0); } }
+@keyframes sprite-cycle-3 { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-576px, 0, 0); } }
+@keyframes sprite-cycle-4 { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-768px, 0, 0); } }
+@keyframes sprite-cycle-5 { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-960px, 0, 0); } }
+@keyframes sprite-cycle-6 { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-1152px, 0, 0); } }
+@keyframes sprite-cycle-7 { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-1344px, 0, 0); } }
+@keyframes sprite-cycle-8 { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-1536px, 0, 0); } }
+
+.pet-toolbar {
+  position: absolute;
+  top: 8px;
+  right: 48px;
+  z-index: 3;
+  display: flex;
+  gap: 5px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  -webkit-app-region: no-drag;
+}
+.pet-shell:hover .pet-toolbar, .pet-shell:focus-within .pet-toolbar, .pet-shell.notification-active .pet-toolbar { opacity: 1; }
+.pet-toolbar button {
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-strong);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 25px;
+}
+.pet-toolbar button:hover { border-color: currentColor; color: var(--text); }
+
+.lights {
+  position: absolute;
+  right: 0;
+  top: 8px;
+  display: grid;
+  gap: 6px;
+  width: 42px;
+  -webkit-app-region: no-drag;
+}
+
+.light {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  place-items: center;
+  width: 42px;
+  height: 30px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  cursor: pointer;
+}
+.light:hover, .light.active { border-color: currentColor; }
+.light .dot { width: 11px; height: 11px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+.light .count { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.green { color: var(--green); }
+.yellow { color: var(--yellow); }
+.red { color: var(--red); }
+.blue { color: var(--blue); }
+.light.yellow { animation: waiting-pulse 1.6s ease-in-out infinite; }
+@keyframes waiting-pulse { 50% { filter: brightness(1.35); transform: scale(1.04); } }
+
+.status-label {
+  position: absolute;
+  right: 48px;
+  bottom: 34px;
+  max-width: 180px;
+  min-height: 22px;
+  padding: 4px 7px;
+  overflow: hidden;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  background: var(--panel-strong);
+  font-size: 10px;
+  line-height: 13px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
+.cli-label {
+  position: absolute;
+  right: 48px;
+  bottom: 4px;
+  max-width: 180px;
+  min-height: 26px;
+  padding: 5px 8px;
+  overflow: hidden;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  background: var(--panel-strong);
+  font-size: 11px;
+  line-height: 14px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
+.pet-shell.notification-active .sprite-viewport { animation: pet-notification 700ms ease-in-out 2; }
+@keyframes pet-notification {
+  25% { transform: translateY(-4px) rotate(-2deg); }
+  75% { transform: translateY(0) rotate(2deg); }
+}
+
+.notification {
+  position: absolute;
+  right: 56px;
+  top: 8px;
+  z-index: 4;
+  display: grid;
+  gap: 3px;
+  width: 250px;
+  min-height: 52px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  -webkit-app-region: no-drag;
+}
+.notification strong { font-size: 12px; line-height: 16px; }
+.notification span { color: var(--muted); font-size: 11px; line-height: 15px; overflow-wrap: anywhere; }
+
+.task-panel, .action-panel {
+  position: absolute;
+  left: 8px;
+  z-index: 6;
+  width: 260px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38);
+  -webkit-app-region: no-drag;
+}
+.task-panel { bottom: 10px; max-height: 360px; }
+.action-panel { top: 8px; bottom: 8px; width: 364px; background: var(--panel-strong); }
+.task-panel > header, .action-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 34px;
+  padding: 0 9px;
+  border-bottom: 1px solid var(--border);
+}
+.task-panel header strong, .action-panel header strong { font-size: 12px; }
+.task-panel header button, .action-panel header button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 18px;
+}
+.task-list { display: grid; gap: 5px; max-height: 324px; padding: 7px; overflow-y: auto; }
+.task-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 7px;
+  border-left: 3px solid currentColor;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.055);
+}
+.task-copy { display: grid; min-width: 0; gap: 2px; }
+.task-copy strong { overflow: hidden; color: var(--text); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.task-copy > span { overflow-wrap: anywhere; color: var(--muted); font-size: 10px; line-height: 14px; }
+.task-copy .ended { color: currentColor; }
+.task-row button, .action-panel footer button {
+  min-width: 48px;
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  font-size: 11px;
+}
+.empty { margin: 12px; color: var(--muted); font-size: 11px; text-align: center; }
+
+.questions, .approval-options {
+  display: grid;
+  gap: 10px;
+  max-height: 430px;
+  padding: 10px;
+  overflow-y: auto;
+}
+fieldset { display: grid; gap: 6px; min-width: 0; margin: 0; padding: 9px; border: 1px solid var(--border); border-radius: 5px; }
+legend { max-width: 100%; padding: 0 4px; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
+legend span { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 5px; border-radius: 50%; background: #2779bd; font-size: 10px; }
+fieldset > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 15px; overflow-wrap: anywhere; }
+.choice { display: grid; grid-template-columns: 17px minmax(0, 1fr); align-items: start; gap: 7px; min-height: 32px; padding: 6px; border: 1px solid transparent; border-radius: 4px; cursor: pointer; }
+.choice:hover { border-color: var(--border); background: rgba(255, 255, 255, 0.045); }
+.choice input { margin: 2px 0 0; accent-color: #53b1fd; }
+.choice > span { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; font-size: 11px; line-height: 15px; }
+.choice small { color: var(--muted); font-size: 10px; }
+.choice.destructive { color: var(--red); }
+textarea { width: 100%; min-height: 62px; resize: vertical; padding: 7px; border: 1px solid var(--border); border-radius: 4px; outline: none; color: var(--text); background: rgba(0, 0, 0, 0.28); font-size: 11px; line-height: 15px; user-select: text; }
+textarea:focus { border-color: var(--blue); }
+.action-error { margin: 8px 10px 0; padding: 7px; border: 1px solid var(--red); border-radius: 4px; color: #ffd5d2; font-size: 10px; overflow-wrap: anywhere; }
+.action-panel footer { position: absolute; right: 0; bottom: 0; left: 0; display: flex; justify-content: flex-end; gap: 7px; min-height: 44px; padding: 8px 10px; border-top: 1px solid var(--border); background: var(--panel-strong); }
+.action-panel footer .primary { border-color: #53b1fd; background: #1467a8; }
+.action-panel footer button:disabled { cursor: default; opacity: 0.45; }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-thumb { border-radius: 3px; background: rgba(255, 255, 255, 0.22); }
+
+/* 低动态模式下停用精灵、等待灯和通知动画。 */
+@media (prefers-reduced-motion: reduce) {
+  .sprite-sheet.animated, .light.yellow, .pet-shell.notification-active .sprite-viewport { animation: none; }
+}

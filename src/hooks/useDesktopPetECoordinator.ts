@@ -4,9 +4,12 @@ import { listen } from "@tauri-apps/api/event";
 import { useShallow } from "zustand/react/shallow";
 import {
   DESKTOP_PET_E_ACTION_EVENT,
+  DESKTOP_PET_E_EVENT,
+  DESKTOP_PET_E_PETS_CHANGED_EVENT,
   DESKTOP_PET_E_RUNTIME_STATE_EVENT,
-  type DesktopPetEChildAction,
+  isDesktopPetEChildAction,
   type DesktopPetEConfigPayload,
+  type DesktopPetEPetAsset,
   type DesktopPetEPosition,
   type DesktopPetERuntimeState,
   type DesktopPetESnapshot,
@@ -19,7 +22,10 @@ import {
 } from "../lib/desktopPetEState";
 import {
   DESKTOP_PET_OUTPUT_ACTIVITY_TTL_MS,
+  joinPetAssetPath,
+  localizedPetText,
   type BackgroundPetTask,
+  type InstalledPet,
 } from "../lib/desktopPet";
 import { sameBackgroundPetTasks } from "../lib/desktopPetTransport";
 import { desktopPetESyncFingerprint } from "../lib/desktopPetETransport";
@@ -52,34 +58,6 @@ function createInstanceId(): string {
   return `cli-manager-${crypto.randomUUID()}`;
 }
 
-function isDesktopPetEChildAction(value: unknown): value is DesktopPetEChildAction {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Record<string, unknown>;
-  if (
-    typeof candidate.actionId !== "string"
-    || candidate.actionId.length === 0
-    || typeof candidate.kind !== "string"
-    || !Number.isSafeInteger(candidate.snapshotRevision)
-    || (candidate.snapshotRevision as number) < 0
-  ) {
-    return false;
-  }
-  if (candidate.kind === "open-task" || candidate.kind === "clear-task") {
-    return typeof candidate.taskId === "string" && candidate.taskId.length > 0;
-  }
-  if (candidate.kind === "submit-action") {
-    return typeof candidate.taskId === "string"
-      && candidate.taskId.length > 0
-      && typeof candidate.pendingActionId === "string"
-      && candidate.pendingActionId.length > 0;
-  }
-  if (candidate.kind === "window-state") {
-    const position = candidate.position;
-    return Boolean(position && typeof position === "object");
-  }
-  return candidate.kind === "open-settings" || candidate.kind === "close-pet";
-}
-
 function normalizeDesktopPetEPosition(position: DesktopPetEPosition): DesktopPetEPosition | null {
   if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return null;
   return { x: Math.round(position.x), y: Math.round(position.y) };
@@ -96,6 +74,28 @@ function desktopPetESnapshotContentKey(snapshot: DesktopPetESnapshot): string {
   });
 }
 
+function desktopPetEPetAsset(pet: InstalledPet | null, language: Parameters<typeof localizedPetText>[1]): DesktopPetEPetAsset | null {
+  if (!pet || pet.format !== "codex" || pet.manifest.engine !== "codex-sprite") return null;
+  const spriteFile = pet.manifest.states.idle.file;
+  const state = (mood: "idle" | "working" | "waiting" | "success" | "error") => {
+    const asset = pet.manifest.states[mood] ?? pet.manifest.states.idle;
+    return { row: asset.row ?? 0, frames: asset.frames ?? 1 };
+  };
+  return {
+    id: pet.manifest.id,
+    displayName: localizedPetText(pet.manifest.name, language),
+    spritePath: joinPetAssetPath(pet.baseDir, spriteFile),
+    spriteVersionNumber: pet.manifest.spriteVersionNumber === 2 ? 2 : 1,
+    states: {
+      idle: state("idle"),
+      green: state("working"),
+      yellow: state("waiting"),
+      red: state("error"),
+      blue: state("success"),
+    },
+  };
+}
+
 export function useDesktopPetECoordinator({
   appReady,
   terminalFullscreen,
@@ -105,6 +105,7 @@ export function useDesktopPetECoordinator({
   const { language, t } = useI18n();
   const settings = useSettingsStore((state) => state.desktopPetE);
   const existingDesktopPetEnabled = useSettingsStore((state) => state.desktopPet.enabled);
+  const existingDesktopPetId = useSettingsStore((state) => state.desktopPet.petId);
   const settingsLoaded = useSettingsStore((state) => state.loaded);
   const replaceRuntimeState = useDesktopPetERuntimeStore((state) => state.replace);
   const projects = useProjectStore((state) => state.projects);
@@ -129,6 +130,7 @@ export function useDesktopPetECoordinator({
     })),
   );
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundPetTask[]>([]);
+  const [installedCodexPets, setInstalledCodexPets] = useState<InstalledPet[]>([]);
   const [activityExpiryRevision, setActivityExpiryRevision] = useState(0);
   const [runtimeState, setRuntimeState] = useState<DesktopPetERuntimeState>(EMPTY_RUNTIME_STATE);
   const [viewedTerminalTaskIds, setViewedTerminalTaskIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -147,6 +149,12 @@ export function useDesktopPetECoordinator({
 
   const tracking = appReady && settingsLoaded && settings.enabled;
   const visible = tracking && !(settings.autoHideFullscreen && terminalFullscreen);
+  const selectedPet = useMemo(() => {
+    const preferredId = settings.petId ?? existingDesktopPetId;
+    const selected = installedCodexPets.find((pet) => pet.manifest.id === preferredId) ?? null;
+    const fallback = settings.petId ? null : installedCodexPets[0] ?? null;
+    return desktopPetEPetAsset(selected ?? fallback, language);
+  }, [existingDesktopPetId, installedCodexPets, language, settings.petId]);
 
   const targetBySessionId = useMemo(() => {
     const targets = new Map<string, { workspanId: string; paneId: string }>();
@@ -247,6 +255,7 @@ export function useDesktopPetECoordinator({
     language,
     visible,
     settings,
+    pet: selectedPet,
     labels: {
       openMain: t("desktopPet.actions.openMain"),
       openSettings: t("desktopPet.actions.openSettings"),
@@ -256,8 +265,50 @@ export function useDesktopPetECoordinator({
       success: t("desktopPet.mood.success"),
       error: t("desktopPet.mood.error"),
       sleeping: t("desktopPet.mood.sleeping"),
+      "desktopPetE.renderer.taskStatus": t("desktopPetE.renderer.taskStatus"),
+      "desktopPetE.renderer.running": t("desktopPetE.renderer.running"),
+      "desktopPetE.renderer.actionNeeded": t("desktopPetE.renderer.actionNeeded"),
+      "desktopPetE.renderer.failed": t("desktopPetE.renderer.failed"),
+      "desktopPetE.renderer.stopped": t("desktopPetE.renderer.stopped"),
+      "desktopPetE.renderer.otherTasks": t("desktopPetE.renderer.otherTasks"),
+      "desktopPetE.renderer.collapse": t("desktopPetE.renderer.collapse"),
+      "desktopPetE.renderer.noTasks": t("desktopPetE.renderer.noTasks"),
+      "desktopPetE.renderer.sessionEnded": t("desktopPetE.renderer.sessionEnded"),
+      "desktopPetE.renderer.respond": t("desktopPetE.renderer.respond"),
+      "desktopPetE.renderer.open": t("desktopPetE.renderer.open"),
+      "desktopPetE.renderer.clear": t("desktopPetE.renderer.clear"),
+      "desktopPetE.renderer.terminal": t("desktopPetE.renderer.terminal"),
+      "desktopPetE.renderer.submit": t("desktopPetE.renderer.submit"),
+      "desktopPetE.renderer.retry": t("desktopPetE.renderer.retry"),
+      "desktopPetE.renderer.submitting": t("desktopPetE.renderer.submitting"),
+      "desktopPetE.renderer.typeAnswer": t("desktopPetE.renderer.typeAnswer"),
+      "desktopPetE.renderer.selectPet": t("desktopPetE.renderer.selectPet"),
+      "desktopPetE.renderer.close": t("desktopPetE.renderer.close"),
+      "desktopPetE.renderer.actionFailed": t("desktopPetE.renderer.actionFailed"),
     },
-  }), [language, settings, t, visible]);
+  }), [language, selectedPet, settings, t, visible]);
+
+  useEffect(() => {
+    if (!appReady || !settingsLoaded || !isTauri()) return;
+    let disposed = false;
+    const refreshPets = () => {
+      void invoke<InstalledPet[]>("desktop_pet_list_installed")
+        .then((installed) => {
+          if (!disposed) {
+            setInstalledCodexPets(installed.filter(
+              (pet) => pet.format === "codex" && pet.manifest.engine === "codex-sprite",
+            ));
+          }
+        })
+        .catch((error) => logWarn("Failed to resolve Desktop Pet E Codex pet", error));
+    };
+    refreshPets();
+    window.addEventListener(DESKTOP_PET_E_PETS_CHANGED_EVENT, refreshPets);
+    return () => {
+      disposed = true;
+      window.removeEventListener(DESKTOP_PET_E_PETS_CHANGED_EVENT, refreshPets);
+    };
+  }, [appReady, settingsLoaded]);
 
   useEffect(() => {
     if (!tracking) return;
@@ -381,9 +432,13 @@ export function useDesktopPetECoordinator({
     const unlistenRuntime = listen<DesktopPetERuntimeState>(DESKTOP_PET_E_RUNTIME_STATE_EVENT, (event) => {
       applyRuntimeState(event.payload);
     });
+    const unlistenDiagnostic = listen<unknown>(DESKTOP_PET_E_EVENT, (event) => {
+      logWarn("Desktop Pet E diagnostic", event.payload);
+    });
     return () => {
       void unlistenAction.then((unlisten) => unlisten());
       void unlistenRuntime.then((unlisten) => unlisten());
+      void unlistenDiagnostic.then((unlisten) => unlisten());
     };
   }, []);
 

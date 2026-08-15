@@ -24,7 +24,7 @@ const protocol = await import(pathToFileURL(outputPath).href);
 test("Desktop Pet E settings have local, deterministic defaults", () => {
   assert.deepEqual(protocol.normalizeDesktopPetESettings(undefined), {
     enabled: false,
-    theme: "clawd",
+    petId: null,
     size: 100,
     position: null,
     lockPosition: false,
@@ -40,10 +40,10 @@ test("Desktop Pet E settings have local, deterministic defaults", () => {
   });
 });
 
-test("invalid theme, size, and position values are normalized", () => {
+test("invalid pet IDs, size, and position values are normalized", () => {
   assert.deepEqual(protocol.normalizeDesktopPetESettings({
     enabled: true,
-    theme: "unknown",
+    petId: "",
     size: 203,
     position: { x: Number.NaN, y: 12 },
     soundEnabled: false,
@@ -54,6 +54,7 @@ test("invalid theme, size, and position values are normalized", () => {
     position: null,
     soundEnabled: false,
   });
+  assert.equal(protocol.normalizeDesktopPetESettings({ petId: " codex.kuromuse " }).petId, "codex.kuromuse");
   assert.equal(protocol.normalizeDesktopPetESize(103), 105);
   assert.deepEqual(protocol.normalizeDesktopPetESettings({
     position: { x: -100_001.4, y: 100_001.4 },
