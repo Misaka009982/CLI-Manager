@@ -12,6 +12,7 @@ import {
   isDesktopPetEChildAction,
   type DesktopPetEActionResult,
   type DesktopPetEConfigPayload,
+  type DesktopPetENotification,
   type DesktopPetEPetAsset,
   type DesktopPetEPosition,
   type DesktopPetERuntimeState,
@@ -37,7 +38,7 @@ import { logWarn } from "../lib/logger";
 import { useProjectStore } from "../stores/projectStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useSettingsStore } from "../stores/settingsStore";
-import { useTerminalStore } from "../stores/terminalStore";
+import { useTerminalStore, type CliHookPayload } from "../stores/terminalStore";
 import { useDesktopPetERuntimeStore } from "../stores/desktopPetERuntimeStore";
 import { useDesktopPetEAgentStore } from "../stores/desktopPetEAgentStore";
 import { findPaneLeafBySession } from "../stores/terminalPaneTree";
@@ -58,8 +59,35 @@ const EMPTY_RUNTIME_STATE: DesktopPetERuntimeState = {
   lastError: null,
 };
 
+const DESKTOP_PET_E_NOTIFICATION_DURATION_MS = 5_000;
+const CLAUDE_QUESTION_TOOL_NAME = "AskUserQuestion";
+const CODEX_QUESTION_TOOL_NAME = "request_user_input";
+
 function createInstanceId(): string {
   return `cli-manager-${crypto.randomUUID()}`;
+}
+
+function isDesktopPetEOrdinaryNotification(payload: CliHookPayload): boolean {
+  if (payload.event !== "Stop" && payload.event !== "StopFailure" && payload.event !== "Notification") {
+    return false;
+  }
+  return !(
+    payload.event === "Notification"
+    && ((payload.source === "claude" && payload.toolName === CLAUDE_QUESTION_TOOL_NAME)
+      || (payload.source === "codex" && payload.toolName === CODEX_QUESTION_TOOL_NAME))
+  );
+}
+
+function desktopPetENotificationSource(payload: CliHookPayload): string {
+  if (payload.source === "codex") return "Codex CLI";
+  if (payload.source === "pi") return "Pi Agent";
+  if (payload.source === "grok") return "Grok Build";
+  return "Claude Code";
+}
+
+function desktopPetENotificationId(payload: CliHookPayload): string {
+  const remoteEventId = payload.remoteEventId?.trim();
+  return remoteEventId ? remoteEventId.slice(0, 160) : crypto.randomUUID();
 }
 
 function normalizeDesktopPetEPosition(position: DesktopPetEPosition): DesktopPetEPosition | null {
@@ -136,12 +164,14 @@ export function useDesktopPetECoordinator({
   );
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundPetTask[]>([]);
   const [installedCodexPets, setInstalledCodexPets] = useState<InstalledPet[]>([]);
+  const [notification, setNotification] = useState<DesktopPetENotification | null>(null);
   const [activityExpiryRevision, setActivityExpiryRevision] = useState(0);
   const [runtimeState, setRuntimeState] = useState<DesktopPetERuntimeState>(EMPTY_RUNTIME_STATE);
   const [viewedTerminalTaskIds, setViewedTerminalTaskIds] = useState<ReadonlySet<string>>(() => new Set());
   const [clearedTaskIds, setClearedTaskIds] = useState<ReadonlySet<string>>(() => new Set());
   const instanceIdRef = useRef<string>(createInstanceId());
   const terminalHistoryRef = useRef<DesktopPetETaskCandidate[]>([]);
+  const sessionStatusObservationsRef = useRef(new Map<string, { status: string; updatedAt: number }>());
   const revisionRef = useRef({ generation: -1, contentKey: "", revision: 0, generatedAt: Date.now() });
   const settingsRef = useRef(settings);
   const snapshotRef = useRef<DesktopPetESnapshot | null>(null);
@@ -174,6 +204,24 @@ export function useDesktopPetECoordinator({
     return targets;
   }, [sessions, workspans]);
 
+  const sessionStatusUpdatedAt = useMemo(() => {
+    const observedAt = Date.now();
+    const observations = sessionStatusObservationsRef.current;
+    const currentSessionIds = new Set(Object.keys(sessionStatuses));
+    for (const sessionId of observations.keys()) {
+      if (!currentSessionIds.has(sessionId)) observations.delete(sessionId);
+    }
+    const result: Record<string, number> = {};
+    for (const [sessionId, status] of Object.entries(sessionStatuses)) {
+      const current = observations.get(sessionId);
+      if (!current || current.status !== status) {
+        observations.set(sessionId, { status, updatedAt: observedAt });
+      }
+      result[sessionId] = observations.get(sessionId)?.updatedAt ?? observedAt;
+    }
+    return result;
+  }, [sessionStatuses]);
+
   const currentCandidates = useMemo(() => deriveDesktopPetECandidates({
     instanceId: instanceIdRef.current,
     generation: runtimeState.generation,
@@ -184,6 +232,7 @@ export function useDesktopPetECoordinator({
     targetBySessionId,
     activeSessionId,
     sessionStatuses,
+    sessionStatusUpdatedAt,
     tabNotifications,
     tabStatusDetails,
     ptyOutputActivityAt,
@@ -199,6 +248,7 @@ export function useDesktopPetECoordinator({
     ptyOutputActivityAt,
     runtimeState.generation,
     sessionStatuses,
+    sessionStatusUpdatedAt,
     sessions,
     tabNotifications,
     tabStatusDetails,
@@ -228,10 +278,12 @@ export function useDesktopPetECoordinator({
     candidates,
     viewedTerminalTaskIds,
     clearedTaskIds,
+    notification,
   }, activeSessionId), [
     activeSessionId,
     candidates,
     clearedTaskIds,
+    notification,
     runtimeState.generation,
     viewedTerminalTaskIds,
   ]);
@@ -291,6 +343,7 @@ export function useDesktopPetECoordinator({
       "desktopPetE.renderer.retry": t("desktopPetE.renderer.retry"),
       "desktopPetE.renderer.submitting": t("desktopPetE.renderer.submitting"),
       "desktopPetE.renderer.typeAnswer": t("desktopPetE.renderer.typeAnswer"),
+      "desktopPetE.renderer.optional": t("desktopPetE.renderer.optional"),
       "desktopPetE.renderer.selectPet": t("desktopPetE.renderer.selectPet"),
       "desktopPetE.renderer.close": t("desktopPetE.renderer.close"),
       "desktopPetE.renderer.actionFailed": t("desktopPetE.renderer.actionFailed"),
@@ -332,6 +385,57 @@ export function useDesktopPetECoordinator({
       window.removeEventListener(DESKTOP_PET_E_PETS_CHANGED_EVENT, refreshPets);
     };
   }, [appReady, settingsLoaded]);
+
+  useEffect(() => {
+    if (!tracking || !settings.notificationsEnabled) {
+      setNotification(null);
+    }
+  }, [settings.notificationsEnabled, tracking]);
+
+  useEffect(() => {
+    if (!appReady || !settingsLoaded || !isTauri()) return;
+    let disposed = false;
+    let clearTimer: number | null = null;
+    const unlisten = listen<CliHookPayload>("claude-hook-notification", (event) => {
+      if (disposed || !settingsRef.current.enabled || !settingsRef.current.notificationsEnabled) return;
+      const payload = event.payload;
+      if (!isDesktopPetEOrdinaryNotification(payload)) return;
+      const now = Date.now();
+      const parsedTimestamp = payload.timestamp ? Date.parse(payload.timestamp) : Number.NaN;
+      const createdAt = Number.isFinite(parsedTimestamp)
+        ? Math.min(parsedTimestamp, now)
+        : now;
+      const expiresAt = createdAt + DESKTOP_PET_E_NOTIFICATION_DURATION_MS;
+      if (expiresAt <= now) return;
+      const source = desktopPetENotificationSource(payload);
+      const fallbackTitle = payload.event === "Stop"
+        ? t("notifications.hookToast.finished")
+        : payload.event === "StopFailure"
+          ? t("notifications.hookToast.failed")
+          : t("notifications.hookToast.attention");
+      const title = payload.title?.trim() || fallbackTitle;
+      const message = payload.message?.trim() || source;
+      const nextNotification: DesktopPetENotification = {
+        id: desktopPetENotificationId(payload),
+        title: title.slice(0, 160),
+        message: message.slice(0, 1_000),
+        createdAt,
+        expiresAt,
+      };
+      setNotification(nextNotification);
+      if (clearTimer !== null) window.clearTimeout(clearTimer);
+      clearTimer = window.setTimeout(() => {
+        if (!disposed) {
+          setNotification((current) => current?.id === nextNotification.id ? null : current);
+        }
+      }, Math.max(0, expiresAt - now));
+    });
+    return () => {
+      disposed = true;
+      if (clearTimer !== null) window.clearTimeout(clearTimer);
+      void unlisten.then((unlistenNotification) => unlistenNotification());
+    };
+  }, [appReady, settingsLoaded, t]);
 
   useEffect(() => {
     if (!tracking) return;
@@ -414,6 +518,7 @@ export function useDesktopPetECoordinator({
       void invoke("desktop_pet_e_agent_availability", {
         instanceId: instanceIdRef.current,
         available,
+        acceptNew: available,
       }).catch((error) => {
         if (!disposed && available) {
           logWarn("Failed to publish Desktop Pet E agent availability", error);
@@ -429,6 +534,7 @@ export function useDesktopPetECoordinator({
         void invoke("desktop_pet_e_agent_availability", {
           instanceId: instanceIdRef.current,
           available: false,
+          acceptNew: false,
         }).catch(() => undefined);
       }
     };

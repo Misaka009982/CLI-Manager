@@ -72,6 +72,7 @@ export interface DesktopPetEQuestion {
   label?: string | null;
   prompt: string;
   mode: DesktopPetEQuestionMode;
+  required?: boolean;
   allowOther: boolean;
   options: DesktopPetEOption[];
 }

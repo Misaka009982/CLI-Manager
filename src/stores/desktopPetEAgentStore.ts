@@ -16,6 +16,7 @@ interface ActionCursor {
 export interface ReducedAgentState {
   brokerEpoch: string | null;
   pendingActions: ReadonlyMap<string, DesktopPetEPendingAction>;
+  submissions: ReadonlyMap<string, string>;
   cursors: ReadonlyMap<string, ActionCursor>;
 }
 
@@ -52,6 +53,7 @@ function reduceAgentEvent(
     : {
         brokerEpoch: event.brokerEpoch,
         pendingActions: new Map<string, DesktopPetEPendingAction>(),
+        submissions: new Map<string, string>(),
         cursors: new Map<string, ActionCursor>(),
       };
   const cursor = currentState.cursors.get(event.sessionId);
@@ -63,11 +65,20 @@ function reduceAgentEvent(
       || (event.pendingAction.requestGeneration === cursor.requestGeneration
         && event.pendingAction.id !== cursor.pendingActionId))
   ) {
+    const transportActionId = event.transportActionId;
+    if (
+      transportActionId
+      && (isTerminal || event.phase === "failed")
+      && currentState.submissions.get(event.pendingAction.id) === transportActionId
+    ) {
+      const submissions = new Map(currentState.submissions);
+      submissions.delete(event.pendingAction.id);
+      return { ...currentState, submissions };
+    }
     return state;
   }
 
-  if (
-    cursor
+  if (cursor
     && cursor.pendingActionId === event.pendingAction.id
     && cursor.requestGeneration === event.pendingAction.requestGeneration
     && cursor.actionFingerprint === actionFingerprint
@@ -96,9 +107,19 @@ function reduceAgentEvent(
     nextActions.set(event.sessionId, event.pendingAction);
   }
 
+  const nextSubmissions = new Map(currentState.submissions);
+  if (
+    event.transportActionId
+    && nextSubmissions.get(event.pendingAction.id) === event.transportActionId
+    && (isTerminal || event.phase === "failed")
+  ) {
+    nextSubmissions.delete(event.pendingAction.id);
+  }
+
   return {
     brokerEpoch: event.brokerEpoch,
     pendingActions: nextActions,
+    submissions: nextSubmissions,
     cursors: nextCursors,
   };
 }
@@ -113,11 +134,13 @@ export function reduceDesktopPetEAgentEvent(
 export const useDesktopPetEAgentStore = create<DesktopPetEAgentState>((set, get) => ({
   brokerEpoch: null,
   pendingActions: new Map(),
+  submissions: new Map(),
   cursors: new Map(),
   applyEvent: (event) => set((current) => reduceAgentEvent(current, event)),
   resetForDaemonRestart: () => set({
     brokerEpoch: null,
     pendingActions: new Map(),
+    submissions: new Map(),
     cursors: new Map(),
   }),
   submit: async (request) => {
@@ -127,11 +150,31 @@ export const useDesktopPetEAgentStore = create<DesktopPetEAgentState>((set, get)
     if (pendingAction.adapterMode !== "interactive") {
       throw new Error("desktop_pet_e_agent_adapter_unavailable");
     }
-    await invoke("desktop_pet_e_agent_submit", {
-      pendingActionId: request.pendingActionId,
-      transportActionId: request.transportActionId,
-      answers: request.answers,
-      approvalValue: request.approvalValue,
-    });
+    const currentSubmission = get().submissions.get(request.pendingActionId);
+    if (currentSubmission) {
+      throw new Error("desktop_pet_e_agent_already_submitting");
+    }
+    set((current) => ({
+      submissions: new Map(current.submissions).set(
+        request.pendingActionId,
+        request.transportActionId,
+      ),
+    }));
+    try {
+      await invoke("desktop_pet_e_agent_submit", {
+        pendingActionId: request.pendingActionId,
+        transportActionId: request.transportActionId,
+        answers: request.answers,
+        approvalValue: request.approvalValue,
+      });
+    } catch (error) {
+      set((current) => {
+        if (current.submissions.get(request.pendingActionId) !== request.transportActionId) return current;
+        const submissions = new Map(current.submissions);
+        submissions.delete(request.pendingActionId);
+        return { submissions };
+      });
+      throw error;
+    }
   },
 }));

@@ -51,6 +51,8 @@ const CODEX_LEGACY_SCRIPTS: [&str; 2] = [CODEX_ATTENTION_SCRIPT_NAME, CODEX_FINI
 const PI_EXTENSION_DIR_NAME: &str = "extensions";
 const PI_EXTENSION_FILE_NAME: &str = "cli-manager-hook.ts";
 const PI_EXTENSION_MARKER: &str = "__CLI_MANAGER_PI_HOOK__";
+const PI_EXTENSION_VERSION_PREFIX: &str = "CLI_MANAGER_PI_EXTENSION_VERSION:";
+const PI_EXTENSION_VERSION: u32 = 2;
 const PI_MODULE_SESSION_START: &str = "CLI_MANAGER_MODULE:sessionStart";
 const PI_MODULE_RUNNING: &str = "CLI_MANAGER_MODULE:running";
 const PI_MODULE_STOP: &str = "CLI_MANAGER_MODULE:stop";
@@ -3119,6 +3121,14 @@ fn pi_module_marker(module: PiHookModule) -> &'static str {
     }
 }
 
+fn pi_extension_version(content: &str) -> Option<u32> {
+    content.lines().find_map(|line| {
+        line.trim_start_matches(|character| character == '/' || character == ' ')
+            .strip_prefix(PI_EXTENSION_VERSION_PREFIX)
+            .and_then(|value| value.trim().parse::<u32>().ok())
+    })
+}
+
 fn pi_extension_source(modules: &[PiHookModule]) -> String {
     let enabled = |target: PiHookModule| {
         modules
@@ -3266,13 +3276,21 @@ fn build_pi_status(pi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus, St
 
     let extension_path = pi_extension_path(&pi_dir);
     let hooks_dir = pi_dir.join(PI_EXTENSION_DIR_NAME);
-    let content = if extension_path.is_file() {
+    let mut content = if extension_path.is_file() {
         fs::read_to_string(&extension_path)
             .map_err(|e| format!("读取 {} 失败: {e}", path_to_string(&extension_path)))?
     } else {
         String::new()
     };
     let owned = content.contains(PI_EXTENSION_MARKER);
+    if owned && pi_extension_version(&content).unwrap_or_default() < PI_EXTENSION_VERSION {
+        let modules = read_pi_modules(&content);
+        if !modules.is_empty() {
+            install_pi_modules(&pi_dir, &modules)?;
+            content = fs::read_to_string(&extension_path)
+                .map_err(|e| format!("读取 {} 失败: {e}", path_to_string(&extension_path)))?;
+        }
+    }
     let modules = if owned {
         read_pi_modules(&content)
     } else {
@@ -5287,6 +5305,7 @@ model_instructions_file = "./instruction.md"
         assert!(status.stop_hook_installed);
         let extension = fs::read_to_string(pi_extension_path(&pi_dir)).unwrap();
         assert!(extension.contains(PI_EXTENSION_MARKER));
+        assert_eq!(pi_extension_version(&extension), Some(PI_EXTENSION_VERSION));
         assert!(extension.contains(r#"source: "pi""#));
         assert!(extension.contains("session_start"));
         assert!(extension.contains("agent_start"));
@@ -5297,6 +5316,44 @@ model_instructions_file = "./instruction.md"
         let after = build_pi_status(Some(pi_dir.clone())).unwrap();
         assert!(matches!(after.status, HookInstallStatus::NotInstalled));
         assert!(!pi_extension_path(&pi_dir).is_file());
+    }
+
+    #[test]
+    fn managed_legacy_pi_extension_is_upgraded_in_place() {
+        let tmp = TempDir::new().unwrap();
+        let pi_dir = tmp.path().join("pi-agent");
+        let extensions_dir = pi_dir.join(PI_EXTENSION_DIR_NAME);
+        fs::create_dir_all(&extensions_dir).unwrap();
+        let extension_path = pi_extension_path(&pi_dir);
+        let legacy = format!(
+            "// {PI_EXTENSION_MARKER}\nconst ENABLED = {{ sessionStart: true, running: true, stop: true }};\nconst source = \"pi\";\n"
+        );
+        fs::write(&extension_path, legacy).unwrap();
+
+        let status = build_pi_status(Some(pi_dir)).unwrap();
+        let upgraded = fs::read_to_string(extension_path).unwrap();
+
+        assert!(matches!(status.status, HookInstallStatus::Installed));
+        assert_eq!(pi_extension_version(&upgraded), Some(PI_EXTENSION_VERSION));
+        assert!(upgraded.contains("requestDecision"));
+    }
+
+    #[test]
+    fn future_managed_pi_extension_is_not_downgraded() {
+        let tmp = TempDir::new().unwrap();
+        let pi_dir = tmp.path().join("pi-agent");
+        let extensions_dir = pi_dir.join(PI_EXTENSION_DIR_NAME);
+        fs::create_dir_all(&extensions_dir).unwrap();
+        let extension_path = pi_extension_path(&pi_dir);
+        let future = format!(
+            "// {PI_EXTENSION_MARKER}\n// {PI_EXTENSION_VERSION_PREFIX}3\n// {PI_MODULE_SESSION_START}\n// {PI_MODULE_RUNNING}\n// {PI_MODULE_STOP}\nconst source = \"pi\";\n"
+        );
+        fs::write(&extension_path, &future).unwrap();
+
+        let status = build_pi_status(Some(pi_dir)).unwrap();
+
+        assert!(matches!(status.status, HookInstallStatus::Installed));
+        assert_eq!(fs::read_to_string(extension_path).unwrap(), future);
     }
 
     #[tokio::test]

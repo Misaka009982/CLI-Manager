@@ -79,6 +79,39 @@ test("all four colors are counted and waiting has the highest mood priority", ()
   assert.deepEqual(result.cliLabel, { agentLabel: "Claude", color: "green", otherTaskCount: 3 });
 });
 
+test("ordinary attention does not enter the four-color task counts", () => {
+  const result = snapshot([candidate("attention", "attention", 200)]);
+  assert.deepEqual(result.counts, { green: 0, yellow: 0, red: 0, blue: 0 });
+  assert.deepEqual(result.tasks, []);
+});
+
+test("ordinary attention preserves the prior terminal task state", () => {
+  const previous = [candidate("session", "running", 100)];
+  const current = [candidate("session", "attention", 200)];
+  const merged = state.mergeDesktopPetECandidatesWithHistory(
+    previous,
+    current,
+    new Set(["session"]),
+  );
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].status, "running");
+  assert.equal(merged[0].updatedAt, 100);
+  assert.deepEqual(snapshot(merged).counts, { green: 1, yellow: 0, red: 0, blue: 0 });
+});
+
+test("jump-only user actions remain yellow through an explicit pending action", () => {
+  const pendingAction = {
+    id: "jump-only-1",
+    kind: "approval",
+    requestGeneration: 1,
+    adapterMode: "jump-only",
+    submitting: false,
+  };
+  const result = snapshot([candidate("attention", "attention", 200, { pendingAction })]);
+  assert.deepEqual(result.counts, { green: 0, yellow: 1, red: 0, blue: 0 });
+  assert.equal(result.tasks[0].pendingAction?.adapterMode, "jump-only");
+});
+
 test("a newer task in the same session replaces an older terminal state", () => {
   const result = snapshot([
     candidate("same", "failed", 100),
@@ -112,6 +145,33 @@ test("terminal history retains only red and blue records and marks ended session
     ["failed", false],
     ["done", true],
   ]);
+});
+
+test("fallback terminal errors keep one stable task identity until the status changes", () => {
+  const input = (generatedAt) => ({
+    instanceId: "instance-1",
+    generation: 1,
+    revision: 0,
+    generatedAt,
+    sessions: [{ id: "terminal-error", title: "Terminal", cliTool: "claude" }],
+    persistedSessions: [],
+    projects: [],
+    activeSessionId: null,
+    sessionStatuses: { "terminal-error": "error" },
+    sessionStatusUpdatedAt: { "terminal-error": 5_000 },
+    tabNotifications: {},
+    tabStatusDetails: {},
+    ptyOutputActivityAt: {},
+    backgroundTasks: [],
+  });
+  const first = state.deriveDesktopPetECandidates(input(10_000));
+  const second = state.deriveDesktopPetECandidates(input(20_000));
+  assert.equal(first[0].updatedAt, 5_000);
+  assert.equal(second[0].updatedAt, 5_000);
+  assert.equal(
+    snapshot(first).tasks[0].id,
+    snapshot(second).tasks[0].id,
+  );
 });
 
 test("snapshot acceptance rejects old instances and non-increasing revisions", () => {

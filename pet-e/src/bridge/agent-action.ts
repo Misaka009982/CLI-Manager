@@ -34,6 +34,7 @@ export function isDraftComplete(action: DesktopPetEPendingAction, draft: ActionD
   return questions.every((question) => {
     const values = draft.answers[question.id] ?? [];
     const custom = draft.customValues[question.id]?.trim() ?? "";
+    if (question.required === false && values.length === 0 && custom.length === 0) return true;
     if (question.mode === "text") return custom.length > 0;
     return values.length > 0 || (question.allowOther && custom.length > 0);
   });

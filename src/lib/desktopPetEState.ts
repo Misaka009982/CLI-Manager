@@ -49,6 +49,7 @@ export interface DesktopPetEAuthoritativeInput {
   targetBySessionId?: ReadonlyMap<string, { workspanId: string; paneId: string }>;
   activeSessionId: string | null;
   sessionStatuses: Record<string, SessionStatus>;
+  sessionStatusUpdatedAt?: Record<string, number>;
   tabNotifications: Record<string, TabNotificationState>;
   tabStatusDetails: Record<string, TabStatusDetails>;
   ptyOutputActivityAt: Record<string, number>;
@@ -163,6 +164,7 @@ export function deriveDesktopPetECandidates(
     if (status === "none" && !pendingAction) continue;
     const target = input.targetBySessionId?.get(session.id) ?? null;
     const source = resolveDesktopPetEAgentSource(resolveDesktopPetECliTool(session, project));
+    const statusUpdatedAt = input.sessionStatusUpdatedAt?.[session.id] ?? now;
     candidates.push({
       sessionId: session.id,
       source,
@@ -174,9 +176,11 @@ export function deriveDesktopPetECandidates(
       daemonOnly: false,
       sessionAlive: true,
       status,
-      updatedAt: pendingAction || status !== resolved.status
+      updatedAt: pendingAction
         ? Math.max(now, resolved.updatedAt)
-        : resolved.updatedAt,
+        : status !== resolved.status
+          ? Math.max(statusUpdatedAt, resolved.updatedAt)
+          : resolved.updatedAt,
       active: session.id === input.activeSessionId,
       pendingAction,
     });
@@ -215,6 +219,20 @@ export function mergeDesktopPetECandidatesWithHistory(
   current: readonly DesktopPetETaskCandidate[],
   liveSessionIds: ReadonlySet<string>,
 ): DesktopPetETaskCandidate[] {
+  const previousBySession = new Map(
+    previousTerminalStates.map((candidate) => [candidate.sessionId, candidate]),
+  );
+  const effectiveCurrent = current.flatMap((candidate) => {
+    if (candidate.pendingAction || candidate.status !== "attention") return [candidate];
+    const previous = previousBySession.get(candidate.sessionId);
+    if (!previous || previous.pendingAction || previous.status === "attention") return [];
+    return [{
+      ...candidate,
+      status: previous.status,
+      updatedAt: previous.updatedAt,
+    }];
+  });
+
   const retained = new Map<string, DesktopPetETaskCandidate>();
   for (const candidate of previousTerminalStates) {
     if (candidate.pendingAction || (candidate.status !== "done" && candidate.status !== "failed")) continue;
@@ -224,16 +242,16 @@ export function mergeDesktopPetECandidatesWithHistory(
     });
   }
 
-  for (const candidate of current) {
+  for (const candidate of effectiveCurrent) {
     retained.delete(candidate.sessionId);
     if (!candidate.pendingAction && (candidate.status === "done" || candidate.status === "failed")) {
       retained.set(candidate.sessionId, candidate);
     }
   }
 
-  const currentSessionIds = new Set(current.map((candidate) => candidate.sessionId));
+  const currentSessionIds = new Set(effectiveCurrent.map((candidate) => candidate.sessionId));
   return [
-    ...current,
+    ...effectiveCurrent,
     ...[...retained.values()].filter((candidate) => !currentSessionIds.has(candidate.sessionId)),
   ];
 }
@@ -250,7 +268,7 @@ export function desktopPetETaskId(
 export function classifyDesktopPetETask(candidate: DesktopPetETaskCandidate): DesktopPetEColor | null {
   if (candidate.pendingAction) return "yellow";
   if (candidate.status === "failed") return "red";
-  if (candidate.status === "running" || candidate.status === "attention") return "green";
+  if (candidate.status === "running") return "green";
   if (candidate.status === "done") return "blue";
   return null;
 }

@@ -35,13 +35,19 @@ pub struct DesktopPetEAgentBroker {
 
 #[derive(Default)]
 struct BrokerState {
-    available_instances: HashMap<String, Instant>,
+    available_instances: HashMap<String, AvailabilityLease>,
     pending: HashMap<String, PendingEntry>,
     request_keys: HashMap<String, String>,
     completed: HashMap<String, CompletedEntry>,
     completed_order: VecDeque<String>,
     pi_requests: HashMap<String, String>,
     next_generation: u64,
+}
+
+#[derive(Clone, Copy)]
+struct AvailabilityLease {
+    updated_at: Instant,
+    accept_new: bool,
 }
 
 #[derive(Clone)]
@@ -82,6 +88,8 @@ enum PendingState {
 struct AvailabilityRequest {
     instance_id: String,
     available: bool,
+    #[serde(default = "default_accept_new")]
+    accept_new: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -518,7 +526,8 @@ impl DesktopPetEAgentBroker {
                 .pending
                 .iter()
                 .filter(|(_, entry)| {
-                    entry.session_id == session_id
+                    matches!(&entry.state, PendingState::Waiting)
+                        && entry.session_id == session_id
                         && (matches!(event, "Stop" | "StopFailure")
                             || action_adapter_mode(&entry.action) != Some("interactive"))
                 })
@@ -549,9 +558,23 @@ impl DesktopPetEAgentBroker {
                 .0
                 .lock()
                 .map_err(|_| "desktop_pet_e_agent_lock_poisoned".to_string())?;
+            prune_availability(&mut state, Instant::now());
             if request.available {
-                state.available_instances.insert(request.instance_id, Instant::now());
-                state.pending.values().cloned().collect::<Vec<_>>()
+                let is_new_instance = state
+                    .available_instances
+                    .insert(
+                        request.instance_id,
+                        AvailabilityLease {
+                            updated_at: Instant::now(),
+                            accept_new: request.accept_new,
+                        },
+                    )
+                    .is_none();
+                if is_new_instance {
+                    state.pending.values().cloned().collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                }
             } else {
                 state.available_instances.remove(&request.instance_id);
                 Vec::new()
@@ -599,10 +622,36 @@ impl DesktopPetEAgentBroker {
                 state.request_keys.remove(&request_key);
             }
 
+            let accepts_new = state.available_instances.values().any(|lease| lease.accept_new);
+            if blueprint.interactive_supported && !accepts_new {
+                state.next_generation = state.next_generation.saturating_add(1).max(1);
+                let pending_action_id = Uuid::new_v4().to_string();
+                return Ok(json!({
+                    "status": "unavailable",
+                    "pendingActionId": pending_action_id,
+                    "pendingAction": {
+                        "id": pending_action_id,
+                        "kind": blueprint.kind,
+                        "title": blueprint.title,
+                        "message": blueprint.message,
+                        "requestGeneration": state.next_generation,
+                        "adapterMode": "jump-only",
+                        "adapterReason": "desktopPetE.agent.adapterUnavailable",
+                        "questions": if blueprint.questions.is_empty() { Value::Null } else { Value::Array(blueprint.questions) },
+                        "approvalChoices": if blueprint.approval_choices.is_empty() { Value::Null } else { Value::Array(blueprint.approval_choices) },
+                        "submitting": false,
+                        "error": Value::Null,
+                    },
+                }));
+            }
+
             let stale_ids = state
                 .pending
                 .iter()
-                .filter(|(_, current)| current.session_id == request.tab_id)
+                .filter(|(_, current)| {
+                    current.session_id == request.tab_id
+                        && matches!(&current.state, PendingState::Waiting)
+                })
                 .map(|(id, _)| id.clone())
                 .collect::<Vec<_>>();
             for id in stale_ids {
@@ -614,10 +663,11 @@ impl DesktopPetEAgentBroker {
                 let oldest = state
                     .pending
                     .iter()
+                    .filter(|(_, current)| matches!(&current.state, PendingState::Waiting))
                     .min_by_key(|(_, current)| current.created_at)
                     .map(|(id, _)| id.clone());
                 let Some(oldest) = oldest else {
-                    break;
+                    return Err("desktop_pet_e_agent_capacity".to_string());
                 };
                 if let Some(current) = remove_pending(&mut state, &oldest) {
                     replaced.push(current);
@@ -626,7 +676,8 @@ impl DesktopPetEAgentBroker {
 
             state.next_generation = state.next_generation.saturating_add(1).max(1);
             let pending_action_id = Uuid::new_v4().to_string();
-            accepted = blueprint.interactive_supported && !state.available_instances.is_empty();
+            accepted = blueprint.interactive_supported
+                && state.available_instances.values().any(|lease| lease.accept_new);
             let adapter_reason = if accepted {
                 None
             } else {
@@ -1119,10 +1170,14 @@ fn now_millis() -> u64 {
         .unwrap_or_default()
 }
 
+fn default_accept_new() -> bool {
+    true
+}
+
 fn prune_availability(state: &mut BrokerState, now: Instant) {
     state
         .available_instances
-        .retain(|_, updated_at| now.duration_since(*updated_at) <= AVAILABILITY_LEASE);
+        .retain(|_, lease| now.duration_since(lease.updated_at) <= AVAILABILITY_LEASE);
 }
 
 fn prune_completed(state: &mut BrokerState, now: Instant) {
@@ -1162,16 +1217,17 @@ fn request_key(request: &OpenRequest) -> String {
         .as_ref()
         .and_then(|value| serde_json::to_string(value).ok())
         .unwrap_or_default();
-    format!(
-        "{}|{}|{}|{}|{}|{}|{}",
-        request.source,
-        request.protocol,
-        request.tab_id,
-        request.event,
+    serde_json::to_string(&[
+        request.source.as_str(),
+        request.protocol.as_str(),
+        request.tab_id.as_str(),
+        request.agent_session_id.as_deref().unwrap_or_default(),
+        request.event.as_str(),
         request.tool_use_id.as_deref().unwrap_or_default(),
         request.method.as_deref().unwrap_or_default(),
-        request_id,
-    )
+        request_id.as_str(),
+    ])
+    .unwrap_or_default()
 }
 
 fn has_known_tool_name(request: &OpenRequest) -> bool {
@@ -1275,14 +1331,17 @@ fn action_blueprint(request: &OpenRequest) -> ActionBlueprint {
             };
         }
         if is_codex_approval_method(method) {
+            let approval_choices = codex_approval_choices(method, &request.hook_input);
+            let interactive_supported = !approval_choices.is_empty();
             return ActionBlueprint {
                 kind: "approval",
                 title,
                 message,
                 questions: Vec::new(),
-                approval_choices: codex_approval_choices(method, &request.hook_input),
-                interactive_supported: true,
-                adapter_reason: None,
+                approval_choices,
+                interactive_supported,
+                adapter_reason: (!interactive_supported)
+                    .then_some("desktopPetE.agent.requestUnsupported"),
             };
         }
     }
@@ -1374,7 +1433,7 @@ fn codex_questions(hook_input: &Value) -> Vec<Value> {
     {
         return Vec::new();
     }
-    normalized_questions(questions, false)
+    normalized_questions(questions, true)
 }
 
 fn codex_hook_questions(hook_input: &Value) -> Vec<Value> {
@@ -1382,10 +1441,10 @@ fn codex_hook_questions(hook_input: &Value) -> Vec<Value> {
         .get("tool_input")
         .and_then(|value| value.get("questions"))
         .or_else(|| hook_input.get("questions"));
-    normalized_questions(questions, false)
+    normalized_questions(questions, true)
 }
 
-fn normalized_questions(value: Option<&Value>, claude: bool) -> Vec<Value> {
+fn normalized_questions(value: Option<&Value>, default_allow_other: bool) -> Vec<Value> {
     let Some(items) = value.and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -1418,38 +1477,40 @@ fn normalized_questions(value: Option<&Value>, claude: bool) -> Vec<Value> {
 
         let mut options = Vec::new();
         if let Some(raw_options) = item.get("options") {
-            let Some(raw_options) = raw_options.as_array() else {
-                return Vec::new();
-            };
-            if raw_options.len() > MAX_OPTIONS {
-                return Vec::new();
-            }
-            let mut seen_values = std::collections::HashSet::new();
-            for option in raw_options {
-                let Some(option_label) = option
-                    .as_str()
-                    .and_then(non_empty_text)
-                    .or_else(|| first_string(option, &["label", "value"]))
-                else {
+            if !raw_options.is_null() {
+                let Some(raw_options) = raw_options.as_array() else {
                     return Vec::new();
                 };
-                let option_value = first_string(option, &["value"])
-                    .unwrap_or_else(|| option_label.clone());
-                let description = first_string(option, &["description"]);
-                if option_label.chars().count() > 160
-                    || option_value.chars().count() > MAX_TEXT_LENGTH
-                    || description
-                        .as_deref()
-                        .is_some_and(|value| value.chars().count() > 320)
-                    || !seen_values.insert(option_value.clone())
-                {
+                if raw_options.len() > MAX_OPTIONS {
                     return Vec::new();
                 }
-                options.push(json!({
-                    "value": option_value,
-                    "label": option_label,
-                    "description": description,
-                }));
+                let mut seen_values = std::collections::HashSet::new();
+                for option in raw_options {
+                    let Some(option_label) = option
+                        .as_str()
+                        .and_then(non_empty_text)
+                        .or_else(|| first_string(option, &["label", "value"]))
+                    else {
+                        return Vec::new();
+                    };
+                    let option_value = first_string(option, &["value"])
+                        .unwrap_or_else(|| option_label.clone());
+                    let description = first_string(option, &["description"]);
+                    if option_label.chars().count() > 160
+                        || option_value.chars().count() > MAX_TEXT_LENGTH
+                        || description
+                            .as_deref()
+                            .is_some_and(|value| value.chars().count() > 320)
+                        || !seen_values.insert(option_value.clone())
+                    {
+                        return Vec::new();
+                    }
+                    options.push(json!({
+                        "value": option_value,
+                        "label": option_label,
+                        "description": description,
+                    }));
+                }
             }
         }
 
@@ -1465,7 +1526,7 @@ fn normalized_questions(value: Option<&Value>, claude: bool) -> Vec<Value> {
             .or_else(|| item.get("isOther"))
             .or_else(|| item.get("is_other"))
             .and_then(Value::as_bool)
-            .unwrap_or(claude);
+            .unwrap_or(default_allow_other);
         if options.is_empty() && !allow_other {
             return Vec::new();
         }
@@ -1474,6 +1535,7 @@ fn normalized_questions(value: Option<&Value>, claude: bool) -> Vec<Value> {
             "label": label,
             "prompt": prompt,
             "mode": if options.is_empty() { "text" } else if multiple { "multiple" } else { "single" },
+            "required": true,
             "allowOther": allow_other,
             "options": options,
         }));
@@ -1487,20 +1549,37 @@ fn mcp_questions(hook_input: &Value) -> Vec<Value> {
         None => return Vec::new(),
     };
     let mode = params.get("mode").and_then(Value::as_str).unwrap_or("form");
-    if mode == "url" {
+    if !matches!(mode, "form" | "openai/form") {
         return Vec::new();
     }
-    let schema = params
+    let Some(schema) = params
         .get("requestedSchema")
-        .or_else(|| params.get("requested_schema"));
-    let Some(properties) = schema
-        .and_then(|value| value.get("properties"))
-        .and_then(Value::as_object)
+        .or_else(|| params.get("requested_schema"))
     else {
+        return Vec::new();
+    };
+    if schema.get("type").and_then(Value::as_str) != Some("object") {
+        return Vec::new();
+    }
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
         return Vec::new();
     };
     if properties.is_empty() || properties.len() > MAX_QUESTIONS {
         return Vec::new();
+    }
+    let mut required_ids = std::collections::HashSet::<String>::new();
+    if let Some(required) = schema.get("required") {
+        let Some(required) = required.as_array() else {
+            return Vec::new();
+        };
+        for required_id in required {
+            let Some(required_id) = required_id.as_str() else {
+                return Vec::new();
+            };
+            if !properties.contains_key(required_id) || !required_ids.insert(required_id.to_string()) {
+                return Vec::new();
+            }
+        }
     }
 
     let mut questions = Vec::with_capacity(properties.len());
@@ -1533,6 +1612,7 @@ fn mcp_questions(hook_input: &Value) -> Vec<Value> {
             "label": label,
             "prompt": prompt,
             "mode": if options.is_empty() { "text" } else if multiple { "multiple" } else { "single" },
+            "required": required_ids.contains(id),
             "allowOther": false,
             "options": options,
         }));
@@ -1541,31 +1621,48 @@ fn mcp_questions(hook_input: &Value) -> Vec<Value> {
 }
 
 fn mcp_options(property: &Value) -> Option<Vec<Value>> {
-    let source = property
-        .get("enum")
-        .and_then(Value::as_array)
-        .or_else(|| {
-            property
-                .get("items")
-                .and_then(|value| value.get("enum"))
-                .and_then(Value::as_array)
-        });
+    let direct_values = property.get("enum").and_then(Value::as_array);
+    let source = direct_values.or_else(|| {
+        property
+            .get("items")
+            .and_then(|value| value.get("enum"))
+            .and_then(Value::as_array)
+    });
     if let Some(values) = source {
         if values.len() > MAX_OPTIONS {
+            return None;
+        }
+        let enum_names = if direct_values.is_some() {
+            match property.get("enumNames") {
+                Some(value) => Some(value.as_array()?),
+                None => None,
+            }
+        } else {
+            None
+        };
+        if enum_names.is_some_and(|names| names.len() != values.len()) {
             return None;
         }
         let mut seen_values = std::collections::HashSet::new();
         return values
             .iter()
-            .map(|value| {
+            .enumerate()
+            .map(|(index, value)| {
                 let value = value.as_str()?.trim();
+                let label = enum_names
+                    .and_then(|names| names.get(index))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or(value);
                 if value.is_empty()
                     || value.chars().count() > MAX_TEXT_LENGTH
+                    || label.is_empty()
+                    || label.chars().count() > 160
                     || !seen_values.insert(value.to_string())
                 {
                     return None;
                 }
-                Some(json!({ "value": value, "label": value, "description": Value::Null }))
+                Some(json!({ "value": value, "label": label, "description": Value::Null }))
             })
             .collect::<Option<Vec<_>>>();
     }
@@ -1574,6 +1671,7 @@ fn mcp_options(property: &Value) -> Option<Vec<Value>> {
         .get("oneOf")
         .or_else(|| property.get("anyOf"))
         .or_else(|| property.get("items").and_then(|value| value.get("anyOf")))
+        .or_else(|| property.get("items").and_then(|value| value.get("oneOf")))
         .and_then(Value::as_array);
     if let Some(titled) = titled {
         if titled.len() > MAX_OPTIONS {
@@ -1701,46 +1799,105 @@ fn default_approval_choices(allow_session: bool) -> Vec<Value> {
     choices
 }
 
+fn is_supported_codex_native_command_decision(decision: &Value) -> bool {
+    let execpolicy = decision
+        .get("acceptWithExecpolicyAmendment")
+        .and_then(Value::as_object)
+        .and_then(|value| {
+            value
+                .get("execpolicy_amendment")
+                .or_else(|| value.get("execpolicyAmendment"))
+        })
+        .and_then(Value::as_object)
+        .and_then(|amendment| amendment.get("command"))
+        .and_then(Value::as_array)
+        .is_some_and(|command| {
+            !command.is_empty()
+                && command
+                    .iter()
+                    .all(|argument| argument.as_str().is_some_and(|value| !value.is_empty()))
+        });
+    if execpolicy {
+        return true;
+    }
+    decision
+        .get("applyNetworkPolicyAmendment")
+        .and_then(Value::as_object)
+        .and_then(|value| {
+            value
+                .get("network_policy_amendment")
+                .or_else(|| value.get("networkPolicyAmendment"))
+        })
+        .and_then(Value::as_object)
+        .is_some_and(|amendment| {
+            amendment.get("action").and_then(Value::as_str) == Some("allow")
+                && amendment
+                    .get("host")
+                    .and_then(Value::as_str)
+                    .is_some_and(|host| !host.trim().is_empty())
+        })
+}
+
 fn codex_approval_choices(method: &str, hook_input: &Value) -> Vec<Value> {
     if method == "item/permissions/requestApproval" {
         return default_approval_choices(true);
     }
-    let mut values = Vec::new();
-    if let Some(decisions) = hook_input
+    let decisions = hook_input
         .get("params")
-        .and_then(|value| value.get("availableDecisions"))
-        .and_then(Value::as_array)
-    {
-        for decision in decisions.iter().take(8) {
-            let value = decision
-                .as_str()
-                .map(str::to_string)
-                .or_else(|| decision.get("type").and_then(Value::as_str).map(str::to_string));
-            let Some(value) = value else {
-                continue;
-            };
-            let normalized = value.to_ascii_lowercase();
-            let (wire_value, label, destructive) = if normalized.contains("session") {
-                ("allow-session", "desktopPetE.approval.allowForSession", false)
-            } else if normalized.contains("decline") || normalized.contains("deny") {
-                ("deny", "desktopPetE.approval.deny", true)
-            } else if normalized.contains("cancel") || normalized.contains("abort") {
-                ("cancel", "desktopPetE.approval.cancel", true)
-            } else if normalized.contains("accept") || normalized.contains("approve") {
-                ("allow", "desktopPetE.approval.allow", false)
-            } else {
-                continue;
-            };
-            if !values.iter().any(|item: &Value| item.get("value").and_then(Value::as_str) == Some(wire_value)) {
-                values.push(json!({ "value": wire_value, "label": label, "destructive": destructive }));
-            }
+        .and_then(|value| value.get("availableDecisions"));
+    let Some(decisions) = decisions else {
+        return default_approval_choices(true);
+    };
+    let Some(decisions) = decisions.as_array() else {
+        return Vec::new();
+    };
+
+    let mut choices = Vec::new();
+    for (index, decision) in decisions.iter().take(8).enumerate() {
+        let choice = match decision.as_str() {
+            Some("accept") => Some((
+                "allow".to_string(),
+                "desktopPetE.approval.allow",
+                false,
+            )),
+            Some("acceptForSession") => Some((
+                "allow-session".to_string(),
+                "desktopPetE.approval.allowForSession",
+                false,
+            )),
+            Some("decline") => Some((
+                "deny".to_string(),
+                "desktopPetE.approval.deny",
+                true,
+            )),
+            Some("cancel") => Some((
+                "cancel".to_string(),
+                "desktopPetE.approval.cancel",
+                true,
+            )),
+            _ if method == "item/commandExecution/requestApproval"
+                && is_supported_codex_native_command_decision(decision) => Some((
+                format!("native:{index}"),
+                "desktopPetE.approval.alwaysAllow",
+                false,
+            )),
+            _ => None,
+        };
+        let Some((value, label, destructive)) = choice else {
+            continue;
+        };
+        if choices.iter().any(|item: &Value| {
+            item.get("value").and_then(Value::as_str) == Some(value.as_str())
+        }) {
+            continue;
         }
+        choices.push(json!({
+            "value": value,
+            "label": label,
+            "destructive": destructive,
+        }));
     }
-    if values.is_empty() {
-        default_approval_choices(true)
-    } else {
-        values
-    }
+    choices
 }
 
 fn approval_message(hook_input: &Value) -> Option<String> {
@@ -1840,6 +1997,13 @@ fn validate_submission(action: &Value, request: &SubmitRequest) -> Result<(), St
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let has_custom = answer.custom_value.as_deref().is_some_and(|value| !value.trim().is_empty());
+        let required = question
+            .get("required")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        if !required && answer.values.is_empty() && !has_custom {
+            continue;
+        }
         if has_custom && mode != "text" && !allow_other {
             return Err("desktop_pet_e_agent_answer_invalid".to_string());
         }
@@ -2021,6 +2185,22 @@ fn mcp_schema_property<'a>(hook_input: &'a Value, question_id: &str) -> Option<&
     schema.get("properties")?.get(question_id)
 }
 
+fn mcp_schema_property_required(hook_input: &Value, question_id: &str) -> bool {
+    let Some(required) = hook_input
+        .get("params")
+        .and_then(|params| {
+            params
+                .get("requestedSchema")
+                .or_else(|| params.get("requested_schema"))
+        })
+        .and_then(|schema| schema.get("required"))
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    required.iter().any(|value| value.as_str() == Some(question_id))
+}
+
 fn mcp_answer_value(
     hook_input: &Value,
     answer: &DesktopPetEAgentAnswer,
@@ -2080,7 +2260,7 @@ fn build_codex_response(entry: &PendingEntry, request: &SubmitRequest) -> Result
             json!({ "answers": answers })
         }
         "item/commandExecution/requestApproval" => {
-            json!({ "decision": codex_decision(request.approval_value.as_deref(), false) })
+            json!({ "decision": codex_command_decision(entry, request)? })
         }
         "item/fileChange/requestApproval" => {
             json!({ "decision": codex_decision(request.approval_value.as_deref(), false) })
@@ -2105,6 +2285,11 @@ fn build_codex_response(entry: &PendingEntry, request: &SubmitRequest) -> Result
         "mcpServer/elicitation/request" => {
             let mut content = Map::new();
             for answer in &request.answers {
+                let is_empty = answer.values.is_empty()
+                    && answer.custom_value.as_deref().and_then(non_empty_text).is_none();
+                if is_empty && !mcp_schema_property_required(&entry.hook_input, &answer.question_id) {
+                    continue;
+                }
                 content.insert(
                     answer.question_id.clone(),
                     mcp_answer_value(&entry.hook_input, answer)?,
@@ -2129,6 +2314,33 @@ fn build_codex_response(entry: &PendingEntry, request: &SubmitRequest) -> Result
         _ => return Err("desktop_pet_e_agent_request_unsupported".to_string()),
     };
     Ok(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+fn codex_command_decision(
+    entry: &PendingEntry,
+    request: &SubmitRequest,
+) -> Result<Value, String> {
+    let approval = request
+        .approval_value
+        .as_deref()
+        .and_then(non_empty_text)
+        .ok_or_else(|| "desktop_pet_e_agent_approval_missing".to_string())?;
+    if let Some(index) = approval
+        .strip_prefix("native:")
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        let decision = entry
+            .hook_input
+            .get("params")
+            .and_then(|value| value.get("availableDecisions"))
+            .and_then(Value::as_array)
+            .and_then(|decisions| decisions.get(index))
+            .filter(|decision| is_supported_codex_native_command_decision(decision))
+            .cloned()
+            .ok_or_else(|| "desktop_pet_e_agent_approval_invalid".to_string())?;
+        return Ok(decision);
+    }
+    Ok(Value::String(codex_decision(Some(&approval), false).to_string()))
 }
 
 fn codex_decision(value: Option<&str>, legacy: bool) -> &'static str {
@@ -2326,6 +2538,7 @@ mod tests {
             .set_available(AvailabilityRequest {
                 instance_id: "frontend-1".to_string(),
                 available: true,
+                accept_new: true,
             })
             .unwrap();
         let mut retry = open_request(
@@ -2345,6 +2558,220 @@ mod tests {
         let opened = broker.open(retry).unwrap();
         assert_eq!(opened["status"], "pending");
         assert_eq!(opened["pendingAction"]["adapterMode"], "interactive");
+    }
+
+    #[test]
+    fn draining_lease_finishes_existing_actions_without_accepting_new_ones() {
+        let broker = DesktopPetEAgentBroker::new();
+        broker
+            .set_available(AvailabilityRequest {
+                instance_id: "frontend-1".to_string(),
+                available: true,
+                accept_new: true,
+            })
+            .unwrap();
+        let first_request = open_request(
+            "claude-hook",
+            "claude",
+            "PermissionRequest",
+            json!({
+                "tool_input": {
+                    "questions": [{
+                        "question": "First",
+                        "options": [{ "label": "A" }]
+                    }]
+                }
+            }),
+        );
+        let first = broker.open(first_request).unwrap();
+        let first_id = first["pendingActionId"].as_str().unwrap().to_string();
+
+        broker
+            .set_available(AvailabilityRequest {
+                instance_id: "frontend-1".to_string(),
+                available: true,
+                accept_new: false,
+            })
+            .unwrap();
+        let duplicate = broker
+            .open(open_request(
+                "claude-hook",
+                "claude",
+                "PermissionRequest",
+                json!({
+                    "tool_input": {
+                        "questions": [{
+                            "question": "First",
+                            "options": [{ "label": "A" }]
+                        }]
+                    }
+                }),
+            ))
+            .unwrap();
+        assert_eq!(duplicate["pendingActionId"], first_id);
+        assert_eq!(duplicate["status"], "pending");
+
+        let mut second_request = open_request(
+            "claude-hook",
+            "claude",
+            "PermissionRequest",
+            json!({
+                "tool_input": {
+                    "questions": [{
+                        "question": "Second",
+                        "options": [{ "label": "B" }]
+                    }]
+                }
+            }),
+        );
+        second_request.tool_use_id = Some("tool-2".to_string());
+        second_request.request_id = Some(json!(12));
+        let second = broker.open(second_request).unwrap();
+        assert_eq!(second["status"], "unavailable");
+
+        let state = broker.shared.0.lock().unwrap();
+        assert_eq!(state.pending.len(), 1);
+        assert!(state.pending.contains_key(&first_id));
+        drop(state);
+        assert_eq!(
+            broker
+                .poll(PollRequest {
+                    pending_action_id: first_id,
+                    wait_ms: Some(1),
+                })
+                .unwrap()["status"],
+            "pending"
+        );
+    }
+
+    #[test]
+    fn claude_question_permission_request_replaces_notification_preview() {
+        let broker = DesktopPetEAgentBroker::new();
+        broker
+            .set_available(AvailabilityRequest {
+                instance_id: "frontend-1".to_string(),
+                available: true,
+                accept_new: true,
+            })
+            .unwrap();
+        let preview = broker
+            .open(open_request(
+                "notification-only",
+                "claude",
+                "Notification",
+                json!({
+                    "tool_input": {
+                        "questions": [{
+                            "question": "Choose",
+                            "options": [{ "label": "A" }]
+                        }]
+                    }
+                }),
+            ))
+            .unwrap();
+        assert_eq!(preview["status"], "unavailable");
+        let preview_id = preview["pendingActionId"].as_str().unwrap().to_string();
+
+        let interactive = broker
+            .open(open_request(
+                "claude-hook",
+                "claude",
+                "PermissionRequest",
+                json!({
+                    "tool_input": {
+                        "questions": [{
+                            "question": "Choose",
+                            "options": [{ "label": "A" }]
+                        }]
+                    }
+                }),
+            ))
+            .unwrap();
+        assert_eq!(interactive["status"], "pending");
+        assert_eq!(interactive["pendingAction"]["adapterMode"], "interactive");
+        let interactive_id = interactive["pendingActionId"].as_str().unwrap();
+        assert_ne!(interactive_id, preview_id);
+
+        let state = broker.shared.0.lock().unwrap();
+        assert_eq!(state.pending.len(), 1);
+        assert!(!state.pending.contains_key(&preview_id));
+        assert!(state.pending.contains_key(interactive_id));
+    }
+
+    #[test]
+    fn a_new_request_never_replaces_a_submitted_response_before_ack() {
+        let broker = DesktopPetEAgentBroker::new();
+        broker
+            .set_available(AvailabilityRequest {
+                instance_id: "frontend-1".to_string(),
+                available: true,
+                accept_new: true,
+            })
+            .unwrap();
+        let first = broker
+            .open(open_request(
+                "claude-hook",
+                "claude",
+                "PermissionRequest",
+                json!({
+                    "tool_input": {
+                        "questions": [{
+                            "question": "First",
+                            "options": [{ "label": "A" }]
+                        }]
+                    }
+                }),
+            ))
+            .unwrap();
+        let first_id = first["pendingActionId"].as_str().unwrap().to_string();
+        broker
+            .submit(SubmitRequest {
+                pending_action_id: first_id.clone(),
+                transport_action_id: "transport-1".to_string(),
+                answers: vec![DesktopPetEAgentAnswer {
+                    question_id: "0".to_string(),
+                    values: vec!["A".to_string()],
+                    custom_value: None,
+                }],
+                approval_value: None,
+            })
+            .unwrap();
+
+        let mut second_request = open_request(
+            "claude-hook",
+            "claude",
+            "PermissionRequest",
+            json!({
+                "tool_input": {
+                    "questions": [{
+                        "question": "Second",
+                        "options": [{ "label": "B" }]
+                    }]
+                }
+            }),
+        );
+        second_request.tool_use_id = Some("tool-2".to_string());
+        second_request.request_id = Some(json!(12));
+        let second = broker.open(second_request).unwrap();
+        let second_id = second["pendingActionId"].as_str().unwrap();
+
+        let state = broker.shared.0.lock().unwrap();
+        assert_eq!(state.pending.len(), 2);
+        assert!(matches!(
+            state.pending.get(&first_id).map(|entry| &entry.state),
+            Some(PendingState::Submitted { .. })
+        ));
+        assert!(state.pending.contains_key(second_id));
+        drop(state);
+        assert_eq!(
+            broker
+                .poll(PollRequest {
+                    pending_action_id: first_id,
+                    wait_ms: Some(1),
+                })
+                .unwrap()["status"],
+            "resolved"
+        );
     }
 
     #[test]
@@ -2391,6 +2818,7 @@ mod tests {
             .set_available(AvailabilityRequest {
                 instance_id: "frontend-1".to_string(),
                 available: true,
+                accept_new: true,
             })
             .unwrap();
         let opened = broker
@@ -2440,12 +2868,258 @@ mod tests {
     }
 
     #[test]
+    fn codex_user_input_accepts_null_options_for_free_text() {
+        let mut request = open_request(
+            "codex-app-server",
+            "codex",
+            "PermissionRequest",
+            json!({
+                "params": {
+                    "questions": [{
+                        "id": "details",
+                        "header": "Details",
+                        "question": "Explain",
+                        "isOther": true,
+                        "isSecret": false,
+                        "options": null
+                    }]
+                }
+            }),
+        );
+        request.method = Some("tool/requestUserInput".to_string());
+        request.tool_name = Some("request_user_input".to_string());
+        let blueprint = action_blueprint(&request);
+        assert!(blueprint.interactive_supported);
+        assert_eq!(blueprint.kind, "question");
+        assert_eq!(blueprint.questions[0]["mode"], "text");
+        assert_eq!(blueprint.questions[0]["allowOther"], true);
+    }
+
+    #[test]
+    fn request_keys_are_scoped_to_the_agent_session() {
+        let first = open_request("codex-app-server", "codex", "PermissionRequest", json!({}));
+        let mut second = open_request("codex-app-server", "codex", "PermissionRequest", json!({}));
+        second.agent_session_id = Some("agent-2".to_string());
+        assert_ne!(request_key(&first), request_key(&second));
+    }
+
+    #[test]
+    fn codex_available_decisions_preserve_native_amendments() {
+        let hook_input = json!({
+            "params": {
+                "availableDecisions": [
+                    {
+                        "acceptWithExecpolicyAmendment": {
+                            "execpolicy_amendment": {
+                                "command": ["git", "status"]
+                            }
+                        }
+                    },
+                    "decline"
+                ]
+            }
+        });
+        let choices = codex_approval_choices(
+            "item/commandExecution/requestApproval",
+            &hook_input,
+        );
+        assert_eq!(choices.len(), 2);
+        assert_eq!(choices[0]["value"], "native:0");
+        assert_eq!(choices[1]["value"], "deny");
+        assert!(!choices.iter().any(|choice| choice["value"] == "allow-session"));
+
+        let entry = PendingEntry {
+            request_key: "key".to_string(),
+            pending_action_id: "pending".to_string(),
+            session_id: "tab".to_string(),
+            source: "codex".to_string(),
+            protocol: "codex-app-server".to_string(),
+            method: Some("item/commandExecution/requestApproval".to_string()),
+            request_id: Some(json!(29)),
+            hook_input,
+            action: json!({ "kind": "approval", "approvalChoices": choices }),
+            state: PendingState::Waiting,
+            created_at: Instant::now(),
+            expires_at: Instant::now() + PENDING_ACTION_TTL,
+        };
+        let request = SubmitRequest {
+            pending_action_id: "pending".to_string(),
+            transport_action_id: "transport".to_string(),
+            answers: Vec::new(),
+            approval_value: Some("native:0".to_string()),
+        };
+        let response = build_codex_response(&entry, &request).unwrap();
+        assert_eq!(
+            response["result"]["decision"],
+            entry.hook_input["params"]["availableDecisions"][0]
+        );
+    }
+
+    #[test]
+    fn mcp_elicitation_rejects_unknown_modes_and_preserves_option_titles() {
+        let mut request = open_request(
+            "codex-app-server",
+            "codex",
+            "PermissionRequest",
+            json!({
+                "params": {
+                    "mode": "future-mode",
+                    "requestedSchema": {
+                        "type": "object",
+                        "properties": {
+                            "choice": { "type": "string", "enum": ["a"] }
+                        }
+                    }
+                }
+            }),
+        );
+        request.method = Some("mcpServer/elicitation/request".to_string());
+        let unsupported = action_blueprint(&request);
+        assert!(!unsupported.interactive_supported);
+
+        let legacy = mcp_options(&json!({
+            "type": "string",
+            "enum": ["a", "b"],
+            "enumNames": ["Option A", "Option B"]
+        }))
+        .unwrap();
+        assert_eq!(legacy[0]["label"], "Option A");
+        assert_eq!(legacy[1]["value"], "b");
+
+        let titled_array = mcp_options(&json!({
+            "type": "array",
+            "items": {
+                "oneOf": [
+                    { "const": "a", "title": "Option A" },
+                    { "const": "b", "title": "Option B" }
+                ]
+            }
+        }))
+        .unwrap();
+        assert_eq!(titled_array[1]["label"], "Option B");
+    }
+
+    #[test]
+    fn mcp_optional_fields_can_be_omitted() {
+        let hook_input = json!({
+            "params": {
+                "mode": "form",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "requiredField": { "type": "string", "title": "Required" },
+                        "optionalField": { "type": "string", "title": "Optional" }
+                    },
+                    "required": ["requiredField"]
+                }
+            }
+        });
+        let questions = mcp_questions(&hook_input);
+        let required = questions
+            .iter()
+            .find(|question| question["id"] == "requiredField")
+            .unwrap();
+        let optional = questions
+            .iter()
+            .find(|question| question["id"] == "optionalField")
+            .unwrap();
+        assert_eq!(required["required"], true);
+        assert_eq!(optional["required"], false);
+        let action = json!({ "kind": "questionnaire", "questions": questions });
+        let request = SubmitRequest {
+            pending_action_id: "pending".to_string(),
+            transport_action_id: "transport".to_string(),
+            answers: vec![
+                DesktopPetEAgentAnswer {
+                    question_id: "requiredField".to_string(),
+                    values: Vec::new(),
+                    custom_value: Some("value".to_string()),
+                },
+                DesktopPetEAgentAnswer {
+                    question_id: "optionalField".to_string(),
+                    values: Vec::new(),
+                    custom_value: None,
+                },
+            ],
+            approval_value: None,
+        };
+        validate_submission(&action, &request).unwrap();
+        let entry = PendingEntry {
+            request_key: "key".to_string(),
+            pending_action_id: "pending".to_string(),
+            session_id: "tab".to_string(),
+            source: "codex".to_string(),
+            protocol: "codex-app-server".to_string(),
+            method: Some("mcpServer/elicitation/request".to_string()),
+            request_id: Some(json!(28)),
+            hook_input,
+            action,
+            state: PendingState::Waiting,
+            created_at: Instant::now(),
+            expires_at: Instant::now() + PENDING_ACTION_TTL,
+        };
+        let response = build_codex_response(&entry, &request).unwrap();
+        assert_eq!(response["result"]["content"]["requiredField"], "value");
+        assert!(response["result"]["content"].get("optionalField").is_none());
+    }
+
+    #[test]
+    fn stop_does_not_cancel_a_submitted_action_before_ack() {
+        let broker = DesktopPetEAgentBroker::new();
+        broker
+            .set_available(AvailabilityRequest {
+                instance_id: "frontend-1".to_string(),
+                available: true,
+                accept_new: true,
+            })
+            .unwrap();
+        let opened = broker
+            .open(open_request(
+                "claude-hook",
+                "claude",
+                "PermissionRequest",
+                json!({
+                    "tool_input": {
+                        "questions": [{
+                            "question": "Choose",
+                            "options": [{ "label": "A" }]
+                        }]
+                    }
+                }),
+            ))
+            .unwrap();
+        let pending_action_id = opened["pendingActionId"].as_str().unwrap().to_string();
+        broker
+            .submit(SubmitRequest {
+                pending_action_id: pending_action_id.clone(),
+                transport_action_id: "transport-1".to_string(),
+                answers: vec![DesktopPetEAgentAnswer {
+                    question_id: "0".to_string(),
+                    values: vec!["A".to_string()],
+                    custom_value: None,
+                }],
+                approval_value: None,
+            })
+            .unwrap();
+        broker.observe_hook(&json!({ "event": "Stop", "tabId": "tab-1" }));
+        broker
+            .ack(AckRequest {
+                pending_action_id,
+                transport_action_id: Some("transport-1".to_string()),
+                success: true,
+                error: None,
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn malformed_claude_question_never_becomes_an_approval() {
         let broker = DesktopPetEAgentBroker::new();
         broker
             .set_available(AvailabilityRequest {
                 instance_id: "frontend-1".to_string(),
                 available: true,
+                accept_new: true,
             })
             .unwrap();
         let opened = broker

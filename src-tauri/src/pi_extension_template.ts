@@ -1,4 +1,5 @@
 // __PI_MARKER__
+// CLI_MANAGER_PI_EXTENSION_VERSION:2
 // 由 CLI-Manager 管理，请勿手动修改；如需恢复，请在 Hook 设置中重新安装。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";

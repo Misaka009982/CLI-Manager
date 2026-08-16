@@ -23,6 +23,7 @@ fn agent_target(bridge: &State<'_, DaemonBridge>) -> Result<(u16, String), Strin
 pub fn desktop_pet_e_agent_availability(
     instance_id: String,
     available: bool,
+    accept_new: Option<bool>,
     bridge: State<'_, DaemonBridge>,
 ) -> Result<Value, String> {
     let (port, token) = agent_target(&bridge)?;
@@ -33,6 +34,7 @@ pub fn desktop_pet_e_agent_availability(
         &json!({
             "instanceId": instance_id,
             "available": available,
+            "acceptNew": accept_new.unwrap_or(true),
         }),
         AGENT_REQUEST_TIMEOUT,
     )

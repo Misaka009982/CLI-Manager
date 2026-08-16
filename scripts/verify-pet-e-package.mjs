@@ -134,6 +134,13 @@ function validatePackageContents(root) {
   requireCondition(readFileSync(requireFile(root, "runtime/version"), "utf8").trim() === "41.10.2", "runtime_version");
   validatePortableExecutable(requireFile(root, "runtime/electron.exe"));
 
+  const appPackage = readJson(requireFile(root, "app/package.json"));
+  requireCondition(appPackage.name === "cli-manager-desktop-pet-e-runtime", "app_package_name");
+  requireCondition(appPackage.version === "1.0.0", "app_package_version");
+  requireCondition(appPackage.private === true, "app_package_private");
+  requireCondition(appPackage.type === "module", "app_module_type");
+  requireCondition(appPackage.main === "main.js", "app_main_entry");
+
   for (const requiredPath of [
     "runtime/LICENSE",
     "runtime/LICENSES.chromium.html",

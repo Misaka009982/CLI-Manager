@@ -30,9 +30,12 @@ export function useDesktopPetEAgentCoordinator(appReady: boolean): void {
   const desktopPetEEnabled = useSettingsStore((state) => state.desktopPetE.enabled);
   const runtimeError = useDesktopPetERuntimeStore((state) => state.lastError);
   const agentInteractionEnabled = useSettingsStore((state) => state.desktopPetE.agentInteractionEnabled);
-  const sessionInteractionAvailable = appReady
+  const sessionAcceptsNewActions = appReady
     && agentInteractionEnabled
-    && (desktopPetEEnabled || runtimeFailureGrace || hasInteractivePendingActions);
+    && (desktopPetEEnabled || runtimeFailureGrace);
+  const sessionInteractionAvailable = sessionAcceptsNewActions
+    || (appReady && agentInteractionEnabled && hasInteractivePendingActions);
+  const sessionActionDisplayEnabled = appReady && desktopPetEEnabled;
 
   useEffect(() => {
     window.addEventListener("cli-manager-pty-daemon-restarted", resetForDaemonRestart);
@@ -61,12 +64,15 @@ export function useDesktopPetEAgentCoordinator(appReady: boolean): void {
     let disposed = false;
     let unlisten: (() => void) | null = null;
     let availabilityTimer: number | null = null;
+    let unsubscribeTerminalStore: (() => void) | null = null;
+    const owningSessionRecoveryTimers = new Map<string, number>();
 
     const publishAvailability = () => {
       if (!available) return;
       void invoke("desktop_pet_e_agent_availability", {
         instanceId,
         available: true,
+        acceptNew: sessionAcceptsNewActions,
       }).catch((error) => {
         if (!disposed) logWarn("Failed to publish CLI-Manager session action availability", error);
       });
@@ -84,6 +90,8 @@ export function useDesktopPetEAgentCoordinator(appReady: boolean): void {
     };
 
     const ensureOwningSession = (sessionId: string, pendingActionId: string) => {
+      const currentAction = useDesktopPetEAgentStore.getState().pendingActions.get(sessionId);
+      if (currentAction?.id !== pendingActionId) return;
       const terminalState = useTerminalStore.getState();
       if (terminalState.sessions.some((session) => session.id === sessionId)) return;
       if (attachInFlightRef.current.has(sessionId)) return;
@@ -91,8 +99,13 @@ export function useDesktopPetEAgentCoordinator(appReady: boolean): void {
       void (async () => {
         let attached = false;
         for (let attempt = 0; attempt < 3 && !attached && !disposed; attempt += 1) {
+          const pending = useDesktopPetEAgentStore.getState().pendingActions.get(sessionId);
+          if (pending?.id !== pendingActionId) return;
           try {
-            attached = await terminalState.attachDaemonSession(sessionId, { activate: false });
+            attached = await terminalState.attachDaemonSession(sessionId, {
+              activate: false,
+              requireAlive: true,
+            });
           } catch (error) {
             logWarn("Failed to attach the owning session for Desktop Pet E", error);
           }
@@ -106,11 +119,33 @@ export function useDesktopPetEAgentCoordinator(appReady: boolean): void {
       }).finally(() => attachInFlightRef.current.delete(sessionId));
     };
 
+    const scheduleOwningSessionRecovery = (sessionId: string, pendingActionId: string) => {
+      const currentTimer = owningSessionRecoveryTimers.get(sessionId);
+      if (currentTimer !== undefined) window.clearTimeout(currentTimer);
+      const timer = window.setTimeout(() => {
+        owningSessionRecoveryTimers.delete(sessionId);
+        if (!disposed) ensureOwningSession(sessionId, pendingActionId);
+      }, 250);
+      owningSessionRecoveryTimers.set(sessionId, timer);
+    };
+
+    unsubscribeTerminalStore = useTerminalStore.subscribe((next, previous) => {
+      if (next.sessions === previous.sessions) return;
+      const nextSessionIds = new Set(next.sessions.map((session) => session.id));
+      for (const session of previous.sessions) {
+        if (nextSessionIds.has(session.id)) continue;
+        const action = useDesktopPetEAgentStore.getState().pendingActions.get(session.id);
+        if (action) scheduleOwningSessionRecovery(session.id, action.id);
+      }
+    });
+
     void listen<unknown>(DESKTOP_PET_E_AGENT_EVENT, (event) => {
       if (!isDesktopPetEAgentEvent(event.payload)) return;
       const agentEvent = event.payload;
       const terminalPhase = agentEvent.phase === "resolved" || agentEvent.phase === "cancelled";
-      if (!available && !terminalPhase) return;
+      const displayOnlyEvent = sessionActionDisplayEnabled
+        && agentEvent.pendingAction.adapterMode !== "interactive";
+      if (!available && !terminalPhase && !displayOnlyEvent) return;
       applyEvent(agentEvent);
       if (!terminalPhase) {
         ensureOwningSession(agentEvent.sessionId, agentEvent.pendingActionId);
@@ -135,13 +170,17 @@ export function useDesktopPetEAgentCoordinator(appReady: boolean): void {
     return () => {
       disposed = true;
       if (availabilityTimer !== null) window.clearInterval(availabilityTimer);
+      for (const timer of owningSessionRecoveryTimers.values()) window.clearTimeout(timer);
+      owningSessionRecoveryTimers.clear();
+      unsubscribeTerminalStore?.();
       unlisten?.();
       if (available) {
         void invoke("desktop_pet_e_agent_availability", {
           instanceId,
           available: false,
+          acceptNew: false,
         }).catch(() => undefined);
       }
     };
-  }, [applyEvent, sessionInteractionAvailable]);
+  }, [applyEvent, sessionAcceptsNewActions, sessionActionDisplayEnabled, sessionInteractionAvailable]);
 }

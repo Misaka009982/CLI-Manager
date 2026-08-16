@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createReadStream, createWriteStream, cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { createReadStream, createWriteStream, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { pipeline } from "node:stream/promises";
 import { Readable, Transform } from "node:stream";
@@ -170,7 +170,15 @@ function stageApplication() {
   if (!existsSync(path.join(applicationSource, "main.js"))) {
     fail("pet_e_build_missing: run npm --prefix pet-e run build first");
   }
-  cpSync(applicationSource, path.join(resourcesRoot, "app"), { recursive: true });
+  const applicationDestination = path.join(resourcesRoot, "app");
+  cpSync(applicationSource, applicationDestination, { recursive: true });
+  writeFileSync(path.join(applicationDestination, "package.json"), `${JSON.stringify({
+    name: "cli-manager-desktop-pet-e-runtime",
+    version: "1.0.0",
+    private: true,
+    type: "module",
+    main: "main.js",
+  }, null, 2)}\n`, "utf8");
   cpSync(path.join(repoRoot, "pet-e", "NOTICE.md"), path.join(resourcesRoot, "NOTICE.md"));
   cpSync(path.join(repoRoot, "pet-e", "runtime-manifest.json"), path.join(resourcesRoot, "runtime-manifest.json"));
   mkdirSync(path.join(resourcesRoot, "LICENSES"), { recursive: true });

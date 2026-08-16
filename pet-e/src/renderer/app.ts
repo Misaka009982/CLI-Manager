@@ -149,7 +149,7 @@ function cliLabelMarkup(): string {
 }
 
 function taskListMarkup(): string {
-  if (config?.settings.showTaskArea === false) return "";
+  if (config?.settings.showTaskArea === false || activeTaskId) return "";
   const tasks = tasksForColor(snapshot, expandedColor);
   if (!expandedColor) return "";
   const title = label(`desktopPetE.renderer.${expandedColor === "green" ? "running" : expandedColor === "yellow" ? "actionNeeded" : expandedColor === "red" ? "failed" : "stopped"}`);
@@ -211,7 +211,8 @@ function questionsMarkup(action: NonNullable<DesktopPetETask["pendingAction"]>, 
   return `<div class="questions">${(action.questions ?? []).map((question, index) => {
     const values = draft.answers[question.id] ?? [];
     const optionType = question.mode === "multiple" ? "checkbox" : "radio";
-    return `<fieldset data-question="${escapeText(question.id)}"><legend><span>${index + 1}</span>${escapeText(question.label || question.prompt)}</legend>${question.label ? `<p>${escapeText(question.prompt)}</p>` : ""}
+    const optional = question.required === false ? `<small class="question-optional">${escapeText(label("desktopPetE.renderer.optional"))}</small>` : "";
+    return `<fieldset data-question="${escapeText(question.id)}"><legend><span>${index + 1}</span>${escapeText(question.label || question.prompt)}${optional}</legend>${question.label ? `<p>${escapeText(question.prompt)}</p>` : ""}
       ${question.mode === "text" ? "" : question.options.map((option) => `<label class="choice"><input type="${optionType}" name="question-${escapeText(question.id)}" value="${escapeText(option.value)}" ${values.includes(option.value) ? "checked" : ""}/><span><strong>${escapeText(option.label)}</strong>${option.description ? `<small>${escapeText(option.description)}</small>` : ""}</span></label>`).join("")}
       ${question.mode === "text" || question.allowOther ? `<textarea data-custom="${escapeText(question.id)}" maxlength="16384" placeholder="${escapeText(label("desktopPetE.renderer.typeAnswer"))}">${escapeText(draft.customValues[question.id] ?? "")}</textarea>` : ""}
     </fieldset>`;

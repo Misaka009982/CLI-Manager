@@ -19,12 +19,20 @@ use uuid::Uuid;
 
 const NOTIFY_ATTEMPTS: usize = 2;
 const NOTIFY_RETRY_DELAY: Duration = Duration::from_millis(80);
+const HOOK_NOTIFY_MAX_BODY_BYTES: usize = 64 * 1024;
 
 /// `main` 在初始化 Tauri runtime 之前调用本函数并退出，因此这里
 /// 不依赖任何 Tauri/WebView 状态，冷启动开销极小。
 pub fn run_and_exit(source: &str, event: &str) -> ! {
-    let result = read_hook_input().and_then(|hook_input| {
+    let result = read_hook_input().and_then(|mut hook_input| {
         if is_interactive_event(source, event, &hook_input) {
+            let suppressed = should_suppress_codex_permission_request(source, event, &hook_input);
+            let notification_result = if suppressed {
+                Ok(())
+            } else {
+                ensure_desktop_pet_e_request_id(&mut hook_input);
+                try_notify_input(source, event, hook_input.clone())
+            };
             match try_interactive_decision(source, event, hook_input)? {
                 Some(decision) => {
                     let mut output = serde_json::to_vec(&decision.response)
@@ -42,10 +50,10 @@ pub fn run_and_exit(source: &str, event: &str) -> ! {
                     if !delivered {
                         return Err(HookNotifyError::BridgeWrite);
                     }
+                    Ok(())
                 }
-                None => {}
+                None => notification_result,
             }
-            Ok(())
         } else {
             try_notify_input(source, event, hook_input)
         }
@@ -141,6 +149,30 @@ pub(crate) fn acknowledge_desktop_pet_e_agent(decision: &InteractiveDecision, su
         if attempt + 1 < NOTIFY_ATTEMPTS {
             thread::sleep(NOTIFY_RETRY_DELAY);
         }
+    }
+}
+
+fn ensure_desktop_pet_e_request_id(hook_input: &mut Value) {
+    let existing = hook_input.get("request_id").or_else(|| hook_input.get("requestId"));
+    let valid = match existing {
+        Some(Value::Number(_)) => true,
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            !trimmed.is_empty()
+                && trimmed.len() <= 512
+                && !trimmed.chars().any(|character| matches!(character, '\0' | '\r' | '\n'))
+        }
+        _ => false,
+    };
+    if valid {
+        return;
+    }
+    if let Some(object) = hook_input.as_object_mut() {
+        object.insert(
+            "request_id".to_string(),
+            Value::String(Uuid::new_v4().to_string()),
+        );
+        object.remove("requestId");
     }
 }
 
@@ -317,7 +349,6 @@ fn try_interactive_decision(
         return Ok(None);
     }
     if source == "grok" {
-        let _ = try_notify_input(source, event, hook_input);
         return Ok(None);
     }
     let request_id = hook_input
@@ -355,7 +386,6 @@ fn try_interactive_decision(
         "requestId": request_id,
         "hookInput": hook_input.clone(),
     });
-    let _ = try_notify_input(source, event, hook_input);
     request_desktop_pet_e_agent(&open_payload)
 }
 
@@ -416,7 +446,16 @@ fn try_notify_input(source: &str, event: &str, hook_input: Value) -> Result<(), 
             object.insert("hookInput".to_string(), hook_input.clone());
         }
     }
-    let body = serde_json::to_vec(&payload).map_err(|_| HookNotifyError::PayloadSerialize)?;
+    let mut body = serde_json::to_vec(&payload).map_err(|_| HookNotifyError::PayloadSerialize)?;
+    if body.len() > HOOK_NOTIFY_MAX_BODY_BYTES {
+        if let Some(object) = payload.as_object_mut() {
+            object.remove("hookInput");
+        }
+        body = serde_json::to_vec(&payload).map_err(|_| HookNotifyError::PayloadSerialize)?;
+    }
+    if body.len() > HOOK_NOTIFY_MAX_BODY_BYTES {
+        return Err(HookNotifyError::PayloadSerialize);
+    }
 
     let mut last_error = if non_empty_env("CLI_MANAGER_NOTIFY_PORT").is_some() {
         HookNotifyError::MissingToken
@@ -719,8 +758,12 @@ fn title_for(source: &str, event: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{failure_diagnostic_line, should_suppress_codex_permission_request};
-    use serde_json::json;
+    use super::{
+        ensure_desktop_pet_e_request_id,
+        failure_diagnostic_line,
+        should_suppress_codex_permission_request,
+    };
+    use serde_json::{json, Value};
 
     #[test]
     fn extract_reasoning_effort_reads_claude_hook_effort_level() {
@@ -755,6 +798,19 @@ mod tests {
             Some("exa")
         );
         assert_eq!(cli_manager_hook_schema::extract_mcp_server("Read"), None);
+    }
+
+    #[test]
+    fn interactive_events_share_one_request_id_with_the_normal_hook_chain() {
+        let mut input = json!({ "tool_name": "AskUserQuestion", "requestId": null });
+        ensure_desktop_pet_e_request_id(&mut input);
+        let request_id = input.get("request_id").and_then(Value::as_str).unwrap();
+        assert!(!request_id.is_empty());
+        assert!(input.get("requestId").is_none());
+
+        let preserved = request_id.to_string();
+        ensure_desktop_pet_e_request_id(&mut input);
+        assert_eq!(input.get("request_id").and_then(Value::as_str), Some(preserved.as_str()));
     }
 
     #[test]

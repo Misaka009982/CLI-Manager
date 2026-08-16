@@ -20,6 +20,14 @@ test("pending-action broker is bounded, authenticated, and lease-gated", () => {
   assert.match(broker, /DESKTOP_PET_E_AGENT_MAX_BODY_BYTES: usize = 1024 \* 1024/);
   assert.match(broker, /MAX_PENDING_ACTIONS: usize = 128/);
   assert.match(broker, /AVAILABILITY_LEASE/);
+  assert.match(broker, /let is_new_instance = state[\s\S]*available_instances[\s\S]*\.is_none\(\)/);
+  assert.match(broker, /draining_lease_finishes_existing_actions_without_accepting_new_ones/);
+  assert.match(broker, /blueprint\.interactive_supported && !accepts_new/);
+  assert.match(broker, /accept_new: bool/);
+  assert.match(broker, /values\(\)\.any\(\|lease\| lease\.accept_new\)/);
+  assert.match(sessionCoordinator, /acceptNew: sessionAcceptsNewActions/);
+  assert.match(sessionCoordinator, /const sessionAcceptsNewActions/);
+  assert.match(sessionCoordinator, /hasInteractivePendingActions/);
   assert.match(broker, /Condvar/);
   assert.match(hookServer, /Authorization/);
   assert.match(hookServer, /DesktopPetEAgentBroker::is_agent_path/);
@@ -39,7 +47,14 @@ test("submission keeps transport identity until protocol acknowledgement", () =>
   assert.match(broker, /"failed"/);
   assert.match(sharedAgentStore, /desktop_pet_e_agent_submit/);
   assert.match(coordinator, /useDesktopPetEAgentStore\.getState\(\)\.submit/);
-  assert.match(sessionPanel, /await submit\(\{/);
+  assert.match(sharedAgentStore, /submissions: ReadonlyMap<string, string>/);
+  assert.match(sharedAgentStore, /desktop_pet_e_agent_already_submitting/);
+  assert.match(sharedAgentStore, /submissions\.get\(request\.pendingActionId\)/);
+  assert.match(sessionPanel, /state\.submissions\.get\(action\.id\)/);
+  assert.match(sessionPanel, /sharedSubmitting !== null/);
+  assert.match(sharedAgentStore, /submissions\.delete\(event\.pendingAction\.id\)/);
+  assert.match(sharedAgentStore, /submissions: new Map\(\)/);
+
   assert.match(coordinator, /desktop_pet_e_action_result/);
   assert.match(coordinator, /confirmed: false/);
   assert.match(coordinator, /confirmed: true/);
@@ -50,9 +65,14 @@ test("pet and owning session share pending actions without lifecycle cancellatio
   assert.match(sessionCoordinator, /cli-manager-session-ui-/);
   assert.match(sessionCoordinator, /DESKTOP_PET_E_AGENT_EVENT/);
   assert.match(sessionCoordinator, /desktop_pet_e_agent_availability/);
-  assert.match(sessionCoordinator, /desktopPetEEnabled \|\| runtimeFailureGrace \|\| hasInteractivePendingActions/);
+  assert.match(sessionCoordinator, /sessionInteractionAvailable = sessionAcceptsNewActions/);
   assert.match(sessionCoordinator, /RUNTIME_FAILURE_AVAILABILITY_GRACE_MS = 15_000/);
-  assert.match(sessionCoordinator, /attachDaemonSession\(sessionId, \{ activate: false \}\)/);
+  assert.match(sessionCoordinator, /attachDaemonSession\(sessionId, \{[\s\S]*activate: false,[\s\S]*requireAlive: true/);
+  assert.match(terminalStore, /requireAlive\?: boolean/);
+  assert.match(terminalStore, /options\?\.requireAlive && !daemonSession\.alive/);
+  assert.match(sessionCoordinator, /useTerminalStore\.subscribe/);
+  assert.match(sessionCoordinator, /scheduleOwningSessionRecovery/);
+  assert.match(sessionCoordinator, /next\.sessions === previous\.sessions/);
   assert.match(sessionCoordinator, /currentAction\?\.id !== pendingActionId/);
   assert.match(sessionCoordinator, /reason: "owning-session-unavailable"/);
   assert.match(terminalStore, /activate\?: boolean/);
@@ -87,6 +107,12 @@ test("Claude command hooks wait for native output and preserve official decision
   assert.match(hookClient, /Duration::from_secs\(590\)/);
   assert.match(hookSettings, /build_command\(exe, "claude", "PermissionRequest"\),\s*600/);
   assert.match(hookSettings, /build_command\(exe, "codex", "PermissionRequest"\),\s*600/);
+  assert.match(hookClient, /interactive_events_share_one_request_id_with_the_normal_hook_chain/);
+  assert.match(hookClient, /ensure_desktop_pet_e_request_id\(&mut hook_input\)/);
+  assert.match(hookClient, /try_notify_input\(source, event, hook_input\.clone\(\)\)/);
+  assert.match(hookClient, /HOOK_NOTIFY_MAX_BODY_BYTES/);
+  assert.match(hookClient, /object\.remove\("hookInput"\)/);
+  assert.match(hookClient, /None => notification_result/);
   assert.match(hookClient, /stdout\.lock\(\)/);
   assert.match(hookClient, /write_all\(&output\)/);
   assert.match(hookClient, /"cancelled" \| "expired" \| "unavailable" => return Ok\(None\)/);
@@ -103,6 +129,25 @@ test("question notifications degrade to jump-only without becoming normal notifi
   assert.match(hookServer, /question_event/);
   assert.match(hookServer, /"notification-only"/);
   assert.match(broker, /codex_hook_questions/);
+  assert.match(broker, /request_keys_are_scoped_to_the_agent_session/);
+  assert.match(broker, /request\.agent_session_id\.as_deref\(\)\.unwrap_or_default\(\)/);
+  assert.match(broker, /codex_available_decisions_preserve_native_amendments/);
+  assert.match(broker, /is_supported_codex_native_command_decision/);
+  assert.match(broker, /codex_command_decision\(entry, request\)\?/);
+  assert.match(broker, /codex_user_input_accepts_null_options_for_free_text/);
+  assert.match(broker, /!raw_options\.is_null\(\)/);
+  assert.match(broker, /claude_question_permission_request_replaces_notification_preview/);
+  assert.match(broker, /a_new_request_never_replaces_a_submitted_response_before_ack/);
+  assert.match(broker, /current\.session_id == request\.tab_id[\s\S]*PendingState::Waiting/);
+  assert.match(broker, /desktop_pet_e_agent_capacity/);
+  assert.match(broker, /mcp_elicitation_rejects_unknown_modes_and_preserves_option_titles/);
+  assert.match(broker, /matches!\(mode, "form" \| "openai\/form"\)/);
+  assert.match(broker, /value\.get\("oneOf"\)/);
+  assert.match(broker, /property\.get\("enumNames"\)/);
+  assert.match(broker, /mcp_optional_fields_can_be_omitted/);
+  assert.match(broker, /"required": required_ids\.contains/);
+  assert.match(broker, /stop_does_not_cancel_a_submitted_action_before_ack/);
+  assert.match(broker, /matches!\(&entry\.state, PendingState::Waiting\)/);
   assert.match(broker, /desktopPetE\.agent\.notificationOnly/);
 });
 
@@ -119,6 +164,8 @@ test("Codex app-server requests keep native ids and share one synchronized stdin
     assert.match(proxy, new RegExp(method.replaceAll("/", "\\/")));
   }
   assert.match(proxy, /Arc::new\(Mutex::new/);
+  assert.match(proxy, /Arc<Mutex<Option<W>>>/);
+  assert.match(proxy, /writer\.take\(\)/);
   assert.match(proxy, /std::thread::spawn/);
   assert.match(proxy, /first_protocol_string/);
   assert.match(proxy, /write_parent_line\(&parent_output, &original_line\)/);

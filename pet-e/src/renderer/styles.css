@@ -245,8 +245,10 @@ button { color: inherit; }
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38);
   -webkit-app-region: no-drag;
 }
-.task-panel { bottom: 10px; max-height: 360px; }
-.action-panel { top: 8px; bottom: 8px; width: 364px; background: var(--panel-strong); }
+.task-panel { top: 8px; max-height: 256px; width: 364px; }
+.action-panel { top: 8px; bottom: 8px; width: 364px; display: flex; flex-direction: column; background: var(--panel-strong); }
+.action-panel > header { flex: 0 0 34px; }
+.action-panel > p:not(.action-error) { margin: 8px 10px 0; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; line-height: 15px; }
 .task-panel > header, .action-panel > header {
   display: flex;
   align-items: center;
@@ -266,7 +268,7 @@ button { color: inherit; }
   cursor: pointer;
   font-size: 18px;
 }
-.task-list { display: grid; gap: 5px; max-height: 324px; padding: 7px; overflow-y: auto; }
+.task-list { display: grid; gap: 5px; max-height: 214px; padding: 7px; overflow-y: auto; }
 .task-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -296,14 +298,16 @@ button { color: inherit; }
 
 .questions, .approval-options {
   display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
   gap: 10px;
-  max-height: 430px;
   padding: 10px;
   overflow-y: auto;
 }
 fieldset { display: grid; gap: 6px; min-width: 0; margin: 0; padding: 9px; border: 1px solid var(--border); border-radius: 5px; }
 legend { max-width: 100%; padding: 0 4px; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
 legend span { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 5px; border-radius: 50%; background: #2779bd; font-size: 10px; }
+.question-optional { margin-left: 6px; color: var(--muted); font-size: 10px; font-weight: 400; }
 fieldset > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 15px; overflow-wrap: anywhere; }
 .choice { display: grid; grid-template-columns: 17px minmax(0, 1fr); align-items: start; gap: 7px; min-height: 32px; padding: 6px; border: 1px solid transparent; border-radius: 4px; cursor: pointer; }
 .choice:hover { border-color: var(--border); background: rgba(255, 255, 255, 0.045); }
@@ -314,7 +318,7 @@ fieldset > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 15p
 textarea { width: 100%; min-height: 62px; resize: vertical; padding: 7px; border: 1px solid var(--border); border-radius: 4px; outline: none; color: var(--text); background: rgba(0, 0, 0, 0.28); font-size: 11px; line-height: 15px; user-select: text; }
 textarea:focus { border-color: var(--blue); }
 .action-error { margin: 8px 10px 0; padding: 7px; border: 1px solid var(--red); border-radius: 4px; color: #ffd5d2; font-size: 10px; overflow-wrap: anywhere; }
-.action-panel footer { position: absolute; right: 0; bottom: 0; left: 0; display: flex; justify-content: flex-end; gap: 7px; min-height: 44px; padding: 8px 10px; border-top: 1px solid var(--border); background: var(--panel-strong); }
+.action-panel footer { position: static; display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 7px; min-height: 44px; padding: 8px 10px; border-top: 1px solid var(--border); background: var(--panel-strong); }
 .action-panel footer .primary { border-color: #53b1fd; background: #1467a8; }
 .action-panel footer button:disabled { cursor: default; opacity: 0.45; }
 

@@ -6,9 +6,13 @@ use crate::shell_resolver::silent_command;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[cfg(target_os = "windows")]
+use sha2::{Digest, Sha256};
+#[cfg(target_os = "windows")]
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+#[cfg(target_os = "windows")]
+use std::path::Path;
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -439,6 +443,24 @@ fn diagnostic(code: &str, detail: String) -> DesktopPetEDiagnostic {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("desktop_pet_e_package_file_hash_failed:{}:{error}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| format!("desktop_pet_e_package_file_hash_failed:{}:{error}", path.display()))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 fn validate_packaged_runtime<R: Runtime>(
     app: &AppHandle<R>,
     runtime: &PathBuf,
@@ -480,16 +502,35 @@ fn validate_packaged_runtime<R: Runtime>(
         {
             return Err("desktop_pet_e_package_manifest_mismatch".to_string());
         }
+        let app_package_path = entry.with_file_name("package.json");
+        let app_package_bytes = fs::read(&app_package_path)
+            .map_err(|error| format!("desktop_pet_e_package_app_manifest_missing: {error}"))?;
+        let app_package: Value = serde_json::from_slice(&app_package_bytes)
+            .map_err(|error| format!("desktop_pet_e_package_app_manifest_invalid: {error}"))?;
+        if app_package.get("name").and_then(Value::as_str)
+            != Some("cli-manager-desktop-pet-e-runtime")
+            || app_package.get("version").and_then(Value::as_str) != Some("1.0.0")
+            || app_package.get("private").and_then(Value::as_bool) != Some(true)
+            || app_package.get("type").and_then(Value::as_str) != Some("module")
+            || app_package.get("main").and_then(Value::as_str) != Some("main.js")
+        {
+            return Err("desktop_pet_e_package_app_manifest_mismatch".to_string());
+        }
         for (relative_path, actual_path) in [
-            ("runtime/electron.exe", runtime),
-            ("app/main.js", entry),
+            ("runtime/electron.exe", runtime.as_path()),
+            ("app/main.js", entry.as_path()),
+            ("app/package.json", app_package_path.as_path()),
         ] {
             let metadata = fs::metadata(actual_path)
                 .map_err(|error| format!("desktop_pet_e_package_file_missing:{relative_path}:{error}"))?;
             let Some(recorded) = manifest.files.iter().find(|file| file.path == relative_path) else {
                 return Err(format!("desktop_pet_e_package_file_unlisted:{relative_path}"));
             };
-            if recorded.size != metadata.len() || recorded.sha256.len() != 64 {
+            let actual_sha256 = sha256_file(actual_path)?;
+            if recorded.size != metadata.len()
+                || recorded.sha256.len() != 64
+                || !recorded.sha256.eq_ignore_ascii_case(&actual_sha256)
+            {
                 return Err(format!("desktop_pet_e_package_file_mismatch:{relative_path}"));
             }
         }

@@ -10,6 +10,11 @@ const hookServer = readFileSync(new URL("../src-tauri/src/claude_hook.rs", impor
 test("managed Pi extension is generated from the owned decision template", () => {
   assert.match(hookSettings, /include_str!\("\.\.\/pi_extension_template\.ts"\)/);
   assert.match(template, /__CLI_MANAGER_PI_HOOK__|__PI_MARKER__/);
+  assert.match(template, /CLI_MANAGER_PI_EXTENSION_VERSION:2/);
+  assert.match(hookSettings, /PI_EXTENSION_VERSION_PREFIX/);
+  assert.match(hookSettings, /pi_extension_version\(&content\)\.unwrap_or_default\(\) < PI_EXTENSION_VERSION/);
+  assert.match(hookSettings, /managed_legacy_pi_extension_is_upgraded_in_place/);
+  assert.match(hookSettings, /future_managed_pi_extension_is_not_downgraded/);
   assert.match(template, /pi\.getAllTools\(\)/);
   assert.match(template, /tools\.find\(\(tool\) => tool\.name === "question"\)/);
   assert.match(template, /tools\.find\(\(tool\) => tool\.name === "questionnaire"\)/);

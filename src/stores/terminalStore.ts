@@ -313,8 +313,11 @@ interface TerminalStore {
   setSplitRatio: (splitId: string, ratio: number) => void;
   getNextSessionIdForShortcut: (delta: 1 | -1) => string | null;
   restoreSessions: (projectMap: Map<string, Project>, projectHealth: Record<string, boolean>) => Promise<void>;
-  /** 从 daemon 恢复单个后台任务；默认聚焦，宠物E会话面板可选择只挂载到当前布局。 */
-  attachDaemonSession: (sessionId: string, options?: { activate?: boolean }) => Promise<boolean>;
+  /** 从 daemon 恢复单个后台任务；默认聚焦，宠物E会话面板只恢复仍存活的所属任务。 */
+  attachDaemonSession: (
+    sessionId: string,
+    options?: { activate?: boolean; requireAlive?: boolean },
+  ) => Promise<boolean>;
   /** 终止并移除单个 daemon 后台任务及终端恢复数据。 */
   discardDaemonSession: (sessionId: string) => Promise<void>;
   /** 合并态（hook+shell）为 running 的真实 PTY 会话 id，供退出拦截判定任务是否在跑（Issue #123 Phase 1）。 */
@@ -3293,7 +3296,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const daemonSession = (await invoke<DaemonSessionMeta[]>("pty_daemon_sessions"))
       .find((item) => item.sessionId === sessionId);
-    if (!daemonSession) return false;
+    if (!daemonSession || (options?.requireAlive && !daemonSession.alive)) return false;
     current = get();
     if (current.sessions.some((session) => session.id === sessionId)) {
       if (activate) current.setActive(sessionId);

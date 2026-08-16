@@ -303,12 +303,12 @@ fn run_proxy(child_args: &[String]) -> Result<i32, String> {
     let mut child = command
         .spawn()
         .map_err(|err| format!("start real Codex app-server failed: {err}"))?;
-    let child_stdin = Arc::new(Mutex::new(
+    let child_stdin = Arc::new(Mutex::new(Some(
         child
             .stdin
             .take()
             .ok_or_else(|| "real Codex stdin pipe is unavailable".to_string())?,
-    ));
+    )));
     let child_stdout = child
         .stdout
         .take()
@@ -325,13 +325,17 @@ fn run_proxy(child_args: &[String]) -> Result<i32, String> {
     let input_child_stdin = Arc::clone(&child_stdin);
     let input_expected_thread_id = expected_thread_id.clone();
     std::thread::spawn(move || {
-        if let Err(err) = forward_parent_input(
+        let result = forward_parent_input(
             &input_child_stdin,
             input_expected_thread_id.as_deref(),
             remote_work_dir.as_deref(),
             &input_pending,
             &input_output,
-        ) {
+        );
+        if let Ok(mut writer) = input_child_stdin.lock() {
+            writer.take();
+        }
+        if let Err(err) = result {
             eprintln!("CLI-Manager Codex app-server proxy input failed: {err}");
         }
     });
@@ -523,7 +527,7 @@ fn codex_command(launcher: &Path, args: &[String]) -> Command {
 }
 
 fn forward_parent_input<W: Write>(
-    child_stdin: &Arc<Mutex<W>>,
+    child_stdin: &Arc<Mutex<Option<W>>>,
     expected_thread_id: Option<&str>,
     remote_work_dir: Option<&str>,
     pending: &Arc<Mutex<HashMap<String, PendingResume>>>,
@@ -553,6 +557,9 @@ fn forward_parent_input<W: Write>(
                 let mut child_stdin = child_stdin
                     .lock()
                     .map_err(|_| "real Codex stdin lock poisoned".to_string())?;
+                let child_stdin = child_stdin
+                    .as_mut()
+                    .ok_or_else(|| "real Codex stdin pipe is closed".to_string())?;
                 child_stdin
                     .write_all(&line)
                     .and_then(|_| child_stdin.flush())
@@ -654,7 +661,7 @@ fn codex_agent_request(line: &[u8], expected_thread_id: Option<&str>) -> Option<
 fn handle_codex_agent_request<W: Write + Send + 'static>(
     request: CodexAgentRequest,
     original_line: Vec<u8>,
-    child_stdin: Arc<Mutex<W>>,
+    child_stdin: Arc<Mutex<Option<W>>>,
     parent_output: Arc<Mutex<io::Stdout>>,
 ) {
     match request_desktop_pet_e_agent(&request.open_payload) {
@@ -664,6 +671,9 @@ fn handle_codex_agent_request<W: Write + Send + 'static>(
                 .lock()
                 .map_err(|_| "real Codex stdin lock poisoned".to_string())
                 .and_then(|mut writer| {
+                    let writer = writer
+                        .as_mut()
+                        .ok_or_else(|| "real Codex stdin pipe is closed".to_string())?;
                     writer
                         .write_all(&response)
                         .and_then(|_| writer.flush())
@@ -695,7 +705,7 @@ fn forward_child_output<R: io::Read, W: Write + Send + 'static>(
     pending: &Arc<Mutex<HashMap<String, PendingResume>>>,
     parent_output: &Arc<Mutex<io::Stdout>>,
     hook_forwarder: Option<&SshHandoffHookForwarder>,
-    child_stdin: &Arc<Mutex<W>>,
+    child_stdin: &Arc<Mutex<Option<W>>>,
     expected_thread_id: Option<&str>,
 ) -> Result<(), String> {
     let mut reader = BufReader::new(child_stdout);

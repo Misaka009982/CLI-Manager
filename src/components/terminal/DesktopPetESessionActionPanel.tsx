@@ -125,13 +125,14 @@ function JumpOnlyNotice({ action, reason }: JumpOnlyNoticeProps) {
 function InteractiveActionPanel({ action }: ActionContentProps) {
   const { t } = useI18n();
   const submit = useDesktopPetEAgentStore((state) => state.submit);
+  const sharedSubmitting = useDesktopPetEAgentStore((state) => state.submissions.get(action.id) ?? null);
   const [draft, setDraft] = useState<ActionDraft>(() => createActionDraft(action));
   const [collapsed, setCollapsed] = useState(false);
   const [localSubmitting, setLocalSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const titleId = useId();
   const groupPrefix = useId();
-  const submitting = action.submitting || localSubmitting;
+  const submitting = action.submitting || localSubmitting || sharedSubmitting !== null;
   const error = localizeActionText(localError ?? action.error, t);
   const title = action.title?.trim() || t("desktopPetE.renderer.actionNeeded");
 
@@ -251,6 +252,11 @@ function InteractiveActionPanel({ action }: ActionContentProps) {
                       {questionIndex + 1}
                     </span>
                     <span className="min-w-0 break-words leading-5">{question.label || question.prompt}</span>
+                    {question.required === false && (
+                      <span className="shrink-0 text-[10px] font-normal" style={{ color: "var(--terminal-theme-muted, #9ca0a6)" }}>
+                        {t("desktopPetE.renderer.optional")}
+                      </span>
+                    )}
                   </legend>
                   {question.label && (
                     <p className="mb-2 mt-0 break-words text-xs leading-5" style={{ color: "var(--terminal-theme-muted, #9ca0a6)" }}>

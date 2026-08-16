@@ -39,6 +39,13 @@ function createPackageFixture() {
   writeFile(root, "runtime/LICENSE", "Electron license\n");
   writeFile(root, "runtime/LICENSES.chromium.html", "Chromium notices\n");
   writeFile(root, "runtime/resources/default_app.asar", "asar\n");
+  writeFile(root, "app/package.json", `${JSON.stringify({
+    name: "cli-manager-desktop-pet-e-runtime",
+    version: "1.0.0",
+    private: true,
+    type: "module",
+    main: "main.js",
+  })}\n`);
   for (const relativePath of [
     "app/main.js",
     "app/preload.cjs",
@@ -97,6 +104,21 @@ test("package verification rejects a non-x64 Electron executable", async () => {
   );
 });
 
+test("package verification rejects CommonJS runtime metadata", async () => {
+  const root = freshPackageFixture();
+  writeFile(root, "app/package.json", JSON.stringify({
+    name: "cli-manager-desktop-pet-e-runtime",
+    version: "1.0.0",
+    private: true,
+    type: "commonjs",
+    main: "main.js",
+  }));
+  await assert.rejects(
+    () => verifyPetEPackage(root, { writeManifest: true }),
+    /app_module_type/,
+  );
+});
+
 test("resource chain uses the resolver path and never stages runtime at launch", () => {
   const tauri = readFileSync(path.join(repositoryRoot, "src-tauri/tauri.windows.conf.json"), "utf8");
   const baseTauri = readFileSync(path.join(repositoryRoot, "src-tauri/tauri.conf.json"), "utf8");
@@ -108,10 +130,14 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   assert.doesNotMatch(baseTauri, /resources\/pet-e/);
   assert.match(prepare, /CLI_MANAGER_PET_E_RUNTIME_ARCHIVE/);
   assert.match(prepare, /7665990f65b7d2f61671eb342b08c4b6f2e7ce302a269d56c2f3554fc8c8ce72/);
+  assert.match(prepare, /appPackage|package\.json/);
+  assert.match(prepare, /version: "1\.0\.0"/);
   assert.match(manager, /pet-e\/runtime\/electron\.exe/);
   assert.match(manager, /pet-e\/app\/main\.js/);
   assert.match(manager, /PET_E_PACKAGE_MANIFEST_RELATIVE_PATH/);
   assert.match(manager, /ELECTRON_RUNTIME_SHA256/);
+  assert.match(manager, /sha256_file/);
+  assert.match(manager, /eq_ignore_ascii_case\(&actual_sha256\)/);
   assert.match(portable, /verify-pet-e-package\.mjs/);
   assert.doesNotMatch(manager, /fetch\(|reqwest::/);
 });

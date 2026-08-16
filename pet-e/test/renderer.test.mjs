@@ -11,6 +11,7 @@ test("renderer keeps the task area collapsed until an explicit interaction", () 
   assert.match(source, /data-command=\"close-pet\"/);
   assert.match(source, /kind: "open-settings"/);
   assert.match(source, /config\.settings\.openOnHover/);
+  assert.match(source, /if \(config\?\.settings\.showTaskArea === false \|\| activeTaskId\) return ""/);
   assert.match(source, /config\?\.settings\.agentInteractionEnabled !== false/);
 });
 
@@ -29,6 +30,8 @@ test("renderer preserves drafts and exposes retry after a rejected action", () =
   assert.match(shared, /serializeAnswers/);
   assert.match(shared, /isDraftComplete/);
   assert.match(shared, /questions\.length === 0/);
+  assert.match(shared, /question\.required === false/);
+  assert.match(source, /desktopPetE\.renderer\.optional/);
 });
 
 test("renderer uses the strict CSP-compatible sprite class contract", () => {
@@ -38,6 +41,9 @@ test("renderer uses the strict CSP-compatible sprite class contract", () => {
   assert.doesNotMatch(app, /style=\"/);
   assert.match(app, /sprite-row-\$\{state\.row\}/);
   assert.match(css, /sprite-row-10/);
+  assert.match(css, /\.action-panel \{[\s\S]*display: flex;[\s\S]*flex-direction: column;/);
+  assert.match(css, /\.action-panel footer \{ position: static;/);
+  assert.match(css, /\.task-panel \{ top: 8px;[\s\S]*width: 364px;/);
   assert.match(html, /style-src pet-e-app:/);
   assert.doesNotMatch(html, /unsafe-inline/);
 });

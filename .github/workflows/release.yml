@@ -157,9 +157,9 @@ jobs:
         if: matrix.platform == 'windows-latest'
         run: npm run test:tauri-dev-proxy
 
-      - name: Test Desktop Pet E package contract
+      - name: Test Desktop Pet E contracts
         if: matrix.platform == 'windows-latest'
-        run: node scripts/petEPackage.test.mjs
+        run: npm run test:pet-e:contracts
 
       - name: Download bundled SSH Agent
         uses: actions/download-artifact@v4
