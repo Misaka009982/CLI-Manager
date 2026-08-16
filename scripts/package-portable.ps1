@@ -28,10 +28,20 @@ if ($normalizedVersion -notmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?
 $mainExecutable = Join-Path $resolvedSourceDir "cli-manager.exe"
 $proxyExecutable = Join-Path $resolvedSourceDir "cli-manager-codex-proxy.exe"
 $resourcesDir = Join-Path $resolvedSourceDir "resources"
-foreach ($requiredPath in @($mainExecutable, $proxyExecutable, $resourcesDir)) {
+$petEResourceDir = Join-Path $resourcesDir "pet-e"
+foreach ($requiredPath in @($mainExecutable, $proxyExecutable, $resourcesDir, $petEResourceDir)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Missing portable package input: $requiredPath"
     }
+}
+
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    throw "Node.js is required to validate the Desktop Pet E portable resources"
+}
+$packageVerifier = Join-Path $repositoryRoot "scripts/verify-pet-e-package.mjs"
+& node $packageVerifier --root $petEResourceDir
+if ($LASTEXITCODE -ne 0) {
+    throw "Desktop Pet E resource validation failed with exit code $LASTEXITCODE"
 }
 
 New-Item -ItemType Directory -Force -Path $resolvedOutputDir | Out-Null

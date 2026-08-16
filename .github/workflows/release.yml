@@ -145,6 +145,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Desktop Pet E build dependencies
+        if: matrix.platform == 'windows-latest'
+        run: npm install --prefix pet-e --ignore-scripts --no-audit --no-fund --package-lock=false
+
       - name: Test Codex app-server proxy
         if: matrix.platform == 'windows-latest'
         run: npm run test:codex-proxy:e2e
@@ -152,6 +156,10 @@ jobs:
       - name: Test Tauri dev proxy preparation
         if: matrix.platform == 'windows-latest'
         run: npm run test:tauri-dev-proxy
+
+      - name: Test Desktop Pet E package contract
+        if: matrix.platform == 'windows-latest'
+        run: node scripts/petEPackage.test.mjs
 
       - name: Download bundled SSH Agent
         uses: actions/download-artifact@v4

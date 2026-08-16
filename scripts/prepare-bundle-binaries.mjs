@@ -8,8 +8,32 @@ const targetRoot = path.join(repoRoot, "src-tauri", "target");
 const profile = process.env.TAURI_ENV_DEBUG === "true" ? "debug" : "release";
 const universalDir = path.join(targetRoot, "universal-apple-darwin", profile);
 const helperBinaryNames = ["cli-manager-daemon", "cli-manager-codex-proxy"];
+const targetPlatform = process.env.TAURI_ENV_PLATFORM ?? (process.platform === "win32" ? "windows" : process.platform === "darwin" ? "darwin" : process.platform);
 
-if (process.env.TAURI_ENV_PLATFORM !== "darwin" || process.env.TAURI_ENV_ARCH !== "universal") {
+function run(command, args, label) {
+  const result = spawnSync(command, args, {
+    cwd: repoRoot,
+    stdio: "inherit",
+    windowsHide: true,
+  });
+  if (result.error) {
+    console.error(`${label} could not start: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.status !== 0) {
+    console.error(`${label} failed with exit code ${result.status ?? "unknown"}`);
+    process.exit(result.status ?? 1);
+  }
+}
+
+if (targetPlatform === "windows" || targetPlatform === "win32") {
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  run(npmCommand, ["run", "build:pet-e"], "Desktop Pet E build");
+  run(process.execPath, ["scripts/prepare-pet-e-runtime.mjs"], "Desktop Pet E resource preparation");
+  process.exit(0);
+}
+
+if (targetPlatform !== "darwin" || process.env.TAURI_ENV_ARCH !== "universal") {
   process.exit(0);
 }
 
@@ -27,18 +51,5 @@ for (const binaryName of helperBinaryNames) {
     }
   }
 
-  const result = spawnSync("lipo", ["-create", arm64, x64, "-output", output], {
-    cwd: repoRoot,
-    stdio: "inherit",
-  });
-
-  if (result.error) {
-    console.error(`Failed to start lipo for ${binaryName}: ${result.error.message}`);
-    process.exit(1);
-  }
-
-  if (result.status !== 0) {
-    console.error(`lipo failed for ${binaryName} with exit code ${result.status ?? "unknown"}`);
-    process.exit(result.status ?? 1);
-  }
+  run("lipo", ["-create", arm64, x64, "-output", output], `lipo ${binaryName}`);
 }

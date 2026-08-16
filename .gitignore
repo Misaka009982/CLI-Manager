@@ -34,6 +34,12 @@ data/
 
 # Tauri
 src-tauri/target/
+src-tauri/resources/pet-e/runtime/
+src-tauri/resources/pet-e/app/
+src-tauri/resources/pet-e/LICENSES/
+src-tauri/resources/pet-e/NOTICE.md
+src-tauri/resources/pet-e/runtime-manifest.json
+src-tauri/resources/pet-e/package-manifest.json
 src-tauri/ssh-agent/target/
 src-tauri/history-core/target/
 src-tauri/history-core/Cargo.lock

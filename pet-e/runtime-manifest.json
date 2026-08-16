@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "runtime": "electron",
+  "version": "41.10.2",
+  "platform": "win32",
+  "arch": "x64",
+  "archive": "electron-v41.10.2-win32-x64.zip",
+  "sourceUrl": "https://github.com/electron/electron/releases/download/v41.10.2/electron-v41.10.2-win32-x64.zip",
+  "checksumUrl": "https://github.com/electron/electron/releases/download/v41.10.2/SHASUMS256.txt",
+  "sha256": "7665990f65b7d2f61671eb342b08c4b6f2e7ce302a269d56c2f3554fc8c8ce72",
+  "entry": "electron.exe"
+}

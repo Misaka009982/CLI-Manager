@@ -5,6 +5,8 @@ use crate::desktop_pet_e_bridge::{
 use crate::shell_resolver::silent_command;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(target_os = "windows")]
+use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Stdio};
@@ -20,10 +22,59 @@ use crate::process_job::ChildJob;
 const ACTION_EVENT: &str = "desktop-pet-e-action";
 const RUNTIME_STATE_EVENT: &str = "desktop-pet-e-runtime-state";
 const DIAGNOSTIC_EVENT: &str = "desktop-pet-e-event";
-const PET_E_RESOURCE_ROOT: &str = "pet-e";
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
 const ELECTRON_RUNTIME_RELATIVE_PATH: &str = "pet-e/runtime/electron.exe";
 const ELECTRON_ENTRY_RELATIVE_PATH: &str = "pet-e/app/main.js";
+#[cfg(target_os = "windows")]
+const PET_E_PACKAGE_MANIFEST_RELATIVE_PATH: &str = "pet-e/package-manifest.json";
+#[cfg(target_os = "windows")]
+const ELECTRON_RUNTIME_VERSION: &str = "41.10.2";
+#[cfg(target_os = "windows")]
+const ELECTRON_RUNTIME_ARCHIVE: &str = "electron-v41.10.2-win32-x64.zip";
+#[cfg(target_os = "windows")]
+const ELECTRON_RUNTIME_SOURCE_URL: &str =
+    "https://github.com/electron/electron/releases/download/v41.10.2/electron-v41.10.2-win32-x64.zip";
+#[cfg(target_os = "windows")]
+const ELECTRON_RUNTIME_CHECKSUM_URL: &str =
+    "https://github.com/electron/electron/releases/download/v41.10.2/SHASUMS256.txt";
+#[cfg(target_os = "windows")]
+const ELECTRON_RUNTIME_SHA256: &str =
+    "7665990f65b7d2f61671eb342b08c4b6f2e7ce302a269d56c2f3554fc8c8ce72";
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopPetERuntimeManifest {
+    schema_version: u32,
+    runtime: String,
+    version: String,
+    platform: String,
+    arch: String,
+    archive: String,
+    source_url: String,
+    checksum_url: String,
+    sha256: String,
+    entry: String,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopPetEPackageFile {
+    path: String,
+    size: u64,
+    sha256: String,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopPetEPackageManifest {
+    schema_version: u32,
+    component: String,
+    runtime: DesktopPetERuntimeManifest,
+    files: Vec<DesktopPetEPackageFile>,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -388,6 +439,64 @@ fn diagnostic(code: &str, detail: String) -> DesktopPetEDiagnostic {
     }
 }
 
+fn validate_packaged_runtime<R: Runtime>(
+    app: &AppHandle<R>,
+    runtime: &PathBuf,
+    entry: &PathBuf,
+) -> Result<(), String> {
+    if std::env::var_os("CLI_MANAGER_PET_E_RUNTIME").is_some()
+        || std::env::var_os("CLI_MANAGER_PET_E_ENTRY").is_some()
+    {
+        return Ok(());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, runtime, entry);
+        return Err("desktop_pet_e_platform_unsupported".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let manifest_path = app
+            .path()
+            .resolve(PET_E_PACKAGE_MANIFEST_RELATIVE_PATH, BaseDirectory::Resource)
+            .map_err(|error| format!("desktop_pet_e_package_manifest_resolve_failed: {error}"))?;
+        let manifest_bytes = fs::read(&manifest_path)
+            .map_err(|error| format!("desktop_pet_e_package_manifest_missing: {error}"))?;
+        let manifest: DesktopPetEPackageManifest = serde_json::from_slice(&manifest_bytes)
+            .map_err(|error| format!("desktop_pet_e_package_manifest_invalid: {error}"))?;
+        let runtime_manifest = &manifest.runtime;
+        if manifest.schema_version != 1
+            || manifest.component != "desktop-pet-e"
+            || runtime_manifest.schema_version != 1
+            || runtime_manifest.runtime != "electron"
+            || runtime_manifest.version != ELECTRON_RUNTIME_VERSION
+            || runtime_manifest.platform != "win32"
+            || runtime_manifest.arch != "x64"
+            || runtime_manifest.archive != ELECTRON_RUNTIME_ARCHIVE
+            || runtime_manifest.entry != "electron.exe"
+            || runtime_manifest.source_url != ELECTRON_RUNTIME_SOURCE_URL
+            || runtime_manifest.checksum_url != ELECTRON_RUNTIME_CHECKSUM_URL
+            || runtime_manifest.sha256 != ELECTRON_RUNTIME_SHA256
+        {
+            return Err("desktop_pet_e_package_manifest_mismatch".to_string());
+        }
+        for (relative_path, actual_path) in [
+            ("runtime/electron.exe", runtime),
+            ("app/main.js", entry),
+        ] {
+            let metadata = fs::metadata(actual_path)
+                .map_err(|error| format!("desktop_pet_e_package_file_missing:{relative_path}:{error}"))?;
+            let Some(recorded) = manifest.files.iter().find(|file| file.path == relative_path) else {
+                return Err(format!("desktop_pet_e_package_file_unlisted:{relative_path}"));
+            };
+            if recorded.size != metadata.len() || recorded.sha256.len() != 64 {
+                return Err(format!("desktop_pet_e_package_file_mismatch:{relative_path}"));
+            }
+        }
+        Ok(())
+    }
+}
+
 fn resolve_runtime_paths<R: Runtime>(app: &AppHandle<R>) -> Result<(PathBuf, PathBuf), String> {
     let runtime = std::env::var_os("CLI_MANAGER_PET_E_RUNTIME")
         .map(PathBuf::from)
@@ -417,6 +526,7 @@ fn resolve_runtime_paths<R: Runtime>(app: &AppHandle<R>) -> Result<(PathBuf, Pat
             entry.to_string_lossy()
         ));
     }
+    validate_packaged_runtime(app, &runtime, &entry)?;
     Ok((runtime, entry))
 }
 
@@ -439,7 +549,6 @@ fn start_process<R: Runtime>(
         .arg(&instance_id)
         .arg("--generation")
         .arg(generation.to_string())
-        .env("CLI_MANAGER_PET_E_RESOURCE_ROOT", PET_E_RESOURCE_ROOT)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
