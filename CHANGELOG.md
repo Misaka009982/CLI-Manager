@@ -2,6 +2,11 @@
 
 ## [TEMP] - 2026-08-11
 
+### 远程托管
+
+- 修复项目 Provider 锁定逻辑把运行时专用的 `--profile` 传给 Codex app-server、导致 cc-connect 启动探针立即失败的问题；app-server 继续使用完整 `-c` 覆盖锁定登记 Provider，普通 Codex 运行命令仍保留生成的 Provider profile。
+- 修复 Provider 密钥只注入 cc-connect 父进程、未传入 Codex Agent 子进程的问题；受管配置仅保存环境变量占位符，不落盘密钥明文。
+
 ### 文件面板路径复制与跨项目拖拽
 
 - 处理文件面板路径复制与跨项目终端拖拽需求：支持复制文件/目录的相对路径和绝对路径；从一个项目的文件面板拖拽到另一个项目的终端时使用绝对路径。（Refs #202）
