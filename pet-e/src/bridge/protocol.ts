@@ -226,6 +226,7 @@ export type DesktopPetEChildAction =
     };
 
 export interface DesktopPetEAgentEvent {
+  brokerEpoch: string;
   phase: "pending" | "submitted" | "resolved" | "failed" | "cancelled";
   sessionId: string;
   source: Exclude<DesktopPetEAgentSource, "other">;
@@ -330,7 +331,8 @@ export function isDesktopPetEAgentEvent(value: unknown): value is DesktopPetEAge
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
   if (
-    !["pending", "submitted", "resolved", "failed", "cancelled"].includes(String(candidate.phase))
+    !isBoundedString(candidate.brokerEpoch, DESKTOP_PET_E_MAX_ACTION_ID_LENGTH)
+    || !["pending", "submitted", "resolved", "failed", "cancelled"].includes(String(candidate.phase))
     || !isBoundedString(candidate.sessionId, DESKTOP_PET_E_MAX_FIELD_ID_LENGTH)
     || !["claude", "codex", "pi", "grok"].includes(String(candidate.source))
     || !isBoundedString(candidate.pendingActionId, DESKTOP_PET_E_MAX_FIELD_ID_LENGTH)

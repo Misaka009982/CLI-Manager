@@ -23,6 +23,7 @@ export function useDesktopPetEAgentCoordinator(appReady: boolean): void {
   const attachInFlightRef = useRef(new Set<string>());
   const [runtimeFailureGrace, setRuntimeFailureGrace] = useState(false);
   const applyEvent = useDesktopPetEAgentStore((state) => state.applyEvent);
+  const resetForDaemonRestart = useDesktopPetEAgentStore((state) => state.resetForDaemonRestart);
   const hasInteractivePendingActions = useDesktopPetEAgentStore((state) => (
     [...state.pendingActions.values()].some((action) => action.adapterMode === "interactive")
   ));
@@ -32,6 +33,13 @@ export function useDesktopPetEAgentCoordinator(appReady: boolean): void {
   const sessionInteractionAvailable = appReady
     && agentInteractionEnabled
     && (desktopPetEEnabled || runtimeFailureGrace || hasInteractivePendingActions);
+
+  useEffect(() => {
+    window.addEventListener("cli-manager-pty-daemon-restarted", resetForDaemonRestart);
+    return () => {
+      window.removeEventListener("cli-manager-pty-daemon-restarted", resetForDaemonRestart);
+    };
+  }, [resetForDaemonRestart]);
 
   useEffect(() => {
     if (!runtimeError) {

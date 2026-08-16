@@ -3,7 +3,7 @@ use serde_json::{json, Map, Value};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -2179,6 +2179,11 @@ fn action_adapter_mode(action: &Value) -> Option<&str> {
     action.get("adapterMode").and_then(Value::as_str)
 }
 
+fn agent_broker_epoch() -> &'static str {
+    static EPOCH: OnceLock<String> = OnceLock::new();
+    EPOCH.get_or_init(|| Uuid::new_v4().to_string()).as_str()
+}
+
 fn agent_event(
     phase: &str,
     entry: &PendingEntry,
@@ -2187,6 +2192,7 @@ fn agent_event(
 ) -> Value {
     json!({
         DESKTOP_PET_E_AGENT_MARKER: {
+            "brokerEpoch": agent_broker_epoch(),
             "phase": phase,
             "sessionId": entry.session_id,
             "source": entry.source,

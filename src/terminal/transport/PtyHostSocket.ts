@@ -188,6 +188,7 @@ export class PtyHostSocket {
   }
 
   resetAfterDaemonRestart(): void {
+    window.dispatchEvent(new Event("cli-manager-pty-daemon-restarted"));
     this.attachedSessions.clear();
     this.closedSessions.clear();
     this.cancelReconnectWhenIdle();

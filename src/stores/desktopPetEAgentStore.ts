@@ -13,7 +13,8 @@ interface ActionCursor {
   closed: boolean;
 }
 
-interface ReducedAgentState {
+export interface ReducedAgentState {
+  brokerEpoch: string | null;
   pendingActions: ReadonlyMap<string, DesktopPetEPendingAction>;
   cursors: ReadonlyMap<string, ActionCursor>;
 }
@@ -27,6 +28,7 @@ export interface DesktopPetEAgentSubmitRequest {
 
 interface DesktopPetEAgentState extends ReducedAgentState {
   applyEvent: (event: DesktopPetEAgentEvent) => void;
+  resetForDaemonRestart: () => void;
   submit: (request: DesktopPetEAgentSubmitRequest) => Promise<void>;
 }
 
@@ -45,7 +47,14 @@ function reduceAgentEvent(
   state: ReducedAgentState,
   event: DesktopPetEAgentEvent,
 ): ReducedAgentState {
-  const cursor = state.cursors.get(event.sessionId);
+  const currentState = state.brokerEpoch === event.brokerEpoch
+    ? state
+    : {
+        brokerEpoch: event.brokerEpoch,
+        pendingActions: new Map<string, DesktopPetEPendingAction>(),
+        cursors: new Map<string, ActionCursor>(),
+      };
+  const cursor = currentState.cursors.get(event.sessionId);
   const isTerminal = event.phase === "resolved" || event.phase === "cancelled";
   const actionFingerprint = agentEventFingerprint(event);
   if (
@@ -70,7 +79,7 @@ function reduceAgentEvent(
     return state;
   }
 
-  const nextCursors = new Map(state.cursors);
+  const nextCursors = new Map(currentState.cursors);
   nextCursors.set(event.sessionId, {
     pendingActionId: event.pendingAction.id,
     requestGeneration: event.pendingAction.requestGeneration,
@@ -78,7 +87,7 @@ function reduceAgentEvent(
     closed: isTerminal,
   });
 
-  const nextActions = new Map(state.pendingActions);
+  const nextActions = new Map(currentState.pendingActions);
   if (isTerminal) {
     if (nextActions.get(event.sessionId)?.id === event.pendingAction.id) {
       nextActions.delete(event.sessionId);
@@ -87,7 +96,11 @@ function reduceAgentEvent(
     nextActions.set(event.sessionId, event.pendingAction);
   }
 
-  return { pendingActions: nextActions, cursors: nextCursors };
+  return {
+    brokerEpoch: event.brokerEpoch,
+    pendingActions: nextActions,
+    cursors: nextCursors,
+  };
 }
 
 export function reduceDesktopPetEAgentEvent(
@@ -98,9 +111,15 @@ export function reduceDesktopPetEAgentEvent(
 }
 
 export const useDesktopPetEAgentStore = create<DesktopPetEAgentState>((set, get) => ({
+  brokerEpoch: null,
   pendingActions: new Map(),
   cursors: new Map(),
   applyEvent: (event) => set((current) => reduceAgentEvent(current, event)),
+  resetForDaemonRestart: () => set({
+    brokerEpoch: null,
+    pendingActions: new Map(),
+    cursors: new Map(),
+  }),
   submit: async (request) => {
     const pendingAction = [...get().pendingActions.values()]
       .find((action) => action.id === request.pendingActionId);

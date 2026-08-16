@@ -10,6 +10,7 @@ const proxy = readFileSync(new URL("../src-tauri/src/codex_app_server_proxy.rs",
 const coordinator = readFileSync(new URL("../src/hooks/useDesktopPetECoordinator.ts", import.meta.url), "utf8");
 const sessionCoordinator = readFileSync(new URL("../src/hooks/useDesktopPetEAgentCoordinator.ts", import.meta.url), "utf8");
 const sharedAgentStore = readFileSync(new URL("../src/stores/desktopPetEAgentStore.ts", import.meta.url), "utf8");
+const agentProtocol = readFileSync(new URL("../pet-e/src/bridge/protocol.ts", import.meta.url), "utf8");
 const sessionPanel = readFileSync(new URL("../src/components/terminal/DesktopPetESessionActionPanel.tsx", import.meta.url), "utf8");
 const terminalTabs = readFileSync(new URL("../src/components/TerminalTabs.tsx", import.meta.url), "utf8");
 const terminalStore = readFileSync(new URL("../src/stores/terminalStore.ts", import.meta.url), "utf8");
@@ -57,8 +58,13 @@ test("pet and owning session share pending actions without lifecycle cancellatio
   assert.match(terminalStore, /activate\?: boolean/);
   assert.match(terminalStore, /setPaneActiveSession\(paneResult\.tree, targetWorkspan\.activeSessionId\)/);
   assert.match(sharedAgentStore, /requestGeneration < cursor\.requestGeneration/);
-  assert.match(sharedAgentStore, /cursor\.closed && cursor\.pendingActionId/);
+  assert.match(sharedAgentStore, /state\.brokerEpoch === event\.brokerEpoch/);
+  assert.match(sharedAgentStore, /resetForDaemonRestart/);
+  assert.match(agentProtocol, /brokerEpoch: string/);
+  assert.match(agentProtocol, /candidate\.brokerEpoch/);
+  assert.match(sessionCoordinator, /cli-manager-pty-daemon-restarted/);
   assert.match(coordinator, /state\) => state\.pendingActions/);
+  assert.match(sharedAgentStore, /cursor\.closed && cursor\.pendingActionId/);
   assert.match(sessionPanel, /state\) => state\.submit/);
   assert.match(sessionPanel, /desktopPetE\.agentInteractionEnabled/);
   assert.match(sessionPanel, /reason="desktopPetE\.agent\.adapterUnavailable"/);
