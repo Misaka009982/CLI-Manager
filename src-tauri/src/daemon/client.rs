@@ -11,6 +11,9 @@ use super::protocol::{
     decode_daemon_frame, encode_frame, ClientFrame, DaemonFrame, ProtocolError, SessionMeta,
     MAX_FRAME_BYTES,
 };
+use crate::desktop_pet_e_agent::{
+    DESKTOP_PET_E_AGENT_EVENT, DESKTOP_PET_E_AGENT_MARKER,
+};
 use crate::pty::manager::PtyProcessStatus;
 use crate::ssh_launch::SshLaunchPlan;
 use std::collections::HashMap;
@@ -210,7 +213,11 @@ impl DaemonClient {
                 );
             }
             DaemonFrame::HookReport { payload } => {
-                let _ = app_handle.emit("claude-hook-notification", payload);
+                if let Some(event) = payload.get(DESKTOP_PET_E_AGENT_MARKER) {
+                    let _ = app_handle.emit(DESKTOP_PET_E_AGENT_EVENT, event.clone());
+                } else {
+                    let _ = app_handle.emit("claude-hook-notification", payload);
+                }
             }
             DaemonFrame::SshAgentHookGap { host_id, dropped } => {
                 let _ = app_handle.emit(

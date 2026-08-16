@@ -169,7 +169,12 @@ function taskMarkup(task: DesktopPetETask): string {
   const commandLabel = interactive
     ? label("desktopPetE.renderer.respond")
     : canOpenTask(task) ? label("desktopPetE.renderer.open") : canClearTask(task) ? label("desktopPetE.renderer.clear") : "";
-  return `<article class="task-row ${task.color}"><div class="task-copy"><strong>${escapeText(task.agentLabel)}</strong><span>${escapeText(task.title)}</span>${ended}</div>${command ? `<button type="button" data-task="${escapeText(task.id)}" data-command="${command}">${escapeText(commandLabel)}</button>` : ""}</article>`;
+  const actionDetails = [
+    task.pendingAction?.message,
+    task.pendingAction?.adapterReason ? label(task.pendingAction.adapterReason) : null,
+  ].filter((value): value is string => Boolean(value));
+  const actionDetail = actionDetails.join(" · ");
+  return `<article class="task-row ${task.color}"><div class="task-copy"><strong>${escapeText(task.agentLabel)}</strong><span>${escapeText(task.title)}</span>${actionDetail ? `<small>${escapeText(actionDetail)}</small>` : ""}${ended}</div>${command ? `<button type="button" data-task="${escapeText(task.id)}" data-command="${command}">${escapeText(commandLabel)}</button>` : ""}</article>`;
 }
 
 function toolbarMarkup(): string {
@@ -190,15 +195,16 @@ function actionPanelMarkup(): string {
   drafts.set(action.id, draft);
   const isSubmitting = action.submitting || submitting.has(action.id);
   const actionError = submissionErrors.get(action.id) ?? action.error;
-  return `<section class="action-panel" data-action="${escapeText(action.id)}"><header><strong>${escapeText(task.agentLabel)}</strong><button type="button" data-command="close-action" aria-label="${escapeText(label("desktopPetE.renderer.close"))}">×</button></header>
-    ${actionError ? `<p class="action-error">${escapeText(actionError)}</p>` : ""}
+  return `<section class="action-panel" data-action="${escapeText(action.id)}"><header><strong>${escapeText(action.title || task.agentLabel)}</strong><button type="button" data-command="close-action" aria-label="${escapeText(label("desktopPetE.renderer.close"))}">×</button></header>
+    ${action.message ? `<p>${escapeText(action.message)}</p>` : ""}
+    ${actionError ? `<p class="action-error">${escapeText(label(actionError))}</p>` : ""}
     ${action.kind === "approval" ? approvalMarkup(action, draft) : questionsMarkup(action, draft)}
     <footer><button type="button" data-command="open" data-task="${escapeText(task.id)}">${escapeText(label("desktopPetE.renderer.terminal"))}</button><button type="button" class="primary" data-command="submit" data-task="${escapeText(task.id)}" ${!isDraftComplete(action, draft) || isSubmitting ? "disabled" : ""}>${escapeText(isSubmitting ? label("desktopPetE.renderer.submitting") : actionError ? label("desktopPetE.renderer.retry") : label("desktopPetE.renderer.submit"))}</button></footer>
   </section>`;
 }
 
 function approvalMarkup(action: NonNullable<DesktopPetETask["pendingAction"]>, draft: ActionDraft): string {
-  return `<div class="approval-options">${(action.approvalChoices ?? []).map((choice) => `<label class="choice${choice.destructive ? " destructive" : ""}"><input type="radio" name="approval" value="${escapeText(choice.value)}" ${draft.approvalValue === choice.value ? "checked" : ""}/><span>${escapeText(choice.label)}</span></label>`).join("")}</div>`;
+  return `<div class="approval-options">${(action.approvalChoices ?? []).map((choice) => `<label class="choice${choice.destructive ? " destructive" : ""}"><input type="radio" name="approval" value="${escapeText(choice.value)}" ${draft.approvalValue === choice.value ? "checked" : ""}/><span>${escapeText(label(choice.label))}</span></label>`).join("")}</div>`;
 }
 
 function questionsMarkup(action: NonNullable<DesktopPetETask["pendingAction"]>, draft: ActionDraft): string {

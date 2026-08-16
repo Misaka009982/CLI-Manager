@@ -1,5 +1,8 @@
 #[cfg(target_os = "windows")]
 use crate::shell_resolver::silent_command;
+use crate::hook_client::{
+    acknowledge_desktop_pet_e_agent, request_desktop_pet_e_agent,
+};
 use crate::ssh_transport::{
     format_remote_home_path, posix_quote, validate_remote_home_path, SshOneShotOptions,
     SshTransportLaunch, SshTransportSpec,
@@ -13,6 +16,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub const HELPER_SUBCOMMAND: &str = "__codex_app_server_proxy";
@@ -33,6 +37,7 @@ pub(crate) const CODEX_REMOTE_PROVIDER_NAME: &str = "cli_manager_remote";
 const MAX_PROTOCOL_LINE_BYTES: usize = 512 * 1024 * 1024;
 const STRICT_RESUME_ERROR_CODE: i64 = -32091;
 const SSH_HANDOFF_HOOK_QUEUE_CAPACITY: usize = 32;
+const MAX_AGENT_REQUEST_WORKERS: usize = 32;
 const LOCAL_HANDOFF_DELIVERY_INSTRUCTION: &str = "CLI-Manager remote handoff: deliver output files with `cc-connect send --file <absolute-path>` and output images with `cc-connect send --image <absolute-path>`.";
 
 #[derive(Debug, Deserialize)]
@@ -298,10 +303,12 @@ fn run_proxy(child_args: &[String]) -> Result<i32, String> {
     let mut child = command
         .spawn()
         .map_err(|err| format!("start real Codex app-server failed: {err}"))?;
-    let child_stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "real Codex stdin pipe is unavailable".to_string())?;
+    let child_stdin = Arc::new(Mutex::new(
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| "real Codex stdin pipe is unavailable".to_string())?,
+    ));
     let child_stdout = child
         .stdout
         .take()
@@ -315,10 +322,12 @@ fn run_proxy(child_args: &[String]) -> Result<i32, String> {
         .as_ref()
         .and_then(|_| SshHandoffHookForwarder::from_environment(expected_thread_id.clone()));
     let remote_work_dir = ssh_launch.as_ref().map(|launch| launch.remote_path.clone());
+    let input_child_stdin = Arc::clone(&child_stdin);
+    let input_expected_thread_id = expected_thread_id.clone();
     std::thread::spawn(move || {
         if let Err(err) = forward_parent_input(
-            child_stdin,
-            expected_thread_id.as_deref(),
+            &input_child_stdin,
+            input_expected_thread_id.as_deref(),
             remote_work_dir.as_deref(),
             &input_pending,
             &input_output,
@@ -332,6 +341,8 @@ fn run_proxy(child_args: &[String]) -> Result<i32, String> {
         &pending,
         &parent_output,
         hook_forwarder.as_ref(),
+        &child_stdin,
+        expected_thread_id.as_deref(),
     ) {
         let _ = child.kill();
         let _ = child.wait();
@@ -511,8 +522,8 @@ fn codex_command(launcher: &Path, args: &[String]) -> Command {
     command
 }
 
-fn forward_parent_input(
-    mut child_stdin: impl Write,
+fn forward_parent_input<W: Write>(
+    child_stdin: &Arc<Mutex<W>>,
     expected_thread_id: Option<&str>,
     remote_work_dir: Option<&str>,
     pending: &Arc<Mutex<HashMap<String, PendingResume>>>,
@@ -539,6 +550,9 @@ fn forward_parent_input(
         };
         match action {
             ClientLineAction::Forward(line) => {
+                let mut child_stdin = child_stdin
+                    .lock()
+                    .map_err(|_| "real Codex stdin lock poisoned".to_string())?;
                 child_stdin
                     .write_all(&line)
                     .and_then(|_| child_stdin.flush())
@@ -552,18 +566,172 @@ fn forward_parent_input(
     Ok(())
 }
 
-fn forward_child_output(
-    child_stdout: impl io::Read,
+struct CodexAgentRequest {
+    open_payload: Value,
+    hook_payload: Value,
+}
+
+fn first_protocol_string<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+    })
+}
+
+fn codex_agent_request(line: &[u8], expected_thread_id: Option<&str>) -> Option<CodexAgentRequest> {
+    let message = serde_json::from_slice::<Value>(trim_line_ending(line)).ok()?;
+    let method = message.get("method").and_then(Value::as_str)?;
+    if !matches!(
+        method,
+        "item/commandExecution/requestApproval"
+            | "item/fileChange/requestApproval"
+            | "item/permissions/requestApproval"
+            | "item/tool/requestUserInput"
+            | "tool/requestUserInput"
+            | "mcpServer/elicitation/request"
+            | "applyPatchApproval"
+            | "execCommandApproval"
+    ) {
+        return None;
+    }
+    let request_id = message.get("id")?.clone();
+    if !matches!(request_id, Value::String(_) | Value::Number(_)) {
+        return None;
+    }
+    let params = message.get("params")?;
+    let session_id = first_protocol_string(
+        params,
+        &["threadId", "thread_id", "conversationId", "conversation_id"],
+    )
+    .or(expected_thread_id)?;
+    if expected_thread_id.is_some_and(|expected| expected != session_id) {
+        return None;
+    }
+    let tab_id = env::var("CLI_MANAGER_TAB_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("external:codex:{session_id}"));
+    let tool_use_id = first_protocol_string(
+        params,
+        &["itemId", "item_id", "approvalId", "approval_id", "callId", "call_id"],
+    );
+    let notification_tool_name = if matches!(method, "item/tool/requestUserInput" | "tool/requestUserInput") {
+        "request_user_input"
+    } else {
+        method
+    };
+    let hook_payload = json!({
+        "tabId": tab_id.clone(),
+        "source": "codex",
+        "event": "PermissionRequest",
+        "sessionId": session_id,
+        "toolUseId": tool_use_id,
+        "toolName": notification_tool_name,
+        "remoteEventId": uuid::Uuid::new_v4().to_string(),
+    });
+    let open_payload = json!({
+        "source": "codex",
+        "event": "PermissionRequest",
+        "protocol": "codex-app-server",
+        "tabId": tab_id,
+        "agentSessionId": session_id,
+        "toolUseId": tool_use_id,
+        "toolName": method,
+        "requestId": request_id,
+        "method": method,
+        "hookInput": message,
+    });
+    Some(CodexAgentRequest {
+        open_payload,
+        hook_payload,
+    })
+}
+
+fn handle_codex_agent_request<W: Write + Send + 'static>(
+    request: CodexAgentRequest,
+    original_line: Vec<u8>,
+    child_stdin: Arc<Mutex<W>>,
+    parent_output: Arc<Mutex<io::Stdout>>,
+) {
+    match request_desktop_pet_e_agent(&request.open_payload) {
+        Ok(Some(decision)) => {
+            let response = json_line(&decision.response);
+            let write_result = child_stdin
+                .lock()
+                .map_err(|_| "real Codex stdin lock poisoned".to_string())
+                .and_then(|mut writer| {
+                    writer
+                        .write_all(&response)
+                        .and_then(|_| writer.flush())
+                        .map_err(|error| format!("write Codex agent response failed: {error}"))
+                });
+            if let Err(error) = write_result {
+                acknowledge_desktop_pet_e_agent(&decision, false);
+                eprintln!("CLI-Manager Codex decision delivery failed: {error}");
+                return;
+            }
+            acknowledge_desktop_pet_e_agent(&decision, true);
+        }
+        Ok(None) => {
+            if let Err(error) = write_parent_line(&parent_output, &original_line) {
+                eprintln!("CLI-Manager Codex native decision fallback failed: {error}");
+            }
+        }
+        Err(error) => {
+            eprintln!("CLI-Manager Codex decision bridge unavailable: {}", error.code());
+            if let Err(write_error) = write_parent_line(&parent_output, &original_line) {
+                eprintln!("CLI-Manager Codex native decision fallback failed: {write_error}");
+            }
+        }
+    }
+}
+
+fn forward_child_output<R: io::Read, W: Write + Send + 'static>(
+    child_stdout: R,
     pending: &Arc<Mutex<HashMap<String, PendingResume>>>,
     parent_output: &Arc<Mutex<io::Stdout>>,
     hook_forwarder: Option<&SshHandoffHookForwarder>,
+    child_stdin: &Arc<Mutex<W>>,
+    expected_thread_id: Option<&str>,
 ) -> Result<(), String> {
     let mut reader = BufReader::new(child_stdout);
+    let agent_workers = Arc::new(AtomicUsize::new(0));
     while let Some(line) = read_protocol_line(&mut reader, MAX_PROTOCOL_LINE_BYTES)
         .map_err(|err| format!("read real Codex response failed: {err}"))?
     {
         if let Some(forwarder) = hook_forwarder {
             forwarder.inspect_server_line(&line);
+        }
+        if let Some(request) = codex_agent_request(&line, expected_thread_id) {
+            if hook_forwarder.is_none() {
+                let _ = crate::hook_client::try_notify_prepared_payload(&request.hook_payload);
+            }
+            if agent_workers
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                    (current < MAX_AGENT_REQUEST_WORKERS).then_some(current + 1)
+                })
+                .is_err()
+            {
+                write_parent_line(parent_output, &line)?;
+                continue;
+            }
+            let request_child_stdin = Arc::clone(child_stdin);
+            let request_parent_output = Arc::clone(parent_output);
+            let request_workers = Arc::clone(&agent_workers);
+            std::thread::spawn(move || {
+                handle_codex_agent_request(
+                    request,
+                    line,
+                    request_child_stdin,
+                    request_parent_output,
+                );
+                request_workers.fetch_sub(1, Ordering::AcqRel);
+            });
+            continue;
         }
         let transformed = {
             let mut pending = pending
@@ -704,13 +872,11 @@ fn ssh_handoff_hook_payload(
     let message = serde_json::from_slice::<Value>(trim_line_ending(line)).ok()?;
     let method = message.get("method").and_then(Value::as_str)?;
     let params = message.get("params").and_then(Value::as_object)?;
-    let session_id = params
-        .get("threadId")
-        .or_else(|| params.get("conversationId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or(expected_thread_id)?;
+    let session_id = first_protocol_string(
+        params,
+        &["threadId", "thread_id", "conversationId", "conversation_id"],
+    )
+    .or(expected_thread_id)?;
     if expected_thread_id.is_some_and(|expected| session_id != expected) {
         return None;
     }
@@ -739,15 +905,16 @@ fn ssh_handoff_hook_payload(
         | "item/fileChange/requestApproval"
         | "item/permissions/requestApproval"
         | "item/tool/requestUserInput"
+        | "tool/requestUserInput"
         | "mcpServer/elicitation/request"
         | "applyPatchApproval"
         | "execCommandApproval" => "PermissionRequest",
         _ => return None,
     };
-    let tool_use_id = params
-        .get("itemId")
-        .or_else(|| params.get("approvalId"))
-        .and_then(Value::as_str);
+    let tool_use_id = first_protocol_string(
+        params,
+        &["itemId", "item_id", "approvalId", "approval_id", "callId", "call_id"],
+    );
     Some(json!({
         "tabId": tab_id,
         "source": "codex",

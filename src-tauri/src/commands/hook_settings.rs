@@ -25,10 +25,11 @@ const HOOK_COMMAND_MARKER: &str = "__hook";
 const CODEX_COMMON_CONFIG_HOOKS_MARKER: &str = "# CLI-Manager hook protection";
 const CCSWITCH_COMMON_CONFIG_CLAUDE_KEY: &str = "common_config_claude";
 const CCSWITCH_COMMON_CONFIG_CODEX_KEY: &str = "common_config_codex";
-const CLAUDE_HOOK_EVENTS: [&str; 9] = [
+const CLAUDE_HOOK_EVENTS: [&str; 10] = [
     "SessionStart",
     "UserPromptSubmit",
     "Notification",
+    "PermissionRequest",
     "Stop",
     "StopFailure",
     "SubagentStart",
@@ -908,11 +909,19 @@ fn apply_claude_hook_module(settings: &mut Value, exe: &str, module: ClaudeHookM
             build_command(exe, "claude", "UserPromptSubmit"),
         ),
         ClaudeHookModule::Attention => {
+            remove_named_hook_command(settings, "PermissionRequest", "claude", "PermissionRequest");
             add_hook_command_with_matcher(
                 settings,
                 "Notification",
                 "permission_prompt|idle_prompt",
                 build_command(exe, "claude", "Notification"),
+            );
+            add_hook_command_with_timeout(
+                settings,
+                "PermissionRequest",
+                "",
+                build_command(exe, "claude", "PermissionRequest"),
+                600,
             );
             remove_named_hook_command(settings, "PreToolUse", "claude", "Notification");
             add_hook_command_with_matcher(
@@ -976,7 +985,11 @@ fn remove_claude_hook_module(settings: &mut Value, module: ClaudeHookModule) {
             remove_hook_commands(settings, &["UserPromptSubmit"], &CLAUDE_LEGACY_SCRIPTS)
         }
         ClaudeHookModule::Attention => {
-            remove_hook_commands(settings, &["Notification"], &CLAUDE_LEGACY_SCRIPTS);
+            remove_hook_commands(
+                settings,
+                &["Notification", "PermissionRequest"],
+                &CLAUDE_LEGACY_SCRIPTS,
+            );
             remove_named_hook_command(settings, "PreToolUse", "claude", "Notification");
         }
         ClaudeHookModule::Stop => remove_hook_commands(settings, &["Stop"], &CLAUDE_LEGACY_SCRIPTS),
@@ -1004,10 +1017,13 @@ fn apply_codex_hook_module(settings: &mut Value, exe: &str, module: CodexHookMod
             build_command(exe, "codex", "UserPromptSubmit"),
         ),
         CodexHookModule::Attention => {
-            add_hook_command(
+            remove_named_hook_command(settings, "PermissionRequest", "codex", "PermissionRequest");
+            add_hook_command_with_timeout(
                 settings,
                 "PermissionRequest",
+                "",
                 build_command(exe, "codex", "PermissionRequest"),
+                600,
             );
             remove_named_hook_command(settings, "PreToolUse", "codex", "Notification");
             add_hook_command_with_matcher(
@@ -1260,6 +1276,10 @@ fn common_config_has_hooks(
                 &settings,
                 "Notification",
                 &build_command(exe, "claude", "Notification"),
+            ) && exact_command_registered(
+                &settings,
+                "PermissionRequest",
+                &build_command(exe, "claude", "PermissionRequest"),
             ) && exact_command_with_matcher_registered(
                 &settings,
                 "PreToolUse",
@@ -1880,6 +1900,7 @@ fn install_claude_hooks(claude_dir: &Path) -> Result<(), String> {
             "SessionStart",
             "UserPromptSubmit",
             "Notification",
+            "PermissionRequest",
             "Stop",
             "StopFailure",
             "SubagentStart",
@@ -1919,6 +1940,7 @@ fn uninstall_claude_hooks(claude_dir: &Path) -> Result<(), String> {
             "SessionStart",
             "UserPromptSubmit",
             "Notification",
+            "PermissionRequest",
             "Stop",
             "StopFailure",
             "SubagentStart",
@@ -3098,114 +3120,37 @@ fn pi_module_marker(module: PiHookModule) -> &'static str {
 }
 
 fn pi_extension_source(modules: &[PiHookModule]) -> String {
-    let session_start = modules
-        .iter()
-        .any(|module| matches!(module, PiHookModule::SessionStart));
-    let running = modules
-        .iter()
-        .any(|module| matches!(module, PiHookModule::Running));
-    let stop = modules
-        .iter()
-        .any(|module| matches!(module, PiHookModule::Stop));
-
-    let mut source = format!(
-        r#"// {marker}
-// Managed by CLI-Manager. Do not edit manually; reinstall from Hook settings.
-// Bridges Pi Agent lifecycle events into CLI-Manager tab notifications / live stats.
-
-import type {{ ExtensionAPI }} from "@earendil-works/pi-coding-agent";
-
-const MARKER = "{marker}";
-const ENABLED = {{
-  sessionStart: {session_start},
-  running: {running},
-  stop: {stop},
-}};
-
-type NotifyEvent = "SessionStart" | "UserPromptSubmit" | "Stop";
-
-function nonEmpty(value: string | undefined | null): string | null {{
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}}
-
-async function postHookEvent(event: NotifyEvent, sessionId: string | null, message?: string | null) {{
-  const tabId = nonEmpty(process.env.CLI_MANAGER_TAB_ID);
-  const port = nonEmpty(process.env.CLI_MANAGER_NOTIFY_PORT);
-  const token = nonEmpty(process.env.CLI_MANAGER_NOTIFY_TOKEN);
-  if (!tabId || !port || !token) return;
-
-  const payload = {{
-    tabId,
-    source: "pi",
-    event,
-    title: titleFor(event),
-    message: message ?? null,
-    sessionId,
-    cwd: process.cwd(),
-    timestamp: new Date().toISOString(),
-  }};
-
-  try {{
-    await fetch(`http://127.0.0.1:${{port}}/api/claude-hook`, {{
-      method: "POST",
-      headers: {{
-        Authorization: `Bearer ${{token}}`,
-        "Content-Type": "application/json",
-      }},
-      body: JSON.stringify(payload),
-    }});
-  }} catch {{
-    // Hook bridge failures must never interrupt Pi.
-  }}
-}}
-
-function titleFor(event: NotifyEvent): string {{
-  switch (event) {{
-    case "SessionStart":
-      return "Pi Agent session started";
-    case "UserPromptSubmit":
-      return "Pi Agent running";
-    case "Stop":
-      return "Pi Agent done";
-  }}
-}}
-
-function readSessionId(ctx: {{ sessionManager?: {{ getSessionId?: () => string | undefined }} }}): string | null {{
-  try {{
-    return nonEmpty(ctx.sessionManager?.getSessionId?.() ?? null);
-  }} catch {{
-    return null;
-  }}
-}}
-
-export default function (pi: ExtensionAPI) {{
-  if (ENABLED.sessionStart) {{
-    pi.on("session_start", async (_event, ctx) => {{
-      await postHookEvent("SessionStart", readSessionId(ctx));
-    }});
-  }}
-
-  if (ENABLED.running) {{
-    pi.on("agent_start", async (_event, ctx) => {{
-      await postHookEvent("UserPromptSubmit", readSessionId(ctx));
-    }});
-  }}
-
-  if (ENABLED.stop) {{
-    pi.on("agent_settled", async (_event, ctx) => {{
-      await postHookEvent("Stop", readSessionId(ctx));
-    }});
-  }}
-
-  void MARKER;
-}}
-"#,
-        marker = PI_EXTENSION_MARKER,
-        session_start = if session_start { "true" } else { "false" },
-        running = if running { "true" } else { "false" },
-        stop = if stop { "true" } else { "false" },
-    );
+    let enabled = |target: PiHookModule| {
+        modules
+            .iter()
+            .any(|module| std::mem::discriminant(module) == std::mem::discriminant(&target))
+    };
+    let mut source = include_str!("../pi_extension_template.ts")
+        .replace("__PI_MARKER__", PI_EXTENSION_MARKER)
+        .replace(
+            "__PI_SESSION_START__",
+            if enabled(PiHookModule::SessionStart) {
+                "true"
+            } else {
+                "false"
+            },
+        )
+        .replace(
+            "__PI_RUNNING__",
+            if enabled(PiHookModule::Running) {
+                "true"
+            } else {
+                "false"
+            },
+        )
+        .replace(
+            "__PI_STOP__",
+            if enabled(PiHookModule::Stop) {
+                "true"
+            } else {
+                "false"
+            },
+        );
 
     for module in modules {
         source.push_str(&format!("// {}\n", pi_module_marker(*module)));
@@ -3472,6 +3417,7 @@ fn build_claude_status(claude_dir: Option<PathBuf>) -> Result<ToolHookSettingsSt
         session_start_hook_installed: registered("SessionStart"),
         running_hook_installed: registered("UserPromptSubmit"),
         attention_hook_installed: registered("Notification")
+            && registered("PermissionRequest")
             && registered_exact_command_with_matcher(
                 &settings,
                 exe.as_deref(),
@@ -3799,6 +3745,61 @@ fn write_json(path: &Path, settings: &Value) -> Result<(), String> {
 
 fn add_hook_command(settings: &mut Value, event: &str, command: String) {
     add_hook_command_with_matcher(settings, event, "", command);
+}
+
+fn add_hook_command_with_timeout(
+    settings: &mut Value,
+    event: &str,
+    matcher: &str,
+    command: String,
+    timeout: u64,
+) {
+    let root = ensure_object(settings);
+    let hooks = ensure_child_object(root, "hooks");
+    let event_value = hooks
+        .entry(event.to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !event_value.is_array() {
+        *event_value = Value::Array(Vec::new());
+    }
+    if let Value::Array(entries) = event_value {
+        for entry in entries.iter_mut() {
+            let has_command = entry
+                .get("hooks")
+                .and_then(Value::as_array)
+                .is_some_and(|hooks| {
+                    hooks.iter().any(|hook| {
+                        hook.get("command").and_then(Value::as_str) == Some(command.as_str())
+                    })
+                });
+            if !has_command {
+                continue;
+            }
+            let Some(entry_object) = entry.as_object_mut() else {
+                continue;
+            };
+            if let Some(hooks) = entry_object.get_mut("hooks").and_then(Value::as_array_mut) {
+                for hook in hooks {
+                    if hook.get("command").and_then(Value::as_str) == Some(command.as_str()) {
+                        if let Some(hook_object) = hook.as_object_mut() {
+                            hook_object.insert("timeout".to_string(), Value::Number(timeout.into()));
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        entries.push(json!({
+            "matcher": matcher,
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": command,
+                    "timeout": timeout
+                }
+            ]
+        }));
+    }
 }
 
 fn add_hook_command_with_matcher(

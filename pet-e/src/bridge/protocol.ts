@@ -3,6 +3,7 @@ export const DESKTOP_PET_E_MAX_LINE_BYTES = 1024 * 1024;
 export const DESKTOP_PET_E_EVENT = "desktop-pet-e-event";
 export const DESKTOP_PET_E_ACTION_EVENT = "desktop-pet-e-action";
 export const DESKTOP_PET_E_RUNTIME_STATE_EVENT = "desktop-pet-e-runtime-state";
+export const DESKTOP_PET_E_AGENT_EVENT = "desktop-pet-e-agent";
 export const DESKTOP_PET_E_PETS_CHANGED_EVENT = "desktop-pet-e-pets-changed";
 export const DESKTOP_PET_E_MAX_ACTION_ID_LENGTH = 160;
 export const DESKTOP_PET_E_MAX_FIELD_ID_LENGTH = 512;
@@ -84,6 +85,8 @@ export interface DesktopPetEApprovalChoice {
 export interface DesktopPetEPendingAction {
   id: string;
   kind: DesktopPetEActionKind;
+  title?: string | null;
+  message?: string | null;
   requestGeneration: number;
   adapterMode: DesktopPetEAdapterMode;
   adapterReason?: string | null;
@@ -222,6 +225,16 @@ export type DesktopPetEChildAction =
       position: DesktopPetEPosition;
     };
 
+export interface DesktopPetEAgentEvent {
+  phase: "pending" | "submitted" | "resolved" | "failed" | "cancelled";
+  sessionId: string;
+  source: Exclude<DesktopPetEAgentSource, "other">;
+  pendingActionId: string;
+  transportActionId?: string | null;
+  pendingAction: DesktopPetEPendingAction;
+  error?: string | null;
+}
+
 export interface DesktopPetEActionResult {
   actionId: string;
   accepted: boolean;
@@ -311,6 +324,31 @@ function normalizePetId(value: unknown, fallback: string | null): string | null 
   if (typeof value !== "string") return fallback;
   const normalized = value.trim();
   return normalized.length > 0 && normalized.length <= 160 ? normalized : fallback;
+}
+
+export function isDesktopPetEAgentEvent(value: unknown): value is DesktopPetEAgentEvent {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  if (
+    !["pending", "submitted", "resolved", "failed", "cancelled"].includes(String(candidate.phase))
+    || !isBoundedString(candidate.sessionId, DESKTOP_PET_E_MAX_FIELD_ID_LENGTH)
+    || !["claude", "codex", "pi", "grok"].includes(String(candidate.source))
+    || !isBoundedString(candidate.pendingActionId, DESKTOP_PET_E_MAX_FIELD_ID_LENGTH)
+    || (candidate.transportActionId !== undefined
+      && candidate.transportActionId !== null
+      && !isBoundedString(candidate.transportActionId, DESKTOP_PET_E_MAX_ACTION_ID_LENGTH))
+  ) {
+    return false;
+  }
+  const action = candidate.pendingAction;
+  if (!action || typeof action !== "object") return false;
+  const pendingAction = action as Record<string, unknown>;
+  return pendingAction.id === candidate.pendingActionId
+    && ["question", "questionnaire", "approval"].includes(String(pendingAction.kind))
+    && Number.isSafeInteger(pendingAction.requestGeneration)
+    && (pendingAction.requestGeneration as number) >= 0
+    && ["interactive", "jump-only", "unavailable"].includes(String(pendingAction.adapterMode))
+    && typeof pendingAction.submitting === "boolean";
 }
 
 export function isDesktopPetEChildAction(value: unknown): value is DesktopPetEChildAction {

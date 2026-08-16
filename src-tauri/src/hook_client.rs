@@ -23,10 +23,45 @@ const NOTIFY_RETRY_DELAY: Duration = Duration::from_millis(80);
 /// `main` 在初始化 Tauri runtime 之前调用本函数并退出，因此这里
 /// 不依赖任何 Tauri/WebView 状态，冷启动开销极小。
 pub fn run_and_exit(source: &str, event: &str) -> ! {
-    if let Err(err) = try_notify(source, event) {
+    let result = read_hook_input().and_then(|hook_input| {
+        if is_interactive_event(source, event, &hook_input) {
+            match try_interactive_decision(source, event, hook_input)? {
+                Some(decision) => {
+                    let mut output = serde_json::to_vec(&decision.response)
+                        .map_err(|_| HookNotifyError::PayloadSerialize)?;
+                    output.push(b'\n');
+                    let delivered = {
+                        let stdout = std::io::stdout();
+                        let mut stdout = stdout.lock();
+                        stdout
+                            .write_all(&output)
+                            .and_then(|_| stdout.flush())
+                            .is_ok()
+                    };
+                    acknowledge_desktop_pet_e_agent(&decision, delivered);
+                    if !delivered {
+                        return Err(HookNotifyError::BridgeWrite);
+                    }
+                }
+                None => {}
+            }
+            Ok(())
+        } else {
+            try_notify_input(source, event, hook_input)
+        }
+    });
+    if let Err(err) = result {
         write_failure_diagnostic(source, event, err.code());
     }
     exit(0);
+}
+
+fn read_hook_input() -> Result<Value, HookNotifyError> {
+    let mut stdin_raw = String::new();
+    std::io::stdin()
+        .read_to_string(&mut stdin_raw)
+        .map_err(|_| HookNotifyError::StdinRead)?;
+    serde_json::from_str(stdin_raw.trim()).map_err(|_| HookNotifyError::InvalidInput)
 }
 
 pub(crate) fn try_notify_prepared_payload(payload: &Value) -> bool {
@@ -47,7 +82,7 @@ pub(crate) fn try_notify_prepared_payload(payload: &Value) -> bool {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum HookNotifyError {
+pub(crate) enum HookNotifyError {
     MissingPort,
     MissingToken,
     StdinRead,
@@ -61,7 +96,7 @@ enum HookNotifyError {
 }
 
 impl HookNotifyError {
-    fn code(self) -> &'static str {
+    pub(crate) fn code(self) -> &'static str {
         match self {
             Self::MissingPort => "missing_port",
             Self::MissingToken => "missing_token",
@@ -77,20 +112,259 @@ impl HookNotifyError {
     }
 }
 
-fn try_notify(source: &str, event: &str) -> Result<(), HookNotifyError> {
-    let tab_id =
-        non_empty_env("CLI_MANAGER_TAB_ID").unwrap_or_else(|| format!("external:{source}"));
+pub(crate) struct InteractiveDecision {
+    pub(crate) response: Value,
+    pub(crate) pending_action_id: String,
+    pub(crate) transport_action_id: String,
+}
 
-    let mut stdin_raw = String::new();
-    std::io::stdin()
-        .read_to_string(&mut stdin_raw)
-        .map_err(|_| HookNotifyError::StdinRead)?;
-    let hook_input: Value =
-        serde_json::from_str(stdin_raw.trim()).map_err(|_| HookNotifyError::InvalidInput)?;
+pub(crate) fn acknowledge_desktop_pet_e_agent(decision: &InteractiveDecision, success: bool) {
+    let payload = json!({
+        "pendingActionId": decision.pending_action_id,
+        "transportActionId": decision.transport_action_id,
+        "success": success,
+    });
+    for attempt in 0..NOTIFY_ATTEMPTS {
+        for target in resolve_notify_targets() {
+            if post_json(
+                &target.port,
+                &target.token,
+                "/api/desktop-pet-e-agent/ack",
+                &payload,
+                Duration::from_secs(3),
+            )
+            .is_ok()
+            {
+                return;
+            }
+        }
+        if attempt + 1 < NOTIFY_ATTEMPTS {
+            thread::sleep(NOTIFY_RETRY_DELAY);
+        }
+    }
+}
+
+fn is_interactive_event(source: &str, event: &str, _hook_input: &Value) -> bool {
+    event == "PermissionRequest" && matches!(source, "claude" | "codex" | "grok")
+}
+
+fn is_question_event(source: &str, event: &str, hook_input: &Value) -> bool {
+    if !matches!(event, "PreToolUse" | "Notification") {
+        return false;
+    }
+    let tool_name = hook_input
+        .get("tool_name")
+        .or_else(|| hook_input.get("toolName"))
+        .or_else(|| hook_input.get("tool_input").and_then(|value| value.get("name")))
+        .and_then(Value::as_str);
+    matches!(
+        (source, tool_name),
+        ("claude", Some("AskUserQuestion")) | ("codex", Some("request_user_input"))
+    )
+}
+
+fn cancel_desktop_pet_e_agent(
+    target: &NotifyTarget,
+    pending_action_id: &str,
+    reason: &str,
+) {
+    let _ = post_json(
+        &target.port,
+        &target.token,
+        "/api/desktop-pet-e-agent/cancel",
+        &json!({
+            "pendingActionId": pending_action_id,
+            "reason": reason,
+        }),
+        Duration::from_secs(3),
+    );
+}
+
+pub(crate) fn request_desktop_pet_e_agent(
+    open_payload: &Value,
+) -> Result<Option<InteractiveDecision>, HookNotifyError> {
+    let targets = resolve_notify_targets();
+    if targets.is_empty() {
+        return Ok(None);
+    }
+    for target in targets {
+        let opened = match post_json(
+            &target.port,
+            &target.token,
+            "/api/desktop-pet-e-agent/open",
+            open_payload,
+            Duration::from_secs(3),
+        ) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let status = opened.get("status").and_then(Value::as_str).unwrap_or_default();
+        if status == "resolved" {
+            let pending_action_id = opened
+                .get("pendingActionId")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or(HookNotifyError::BridgeResponse)?;
+            let response = opened
+                .get("response")
+                .cloned()
+                .ok_or(HookNotifyError::BridgeResponse)?;
+            let transport_action_id = opened
+                .get("transportActionId")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or(HookNotifyError::BridgeResponse)?;
+            return Ok(Some(InteractiveDecision {
+                response,
+                pending_action_id,
+                transport_action_id,
+            }));
+        }
+        let pending_action_id = opened
+            .get("pendingActionId")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or(HookNotifyError::BridgeResponse)?;
+        if status != "pending" {
+            let pending_action = opened.get("pendingAction");
+            let keep_jump_only = pending_action
+                .and_then(|action| action.get("adapterMode"))
+                .and_then(Value::as_str)
+                == Some("jump-only")
+                && matches!(
+                    pending_action
+                        .and_then(|action| action.get("adapterReason"))
+                        .and_then(Value::as_str),
+                    Some(
+                        "desktopPetE.agent.notificationOnly"
+                            | "desktopPetE.agent.requestUnsupported"
+                            | "desktopPetE.agent.grokJumpOnly"
+                    )
+                );
+            if !keep_jump_only {
+                cancel_desktop_pet_e_agent(&target, &pending_action_id, "agent-unavailable");
+            }
+            return Ok(None);
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(590);
+        loop {
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .unwrap_or_default();
+            if remaining.is_zero() {
+                cancel_desktop_pet_e_agent(&target, &pending_action_id, "agent-timeout");
+                return Ok(None);
+            }
+            let poll = match post_json(
+                &target.port,
+                &target.token,
+                "/api/desktop-pet-e-agent/poll",
+                &json!({
+                    "pendingActionId": pending_action_id,
+                    "waitMs": remaining.as_millis().clamp(1, 590_000),
+                }),
+                remaining + Duration::from_secs(2),
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    cancel_desktop_pet_e_agent(
+                        &target,
+                        &pending_action_id,
+                        "agent-poll-failed",
+                    );
+                    return Err(error);
+                }
+            };
+            match poll.get("status").and_then(Value::as_str).unwrap_or_default() {
+                "resolved" => {
+                    let response = poll
+                        .get("response")
+                        .cloned()
+                        .ok_or(HookNotifyError::BridgeResponse)?;
+                    let transport_action_id = poll
+                        .get("transportActionId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .ok_or(HookNotifyError::BridgeResponse)?;
+                    return Ok(Some(InteractiveDecision {
+                        response,
+                        pending_action_id,
+                        transport_action_id,
+                    }));
+                }
+                "pending" => continue,
+                "cancelled" | "expired" | "unavailable" => return Ok(None),
+                _ => {
+                    cancel_desktop_pet_e_agent(
+                        &target,
+                        &pending_action_id,
+                        "agent-response-invalid",
+                    );
+                    return Err(HookNotifyError::BridgeResponse);
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn try_interactive_decision(
+    source: &str,
+    event: &str,
+    mut hook_input: Value,
+) -> Result<Option<InteractiveDecision>, HookNotifyError> {
+    if should_suppress_codex_permission_request(source, event, &hook_input) {
+        return Ok(None);
+    }
+    if source == "grok" {
+        let _ = try_notify_input(source, event, hook_input);
+        return Ok(None);
+    }
+    let request_id = hook_input
+        .get("request_id")
+        .or_else(|| hook_input.get("requestId"))
+        .cloned()
+        .or_else(|| {
+            let value = Value::String(Uuid::new_v4().to_string());
+            hook_input
+                .as_object_mut()
+                .map(|object| object.insert("request_id".to_string(), value.clone()));
+            Some(value)
+        });
+    let normalized =
+        normalize_hook_input(event, &hook_input).ok_or(HookNotifyError::UnsupportedPayload)?;
+    let tab_id = non_empty_env("CLI_MANAGER_TAB_ID").unwrap_or_else(|| format!("external:{source}"));
+    let tab_id = if tab_id.starts_with("external:") {
+        normalized
+            .session_id
+            .as_deref()
+            .map(|session| format!("external:{source}:{session}"))
+            .unwrap_or(tab_id)
+    } else {
+        tab_id
+    };
+    let protocol = if source == "codex" { "codex-hook" } else { "claude-hook" };
+    let open_payload = json!({
+        "source": source,
+        "event": event,
+        "protocol": protocol,
+        "tabId": tab_id,
+        "agentSessionId": normalized.session_id,
+        "toolUseId": normalized.tool_use_id,
+        "toolName": normalized.tool_name,
+        "requestId": request_id,
+        "hookInput": hook_input.clone(),
+    });
+    let _ = try_notify_input(source, event, hook_input);
+    request_desktop_pet_e_agent(&open_payload)
+}
+
+fn try_notify_input(source: &str, event: &str, hook_input: Value) -> Result<(), HookNotifyError> {
     if should_suppress_codex_permission_request(source, event, &hook_input) {
         return Ok(());
     }
-
+    let tab_id =
+        non_empty_env("CLI_MANAGER_TAB_ID").unwrap_or_else(|| format!("external:{source}"));
     let normalized =
         normalize_hook_input(event, &hook_input).ok_or(HookNotifyError::UnsupportedPayload)?;
     // Prefer explicit env tab id; if external, include session id for uniqueness.
@@ -113,7 +387,7 @@ fn try_notify(source: &str, event: &str) -> Result<(), HookNotifyError> {
         .map(|path| path.to_string_lossy().to_string());
 
     // 字段名为 camelCase，对应 claude_hook::ClaudeHookRequest 的 serde(rename_all = "camelCase")。
-    let payload = json!({
+    let mut payload = json!({
         "tabId": tab_id,
         "source": source,
         "event": event,
@@ -135,6 +409,13 @@ fn try_notify(source: &str, event: &str) -> Result<(), HookNotifyError> {
         // 同一次 Hook 进程内的重试复用该 ID，daemon 可幂等去重。
         "remoteEventId": Uuid::new_v4().to_string(),
     });
+    if is_interactive_event(source, event, &hook_input)
+        || is_question_event(source, event, &hook_input)
+    {
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("hookInput".to_string(), hook_input.clone());
+        }
+    }
     let body = serde_json::to_vec(&payload).map_err(|_| HookNotifyError::PayloadSerialize)?;
 
     let mut last_error = if non_empty_env("CLI_MANAGER_NOTIFY_PORT").is_some() {
@@ -244,6 +525,56 @@ fn post(port: &str, token: &str, body: &[u8]) -> Result<(), HookNotifyError> {
     Ok(())
 }
 
+fn post_json(
+    port: &str,
+    token: &str,
+    path: &str,
+    payload: &Value,
+    read_timeout: Duration,
+) -> Result<Value, HookNotifyError> {
+    let port: u16 = port.parse().map_err(|_| HookNotifyError::InvalidPort)?;
+    let body = serde_json::to_vec(payload).map_err(|_| HookNotifyError::PayloadSerialize)?;
+    if body.len() > 1024 * 1024 {
+        return Err(HookNotifyError::PayloadSerialize);
+    }
+    let mut stream =
+        TcpStream::connect(("127.0.0.1", port)).map_err(|_| HookNotifyError::BridgeConnect)?;
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_read_timeout(Some(read_timeout));
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream
+        .write_all(head.as_bytes())
+        .and_then(|_| stream.write_all(&body))
+        .and_then(|_| stream.flush())
+        .map_err(|_| HookNotifyError::BridgeWrite)?;
+    let mut response = Vec::new();
+    stream
+        .take((1024 * 1024 + 16 * 1024 + 1) as u64)
+        .read_to_end(&mut response)
+        .map_err(|_| HookNotifyError::BridgeResponse)?;
+    if response.len() > 1024 * 1024 + 16 * 1024 {
+        return Err(HookNotifyError::BridgeResponse);
+    }
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or(HookNotifyError::BridgeResponse)?;
+    let header = std::str::from_utf8(&response[..header_end])
+        .map_err(|_| HookNotifyError::BridgeResponse)?;
+    let status_line = header.lines().next().unwrap_or_default();
+    if !status_line.starts_with("HTTP/1.1 2") && !status_line.starts_with("HTTP/1.0 2") {
+        return Err(HookNotifyError::BridgeResponse);
+    }
+    let response_body = &response[header_end + 4..];
+    if response_body.is_empty() {
+        return Ok(json!({ "status": "accepted" }));
+    }
+    serde_json::from_slice(response_body).map_err(|_| HookNotifyError::BridgeResponse)
+}
+
 fn write_failure_diagnostic(source: &str, event: &str, code: &str) {
     let Ok(log_dir) = crate::app_paths::logs_dir() else {
         return;
@@ -295,6 +626,7 @@ fn diagnostic_event(value: &str) -> &'static str {
         "SessionStart" => "SessionStart",
         "UserPromptSubmit" => "UserPromptSubmit",
         "Notification" => "Notification",
+        "PreToolUse" => "PreToolUse",
         "PermissionRequest" => "PermissionRequest",
         "Stop" => "Stop",
         "StopFailure" => "StopFailure",

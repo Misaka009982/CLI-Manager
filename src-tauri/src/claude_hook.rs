@@ -1,5 +1,6 @@
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -7,10 +8,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crate::desktop_pet_e_agent::{
+    DesktopPetEAgentBroker, DesktopPetEAgentHttpResponse, DESKTOP_PET_E_AGENT_MAX_BODY_BYTES,
+};
 use crate::third_party_notification::HookNotificationJob;
 
 const REQUEST_PATH: &str = "/api/claude-hook";
-const MAX_BODY_BYTES: usize = 64 * 1024;
+const HOOK_MAX_BODY_BYTES: usize = 64 * 1024;
+const MAX_BODY_BYTES: usize = DESKTOP_PET_E_AGENT_MAX_BODY_BYTES;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const RECENT_HOOK_EVENT_LIMIT: usize = 1024;
 const CLAUDE_QUESTION_TOOL_NAME: &str = "AskUserQuestion";
@@ -75,6 +80,8 @@ struct ClaudeHookRequest {
     remote_agent_transcript_ref: Option<String>,
     remote_event_id: Option<String>,
     remote_sequence: Option<u64>,
+    #[serde(default)]
+    hook_input: Option<Value>,
 }
 
 #[derive(Clone, Serialize)]
@@ -115,7 +122,7 @@ impl ClaudeHookPayload {
 
     pub fn requires_user_response(&self) -> bool {
         self.event == "PermissionRequest"
-            || (self.event == "Notification"
+            || (matches!(self.event.as_str(), "PreToolUse" | "Notification")
                 && matches!(
                     (self.source.as_str(), self.tool_name.as_deref()),
                     ("claude", Some(CLAUDE_QUESTION_TOOL_NAME))
@@ -143,7 +150,12 @@ impl ClaudeHookPayload {
 
 /// 在给定 listener 上跑 hook HTTP 服务：解析/鉴权/校验后把 payload 交给 sink。
 /// daemon 与主进程共用（Issue #123 Phase 2）。
-pub fn spawn_hook_listener(listener: TcpListener, token: String, sink: HookPayloadSink) {
+pub fn spawn_hook_listener(
+    listener: TcpListener,
+    token: String,
+    sink: HookPayloadSink,
+    agent_broker: DesktopPetEAgentBroker,
+) {
     let recent_events = Arc::new(Mutex::new(RecentHookEvents::default()));
     thread::spawn(move || {
         for stream in listener.incoming() {
@@ -152,7 +164,10 @@ pub fn spawn_hook_listener(listener: TcpListener, token: String, sink: HookPaylo
                     let token = token.clone();
                     let sink = Arc::clone(&sink);
                     let recent_events = Arc::clone(&recent_events);
-                    thread::spawn(move || handle_stream(stream, sink, &token, recent_events));
+                    let agent_broker = agent_broker.clone();
+                    thread::spawn(move || {
+                        handle_stream(stream, sink, &token, recent_events, agent_broker)
+                    });
                 }
                 Err(err) => warn!("cli hook bridge accept failed: {}", err),
             }
@@ -165,6 +180,7 @@ fn handle_stream(
     sink: HookPayloadSink,
     token: &str,
     recent_events: Arc<Mutex<RecentHookEvents>>,
+    agent_broker: DesktopPetEAgentBroker,
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let request = match read_request(&mut stream) {
@@ -175,7 +191,9 @@ fn handle_stream(
         }
     };
 
-    if request.method != "POST" || request.path != REQUEST_PATH {
+    if request.method != "POST"
+        || (request.path != REQUEST_PATH && !DesktopPetEAgentBroker::is_agent_path(&request.path))
+    {
         write_response(&mut stream, "404 Not Found", "not found");
         return;
     }
@@ -188,6 +206,16 @@ fn handle_stream(
         != Some(expected_auth.as_str())
     {
         write_response(&mut stream, "401 Unauthorized", "unauthorized");
+        return;
+    }
+
+    if DesktopPetEAgentBroker::is_agent_path(&request.path) {
+        let response = agent_broker.handle_http(&request.path, &request.body);
+        write_agent_response(&mut stream, response);
+        return;
+    }
+    if request.body.len() > HOOK_MAX_BODY_BYTES {
+        write_response(&mut stream, "413 Payload Too Large", "payload too large");
         return;
     }
 
@@ -215,6 +243,49 @@ fn handle_stream(
     }
 
     log_hook_payload_diagnostic(&payload);
+
+    if let Some(hook_input) = payload.hook_input.clone() {
+        let source = normalize_source(payload.source.as_deref());
+        let question_event = matches!(payload.event.as_str(), "PreToolUse" | "Notification")
+            && matches!(
+                (source, payload.tool_name.as_deref()),
+                ("claude", Some(CLAUDE_QUESTION_TOOL_NAME))
+                    | ("codex", Some(CODEX_QUESTION_TOOL_NAME))
+            );
+        let hook_manages_decision = payload.event == "PermissionRequest" && source != "grok";
+        let jump_only_decision = payload.event == "PermissionRequest" && source == "grok";
+        if hook_manages_decision || jump_only_decision || question_event {
+            let protocol = if jump_only_decision {
+                "notification-only"
+            } else if payload.event == "PermissionRequest" {
+                if source == "codex" { "codex-hook" } else { "claude-hook" }
+            } else {
+                "notification-only"
+            };
+            let request_id = hook_input
+                .get("request_id")
+                .or_else(|| hook_input.get("requestId"))
+                .cloned()
+                .or_else(|| payload.remote_event_id.clone().map(Value::String))
+                .unwrap_or_else(|| Value::String(uuid::Uuid::new_v4().to_string()));
+            let _ = agent_broker.handle_http(
+                "/api/desktop-pet-e-agent/open",
+                serde_json::to_vec(&json!({
+                    "source": source,
+                    "event": payload.event,
+                    "protocol": protocol,
+                    "tabId": payload.tab_id,
+                    "agentSessionId": payload.session_id,
+                    "toolUseId": payload.tool_use_id,
+                    "toolName": payload.tool_name,
+                    "requestId": request_id,
+                    "hookInput": hook_input,
+                }))
+                .unwrap_or_default()
+                .as_slice(),
+            );
+        }
+    }
 
     let payload = ClaudeHookPayload {
         tab_id: payload.tab_id,
@@ -322,6 +393,7 @@ pub fn remote_hook_payload_from_spool(
         remote_agent_transcript_ref: string("agentTranscriptPath"),
         remote_event_id: string("eventId"),
         remote_sequence: value.get("sequence").and_then(serde_json::Value::as_u64),
+        hook_input: None,
     };
     if !is_valid_payload(&request) {
         return Err("remote_hook_payload_invalid".to_string());
@@ -453,6 +525,8 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
             "SessionStart"
                 | "UserPromptSubmit"
                 | "Notification"
+                | "PreToolUse"
+                | "PermissionRequest"
                 | "Stop"
                 | "StopFailure"
                 | "SubagentStart"
@@ -467,6 +541,7 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
             "SessionStart"
                 | "UserPromptSubmit"
                 | "Notification"
+                | "PreToolUse"
                 | "PermissionRequest"
                 | "Stop"
                 | "StopFailure"
@@ -482,6 +557,7 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
             "SessionStart"
                 | "UserPromptSubmit"
                 | "Notification"
+                | "PreToolUse"
                 | "PermissionRequest"
                 | "Stop"
                 | "SubagentStart"
@@ -489,7 +565,7 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
         ),
         "pi" => matches!(
             payload.event.as_str(),
-            "SessionStart" | "UserPromptSubmit" | "Stop"
+            "SessionStart" | "UserPromptSubmit" | "Stop" | "StopFailure"
         ),
         _ => false,
     }
@@ -560,6 +636,17 @@ fn write_response(stream: &mut TcpStream, status: &str, body: &str) {
         body.len()
     );
     let _ = stream.write_all(response.as_bytes());
+    let _ = stream.flush();
+}
+
+fn write_agent_response(stream: &mut TcpStream, response: DesktopPetEAgentHttpResponse) {
+    let head = format!(
+        "HTTP/1.1 {}\r\nContent-Length: {}\r\nConnection: close\r\nContent-Type: application/json; charset=utf-8\r\n\r\n",
+        response.status,
+        response.body.len()
+    );
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(&response.body);
     let _ = stream.flush();
 }
 

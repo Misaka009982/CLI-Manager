@@ -9,6 +9,7 @@ mod commands;
 mod conpty_sideload;
 mod crash_reporter;
 mod credential_store;
+mod desktop_pet_e_agent;
 mod desktop_pet_e_bridge;
 // daemon 二进制（src/bin/cli-manager-daemon.rs）经 lib 复用以下模块，
 // 因此 app_paths 与 daemon 需 pub。
@@ -992,6 +993,10 @@ pub fn run() {
             commands::desktop_pet::desktop_pet_window_reset_position,
             commands::desktop_pet_e::desktop_pet_e_sync,
             commands::desktop_pet_e::desktop_pet_e_runtime_state,
+            commands::desktop_pet_e::desktop_pet_e_action_result,
+            commands::desktop_pet_e_agent::desktop_pet_e_agent_availability,
+            commands::desktop_pet_e_agent::desktop_pet_e_agent_submit,
+            commands::desktop_pet_e_agent::desktop_pet_e_agent_cancel,
             commands::terminal_shell::terminal_shell_scan,
             commands::terminal_shell::terminal_shell_icon,
             commands::ssh::ssh_client_status,

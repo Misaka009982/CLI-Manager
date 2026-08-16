@@ -43,6 +43,15 @@ pub struct DesktopPetEDiagnostic {
     occurred_at: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopPetEActionResult {
+    action_id: String,
+    accepted: bool,
+    confirmed: bool,
+    error: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopPetERuntimeState {
@@ -169,6 +178,45 @@ impl DesktopPetEManager {
         }
         emit_runtime_state(&app, &state);
         Ok(runtime_state(&state))
+    }
+
+    fn send_action_result<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        result: DesktopPetEActionResult,
+    ) -> Result<(), String> {
+        if result.action_id.trim().is_empty() || result.action_id.len() > 160 {
+            return Err("desktop_pet_e_action_result_id_invalid".to_string());
+        }
+        if result
+            .error
+            .as_deref()
+            .is_some_and(|error| {
+                error.len() > 512
+                    || error
+                        .chars()
+                        .any(|character| matches!(character, '\0' | '\r' | '\n'))
+            })
+        {
+            return Err("desktop_pet_e_action_result_error_invalid".to_string());
+        }
+        let payload = serde_json::to_value(result)
+            .map_err(|error| format!("desktop_pet_e_action_result_invalid: {error}"))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "desktop_pet_e_manager_lock_poisoned".to_string())?;
+        if !state.ready {
+            return Err("desktop_pet_e_not_ready".to_string());
+        }
+        if let Err(error) = send_message(&mut state, "action-result", payload) {
+            state.last_error = Some(diagnostic("desktop_pet_e_state_send_failed", error.clone()));
+            finish_current_process(&mut state);
+            restart_after_failure(self.clone(), app.clone(), &mut state);
+            emit_runtime_state(&app, &state);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn handle_stdout_line<R: Runtime>(
@@ -618,6 +666,15 @@ pub fn desktop_pet_e_sync(
     request: DesktopPetESyncRequest,
 ) -> Result<DesktopPetERuntimeState, String> {
     manager.synchronize(app, request)
+}
+
+#[tauri::command]
+pub fn desktop_pet_e_action_result(
+    app: AppHandle,
+    manager: tauri::State<'_, DesktopPetEManager>,
+    result: DesktopPetEActionResult,
+) -> Result<(), String> {
+    manager.send_action_result(app, result)
 }
 
 #[tauri::command]
