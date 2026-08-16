@@ -39,6 +39,7 @@ import { useHistoryStore } from "./stores/historyStore";
 import { useExternalSessionSyncStore } from "./stores/externalSessionSyncStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useDesktopPetCoordinator } from "./hooks/useDesktopPetCoordinator";
+import { useDesktopPetEAgentCoordinator } from "./hooks/useDesktopPetEAgentCoordinator";
 import { useDesktopPetECoordinator } from "./hooks/useDesktopPetECoordinator";
 import { useRemoteHandoffCoordinator } from "./hooks/useRemoteHandoffCoordinator";
 import { useUpdateStore } from "./stores/updateStore";
@@ -794,6 +795,7 @@ function App() {
   }, []);
 
   useRemoteHandoffCoordinator(startupReady);
+  useDesktopPetEAgentCoordinator(startupReady);
 
   useDesktopPetECoordinator({
     appReady: startupReady,

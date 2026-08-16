@@ -26,6 +26,7 @@ const STATIC_FILES = new Map([
   ["/app.js", "app.js"],
   ["/task-state.js", "task-state.js"],
   ["/agent-action.js", "agent-action.js"],
+  ["/bridge/agent-action.js", "../bridge/agent-action.js"],
   ["/styles.css", "styles.css"],
 ]);
 

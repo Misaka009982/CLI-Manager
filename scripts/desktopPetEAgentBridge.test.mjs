@@ -8,6 +8,12 @@ const hookServer = readFileSync(new URL("../src-tauri/src/claude_hook.rs", impor
 const hookSettings = readFileSync(new URL("../src-tauri/src/commands/hook_settings.rs", import.meta.url), "utf8");
 const proxy = readFileSync(new URL("../src-tauri/src/codex_app_server_proxy.rs", import.meta.url), "utf8");
 const coordinator = readFileSync(new URL("../src/hooks/useDesktopPetECoordinator.ts", import.meta.url), "utf8");
+const sessionCoordinator = readFileSync(new URL("../src/hooks/useDesktopPetEAgentCoordinator.ts", import.meta.url), "utf8");
+const sharedAgentStore = readFileSync(new URL("../src/stores/desktopPetEAgentStore.ts", import.meta.url), "utf8");
+const sessionPanel = readFileSync(new URL("../src/components/terminal/DesktopPetESessionActionPanel.tsx", import.meta.url), "utf8");
+const terminalTabs = readFileSync(new URL("../src/components/TerminalTabs.tsx", import.meta.url), "utf8");
+const terminalStore = readFileSync(new URL("../src/stores/terminalStore.ts", import.meta.url), "utf8");
+const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
 test("pending-action broker is bounded, authenticated, and lease-gated", () => {
   assert.match(broker, /DESKTOP_PET_E_AGENT_MAX_BODY_BYTES: usize = 1024 \* 1024/);
@@ -30,10 +36,43 @@ test("submission keeps transport identity until protocol acknowledgement", () =>
   assert.match(broker, /"submitted"/);
   assert.match(broker, /"resolved"/);
   assert.match(broker, /"failed"/);
-  assert.match(coordinator, /desktop_pet_e_agent_submit/);
+  assert.match(sharedAgentStore, /desktop_pet_e_agent_submit/);
+  assert.match(coordinator, /useDesktopPetEAgentStore\.getState\(\)\.submit/);
+  assert.match(sessionPanel, /await submit\(\{/);
   assert.match(coordinator, /desktop_pet_e_action_result/);
   assert.match(coordinator, /confirmed: false/);
   assert.match(coordinator, /confirmed: true/);
+});
+
+test("pet and owning session share pending actions without lifecycle cancellation", () => {
+  assert.match(app, /useDesktopPetEAgentCoordinator\(startupReady\)/);
+  assert.match(sessionCoordinator, /cli-manager-session-ui-/);
+  assert.match(sessionCoordinator, /DESKTOP_PET_E_AGENT_EVENT/);
+  assert.match(sessionCoordinator, /desktop_pet_e_agent_availability/);
+  assert.match(sessionCoordinator, /desktopPetEEnabled \|\| runtimeFailureGrace \|\| hasInteractivePendingActions/);
+  assert.match(sessionCoordinator, /RUNTIME_FAILURE_AVAILABILITY_GRACE_MS = 15_000/);
+  assert.match(sessionCoordinator, /attachDaemonSession\(sessionId, \{ activate: false \}\)/);
+  assert.match(sessionCoordinator, /currentAction\?\.id !== pendingActionId/);
+  assert.match(sessionCoordinator, /reason: "owning-session-unavailable"/);
+  assert.match(terminalStore, /activate\?: boolean/);
+  assert.match(terminalStore, /setPaneActiveSession\(paneResult\.tree, targetWorkspan\.activeSessionId\)/);
+  assert.match(sharedAgentStore, /requestGeneration < cursor\.requestGeneration/);
+  assert.match(sharedAgentStore, /cursor\.closed && cursor\.pendingActionId/);
+  assert.match(coordinator, /state\) => state\.pendingActions/);
+  assert.match(sessionPanel, /state\) => state\.submit/);
+  assert.match(sessionPanel, /desktopPetE\.agentInteractionEnabled/);
+  assert.match(sessionPanel, /reason="desktopPetE\.agent\.adapterUnavailable"/);
+  assert.match(sessionPanel, /serializeAnswers\(action, draft\)/);
+  assert.match(sessionPanel, /type="radio"/);
+  assert.match(sessionPanel, /type="checkbox"/);
+  assert.match(sessionPanel, /<textarea/);
+  assert.match(sessionPanel, /setCollapsed/);
+  assert.match(sessionPanel, /aria-expanded=\{!collapsed\}/);
+  assert.match(terminalTabs, /DesktopPetESessionActionPanel sessionId=\{session\.id\}/);
+  assert.match(terminalTabs, /next\[sessionId\] = "attention"/);
+  assert.match(terminalTabs, /for \(const sessionId of pendingActions\.keys\(\)\)[\s\S]*next\.add\(sessionId\)/);
+  assert.doesNotMatch(coordinator, /desktop_pet_e_agent_cancel/);
+  assert.doesNotMatch(coordinator, /pet-interaction-unavailable|pet-closed|terminal-fallback/);
 });
 
 test("Claude command hooks wait for native output and preserve official decision fields", () => {

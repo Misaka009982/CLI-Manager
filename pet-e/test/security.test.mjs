@@ -27,6 +27,7 @@ test("自定义协议只服务固定 renderer 文件和当前精灵", () => {
   assert.match(main, /STATIC_FILES = new Map/);
   assert.match(main, /task-state\.js/);
   assert.match(main, /agent-action\.js/);
+  assert.match(main, /"\/bridge\/agent-action\.js", "\.\.\/bridge\/agent-action\.js"/);
   assert.match(main, /url\.pathname !== "\/current"/);
   assert.doesNotMatch(main, /TcpListener|UdpSocket|127\.0\.0\.1/);
   assert.match(html, /default-src 'none'/);

@@ -16,12 +16,19 @@ test("renderer keeps the task area collapsed until an explicit interaction", () 
 
 test("renderer preserves drafts and exposes retry after a rejected action", () => {
   const source = read("../src/renderer/app.ts");
+  const entry = read("../src/renderer/agent-action.ts");
+  const shared = read("../src/bridge/agent-action.ts");
   assert.match(source, /const drafts = new Map/);
   assert.match(source, /const submissionErrors = new Map/);
   assert.match(source, /result\.confirmed/);
   assert.match(source, /!result\.accepted \|\| result\.error/);
   assert.match(source, /desktopPetE\.renderer\.retry/);
   assert.match(source, /pendingAction\.id/);
+  assert.match(entry, /export \* from "\.\.\/bridge\/agent-action\.js"/);
+  assert.match(shared, /createActionDraft/);
+  assert.match(shared, /serializeAnswers/);
+  assert.match(shared, /isDraftComplete/);
+  assert.match(shared, /questions\.length === 0/);
 });
 
 test("renderer uses the strict CSP-compatible sprite class contract", () => {

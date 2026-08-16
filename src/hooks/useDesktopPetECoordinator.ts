@@ -13,7 +13,6 @@ import {
   type DesktopPetEActionResult,
   type DesktopPetEConfigPayload,
   type DesktopPetEPetAsset,
-  type DesktopPetEPendingAction,
   type DesktopPetEPosition,
   type DesktopPetERuntimeState,
   type DesktopPetESnapshot,
@@ -40,6 +39,7 @@ import { useSessionStore } from "../stores/sessionStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useTerminalStore } from "../stores/terminalStore";
 import { useDesktopPetERuntimeStore } from "../stores/desktopPetERuntimeStore";
+import { useDesktopPetEAgentStore } from "../stores/desktopPetEAgentStore";
 import { findPaneLeafBySession } from "../stores/terminalPaneTree";
 
 interface UseDesktopPetECoordinatorOptions {
@@ -112,6 +112,7 @@ export function useDesktopPetECoordinator({
   const existingDesktopPetId = useSettingsStore((state) => state.desktopPet.petId);
   const settingsLoaded = useSettingsStore((state) => state.loaded);
   const replaceRuntimeState = useDesktopPetERuntimeStore((state) => state.replace);
+  const pendingActions = useDesktopPetEAgentStore((state) => state.pendingActions);
   const projects = useProjectStore((state) => state.projects);
   const persistedSessions = useSessionStore((state) => state.sessions);
   const {
@@ -135,12 +136,8 @@ export function useDesktopPetECoordinator({
   );
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundPetTask[]>([]);
   const [installedCodexPets, setInstalledCodexPets] = useState<InstalledPet[]>([]);
-  const [petsLoaded, setPetsLoaded] = useState(false);
   const [activityExpiryRevision, setActivityExpiryRevision] = useState(0);
   const [runtimeState, setRuntimeState] = useState<DesktopPetERuntimeState>(EMPTY_RUNTIME_STATE);
-  const [pendingActions, setPendingActions] = useState<ReadonlyMap<string, DesktopPetEPendingAction>>(
-    () => new Map(),
-  );
   const [viewedTerminalTaskIds, setViewedTerminalTaskIds] = useState<ReadonlySet<string>>(() => new Set());
   const [clearedTaskIds, setClearedTaskIds] = useState<ReadonlySet<string>>(() => new Set());
   const instanceIdRef = useRef<string>(createInstanceId());
@@ -151,6 +148,7 @@ export function useDesktopPetECoordinator({
   const onOpenSettingsRef = useRef(onOpenSettings);
   const onActivateSessionRef = useRef(onActivateSession);
   const lastSyncKeyRef = useRef<string | null>(null);
+  const petSubmissionActionIdsRef = useRef<Set<string>>(new Set());
   settingsRef.current = settings;
   onOpenSettingsRef.current = onOpenSettings;
   onActivateSessionRef.current = onActivateSession;
@@ -282,6 +280,7 @@ export function useDesktopPetECoordinator({
       "desktopPetE.renderer.stopped": t("desktopPetE.renderer.stopped"),
       "desktopPetE.renderer.otherTasks": t("desktopPetE.renderer.otherTasks"),
       "desktopPetE.renderer.collapse": t("desktopPetE.renderer.collapse"),
+      "desktopPetE.renderer.expand": t("desktopPetE.renderer.expand"),
       "desktopPetE.renderer.noTasks": t("desktopPetE.renderer.noTasks"),
       "desktopPetE.renderer.sessionEnded": t("desktopPetE.renderer.sessionEnded"),
       "desktopPetE.renderer.respond": t("desktopPetE.renderer.respond"),
@@ -316,7 +315,6 @@ export function useDesktopPetECoordinator({
     if (!appReady || !settingsLoaded || !isTauri()) return;
     let disposed = false;
     const refreshPets = () => {
-      setPetsLoaded(false);
       void invoke<InstalledPet[]>("desktop_pet_list_installed")
         .then((installed) => {
           if (!disposed) {
@@ -325,10 +323,7 @@ export function useDesktopPetECoordinator({
             ));
           }
         })
-        .catch((error) => logWarn("Failed to resolve Desktop Pet E Codex pet", error))
-        .finally(() => {
-          if (!disposed) setPetsLoaded(true);
-        });
+        .catch((error) => logWarn("Failed to resolve Desktop Pet E Codex pet", error));
     };
     refreshPets();
     window.addEventListener(DESKTOP_PET_E_PETS_CHANGED_EVENT, refreshPets);
@@ -439,36 +434,6 @@ export function useDesktopPetECoordinator({
     };
   }, [appReady, runtimeState.ready, selectedPet, settings.agentInteractionEnabled, settingsLoaded, tracking, visible]);
 
-  useEffect(() => {
-    if (!appReady || !settingsLoaded || !isTauri() || pendingActions.size === 0) return;
-    const interactionUnavailable = !settings.enabled
-      || !settings.agentInteractionEnabled
-      || !visible
-      || !runtimeState.ready
-      || (petsLoaded && selectedPet === null)
-      || (!runtimeState.enabled && runtimeState.lastError !== null);
-    if (!interactionUnavailable) return;
-    for (const pendingAction of pendingActions.values()) {
-      if (pendingAction.adapterMode !== "interactive") continue;
-      void invoke("desktop_pet_e_agent_cancel", {
-        pendingActionId: pendingAction.id,
-        reason: "pet-interaction-unavailable",
-      }).catch((error) => logWarn("Failed to release Desktop Pet E agent action", error));
-    }
-  }, [
-    appReady,
-    pendingActions,
-    petsLoaded,
-    runtimeState.enabled,
-    runtimeState.lastError,
-    runtimeState.ready,
-    selectedPet,
-    settings.agentInteractionEnabled,
-    settings.enabled,
-    settingsLoaded,
-    visible,
-  ]);
-
   const sendActionResult = (result: DesktopPetEActionResult) => invoke("desktop_pet_e_action_result", { result })
     .catch((error) => logWarn("Failed to send Desktop Pet E action result", error));
 
@@ -491,13 +456,6 @@ export function useDesktopPetECoordinator({
         return;
       }
       if (action.kind === "close-pet") {
-        for (const task of currentSnapshot.tasks) {
-          if (!task.pendingAction) continue;
-          void invoke("desktop_pet_e_agent_cancel", {
-            pendingActionId: task.pendingAction.id,
-            reason: "pet-closed",
-          }).catch((error) => logWarn("Failed to release Desktop Pet E agent action on close", error));
-        }
         const current = useSettingsStore.getState().desktopPetE;
         void useSettingsStore.getState().update("desktopPetE", { ...current, enabled: false });
         return;
@@ -526,7 +484,8 @@ export function useDesktopPetECoordinator({
           });
           return;
         }
-        void invoke("desktop_pet_e_agent_submit", {
+        petSubmissionActionIdsRef.current.add(action.actionId);
+        void useDesktopPetEAgentStore.getState().submit({
           pendingActionId: action.pendingActionId,
           transportActionId: action.actionId,
           answers: action.answers ?? [],
@@ -536,6 +495,7 @@ export function useDesktopPetECoordinator({
           accepted: true,
           confirmed: false,
         })).catch((error) => {
+          petSubmissionActionIdsRef.current.delete(action.actionId);
           logWarn("Failed to submit Desktop Pet E agent action", error);
           return sendActionResult({
             actionId: action.actionId,
@@ -558,18 +518,6 @@ export function useDesktopPetECoordinator({
           if (!restored) return;
         }
         await onActivateSessionRef.current(task.sessionId);
-        if (task.pendingAction) {
-          await invoke("desktop_pet_e_agent_cancel", {
-            pendingActionId: task.pendingAction.id,
-            reason: "terminal-fallback",
-          }).catch((error) => logWarn("Failed to cancel Desktop Pet E agent action", error));
-          setPendingActions((current) => {
-            if (current.get(task.sessionId)?.id !== task.pendingAction?.id) return current;
-            const next = new Map(current);
-            next.delete(task.sessionId);
-            return next;
-          });
-        }
         if (task.color === "red" || task.color === "blue") {
           setViewedTerminalTaskIds((current) => new Set(current).add(task.id));
         }
@@ -578,27 +526,19 @@ export function useDesktopPetECoordinator({
     const unlistenAgent = listen<unknown>(DESKTOP_PET_E_AGENT_EVENT, (event) => {
       if (!isDesktopPetEAgentEvent(event.payload)) return;
       const agentEvent = event.payload;
-      setPendingActions((current) => {
-        const next = new Map(current);
-        if (agentEvent.phase === "resolved" || agentEvent.phase === "cancelled") {
-          if (next.get(agentEvent.sessionId)?.id === agentEvent.pendingActionId) {
-            next.delete(agentEvent.sessionId);
-          }
-        } else {
-          next.set(agentEvent.sessionId, agentEvent.pendingAction);
-        }
-        return next;
-      });
-      if (!agentEvent.transportActionId) return;
+      const transportActionId = agentEvent.transportActionId;
+      if (!transportActionId || !petSubmissionActionIdsRef.current.has(transportActionId)) return;
       if (agentEvent.phase === "resolved") {
+        petSubmissionActionIdsRef.current.delete(transportActionId);
         void sendActionResult({
-          actionId: agentEvent.transportActionId,
+          actionId: transportActionId,
           accepted: true,
           confirmed: true,
         });
       } else if (agentEvent.phase === "failed" || agentEvent.phase === "cancelled") {
+        petSubmissionActionIdsRef.current.delete(transportActionId);
         void sendActionResult({
-          actionId: agentEvent.transportActionId,
+          actionId: transportActionId,
           accepted: false,
           confirmed: false,
           error: agentEvent.error ?? "desktopPetE.agent.deliveryFailed",

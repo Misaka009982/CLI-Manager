@@ -21,6 +21,7 @@ import {
 import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useTerminalStore, type SplitTerminalOptions, type TabNotificationState } from "../stores/terminalStore";
+import { useDesktopPetEAgentStore } from "../stores/desktopPetEAgentStore";
 import { TERMINAL_PANEL_WIDTH_DEFAULTS, useSettingsStore } from "../stores/settingsStore";
 import { useWorktreeStore } from "../stores/worktreeStore";
 import { useProjectStore } from "../stores/projectStore";
@@ -57,6 +58,7 @@ import {
   type TerminalSidePanelTab,
 } from "./terminal/TerminalSidePanel";
 import { RemoteHandoffOverlay } from "./terminal/RemoteHandoffOverlay";
+import { DesktopPetESessionActionPanel } from "./terminal/DesktopPetESessionActionPanel";
 import { WorktreeFinishDialog } from "./worktree/WorktreeFinishDialog";
 import { FileExplorerSidebar } from "./files/FileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
@@ -1980,6 +1982,9 @@ function PaneLeafView({
                 onSplitDown={(point) => onOpenSplitPicker(session.id, "vertical", point)}
               />
             )}
+            {(session.kind ?? "pty") === "pty" && (
+              <DesktopPetESessionActionPanel sessionId={session.id} />
+            )}
           </div>
         ))}
         <PaneContentDropZones
@@ -2454,7 +2459,7 @@ export function TerminalTabs({
   const { prompt, promptDialog } = useAppPrompt();
   const { confirm, confirmDialog } = useAppConfirm();
   const { saveSession: saveSessionToSidebar, saveSessionDialog } = useSaveSessionToSidebar();
-  const { sessions, activeSessionId, workspans, activeWorkspanId, tabNotifications, tabStatuses } = useTerminalStore(
+  const { sessions, activeSessionId, workspans, activeWorkspanId, tabNotifications: terminalTabNotifications, tabStatuses } = useTerminalStore(
     useShallow((s) => ({
       sessions: s.sessions,
       activeSessionId: s.activeSessionId,
@@ -2464,6 +2469,13 @@ export function TerminalTabs({
       tabStatuses: s.tabStatuses,
     }))
   );
+  const pendingActions = useDesktopPetEAgentStore((state) => state.pendingActions);
+  const tabNotifications = useMemo<Record<string, TabNotificationState>>(() => {
+    if (pendingActions.size === 0) return terminalTabNotifications;
+    const next = { ...terminalTabNotifications };
+    for (const sessionId of pendingActions.keys()) next[sessionId] = "attention";
+    return next;
+  }, [pendingActions, terminalTabNotifications]);
   const setActive = useTerminalStore((s) => s.setActive);
   const setActiveWorkspan = useTerminalStore((s) => s.setActiveWorkspan);
   const reorderWorkspans = useTerminalStore((s) => s.reorderWorkspans);
@@ -2508,8 +2520,9 @@ export function TerminalTabs({
     for (const [sessionId, status] of Object.entries(tabStatuses)) {
       next[sessionId] = status.hook ?? "none";
     }
+    for (const sessionId of pendingActions.keys()) next[sessionId] = "attention";
     return next;
-  }, [tabStatuses]);
+  }, [pendingActions, tabStatuses]);
 
   useEffect(() => {
     const updateFocusState = () => {
@@ -2631,8 +2644,11 @@ export function TerminalTabs({
         next.add(session.id);
       }
     }
+    for (const sessionId of pendingActions.keys()) {
+      if (sessions.some((session) => session.id === sessionId)) next.add(sessionId);
+    }
     return next;
-  }, [projectById, projectScopedTerminalViewEnabled, projects, scopedGroupProjectIds, sessions, terminalScopeValue, worktrees]);
+  }, [pendingActions, projectById, projectScopedTerminalViewEnabled, projects, scopedGroupProjectIds, sessions, terminalScopeValue, worktrees]);
   // Keep the original Workspan trees mounted. The scoped tree is presentation-only;
   // moving a session into a separate hidden tree would recreate its xterm instance.
   const mountedWorkspanLayouts = useMemo(() => workspans.flatMap((workspan) => {

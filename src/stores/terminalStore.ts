@@ -313,8 +313,8 @@ interface TerminalStore {
   setSplitRatio: (splitId: string, ratio: number) => void;
   getNextSessionIdForShortcut: (delta: 1 | -1) => string | null;
   restoreSessions: (projectMap: Map<string, Project>, projectHealth: Record<string, boolean>) => Promise<void>;
-  /** 从 daemon 恢复单个后台任务并聚焦；执行中和已完成会话都可回放。 */
-  attachDaemonSession: (sessionId: string) => Promise<boolean>;
+  /** 从 daemon 恢复单个后台任务；默认聚焦，宠物E会话面板可选择只挂载到当前布局。 */
+  attachDaemonSession: (sessionId: string, options?: { activate?: boolean }) => Promise<boolean>;
   /** 终止并移除单个 daemon 后台任务及终端恢复数据。 */
   discardDaemonSession: (sessionId: string) => Promise<void>;
   /** 合并态（hook+shell）为 running 的真实 PTY 会话 id，供退出拦截判定任务是否在跑（Issue #123 Phase 1）。 */
@@ -3283,17 +3283,23 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }
   },
 
-  attachDaemonSession: async (sessionId) => {
-    const current = get();
+  attachDaemonSession: async (sessionId, options) => {
+    const activate = options?.activate !== false;
+    let current = get();
     if (current.sessions.some((session) => session.id === sessionId)) {
-      current.setActive(sessionId);
+      if (activate) current.setActive(sessionId);
       return true;
     }
 
-    const persisted = useSessionStore.getState().sessions.find((session) => session.id === sessionId);
     const daemonSession = (await invoke<DaemonSessionMeta[]>("pty_daemon_sessions"))
       .find((item) => item.sessionId === sessionId);
     if (!daemonSession) return false;
+    current = get();
+    if (current.sessions.some((session) => session.id === sessionId)) {
+      if (activate) current.setActive(sessionId);
+      return true;
+    }
+    const persisted = useSessionStore.getState().sessions.find((session) => session.id === sessionId);
 
     const taskStatus = resolveDaemonAttachTaskStatus(daemonSession);
     const taskUpdatedAt = resolveDaemonAttachUpdatedAt(daemonSession);
@@ -3340,11 +3346,50 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       });
       persistSshConnectionStateAfterPtyStatus(sessionId, payload);
     });
+    current = get();
+    if (current.sessions.some((currentSession) => currentSession.id === sessionId)) {
+      unlisten();
+      if (activate) current.setActive(sessionId);
+      return true;
+    }
 
     const nextSessions = [...current.sessions, session];
-    const nextWorkspan = createTerminalWorkspan(createWorkspanId(), createPaneId(), sessionId);
-    const workspans = [...current.workspans, nextWorkspan];
-    const mirror = buildWorkspanMirror(workspans, nextWorkspan.id);
+    let workspans: TerminalWorkspan[];
+    let requestedActiveWorkspanId: string | null;
+    if (!activate) {
+      const targetWorkspan = current.workspans.find(
+        (workspan) => workspan.id === current.activeWorkspanId,
+      ) ?? current.workspans[0] ?? null;
+      if (targetWorkspan) {
+        const paneResult = addSessionToPaneTree(
+          targetWorkspan.paneTree,
+          targetWorkspan.activePaneId,
+          sessionId,
+          createPaneId,
+        );
+        const restoredActive = targetWorkspan.activeSessionId
+          ? setPaneActiveSession(paneResult.tree, targetWorkspan.activeSessionId)
+          : { tree: paneResult.tree, activePaneId: targetWorkspan.activePaneId };
+        workspans = updateTerminalWorkspan(current.workspans, targetWorkspan.id, (workspan) => (
+          syncTerminalWorkspanLayout(
+            workspan,
+            restoredActive.tree,
+            restoredActive.activePaneId,
+            targetWorkspan.activeSessionId,
+          )
+        ));
+        requestedActiveWorkspanId = current.activeWorkspanId ?? targetWorkspan.id;
+      } else {
+        const nextWorkspan = createTerminalWorkspan(createWorkspanId(), createPaneId(), sessionId);
+        workspans = [nextWorkspan];
+        requestedActiveWorkspanId = nextWorkspan.id;
+      }
+    } else {
+      const nextWorkspan = createTerminalWorkspan(createWorkspanId(), createPaneId(), sessionId);
+      workspans = [...current.workspans, nextWorkspan];
+      requestedActiveWorkspanId = nextWorkspan.id;
+    }
+    const mirror = buildWorkspanMirror(workspans, requestedActiveWorkspanId);
     const initialTabState = buildTabStatusUpdate(
       current,
       sessionId,
@@ -3368,8 +3413,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       ...initialTabState,
     });
     await useSessionStore.getState().saveSessions(nextSessions);
-    await useSessionStore.getState().saveActiveSessionId(sessionId);
-    await useSessionStore.getState().saveWorkspans(workspans, nextWorkspan.id, nextSessions);
+    await useSessionStore.getState().saveActiveSessionId(mirror.activeSessionId);
+    await useSessionStore.getState().saveWorkspans(workspans, mirror.activeWorkspanId, nextSessions);
     return true;
   },
 
