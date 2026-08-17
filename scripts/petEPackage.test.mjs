@@ -123,6 +123,7 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   const tauri = readFileSync(path.join(repositoryRoot, "src-tauri/tauri.windows.conf.json"), "utf8");
   const baseTauri = readFileSync(path.join(repositoryRoot, "src-tauri/tauri.conf.json"), "utf8");
   const alphaRelease = readFileSync(path.join(repositoryRoot, ".github/workflows/alpha-release.yml"), "utf8");
+  const prepareBundle = readFileSync(path.join(repositoryRoot, "scripts/prepare-bundle-binaries.mjs"), "utf8");
   const prepare = readFileSync(path.join(repositoryRoot, "scripts/prepare-pet-e-runtime.mjs"), "utf8");
   const manager = readFileSync(path.join(repositoryRoot, "src-tauri/src/commands/desktop_pet_e.rs"), "utf8");
   const portable = readFileSync(path.join(repositoryRoot, "scripts/package-portable.ps1"), "utf8");
@@ -133,6 +134,9 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   assert.match(alphaRelease, /npm install --prefix pet-e --ignore-scripts/);
   assert.doesNotMatch(alphaRelease, /prepare-electron-pet-runtime/);
   assert.doesNotMatch(alphaRelease, /node \.\/scripts\/prepare-pet-e-runtime\.mjs/);
+  assert.match(prepareBundle, /process\.env\.ComSpec \|\| "cmd\.exe"/);
+  assert.match(prepareBundle, /\["\/d", "\/s", "\/c", "npm\.cmd", \.\.\.args\]/);
+  assert.doesNotMatch(prepareBundle, /run\(npmCommand/);
   assert.match(prepare, /CLI_MANAGER_PET_E_RUNTIME_ARCHIVE/);
   assert.match(prepare, /7665990f65b7d2f61671eb342b08c4b6f2e7ce302a269d56c2f3554fc8c8ce72/);
   assert.match(prepare, /appPackage|package\.json/);

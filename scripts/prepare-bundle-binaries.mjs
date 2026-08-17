@@ -26,9 +26,16 @@ function run(command, args, label) {
   }
 }
 
+function runNpm(args, label) {
+  if (process.platform === "win32") {
+    run(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "npm.cmd", ...args], label);
+    return;
+  }
+  run("npm", args, label);
+}
+
 if (targetPlatform === "windows" || targetPlatform === "win32") {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  run(npmCommand, ["run", "build:pet-e"], "Desktop Pet E build");
+  runNpm(["run", "build:pet-e"], "Desktop Pet E build");
   run(process.execPath, ["scripts/prepare-pet-e-runtime.mjs"], "Desktop Pet E resource preparation");
   process.exit(0);
 }
