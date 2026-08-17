@@ -101,6 +101,8 @@ const VERIFIED_V1_4_1_BINARY_SHA256: &[&str] = &[
 pub enum CcConnectAgent {
     Claude,
     Codex,
+    Pi,
+    Opencode,
 }
 
 impl CcConnectAgent {
@@ -108,12 +110,15 @@ impl CcConnectAgent {
         match self {
             Self::Claude => "claudecode",
             Self::Codex => "codex",
+            Self::Pi => "pi",
+            Self::Opencode => "opencode",
         }
     }
     fn safe_mode(self) -> &'static str {
         match self {
             Self::Claude => "default",
             Self::Codex => "suggest",
+            Self::Pi | Self::Opencode => "default",
         }
     }
 
@@ -124,6 +129,7 @@ impl CcConnectAgent {
         match self {
             Self::Claude => "bypassPermissions",
             Self::Codex => "yolo",
+            Self::Pi | Self::Opencode => "yolo",
         }
     }
 
@@ -134,6 +140,47 @@ impl CcConnectAgent {
     fn app_server_url(self) -> Option<&'static str> {
         matches!(self, Self::Codex).then_some("stdio://")
     }
+
+    fn rpc(self) -> Option<bool> {
+        matches!(self, Self::Pi).then_some(true)
+    }
+
+    fn session_type(self) -> &'static str {
+        self.config_type()
+    }
+
+    fn hook_source(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Pi => "pi",
+            Self::Opencode => "opencode",
+        }
+    }
+}
+
+fn cc_connect_agent_from_cli_tool(value: &str) -> Option<CcConnectAgent> {
+    value
+        .split(|character: char| character.is_whitespace() || "\"'&;|()".contains(character))
+        .filter(|token| !token.is_empty())
+        .find_map(|token| {
+            let name = token
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(token)
+                .to_ascii_lowercase();
+            let command = [".exe", ".cmd", ".bat", ".com", ".ps1"]
+                .into_iter()
+                .find_map(|suffix| name.strip_suffix(suffix))
+                .unwrap_or(&name);
+            match command {
+                "claude" => Some(CcConnectAgent::Claude),
+                "codex" => Some(CcConnectAgent::Codex),
+                "pi" => Some(CcConnectAgent::Pi),
+                "opencode" => Some(CcConnectAgent::Opencode),
+                _ => None,
+            }
+        })
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1003,6 +1050,8 @@ struct ManagedAgentOptions {
     work_dir: String,
     mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    cmd: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     app_server_url: Option<String>,
@@ -1010,6 +1059,8 @@ struct ManagedAgentOptions {
     model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     codex_home: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rpc: Option<bool>,
     env: BTreeMap<String, String>,
 }
 #[derive(Serialize)]
@@ -1221,6 +1272,24 @@ fn build_managed_config_with_codex(
     project_switch_script_path: &Path,
     codex_launch: Option<&RemoteCodexLaunch>,
 ) -> Result<ManagedConfig, String> {
+    build_managed_config_with_agent_launch(
+        profile,
+        project_list_path,
+        project_switch_script_path,
+        codex_launch,
+        None,
+        &BTreeMap::new(),
+    )
+}
+
+fn build_managed_config_with_agent_launch(
+    profile: &CcConnectProfile,
+    project_list_path: &Path,
+    project_switch_script_path: &Path,
+    codex_launch: Option<&RemoteCodexLaunch>,
+    claude_settings_path: Option<&Path>,
+    additional_agent_environment: &BTreeMap<String, String>,
+) -> Result<ManagedConfig, String> {
     let configured_platforms = enabled_platforms(profile);
     if configured_platforms.is_empty() {
         return Err("at least one messaging platform must be enabled".to_string());
@@ -1270,6 +1339,7 @@ fn build_managed_config_with_codex(
             format!("${{{}}}", provider.env_key),
         );
     }
+    agent_environment.extend(additional_agent_environment.clone());
     Ok(ManagedConfig {
         data_dir: config_path_value(&data_dir()?),
         language: match profile.language {
@@ -1341,10 +1411,21 @@ fn build_managed_config_with_codex(
                         .agent
                         .configured_mode(profile.yolo_enabled)
                         .to_string(),
+                    cmd: (profile.agent == CcConnectAgent::Claude)
+                        .then(|| claude_settings_path)
+                        .flatten()
+                        .map(|settings_path| {
+                            vec![
+                                "claude".to_string(),
+                                "--settings".to_string(),
+                                config_path_value(settings_path),
+                            ]
+                        }),
                     backend: profile.agent.backend().map(str::to_string),
                     app_server_url: profile.agent.app_server_url().map(str::to_string),
                     model: active_model,
                     codex_home,
+                    rpc: profile.agent.rpc(),
                     env: agent_environment,
                 },
             },
@@ -1763,10 +1844,27 @@ fn agent_display_name(agent: CcConnectAgent) -> &'static str {
     match agent {
         CcConnectAgent::Claude => "Claude Code",
         CcConnectAgent::Codex => "Codex",
+        CcConnectAgent::Pi => "Pi",
+        CcConnectAgent::Opencode => "OpenCode",
     }
 }
 
 fn provider_display_value(language: CcConnectLanguage, project: &RegisteredProject) -> String {
+    if matches!(project.agent, CcConnectAgent::Pi | CcConnectAgent::Opencode) {
+        return match (language, project.agent) {
+            (CcConnectLanguage::Zh, CcConnectAgent::Pi) => "Provider：跟随 Pi 配置".to_string(),
+            (CcConnectLanguage::En, CcConnectAgent::Pi) => {
+                "Provider: follow Pi configuration".to_string()
+            }
+            (CcConnectLanguage::Zh, CcConnectAgent::Opencode) => {
+                "Provider：跟随 OpenCode 配置".to_string()
+            }
+            (CcConnectLanguage::En, CcConnectAgent::Opencode) => {
+                "Provider: follow OpenCode configuration".to_string()
+            }
+            _ => unreachable!(),
+        };
+    }
     let provider_name = project.provider_name.as_deref().map(single_line);
     match (language, project.provider_is_global, provider_name) {
         (CcConnectLanguage::Zh, true, Some(name)) => format!("Provider：{name}（全局）"),
@@ -1964,6 +2062,15 @@ fn write_managed_config_with_codex(
     profile: &CcConnectProfile,
     codex_launch: Option<&RemoteCodexLaunch>,
 ) -> Result<PathBuf, String> {
+    write_managed_config_with_agent_launch(profile, codex_launch, None, &BTreeMap::new())
+}
+
+fn write_managed_config_with_agent_launch(
+    profile: &CcConnectProfile,
+    codex_launch: Option<&RemoteCodexLaunch>,
+    claude_settings_path: Option<&Path>,
+    additional_agent_environment: &BTreeMap<String, String>,
+) -> Result<PathBuf, String> {
     let dir = remote_manager_dir()?;
     fs::create_dir_all(&dir).map_err(|err| format!("create remote manager dir failed: {err}"))?;
     fs::create_dir_all(data_dir()?)
@@ -1974,11 +2081,13 @@ fn write_managed_config_with_codex(
     let registered_projects = load_registered_projects(Some(profile))?;
     let cli_manager_executable = std::env::current_exe()
         .map_err(|err| format!("resolve CLI-Manager executable failed: {err}"))?;
-    let payload = toml::to_string_pretty(&build_managed_config_with_codex(
+    let payload = toml::to_string_pretty(&build_managed_config_with_agent_launch(
         profile,
         &list_path,
         &switch_script_path,
         codex_launch,
+        claude_settings_path,
+        additional_agent_environment,
     )?)
     .map_err(|err| format!("serialize cc-connect config failed: {err}"))?;
     let list_payload = render_project_list(profile, &registered_projects);
@@ -2368,6 +2477,85 @@ fn user_home_dir() -> Option<PathBuf> {
         .filter(|value| !value.is_empty())
         .or_else(|| env::var_os("HOME").filter(|value| !value.is_empty()))
         .map(PathBuf::from)
+}
+
+fn ensure_local_agent_available(agent: CcConnectAgent) -> Result<(), String> {
+    let command = match agent {
+        CcConnectAgent::Claude => "claude",
+        CcConnectAgent::Codex => "codex",
+        CcConnectAgent::Pi => "pi",
+        CcConnectAgent::Opencode => "opencode",
+    };
+    let path_value = env::var_os("PATH").ok_or_else(|| "handoff_agent_unavailable".to_string())?;
+    for directory in env::split_paths(&path_value) {
+        #[cfg(target_os = "windows")]
+        let candidates = [
+            format!("{command}.exe"),
+            format!("{command}.cmd"),
+            format!("{command}.bat"),
+            format!("{command}.com"),
+        ];
+        #[cfg(not(target_os = "windows"))]
+        let candidates = [command.to_string()];
+        if candidates
+            .iter()
+            .map(|candidate| directory.join(candidate))
+            .any(|candidate| candidate.is_file())
+        {
+            return Ok(());
+        }
+    }
+    Err("handoff_agent_unavailable".to_string())
+}
+
+fn managed_project_environment(
+    project: &RegisteredProject,
+) -> (BTreeMap<String, String>, Vec<(String, String)>) {
+    if !matches!(project.agent, CcConnectAgent::Pi | CcConnectAgent::Opencode) {
+        return (BTreeMap::new(), Vec::new());
+    }
+    let Ok(serde_json::Value::Object(values)) = serde_json::from_str(&project.env_vars) else {
+        return (BTreeMap::new(), Vec::new());
+    };
+    let reserved = [
+        TELEGRAM_TOKEN_ENV,
+        FEISHU_APP_ID_ENV,
+        FEISHU_APP_SECRET_ENV,
+        WEIXIN_TOKEN_ENV,
+        WECOM_BOT_ID_ENV,
+        WECOM_BOT_SECRET_ENV,
+    ];
+    let mut config = BTreeMap::new();
+    let mut process = Vec::new();
+    for (key, value) in values.into_iter().take(128) {
+        let Some(value) = value.as_str() else {
+            continue;
+        };
+        let valid_key = key.len() <= 128
+            && key
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+            && key
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+        let upper = key.to_ascii_uppercase();
+        if !valid_key
+            || value.len() > 32 * 1024
+            || value.contains('\0')
+            || upper.starts_with("CLI_MANAGER_")
+            || upper.starts_with("CC_CONNECT_")
+            || reserved.contains(&upper.as_str())
+            || PROXY_ENV_KEYS
+                .iter()
+                .any(|reserved_key| reserved_key.eq_ignore_ascii_case(&key))
+        {
+            continue;
+        }
+        config.insert(key.clone(), format!("${{{key}}}"));
+        process.push((key, value.to_string()));
+    }
+    (config, process)
 }
 
 struct RemoteCodexProviderLaunch {
@@ -3217,6 +3405,7 @@ fn project_provider(
     let app_type = match agent {
         CcConnectAgent::Claude => "claude",
         CcConnectAgent::Codex => "codex",
+        CcConnectAgent::Pi | CcConnectAgent::Opencode => return (None, None, true),
     };
     let project_override = serde_json::from_str::<serde_json::Value>(provider_overrides)
         .ok()
@@ -3550,7 +3739,10 @@ fn load_registered_projects(
                 let cli_tool: String = row
                     .try_get("cli_tool")
                     .map_err(|err| format!("read project CLI tool failed: {err}"))?;
-                Ok(RegisteredProjectRow {
+                let Some(agent) = cc_connect_agent_from_cli_tool(&cli_tool) else {
+                    return Ok(None);
+                };
+                Ok(Some(RegisteredProjectRow {
                     id: row
                         .try_get("id")
                         .map_err(|err| format!("read project ID failed: {err}"))?,
@@ -3560,11 +3752,7 @@ fn load_registered_projects(
                     path: row
                         .try_get("path")
                         .map_err(|err| format!("read project path failed: {err}"))?,
-                    agent: if cli_tool.to_ascii_lowercase().contains("codex") {
-                        CcConnectAgent::Codex
-                    } else {
-                        CcConnectAgent::Claude
-                    },
+                    agent,
                     group_id: row
                         .try_get("group_id")
                         .map_err(|err| format!("read project group failed: {err}"))?,
@@ -3592,9 +3780,12 @@ fn load_registered_projects(
                     env_vars: row
                         .try_get("env_vars")
                         .map_err(|err| format!("read project environment failed: {err}"))?,
-                })
+                }))
             })
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Result<Vec<_>, String>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         let provider_catalog = load_provider_catalog().await;
         Ok(order_registered_projects(
             groups,
@@ -5010,6 +5201,9 @@ impl CcConnectManager {
             probe_remote_codex_app_server(launch)
                 .map_err(|err| format!("Codex remote app-server backend is unavailable: {err}"))?;
         }
+        let claude_settings_path = handoff::active_claude_settings_path()?;
+        let (project_agent_environment, project_process_environment) =
+            managed_project_environment(&project);
         let binary = self.detect(profile.executable_path.as_deref(), true)?;
         if !binary.compatible {
             return Err(format!(
@@ -5017,7 +5211,12 @@ impl CcConnectManager {
                 binary.version.as_deref().unwrap_or("binary")
             ));
         }
-        let config_path = write_managed_config_with_codex(&profile, codex_launch.as_ref())?;
+        let config_path = write_managed_config_with_agent_launch(
+            &profile,
+            codex_launch.as_ref(),
+            claude_settings_path.as_deref(),
+            &project_agent_environment,
+        )?;
         format_and_check_config_syntax(&binary.path, &config_path)?;
         let (mut environment, mut secrets) = credential_environment_for_profile(&profile)?;
         if let Some(provider) = codex_launch
@@ -5026,6 +5225,16 @@ impl CcConnectManager {
         {
             environment.push((provider.env_key.clone(), provider.secret.clone()));
             secrets.push(provider.secret.clone());
+        }
+        for (key, value) in project_process_environment {
+            if ["TOKEN", "KEY", "SECRET", "PASSWORD"]
+                .iter()
+                .any(|marker| key.to_ascii_uppercase().contains(marker))
+                && !value.is_empty()
+            {
+                secrets.push(value.clone());
+            }
+            environment.push((key, value));
         }
         let proxy = resolve_proxy_url_if_enabled(
             profile.proxy_enabled,
@@ -6798,6 +7007,132 @@ allow_from = ""
         assert!(!claude_options.contains_key("backend"));
         assert!(!claude_options.contains_key("app_server_url"));
     }
+
+    #[test]
+    fn managed_agent_config_maps_all_supported_handoff_agents() {
+        let project = tempfile::tempdir().unwrap();
+        let mut profile = sample_profile(project.path());
+        for (agent, kind, safe_mode, rpc) in [
+            (CcConnectAgent::Claude, "claudecode", "default", None),
+            (CcConnectAgent::Codex, "codex", "suggest", None),
+            (CcConnectAgent::Pi, "pi", "default", Some(true)),
+            (CcConnectAgent::Opencode, "opencode", "default", None),
+        ] {
+            profile.agent = agent;
+            let raw = toml::to_string(
+                &build_managed_config(
+                    &profile,
+                    Path::new(r"C:\Users\test\cli-manager-projects.txt"),
+                    Path::new(r"C:\Users\test\cli-manager-switch.ps1"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let config = toml::from_str::<toml::Value>(&raw).unwrap();
+            let managed_agent = &config["projects"][0]["agent"];
+            assert_eq!(managed_agent["type"].as_str(), Some(kind));
+            assert_eq!(managed_agent["options"]["mode"].as_str(), Some(safe_mode));
+            assert_eq!(
+                managed_agent["options"]
+                    .as_table()
+                    .unwrap()
+                    .get("rpc")
+                    .and_then(toml::Value::as_bool),
+                rpc
+            );
+        }
+    }
+
+    #[test]
+    fn registered_cli_tool_parser_accepts_supported_launchers_and_rejects_other_agents() {
+        for (value, expected) in [
+            ("claude", Some(CcConnectAgent::Claude)),
+            (
+                r#""D:\npm\codex.cmd" --profile managed"#,
+                Some(CcConnectAgent::Codex),
+            ),
+            (r#"C:\tools\pi.bat --model test"#, Some(CcConnectAgent::Pi)),
+            ("opencode.exe --continue", Some(CcConnectAgent::Opencode)),
+            ("grok", None),
+            ("npm run dev", None),
+        ] {
+            assert_eq!(cc_connect_agent_from_cli_tool(value), expected, "{value}");
+        }
+    }
+
+    #[test]
+    fn managed_claude_snapshot_uses_structured_cmd_without_persisting_project_secrets() {
+        let project = tempfile::tempdir().unwrap();
+        let mut profile = sample_profile(project.path());
+        profile.agent = CcConnectAgent::Claude;
+        let settings_path = Path::new(r"C:\Users\test\.cli-manager\providers\settings.json");
+        let mut environment = BTreeMap::new();
+        environment.insert(
+            "ANTHROPIC_AUTH_TOKEN".to_string(),
+            "${ANTHROPIC_AUTH_TOKEN}".to_string(),
+        );
+        let raw = toml::to_string_pretty(
+            &build_managed_config_with_agent_launch(
+                &profile,
+                Path::new(r"C:\Users\test\cli-manager-projects.txt"),
+                Path::new(r"C:\Users\test\cli-manager-switch.ps1"),
+                None,
+                Some(settings_path),
+                &environment,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let config = toml::from_str::<toml::Value>(&raw).unwrap();
+        assert_eq!(
+            config["projects"][0]["agent"]["options"]["cmd"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "claude",
+                "--settings",
+                "C:/Users/test/.cli-manager/providers/settings.json"
+            ]
+        );
+        assert_eq!(
+            config["projects"][0]["agent"]["options"]["env"]["ANTHROPIC_AUTH_TOKEN"].as_str(),
+            Some("${ANTHROPIC_AUTH_TOKEN}")
+        );
+        assert!(!raw.contains("sk-secret"));
+    }
+
+    #[test]
+    fn pi_and_opencode_project_environment_uses_process_placeholders() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let mut project = sample_registered_project("pi-project", "Pi", project_dir.path());
+        project.agent = CcConnectAgent::Pi;
+        project.env_vars = serde_json::json!({
+            "PI_API_KEY": "sk-secret",
+            "CLI_MANAGER_TAB_ID": "must-not-override",
+            "HTTP_PROXY": "http://unmanaged-proxy"
+        })
+        .to_string();
+        let (config, process) = managed_project_environment(&project);
+        assert_eq!(
+            config.get("PI_API_KEY").map(String::as_str),
+            Some("${PI_API_KEY}")
+        );
+        assert_eq!(
+            process,
+            vec![("PI_API_KEY".to_string(), "sk-secret".to_string())]
+        );
+        assert!(!config.contains_key("CLI_MANAGER_TAB_ID"));
+        assert!(!config.contains_key("HTTP_PROXY"));
+
+        project.agent = CcConnectAgent::Claude;
+        assert_eq!(
+            managed_project_environment(&project),
+            (BTreeMap::new(), Vec::new())
+        );
+    }
     #[test]
     fn project_list_and_switch_tokens_are_stable_and_safe() {
         let current = tempfile::tempdir().unwrap();
@@ -7122,7 +7457,33 @@ allow_from = ""
         let formatted = fs::read_to_string(&config_path).unwrap();
         assert!(formatted.contains("${CLI_MANAGER_CODEX_PROVIDER_API_KEY}"));
         assert!(!formatted.contains("sk-provider-secret"));
+
+        for agent in [
+            CcConnectAgent::Claude,
+            CcConnectAgent::Pi,
+            CcConnectAgent::Opencode,
+        ] {
+            profile.agent = agent;
+            let settings_path = project.path().join("claude-settings.json");
+            let environment = BTreeMap::from([(
+                "AGENT_TEST_TOKEN".to_string(),
+                "${AGENT_TEST_TOKEN}".to_string(),
+            )]);
+            let config = build_managed_config_with_agent_launch(
+                &profile,
+                Path::new(r"C:\Users\test\cli-manager-projects.txt"),
+                Path::new(r"C:\Users\test\cli-manager-switch.ps1"),
+                None,
+                (agent == CcConnectAgent::Claude).then_some(settings_path.as_path()),
+                &environment,
+            )
+            .unwrap();
+            fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+            format_and_check_config_syntax(Path::new(&binary), &config_path).unwrap();
+        }
+
         profile.platforms.clear();
+        profile.agent = CcConnectAgent::Codex;
         profile.platform = CcConnectPlatform::Weixin;
         profile.allow_from = "authorization-pending@im.wechat".to_string();
         fs::write(
