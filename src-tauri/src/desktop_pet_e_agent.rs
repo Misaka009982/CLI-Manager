@@ -559,7 +559,7 @@ impl DesktopPetEAgentBroker {
                 .lock()
                 .map_err(|_| "desktop_pet_e_agent_lock_poisoned".to_string())?;
             prune_availability(&mut state, Instant::now());
-            if request.available {
+            let pending = if request.available {
                 let is_new_instance = state
                     .available_instances
                     .insert(
@@ -578,8 +578,9 @@ impl DesktopPetEAgentBroker {
             } else {
                 state.available_instances.remove(&request.instance_id);
                 Vec::new()
-            }
+            };
             self.shared.1.notify_all();
+            pending
         };
         for entry in pending {
             self.publish(agent_event("pending", &entry, None, None));

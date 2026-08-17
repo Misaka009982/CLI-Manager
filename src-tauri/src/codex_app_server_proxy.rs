@@ -578,7 +578,10 @@ struct CodexAgentRequest {
     hook_payload: Value,
 }
 
-fn first_protocol_string<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
+fn first_protocol_string<'a>(
+    value: &'a serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<&'a str> {
     keys.iter().find_map(|key| {
         value
             .get(*key)
@@ -608,7 +611,7 @@ fn codex_agent_request(line: &[u8], expected_thread_id: Option<&str>) -> Option<
     if !matches!(request_id, Value::String(_) | Value::Number(_)) {
         return None;
     }
-    let params = message.get("params")?;
+    let params = message.get("params").and_then(Value::as_object)?;
     let session_id = first_protocol_string(
         params,
         &["threadId", "thread_id", "conversationId", "conversation_id"],
