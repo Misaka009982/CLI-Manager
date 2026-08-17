@@ -425,6 +425,8 @@ fn standby_target(base_profile: &CcConnectProfile) -> Result<ResolvedHandoffTarg
         name: CONTROL_PROJECT_NAME.to_string(),
         path: profile.project_path.clone(),
         agent: CcConnectAgent::Codex,
+        cli_tool: String::new(),
+        cli_args: String::new(),
         group_path: Vec::new(),
         provider_id: provider_id.clone(),
         codex_provider_id: provider_id,
@@ -931,11 +933,17 @@ impl CcConnectManager {
         }
         // A second app-server cannot authoritatively inspect a thread still owned by
         // the desktop Codex process, and resuming it here can interrupt that process.
-        match prepare_remote_codex_launch(&target.profile, &target.project)? {
+        let local_agent_launcher = (target.transport == CcConnectHandoffTransport::Local)
+            .then(|| ensure_local_agent_available(&target.project))
+            .transpose()?;
+        match prepare_remote_codex_launch(
+            &target.profile,
+            &target.project,
+            local_agent_launcher.as_ref(),
+        )? {
             Some(launch) => probe_remote_codex_app_server(&launch)
                 .map_err(|err| format!("handoff_codex_backend_unavailable: {err}")),
             None if target.transport == CcConnectHandoffTransport::Local => {
-                ensure_local_agent_available(target.project.agent)?;
                 validate_claude_provider_snapshot(&target)
             }
             None => Err("handoff_codex_backend_unavailable".to_string()),

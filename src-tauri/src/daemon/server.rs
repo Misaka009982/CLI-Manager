@@ -2671,6 +2671,44 @@ mod tests {
     }
 
     #[test]
+    fn remote_codex_permission_request_bypasses_provisional_approval_in_daemon_host() {
+        let host = DaemonHost::new();
+        let launch = remote_hook_launch("codex");
+        host.reserve_session_with_launch("tab-1", None, None, Some(&launch))
+            .unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        host.set_hook_sink(approval_aware_hook_sink(Arc::new(move |payload| {
+            sender.send(payload).unwrap();
+        })));
+
+        host.accept_remote_hook_event(serde_json::json!({
+            "kind": "hookEvent",
+            "eventId": "event-1",
+            "sequence": 1,
+            "tabId": "tab-1",
+            "hostId": launch.host_id,
+            "clientInstanceId": launch.client_instance_id,
+            "projectId": launch.project_id,
+            "bridgeEpoch": launch.bridge_epoch,
+            "installationId": launch.agent_installation_id,
+            "source": "codex",
+            "event": "PermissionRequest",
+            "sessionId": "session-1",
+            "agentId": "child-1",
+            "toolName": "apply_patch",
+            "remoteCwd": launch.remote_path,
+            "occurredAt": 1,
+        }));
+
+        let payload = receiver
+            .try_recv()
+            .expect("SSH approval must not be delayed");
+        let payload = serde_json::to_value(payload).unwrap();
+        assert_eq!(payload["event"], "PermissionRequest");
+        assert_eq!(payload["environmentType"], "ssh");
+    }
+
+    #[test]
     fn websocket_writer_sends_binary_terminal_output() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();

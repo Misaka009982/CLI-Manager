@@ -135,20 +135,34 @@ impl ClaudeHookPayload {
             && self.event == "PermissionRequest"
             && non_empty(self.agent_id.as_deref()).is_some()
             && non_empty(self.message.as_deref()).is_none()
+            && matches!(self.approval_environment().as_str(), "local" | "wsl")
     }
 
     fn approval_scope(&self) -> Option<ApprovalScope> {
         Some(ApprovalScope {
             tab_id: self.tab_id.clone(),
+            source: self.source.clone(),
+            environment: self.approval_environment(),
             session_id: non_empty(self.session_id.as_deref()).map(str::to_string),
             agent_id: non_empty(self.agent_id.as_deref())?.to_string(),
         })
     }
 
     fn approval_transcript_path(&self) -> Option<PathBuf> {
-        non_empty(self.agent_transcript_path.as_deref())
-            .or_else(|| non_empty(self.transcript_path.as_deref()))
-            .map(PathBuf::from)
+        let raw = non_empty(self.agent_transcript_path.as_deref())
+            .or_else(|| non_empty(self.transcript_path.as_deref()))?;
+        let path = crate::commands::subagent_transcript::normalize_explicit_transcript_path(
+            raw.to_string(),
+            self.wsl_distro_name.as_deref(),
+        );
+        crate::commands::subagent_transcript::validate_explicit_transcript_path(&path).ok()?;
+        Some(PathBuf::from(path))
+    }
+
+    fn approval_environment(&self) -> String {
+        non_empty(self.environment_type.as_deref())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_else(|| "local".to_string())
     }
 
     pub fn with_remote_project_name(mut self, project_name: String) -> Self {
@@ -176,22 +190,21 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ApprovalScope {
     tab_id: String,
+    source: String,
+    environment: String,
     session_id: Option<String>,
     agent_id: String,
 }
 
 impl ApprovalScope {
     fn same_parent(&self, payload: &ClaudeHookPayload) -> bool {
-        if self.tab_id != payload.tab_id {
+        if self.tab_id != payload.tab_id
+            || self.source != payload.source
+            || self.environment != payload.approval_environment()
+        {
             return false;
         }
-        match (
-            self.session_id.as_deref(),
-            non_empty(payload.session_id.as_deref()),
-        ) {
-            (Some(expected), Some(actual)) => expected == actual,
-            _ => true,
-        }
+        self.session_id.as_deref() == non_empty(payload.session_id.as_deref())
     }
 
     fn same_child(&self, payload: &ClaudeHookPayload) -> bool {
@@ -214,12 +227,10 @@ struct ProvisionalApproval {
 impl ProvisionalApproval {
     fn from_payload(payload: ClaudeHookPayload, now: Instant) -> Self {
         let transcript_path = payload.approval_transcript_path();
-        let transcript_bytes = payload.transcript_bytes.or_else(|| {
-            transcript_path
-                .as_deref()
-                .and_then(|path| fs::metadata(path).ok())
-                .map(|metadata| metadata.len())
-        });
+        let transcript_bytes = transcript_path
+            .as_deref()
+            .filter(|path| !is_wsl_unc_path(path))
+            .and(payload.transcript_bytes);
         Self {
             scope: payload
                 .approval_scope()
@@ -259,6 +270,10 @@ impl ProvisionalApproval {
             (Some(expected), Some(actual)) if expected == actual
         )
     }
+}
+
+fn is_wsl_unc_path(path: &std::path::Path) -> bool {
+    crate::wsl::parse_wsl_unc_path(&path.to_string_lossy()).is_some()
 }
 
 #[derive(Default)]
@@ -950,8 +965,9 @@ mod validation_tests {
 
 #[cfg(test)]
 mod remote_tests {
-    use super::remote_hook_payload_from_spool;
+    use super::{remote_hook_payload_from_spool, ApprovalArbiterState};
     use serde_json::json;
+    use std::time::Instant;
 
     fn remote_notification_job(source: &str) -> super::ClaudeHookPayload {
         let payload = remote_hook_payload_from_spool(&json!({
@@ -987,6 +1003,25 @@ mod remote_tests {
         .unwrap()
     }
 
+    fn remote_codex_permission_request() -> super::ClaudeHookPayload {
+        remote_hook_payload_from_spool(&json!({
+            "kind": "hookEvent",
+            "eventId": "00000000-0000-4000-8000-000000000003",
+            "sequence": 2,
+            "hostId": "host",
+            "projectId": "project",
+            "tabId": "00000000-0000-4000-8000-000000000002",
+            "source": "codex",
+            "event": "PermissionRequest",
+            "sessionId": "session-1",
+            "agentId": "child-1",
+            "toolName": "apply_patch",
+            "remoteCwd": "/srv/private-project",
+            "occurredAt": 1
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn question_notifications_require_user_response() {
         assert!(remote_question_notification("claude", "AskUserQuestion").requires_user_response());
@@ -1013,13 +1048,25 @@ mod remote_tests {
         assert_eq!(job.cwd, None);
         assert_eq!(job.project.as_deref(), Some("Sidebar Project"));
     }
+
+    #[test]
+    fn ssh_codex_permission_request_bypasses_provisional_approval() {
+        let mut state = ApprovalArbiterState::default();
+        let delivered = state.accept(remote_codex_permission_request(), Instant::now());
+        assert_eq!(delivered.len(), 1);
+        assert!(state.pending.is_empty());
+    }
 }
 
 #[cfg(test)]
 mod approval_tests {
-    use super::{ApprovalArbiterState, ClaudeHookPayload, PROVISIONAL_APPROVAL_GRACE};
+    use super::{
+        approval_aware_hook_sink, ApprovalArbiterState, ClaudeHookPayload, HookPayloadSink,
+        PROVISIONAL_APPROVAL_GRACE,
+    };
     use std::fs::{self, OpenOptions};
     use std::io::Write;
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     fn payload(
@@ -1122,6 +1169,10 @@ mod approval_tests {
         pending.transcript_bytes = Some(baseline);
         let mut state = ApprovalArbiterState::default();
         assert!(state.accept(pending, now).is_empty());
+        // The path is intentionally outside the trusted transcript roots in this
+        // synthetic test. Seed the rollout state directly to exercise polling.
+        state.pending[0].transcript_path = Some(transcript.clone());
+        state.pending[0].transcript_bytes = Some(baseline);
 
         OpenOptions::new()
             .append(true)
@@ -1131,6 +1182,109 @@ mod approval_tests {
             .unwrap();
         assert!(state.poll(now + PROVISIONAL_APPROVAL_GRACE).is_empty());
         assert!(state.pending.is_empty());
+    }
+
+    #[test]
+    fn ssh_child_permission_is_delivered_immediately() {
+        let now = Instant::now();
+        let mut state = ApprovalArbiterState::default();
+        let mut remote = payload(
+            "PermissionRequest",
+            Some("child-1"),
+            None,
+            Some("apply_patch"),
+        );
+        remote.environment_type = Some("ssh".to_string());
+        assert_eq!(state.accept(remote, now).len(), 1);
+        assert!(state.pending.is_empty());
+    }
+
+    #[test]
+    fn global_approval_sink_forwards_ssh_permission_immediately() {
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let target = Arc::clone(&delivered);
+        let delivery: HookPayloadSink = Arc::new(move |payload| {
+            target.lock().unwrap().push(payload.tab_id().to_string());
+        });
+        let sink = approval_aware_hook_sink(delivery);
+        let mut remote = payload(
+            "PermissionRequest",
+            Some("child-1"),
+            None,
+            Some("apply_patch"),
+        );
+        remote.environment_type = Some("ssh".to_string());
+        sink(remote);
+        assert_eq!(delivered.lock().unwrap().as_slice(), ["tab-1"]);
+    }
+
+    #[test]
+    fn foreign_source_environment_or_missing_session_cannot_resolve_pending_approval() {
+        let now = Instant::now();
+        let mut state = ApprovalArbiterState::default();
+        assert!(state
+            .accept(
+                payload(
+                    "PermissionRequest",
+                    Some("child-1"),
+                    None,
+                    Some("apply_patch")
+                ),
+                now,
+            )
+            .is_empty());
+
+        let mut other_source = payload("ToolStop", Some("child-1"), None, Some("apply_patch"));
+        other_source.source = "claude".to_string();
+        assert_eq!(state.accept(other_source, now).len(), 1);
+        assert_eq!(state.pending.len(), 1);
+
+        let mut other_environment = payload("ToolStop", Some("child-1"), None, Some("apply_patch"));
+        other_environment.environment_type = Some("wsl".to_string());
+        assert_eq!(state.accept(other_environment, now).len(), 1);
+        assert_eq!(state.pending.len(), 1);
+
+        let mut missing_session = payload("Stop", None, None, None);
+        missing_session.session_id = None;
+        assert_eq!(state.accept(missing_session, now).len(), 1);
+        assert_eq!(state.pending.len(), 1);
+    }
+
+    #[test]
+    fn wsl_transcript_path_is_trusted_without_unc_metadata_polling() {
+        let now = Instant::now();
+        let mut state = ApprovalArbiterState::default();
+        let mut pending = payload(
+            "PermissionRequest",
+            Some("child-1"),
+            None,
+            Some("apply_patch"),
+        );
+        pending.environment_type = Some("wsl".to_string());
+        pending.wsl_distro_name = Some("Ubuntu".to_string());
+        pending.agent_transcript_path =
+            Some("/home/test/.codex/sessions/session.jsonl".to_string());
+        pending.transcript_bytes = Some(123);
+        assert!(state.accept(pending, now).is_empty());
+        assert!(state.pending[0].transcript_path.is_some());
+        assert_eq!(state.pending[0].transcript_bytes, None);
+    }
+
+    #[test]
+    fn untrusted_transcript_path_is_not_polled() {
+        let now = Instant::now();
+        let mut state = ApprovalArbiterState::default();
+        let mut pending = payload(
+            "PermissionRequest",
+            Some("child-1"),
+            None,
+            Some("apply_patch"),
+        );
+        pending.transcript_path = Some(r"C:\temp\untrusted.jsonl".to_string());
+        pending.transcript_bytes = Some(123);
+        assert!(state.accept(pending, now).is_empty());
+        assert_eq!(state.pending[0].transcript_path, None);
+        assert_eq!(state.pending[0].transcript_bytes, None);
     }
 
     #[test]

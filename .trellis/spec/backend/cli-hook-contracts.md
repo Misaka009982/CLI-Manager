@@ -995,3 +995,71 @@ pi.on("agent_start", (_event, ctx) => {
   void postHookEvent("UserPromptSubmit", readSessionId(ctx));
 });
 ```
+
+## Scenario: Remote Handoff Approval Arbitration Boundaries
+
+### 1. Scope / Trigger
+
+- Trigger: a remote-handoff-managed child emits `PermissionRequest` and the shared local Hook sink must decide whether to defer it for a matching Codex transcript decision.
+- Applies to: `ApprovalArbiterState`, `approval_aware_hook_sink`, remote spool replay, transcript-path normalization, and local/WSL/SSH runtime boundaries.
+
+### 2. Signatures
+
+```text
+ApprovalArbiterState::accept(payload) -> Option<ApprovalRoute>
+approval_aware_hook_sink(payload) -> Hook delivery
+normalize_explicit_transcript_path(path, wslDistroName) -> PathBuf | error
+validate_explicit_transcript_path(path) -> PathBuf | error
+```
+
+### 3. Contracts
+
+- One global sink remains the sole classifier before app, daemon, third-party, and remote-handoff fan-out; no downstream sink may independently defer or duplicate an approval.
+- Only a message-less Codex child event from `local` or `wsl` is a provisional candidate. SSH spool/replay events always deliver immediately.
+- A provisional approval may resolve only against the same source, environment, tab, parent session, and child-agent scope. `Some(session)` and `None` are never equivalent.
+- Transcript metadata is read only after explicit path normalization and transcript-root validation. Native metadata polling of `\\wsl$` / `\\wsl.localhost` paths is forbidden.
+- Missing, untrusted, unreadable, or non-local transcript metadata leaves the approval unresolved; the bounded fallback delivery remains authoritative and must never suppress it permanently.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| SSH `PermissionRequest` from spool replay | Forward immediately; do not enter provisional state. |
+| Local/WSL message-less Codex child request | Hold only for the bounded arbitration window. |
+| Source/environment/tab/session/agent mismatch | Do not resolve or cancel the other approval. |
+| Explicit path outside a trusted transcript root | Do not read metadata; use normal fallback delivery. |
+| WSL UNC transcript path | Do not call native `fs::metadata`; rely on Hook event/timing flow. |
+| No decisive transcript event before deadline | Deliver exactly once through the original sink chain. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a local Codex child emits an empty approval followed by a matching transcript decision; only that scoped approval is resolved.
+- Good: an SSH Agent replays a Codex `PermissionRequest`; it reaches normal notification delivery without a 15-second delay.
+- Base: ordinary local approvals keep existing immediate delivery unless they meet every provisional-candidate predicate.
+- Bad: treating a missing session as a wildcard, accepting a spool event as a candidate, or reading an arbitrary UNC path from the payload.
+
+### 6. Tests Required
+
+- Rust tests cover SSH immediate delivery, local/WSL candidate admission, source/environment/session isolation, and timeout fallback delivery.
+- Rust tests cover rejected untrusted paths and WSL UNC paths without native metadata polling.
+- Run `cargo fmt --check`, targeted approval/remote Hook tests, `cargo check --lib`, and `git diff --check`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+// A missing session becomes a wildcard and can resolve another child request.
+scope.session_id.as_deref() == payload.session_id.as_deref()
+```
+
+#### Correct
+
+```rust
+// All correlation dimensions, including Option presence, must match exactly.
+scope.source == payload.source
+    && scope.environment == approval_environment(payload)
+    && scope.tab_id == payload.tab_id
+    && scope.session_id == payload.session_id
+    && scope.agent_id == payload.agent_id
+```

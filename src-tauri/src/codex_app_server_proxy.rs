@@ -19,6 +19,7 @@ pub const HELPER_SUBCOMMAND: &str = "__codex_app_server_proxy";
 pub(crate) const PROXY_EXECUTABLE_ENV: &str = "CLI_MANAGER_CODEX_APP_SERVER_PROXY";
 pub(crate) const EXPECTED_SESSION_ID_ENV: &str = "CLI_MANAGER_CODEX_EXPECTED_SESSION_ID";
 pub(crate) const CODEX_LAUNCHER_ENV: &str = "CLI_MANAGER_CODEX_LAUNCHER";
+pub(crate) const CODEX_LAUNCHER_ARGS_ENV: &str = "CLI_MANAGER_CODEX_LAUNCHER_ARGS";
 pub(crate) const CODEX_BASE_URL_OVERRIDE_ENV: &str = "CLI_MANAGER_CODEX_BASE_URL_OVERRIDE";
 pub(crate) const CODEX_ENV_KEY_OVERRIDE_ENV: &str = "CLI_MANAGER_CODEX_ENV_KEY_OVERRIDE";
 pub(crate) const CODEX_MODEL_OVERRIDE_ENV: &str = "CLI_MANAGER_CODEX_MODEL_OVERRIDE";
@@ -34,6 +35,8 @@ pub(crate) const CODEX_SSH_LAUNCH_ENV: &str = "CLI_MANAGER_CODEX_SSH_LAUNCH";
 // A resumed Codex thread can legitimately exceed cc-connect's 10 MB scanner limit.
 // Keep a finite ceiling so a broken child cannot exhaust the host process indefinitely.
 const MAX_PROTOCOL_LINE_BYTES: usize = 512 * 1024 * 1024;
+const MAX_CODEX_LAUNCHER_ARGS: usize = 64;
+const MAX_CODEX_LAUNCHER_ARG_BYTES: usize = 8 * 1024;
 const STRICT_RESUME_ERROR_CODE: i64 = -32091;
 const SSH_HANDOFF_HOOK_QUEUE_CAPACITY: usize = 32;
 const LOCAL_HANDOFF_DELIVERY_INSTRUCTION: &str = "CLI-Manager remote handoff: deliver output files with `cc-connect send --file <absolute-path>` and output images with `cc-connect send --image <absolute-path>`.";
@@ -299,11 +302,13 @@ fn run_proxy(child_args: &[String]) -> Result<i32, String> {
         )
     } else {
         let launcher = codex_launcher_from_environment()?;
+        let launcher_args = codex_launcher_args_from_environment()?;
         let provider_overrides = CodexProviderOverrides::from_environment()?;
         let expected_model_provider = provider_overrides.model_provider.clone();
-        let child_args = build_codex_child_args(child_args, &provider_overrides)?;
+        let mut effective_args = launcher_args;
+        effective_args.extend(build_codex_child_args(child_args, &provider_overrides)?);
         (
-            codex_command(&launcher, &child_args),
+            codex_command(&launcher, &effective_args)?,
             expected_model_provider,
         )
     };
@@ -372,9 +377,12 @@ fn run_passthrough(child_args: &[String]) -> Result<i32, String> {
         return Ok(status.code().unwrap_or(1));
     }
     let launcher = codex_launcher_from_environment()?;
-    let child_args =
-        build_codex_child_args(child_args, &CodexProviderOverrides::from_environment()?)?;
-    let status = codex_command(&launcher, &child_args)
+    let mut command_args = codex_launcher_args_from_environment()?;
+    command_args.extend(build_codex_child_args(
+        child_args,
+        &CodexProviderOverrides::from_environment()?,
+    )?);
+    let status = codex_command(&launcher, &command_args)?
         .status()
         .map_err(|err| format!("start real Codex command failed: {err}"))?;
     Ok(status.code().unwrap_or(1))
@@ -416,6 +424,31 @@ fn codex_launcher_from_environment() -> Result<PathBuf, String> {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .ok_or_else(|| "real Codex launcher is unavailable".to_string())
+}
+
+fn codex_launcher_args_from_environment() -> Result<Vec<String>, String> {
+    let Some(value) = env::var_os(CODEX_LAUNCHER_ARGS_ENV).filter(|value| !value.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let value = value
+        .into_string()
+        .map_err(|_| "Codex launcher arguments are not valid Unicode".to_string())?;
+    parse_codex_launcher_args(&value)
+}
+
+fn parse_codex_launcher_args(value: &str) -> Result<Vec<String>, String> {
+    let args = serde_json::from_str::<Vec<String>>(value)
+        .map_err(|_| "Codex launcher arguments are invalid".to_string())?;
+    if args.len() > MAX_CODEX_LAUNCHER_ARGS
+        || args.iter().any(|arg| {
+            arg.is_empty()
+                || arg.len() > MAX_CODEX_LAUNCHER_ARG_BYTES
+                || arg.contains(['\0', '\r', '\n'])
+        })
+    {
+        return Err("Codex launcher arguments are invalid".to_string());
+    }
+    Ok(args)
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -535,29 +568,46 @@ fn build_codex_child_args(
 }
 
 #[cfg(target_os = "windows")]
-fn codex_command(launcher: &Path, args: &[String]) -> Command {
-    let is_script = launcher
+fn codex_command(launcher: &Path, args: &[String]) -> Result<Command, String> {
+    let extension = launcher
         .extension()
         .and_then(|value| value.to_str())
-        .is_some_and(|value| {
-            value.eq_ignore_ascii_case("cmd") || value.eq_ignore_ascii_case("bat")
-        });
-    if is_script {
+        .unwrap_or_default();
+    let is_script = matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "cmd" | "bat" | "ps1"
+    );
+    let launcher_value = launcher.to_string_lossy();
+    if is_script
+        && std::iter::once(launcher_value.as_ref())
+            .chain(args.iter().map(String::as_str))
+            .any(|value| value.contains(['&', '|', '<', '>', '^', '%', '!']))
+    {
+        return Err("Codex launcher contains unsupported script characters".to_string());
+    }
+    if extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat") {
         let mut command = silent_command("cmd.exe");
         command.args(["/d", "/c"]).arg(launcher).args(args);
+        Ok(command)
+    } else if extension.eq_ignore_ascii_case("ps1") {
+        let mut command = silent_command("powershell.exe");
         command
+            .args(["-NoProfile", "-File"])
+            .arg(launcher)
+            .args(args);
+        Ok(command)
     } else {
         let mut command = silent_command(&launcher.to_string_lossy());
         command.args(args);
-        command
+        Ok(command)
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-fn codex_command(launcher: &Path, args: &[String]) -> Command {
+fn codex_command(launcher: &Path, args: &[String]) -> Result<Command, String> {
     let mut command = Command::new(launcher);
     command.args(args);
-    command
+    Ok(command)
 }
 
 fn forward_parent_input(
@@ -1175,6 +1225,16 @@ mod tests {
             build_codex_child_args(&original, &CodexProviderOverrides::default()).unwrap(),
             original
         );
+    }
+
+    #[test]
+    fn registered_codex_launcher_args_are_decoded_as_structured_argv() {
+        assert_eq!(
+            parse_codex_launcher_args(r#"["-c","model_reasoning_effort=high"]"#).unwrap(),
+            vec!["-c", "model_reasoning_effort=high"]
+        );
+        assert!(parse_codex_launcher_args(r#"{"command":"codex"}"#).is_err());
+        assert!(parse_codex_launcher_args(r#"["line\nbreak"]"#).is_err());
     }
 
     #[test]
