@@ -127,7 +127,8 @@ test("live PTY output enables OSC 52 copies and replay disables them", () => {
   assert.match(displaySource, /normalizeOutputRef\.current\(rawText, \{ applyOsc52: false \}\)/);
   assert.match(terminalSource, /osc52ClipboardEnabled/);
   assert.match(terminalSource, /formatOsc52Reply/);
-  assert.match(terminalSource, /e\.key\.toLowerCase\(\) === "c"/);
+  assert.match(terminalSource, /readTextFromClipboard/);
+  assert.match(terminalSource, /copyTerminalSelection/);
   assert.match(appSource, /blockChromiumInspect/);
 });
 

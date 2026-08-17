@@ -48,8 +48,9 @@ import { useTerminalDisplay } from "../hooks/useTerminalDisplay";
 import { useTerminalInput, type TerminalSuggestionGhostState } from "../hooks/useTerminalInput";
 import { getTerminalCellWidth } from "../lib/terminalCellWidth";
 import { resolveClaudeImeCompositionAnchor } from "../lib/terminalImeAnchor";
-import { copyTextToClipboard } from "../lib/systemClipboard";
+import { copyTextToClipboard, readTextFromClipboard } from "../lib/systemClipboard";
 import { formatOsc52Reply } from "../lib/terminalOscParse";
+import { eventToCombo } from "../hooks/useKeyboardShortcuts";
 import { hasCodexTuiViewport } from "../lib/terminalTuiDisplay";
 import { createTerminalTuiColorSyncController } from "../lib/terminalTuiColorSync";
 import { hexToRgba, normalizeHexColor } from "../lib/terminalColor";
@@ -431,6 +432,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const visibilityRestoreFallbackRafRef = useRef<number | null>(null);
   const codexCursorShowTimerRef = useRef<number | null>(null);
   const codexSessionDetectedRef = useRef(false);
+  const osc52ClipboardChainRef = useRef(Promise.resolve());
   const displayNormalizeOutputRef = useRef<(text: string) => string>((text) => text);
   const displayTransformOutputRef = useRef<(text: string) => string>((text) => text);
   const displayAfterWriteRef = useRef<((terminal: Terminal) => void) | null>(null);
@@ -770,18 +772,21 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     osPlatformRef,
     onOsc52Write: (text) => {
       if (!useSettingsStore.getState().osc52ClipboardEnabled) return;
-      void copyTextToClipboard(text);
+      osc52ClipboardChainRef.current = osc52ClipboardChainRef.current
+        .catch(() => undefined)
+        .then(() => copyTextToClipboard(text));
     },
     onOsc52Query: (selection) => {
       if (!useSettingsStore.getState().osc52ClipboardEnabled) return;
-      void readClipboardPasteText().then((text) => {
-        const reply = formatOsc52Reply(text ?? "", selection || "c");
-        terminalProcessManager.write(sessionId, reply).catch((err) => {
-          logError("Failed to reply to OSC 52 clipboard query", { sessionId, err });
+      osc52ClipboardChainRef.current = osc52ClipboardChainRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          const text = await readTextFromClipboard();
+          await terminalProcessManager.write(sessionId, formatOsc52Reply(text, selection || "c"));
+        })
+        .catch((err) => {
+          logError("Failed to answer OSC 52 clipboard query", { sessionId, err });
         });
-      }).catch((err) => {
-        logError("Failed to read clipboard for OSC 52 query", { sessionId, err });
-      });
     },
   });
   displayNormalizeOutputRef.current = normalizeTerminalOutput;
@@ -1580,18 +1585,15 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           return false;
         }
       }
-      if (
-        e.type === "keydown"
-        && e.shiftKey
-        && !e.altKey
-        && e.key.toLowerCase() === "c"
-        && (e.ctrlKey || e.metaKey)
-      ) {
-        e.preventDefault();
-        if (terminal.hasSelection()) {
-          void copySelection();
+      if (e.type === "keydown") {
+        const copyShortcut = useSettingsStore.getState().keyboardShortcuts.copyTerminalSelection;
+        if (copyShortcut && eventToCombo(e) === copyShortcut) {
+          e.preventDefault();
+          if (terminal.hasSelection()) {
+            void copySelection();
+          }
+          return false;
         }
-        return false;
       }
       if (e.type === "keydown" && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "v") {
         e.preventDefault();

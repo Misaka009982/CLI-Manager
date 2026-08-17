@@ -7,7 +7,7 @@
 - 内置终端现在拦截远程/全屏 TUI 发出的 OSC 52（含 tmux DCS passthrough），解码后写入 Tauri 本机剪贴板，不再依赖远端 `xclip`/`DISPLAY`。序列会从可见输出中剥离，避免刷出 base64。
 - 仅实时 PTY 输出会写剪贴板；daemon replay、reset 和会话回放不会用历史 OSC 52 覆盖当前剪贴板。查询会回应当前剪贴板内容，清空和非法 payload 不改剪贴板。（Refs #211）
 - 「设置 -> 快捷键」新增 OSC 52 开关，关闭后仍剥离序列，但不写剪贴板、不回答查询。
-- `Ctrl+Shift+C` 在终端中复制选区，并在窗口捕获层阻止 Chromium 检查元素；调试仍用 F12。
+- `Ctrl+Shift+C` 在终端中复制选区（可在「设置 -> 快捷键」改绑），并在窗口捕获层阻止 Chromium 检查元素；调试仍用 F12。
 - 恢复 V1.3.2 鼠标策略：普通拖动选择终端文本，按住 Alt 才把点击/拖动发给底层 TUI，避免 Grok 松手重绘清掉选区。
 
 ### Trellis Codex 工作流

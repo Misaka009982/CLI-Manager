@@ -181,6 +181,7 @@ export type ShortcutAction =
   | "commandPalette"
   | "sessionHistory"
   | "copyAi"
+  | "copyTerminalSelection"
   | "toggleSidebar"
   | "toggleTerminalFullscreen";
 export type TabSwitchShortcutModifier = "Alt" | "Ctrl" | "Shift";
@@ -236,6 +237,7 @@ const SHORTCUT_ACTIONS: readonly ShortcutAction[] = [
   "commandPalette",
   "sessionHistory",
   "copyAi",
+  "copyTerminalSelection",
   "toggleSidebar",
   "toggleTerminalFullscreen",
 ];
@@ -293,6 +295,7 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutMap = {
   commandPalette: "Ctrl+P",
   sessionHistory: "Ctrl+K",
   copyAi: "Alt+P",
+  copyTerminalSelection: "Ctrl+Shift+C",
   toggleSidebar: "Ctrl+B",
   toggleTerminalFullscreen: "F11",
 };
