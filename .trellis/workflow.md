@@ -212,7 +212,7 @@ Load `trellis-brainstorm`; stay in planning.
 The task-start Git branch/upstream synchronization check must be completed and reported before implementation.
 Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`; ask for review before `task.py start`.
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
-Inline mode: skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-before-dev`.
+Inline mode: skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-before-dev`. Do not automatically dispatch a sub-agent. Dispatch is allowed only when the user explicitly requests it, or after the main session asks and receives explicit approval.
 [/workflow-state:planning-inline]
 
 ### Phase 2: Execute
@@ -244,7 +244,7 @@ Dispatch prompt starts with `Active task: <task path from task.py current>`. Rea
 
 [workflow-state:in_progress-inline]
 Flow: `trellis-before-dev` -> edit -> `trellis-check` -> validation -> `trellis-update-spec` -> commit (Phase 3.4) -> `/trellis:finish-work`.
-Do not dispatch implement/check sub-agents in inline mode.
+Do not automatically dispatch implement/check/research sub-agents in inline mode. Dispatch is allowed only when the user explicitly requests it, or after the main session asks and receives explicit approval.
 At the start of resumed work, run and report the read-only Git branch/upstream synchronization check; do not automatically synchronize the branch.
 Before commit, every code change must have a versioned `CHANGELOG.md` entry and a relevant `docs/功能清单.md` entry. Missing changelog version: ask first, then use `TEMP` if it remains unspecified.
 Read context: `prd.md` -> `design.md if present` -> `implement.md if present`, plus relevant spec/research loaded by skills.
