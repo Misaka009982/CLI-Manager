@@ -30,8 +30,8 @@ jobs:
       - name: Cache bundled Electron runtime
         uses: actions/cache@v4
         with:
-          path: src-tauri/target/electron-runtime-cache
-          key: electron-pet-runtime-${{ runner.os }}-${{ runner.arch }}-v41.10.2
+          path: src-tauri/target/pet-e-runtime
+          key: desktop-pet-e-runtime-${{ runner.os }}-${{ runner.arch }}-v41.10.2
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -186,12 +186,8 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
 
-      - name: Prepare bundled Electron desktop pet
-        shell: bash
-        env:
-          TAURI_ENV_PLATFORM: windows
-          TAURI_ENV_ARCH: x86_64
-        run: node ./scripts/prepare-electron-pet-runtime.mjs
+      - name: Install Desktop Pet E build dependencies
+        run: npm install --prefix pet-e --ignore-scripts --no-audit --no-fund --package-lock=false
 
       - name: Record stable latest release
         id: stable_latest
