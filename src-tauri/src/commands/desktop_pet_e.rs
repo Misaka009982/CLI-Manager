@@ -571,6 +571,23 @@ fn resolve_runtime_paths<R: Runtime>(app: &AppHandle<R>) -> Result<(PathBuf, Pat
     Ok((runtime, entry))
 }
 
+#[cfg(target_os = "windows")]
+fn normalize_process_path(path: PathBuf) -> PathBuf {
+    let value = path.to_string_lossy().into_owned();
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = value.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        PathBuf::from(value)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn normalize_process_path(path: PathBuf) -> PathBuf {
+    path
+}
+
 fn start_process<R: Runtime>(
     manager: DesktopPetEManager,
     app: AppHandle<R>,
@@ -582,9 +599,11 @@ fn start_process<R: Runtime>(
     state.ready = false;
     let generation = state.generation;
     let instance_id = Uuid::new_v4().to_string();
-    let mut command = silent_command(&runtime.to_string_lossy());
+    let runtime_arg = normalize_process_path(runtime);
+    let entry_arg = normalize_process_path(entry);
+    let mut command = silent_command(&runtime_arg.to_string_lossy());
     command
-        .arg(&entry)
+        .arg(&entry_arg)
         .arg("--cli-manager-pet-e")
         .arg("--instance-id")
         .arg(&instance_id)

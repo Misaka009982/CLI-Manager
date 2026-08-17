@@ -143,6 +143,11 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   assert.match(prepare, /version: "1\.0\.0"/);
   assert.match(manager, /pet-e\/runtime\/electron\.exe/);
   assert.match(manager, /pet-e\/app\/main\.js/);
+  assert.match(manager, /fn normalize_process_path/);
+  assert.match(manager, /let runtime_arg = normalize_process_path\(runtime\)/);
+  assert.match(manager, /let entry_arg = normalize_process_path\(entry\)/);
+  assert.match(manager, /silent_command\(&runtime_arg\.to_string_lossy\(\)\)/);
+  assert.match(manager, /\.arg\(&entry_arg\)/);
   assert.match(manager, /PET_E_PACKAGE_MANIFEST_RELATIVE_PATH/);
   assert.match(manager, /ELECTRON_RUNTIME_SHA256/);
   assert.match(manager, /sha256_file/);
