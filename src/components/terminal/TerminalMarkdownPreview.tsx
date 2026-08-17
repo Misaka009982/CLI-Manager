@@ -3,6 +3,7 @@ import * as SelectPrimitive from "@radix-ui/react-select";
 import type { ITheme } from "@xterm/xterm";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n, type AppLanguage } from "../../lib/i18n";
+import { normalizeFontFamilyStack } from "../../lib/systemFonts";
 import type { HistoryMessage, HistorySessionDetail, HistorySource, Project, TerminalSession } from "../../lib/types";
 import { resolveCliToolHistorySourceId } from "../../lib/cliTools";
 import { formatTime } from "../history/historyViewUtils";
@@ -10,6 +11,7 @@ import { isLightTerminalTheme } from "../../lib/terminalThemes";
 import { resolveTerminalProjectPath } from "../../lib/terminalOscPath";
 import { buildSshAgentHistoryContext, type SshAgentHistoryContext } from "../../lib/sshAgentHistory";
 import { useProjectStore } from "../../stores/projectStore";
+import { useSettingsStore } from "../../stores/settingsStore";
 import {
   fetchLatestProjectSessionDetail,
   fetchRemoteLatestProjectSessionDetail,
@@ -19,6 +21,7 @@ import { useWorktreeStore } from "../../stores/worktreeStore";
 import { Check, ChevronDown } from "lucide-react";
 import { FileText, RefreshCw, X } from "../icons";
 import { SessionTranscriptContent } from "../history/SessionTranscriptContent";
+import { FontSizeControl, useFontSizeControlVisibility } from "../ui/FontSizeControl";
 
 const PREVIEW_SOURCES = new Set<HistorySource>(["claude", "codex"]);
 const LOCAL_RETRY_DELAYS_MS = [0, 180, 420];
@@ -120,9 +123,8 @@ function selectAssistantMarkdownMessages(detail: HistorySessionDetail): Markdown
 }
 
 const MARKDOWN_SOURCE_FENCE = /^[ \t]*(`{3,}|~{3,})[ \t]*(?:md|markdown)[ \t]*\n([\s\S]*?)\n\1[ \t]*$/i;
-const MARKDOWN_PREVIEW_FONT_SCALE_MIN = 0.8;
-const MARKDOWN_PREVIEW_FONT_SCALE_MAX = 1.6;
-const MARKDOWN_PREVIEW_FONT_SCALE_STEP = 0.08;
+const MARKDOWN_PREVIEW_FONT_SIZE_MIN = 8;
+const MARKDOWN_PREVIEW_FONT_SIZE_MAX = 32;
 
 function unwrapFencedMarkdown(content: string): string {
   const normalized = content.replace(/\r\n?/g, "\n");
@@ -219,6 +221,9 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
   const { language, t } = useI18n();
   const terminalCodeTheme = isLightTerminalTheme(terminalTheme) ? "light" : "dark";
   const terminalPreviewStyle = useMemo(() => buildTerminalMarkdownPreviewStyle(terminalTheme), [terminalTheme]);
+  const uiFontFamily = useSettingsStore((state) => state.uiFontFamily);
+  const uiFontSize = useSettingsStore((state) => state.uiFontSize);
+  const effectiveUiFontFamily = normalizeFontFamilyStack(uiFontFamily);
   const session = useTerminalStore((state) => state.sessions.find((item) => item.id === sessionId) ?? null);
   const hookStatus = useTerminalStore((state) => state.tabStatuses[sessionId]?.hook ?? "none");
   const hookUpdatedAt = useTerminalStore((state) => state.tabStatuses[sessionId]?.hookUpdatedAt ?? null);
@@ -246,7 +251,8 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
 
   const [previewMessages, setPreviewMessages] = useState<MarkdownPreviewMessage[]>([]);
   const [selectedMessageIndex, setSelectedMessageIndex] = useState<number | null>(null);
-  const [markdownFontScale, setMarkdownFontScale] = useState(1);
+  const [fontSize, setFontSize] = useState(uiFontSize);
+  const { fontSizeControlVisible, showFontSizeControl } = useFontSizeControlVisibility();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<PreviewError | null>(null);
   const remoteContextRef = useRef<SshAgentHistoryContext | null>(null);
@@ -258,15 +264,18 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
     [previewMessages, selectedMessageIndex],
   );
   const content = selectedMessage ? unwrapFencedMarkdown(selectedMessage.content) : null;
+  useEffect(() => setFontSize(uiFontSize), [uiFontSize]);
+
   const handlePreviewWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
-    if (!event.ctrlKey && !event.metaKey) return;
+    if ((!event.ctrlKey && !event.metaKey) || event.deltaY === 0) return;
     event.preventDefault();
+    showFontSizeControl();
     const direction = event.deltaY < 0 ? 1 : -1;
-    setMarkdownFontScale((current) => Math.min(
-      MARKDOWN_PREVIEW_FONT_SCALE_MAX,
-      Math.max(MARKDOWN_PREVIEW_FONT_SCALE_MIN, current + direction * MARKDOWN_PREVIEW_FONT_SCALE_STEP),
+    setFontSize((current) => Math.min(
+      MARKDOWN_PREVIEW_FONT_SIZE_MAX,
+      Math.max(MARKDOWN_PREVIEW_FONT_SIZE_MIN, current + direction),
     ));
-  }, []);
+  }, [showFontSizeControl]);
 
   const closeRemoteContext = useCallback((context: SshAgentHistoryContext | null) => {
     if (!context) return;
@@ -401,30 +410,54 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
           <X size={14} aria-hidden="true" />
         </button>
       </header>
-      <div
-        className="ui-scrollbar min-h-0 flex-1 overflow-auto px-4 py-3"
-        onWheel={handlePreviewWheel}
-        style={{ "--markdown-preview-font-scale": markdownFontScale } as CSSProperties}
-      >
-        {loading && !content ? (
-          <div className="flex h-full items-center justify-center text-xs text-[var(--text-muted)]">
-            {t("terminal.markdownPreview.loading")}
-          </div>
-        ) : content ? (
-          <SessionTranscriptContent
-            content={content}
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <div
+          className="ui-scrollbar h-full overflow-auto px-4 py-3"
+          onWheel={handlePreviewWheel}
+          style={{
+            "--markdown-preview-font-size": `${fontSize}px`,
+            fontFamily: effectiveUiFontFamily,
+          } as CSSProperties}
+        >
+          {loading && !content ? (
+            <div className="flex h-full items-center justify-center text-xs text-[var(--text-muted)]">
+              {t("terminal.markdownPreview.loading")}
+            </div>
+          ) : content ? (
+            <SessionTranscriptContent
+              content={content}
+              variant="terminal"
+              terminalCodeTheme={terminalCodeTheme}
+              markdownClassName="subagent-transcript-markdown"
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center px-5 text-center text-xs leading-5 text-[var(--text-muted)]">
+              {error === "noSession"
+                ? t("terminal.markdownPreview.noSession")
+                : error === "loadFailed"
+                  ? t("terminal.markdownPreview.loadFailed")
+                  : t("terminal.markdownPreview.empty")}
+            </div>
+          )}
+        </div>
+        {fontSizeControlVisible && (
+          <FontSizeControl
+            fontSize={fontSize}
+            defaultFontSize={uiFontSize}
+            min={MARKDOWN_PREVIEW_FONT_SIZE_MIN}
+            max={MARKDOWN_PREVIEW_FONT_SIZE_MAX}
+            onChange={(next) => {
+              showFontSizeControl();
+              setFontSize(next);
+            }}
+            className="absolute bottom-3 right-3 z-20"
+            style={{
+              backgroundColor: "var(--term-panel-card)",
+              borderColor: "var(--term-panel-border)",
+              color: "var(--term-panel-fg)",
+            }}
             variant="terminal"
-            terminalCodeTheme={terminalCodeTheme}
-            markdownClassName="subagent-transcript-markdown"
           />
-        ) : (
-          <div className="flex h-full items-center justify-center px-5 text-center text-xs leading-5 text-[var(--text-muted)]">
-            {error === "noSession"
-              ? t("terminal.markdownPreview.noSession")
-              : error === "loadFailed"
-                ? t("terminal.markdownPreview.loadFailed")
-                : t("terminal.markdownPreview.empty")}
-          </div>
         )}
       </div>
     </aside>
