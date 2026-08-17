@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type WheelEvent as ReactWheelEvent } from "react";
 import {
   Terminal,
   type IBufferLine,
@@ -64,6 +64,7 @@ import {
 } from "../lib/linuxGraphics";
 import { getOsPlatform, normalizeShellKey, type OsPlatform } from "../lib/shell";
 import { Portal } from "./ui/Portal";
+import { FontSizeControl, useFontSizeControlVisibility } from "./ui/FontSizeControl";
 import { useProjectStore } from "../stores/projectStore";
 import { formatStartupInputForPty, useTerminalStore } from "../stores/terminalStore";
 import {
@@ -88,6 +89,9 @@ import { shouldReflowTerminalCursorLine } from "../terminal/browser/TerminalRefl
 import { terminalProcessManager } from "../terminal/core/TerminalProcessManager";
 import type { TerminalProcessTraits } from "../terminal/transport/PtyHostSocket";
 import {
+  TERMINAL_FONT_SIZE_DEFAULT,
+  TERMINAL_FONT_SIZE_MAX,
+  TERMINAL_FONT_SIZE_MIN,
   TERMINAL_SCROLLBACK_ROWS_DEFAULT,
   useSettingsStore,
   type LightThemePalette,
@@ -432,6 +436,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const piTerminalCompatibilityRef = useRef<PiTerminalCompatibility | null>(null);
   const terminalScrollbackCustomEnabled = useSettingsStore((s) => s.terminalScrollbackCustomEnabled);
   const terminalScrollbackRows = useSettingsStore((s) => s.terminalScrollbackRows);
+  const updateSettings = useSettingsStore((s) => s.update);
   const effectiveTerminalScrollbackRows = terminalScrollbackCustomEnabled
     ? terminalScrollbackRows
     : TERMINAL_SCROLLBACK_ROWS_DEFAULT;
@@ -471,12 +476,18 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       : null
   ));
   const markdownPreviewSupported = isTerminalMarkdownPreviewSupported(terminalSession, terminalProject);
+  const markdownPreviewButtonVisible = Boolean(
+    terminalSession?.isAgentSession
+    || terminalSession?.cliTool?.trim()
+    || terminalProject?.cli_tool?.trim(),
+  );
   const markdownPreviewCanOpen = markdownPreviewSupported
     && Boolean(terminalSession?.cliSessionId?.trim());
 
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
   const [visibilityRestorePending, setVisibilityRestorePending] = useState(false);
   const [suggestionGhost, setSuggestionGhost] = useState<TerminalSuggestionGhostState | null>(null);
+  const { fontSizeControlVisible, showFontSizeControl } = useFontSizeControlVisibility();
   const [linuxGraphicsConstrained, setLinuxGraphicsConstrained] = useState(false);
   const [linuxGraphicsDisableWebgl, setLinuxGraphicsDisableWebgl] = useState(false);
   const [markdownPreviewOpen, setMarkdownPreviewOpen] = useState(false);
@@ -1791,7 +1802,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     : "12px";
   const searchRightOffset = markdownPreviewOpen
     ? `calc(${markdownPreviewPanelPercent}% + 56px)`
-    : markdownPreviewSupported
+    : markdownPreviewButtonVisible
       ? "56px"
       : "12px";
 
@@ -1815,6 +1826,16 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     backgroundColor: hexToRgba(searchForeground, 0.08, "rgba(255, 255, 255, 0.08)"),
     borderColor: hexToRgba(searchForeground, 0.16, "rgba(255, 255, 255, 0.16)"),
     color: searchForeground,
+  };
+  const terminalFontSizeControlStyle: CSSProperties = {
+    backgroundColor: hexToRgba(searchBackground, showBackgroundImage ? 0.78 : 0.92, "rgba(0, 0, 0, 0.86)"),
+    borderColor: hexToRgba(searchForeground, 0.24, "rgba(255, 255, 255, 0.22)"),
+    boxShadow: `0 12px 30px ${hexToRgba(searchBackground, 0.55, "rgba(0, 0, 0, 0.45)")}`,
+    color: searchForeground,
+    fontFamily: effectiveFontFamily,
+  };
+  const handleTerminalFontSizeWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (event.ctrlKey && event.deltaY !== 0) showFontSizeControl();
   };
 
   const handleMenuCopy = () => {
@@ -1905,7 +1926,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       data-bg-fit={showBackgroundImage ? background.fit : undefined}
       data-bg-position={showBackgroundImage ? background.position : undefined}
     >
-      {markdownPreviewSupported && (
+      {markdownPreviewButtonVisible && (
         <button
           type="button"
           onClick={() => {
@@ -2010,8 +2031,24 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         <div
           className="absolute inset-y-0 left-0 min-w-0 overflow-hidden"
           style={{ width: markdownPreviewOpen ? `${100 - markdownPreviewPanelPercent}%` : "100%" }}
+          onWheelCapture={handleTerminalFontSizeWheel}
         >
           <div ref={containerRef} className="relative h-full w-full overflow-hidden pl-2" style={terminalContainerStyle} />
+          {fontSizeControlVisible && (
+            <FontSizeControl
+              fontSize={fontSize}
+              defaultFontSize={TERMINAL_FONT_SIZE_DEFAULT}
+              min={TERMINAL_FONT_SIZE_MIN}
+              max={TERMINAL_FONT_SIZE_MAX}
+              onChange={(next) => {
+                showFontSizeControl();
+                void updateSettings("fontSize", next);
+              }}
+              className="absolute bottom-3 right-3 z-20"
+              style={terminalFontSizeControlStyle}
+              variant="terminal"
+            />
+          )}
         </div>
         {markdownPreviewOpen && (
           <div

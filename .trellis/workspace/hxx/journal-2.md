@@ -962,3 +962,24 @@ OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 88: 修复供应商作用域与 Pi 终端诊断
+
+**Date**: 2026-08-17
+**Task**: 修复供应商作用域与 Pi 终端诊断
+**Branch**: `master`
+
+### Summary
+
+修复供应商生命周期引用扫描、项目作用域切换、Grok 项目级提示、Tab 中键关闭、Pi 预览、Pi Hook 非阻塞上报与 MCP Adapter 能力发现。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3207bc68` | (see git log) |
+
+### Status
+
+[OK] **Completed**

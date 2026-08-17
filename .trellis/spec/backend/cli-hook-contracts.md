@@ -903,6 +903,8 @@ Pi extension path: ~/.pi/agent/extensions/cli-manager-hook.ts
 Pi source: pi
 Pi events: SessionStart | UserPromptSubmit | Stop
 Stable conflict error: pi_extension_conflict
+Generated lifecycle reporter: postHookEvent(event, sessionId) -> Promise<void>
+Generated reporter deadline: HOOK_TIMEOUT_MS = 1_000
 ```
 
 ### 3. Contracts
@@ -914,6 +916,8 @@ Stable conflict error: pi_extension_conflict
 - Full Pi installation reports `installed`; any non-empty strict subset reports `partialInstalled`; no modules reports `notInstalled`.
 - `session_start` maps to one `SessionStart`, `agent_start` maps to one `UserPromptSubmit`, and `agent_settled` maps to one `Stop`. Do not also map `before_agent_start` to `UserPromptSubmit`, because one Pi run emits both lifecycle events.
 - The extension reads `CLI_MANAGER_TAB_ID`, `CLI_MANAGER_NOTIFY_PORT`, and `CLI_MANAGER_NOTIFY_TOKEN` from its PTY environment and silently skips reporting if any are missing.
+- Pi lifecycle handlers must detach bridge delivery with `void postHookEvent(...)`; they must never `await` a loopback HTTP request, because Pi awaits extension handlers before continuing the agent lifecycle.
+- `postHookEvent` is best-effort and owns a bounded `AbortController` timeout of `HOOK_TIMEOUT_MS`. Timeout, connection failure, or abort is swallowed after cleanup and cannot delay terminal input, agent start, or settle.
 - New user-visible Pi errors must pass through the frontend language selector in every install consumer, including Hook settings and sidebar repair; `zh-TW` uses the existing OpenCC conversion path.
 
 ### 4. Validation & Error Matrix
@@ -926,15 +930,18 @@ Stable conflict error: pi_extension_conflict
 | Selected Pi directory is missing during install | Create it. |
 | Selected Pi directory is missing during status/uninstall | Return the existing directory-missing behavior; do not invent installed state. |
 | Hook callback environment is incomplete | Extension returns without throwing or interrupting Pi. |
+| Loopback bridge is slow, unreachable, or times out | Return from the Pi event handler immediately; abort the detached request within `HOOK_TIMEOUT_MS` and swallow its failure. |
 | Full three-module install | Return `installed`, allowing PTY callback environment injection. |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: a Pi-only user installs all modules, the shared Hook environment is injected, `SessionStart` binds the Pi session id, and realtime stats load.
+- Good: the local bridge is unavailable while a Pi prompt is submitted; Pi starts the run immediately and the detached report expires within one second.
 - Good: a user already has an unrelated `cli-manager-hook.ts`; install fails with a localized conflict message and preserves the file byte-for-byte.
 - Base: only session-start is enabled; status is `partialInstalled` and the module UI reflects that subset.
 - Bad: reuse Claude/Codex required-module assumptions for Pi and require an attention hook that Pi does not provide.
 - Bad: listen to both `before_agent_start` and `agent_start` for the same running event; this duplicates replay and notification traffic.
+- Bad: await `postHookEvent` from a Pi lifecycle handler; a slow loopback bridge then adds network latency to every prompt.
 
 > **Warning**: Pi status must derive `hooks_feature_installed` and `hooks_trusted`
 > from marker ownership. Leaving either flag true after the managed extension is
@@ -947,6 +954,7 @@ Stable conflict error: pi_extension_conflict
 - Rust: one selected module reports `HookInstallStatus::PartialInstalled`.
 - Rust: install against an unowned same-name extension returns `pi_extension_conflict` and preserves exact content.
 - Rust: install then uninstall removes the marker-owned extension.
+- Rust: generated Pi extension source uses `void postHookEvent` for every lifecycle mapping, contains `AbortController` and `HOOK_TIMEOUT_MS = 1_000`, and contains no `await postHookEvent`.
 - TypeScript: type-check after frontend status or localized error handling changes.
 - Manual: verify Hook settings in `zh-CN`, `zh-TW`, and `en-US`, then start one Pi run and confirm exactly one running transition.
 
@@ -964,6 +972,12 @@ pi.on("before_agent_start", reportRunning);
 pi.on("agent_start", reportRunning);
 ```
 
+```typescript
+pi.on("agent_start", async (_event, ctx) => {
+  await postHookEvent("UserPromptSubmit", readSessionId(ctx));
+});
+```
+
 #### Correct
 
 ```rust
@@ -976,76 +990,8 @@ if checks.attention_hook_required {
 pi.on("agent_start", reportRunning);
 ```
 
-## Scenario: Codex Child Approval Arbitration
-
-### 1. Scope / Trigger
-
-- Trigger: Codex emits a child-agent `PermissionRequest` before a tool even though no user-visible approval is ultimately required.
-- Applies to: hidden `__hook` payload creation, shared daemon Hook admission, foreground/background task state, desktop pet, taskbar/system/application notifications, third-party notification delivery, and remote handoff notifications.
-
-### 2. Signatures
-
-```text
-transcriptBytes: optional unsigned byte length captured before the Hook process returns
-approval_aware_hook_sink(delivery: HookPayloadSink) -> HookPayloadSink
-```
-
-### 3. Contracts
-
-- Main-agent `PermissionRequest` events remain immediate.
-- Child approvals with a non-empty user-facing message remain immediate.
-- A Codex child `PermissionRequest` with no explicit evidence is provisional, not rejected. It must not reach any status or notification sink until resolved or conservatively escalated.
-- The Hook client captures the child rollout path when available, otherwise the reported transcript path, and records its file length before the synchronous Hook returns control to Codex.
-- Rollout growth beyond that exact baseline is positive progress evidence. Checking metadata must not read or parse transcript content, compare localized strings, or hard-code tool names.
-- Matching tool lifecycle events, `SubagentStop`, parent `Stop`/`StopFailure`, and a new parent `UserPromptSubmit` resolve only their correlated parent/session and child scope.
-- Correlation prefers `toolUseId`; when unavailable it may use parent Tab/session + child `agentId` + tool name. Events from another child never resolve the record.
-- Missing paths, unreadable WSL/SSH references, absent progress identity, or any other uncertainty must retain the record until the 15-second grace deadline, then deliver it exactly once.
-- The provisional set is bounded. Capacity pressure, poisoned state, or worker-start failure must fail open by delivering approval events, never silently dropping them.
-- Arbitration occurs before background activation, daemon task status, frontend broadcast, third-party enqueue, and remote-handoff enqueue so all sinks observe one decision.
-- `transcriptBytes` is optional for backward compatibility with old Hook clients and SSH agents.
-
-### 4. Validation & Error Matrix
-
-| Condition | Required behavior |
-|---|---|
-| Main-agent permission | Deliver immediately. |
-| Child permission with explicit message | Deliver immediately. |
-| Ambiguous child permission then rollout growth | Resolve without setting parent `attention`. |
-| Ambiguous child permission then matching tool progress | Resolve only that child/request. |
-| Ambiguous child permission with no evidence | Deliver once after 15 seconds. |
-| Another child progresses | Keep the original child pending. |
-| Rollout path is unreadable | Do not assume progress; conservatively escalate. |
-| Arbiter cannot retain state | Fail open and deliver immediately. |
-
-### 5. Good/Base/Bad Cases
-
-- Good: child `apply_patch` completes and appends its rollout; the pet keeps the real working state and no approval notification is emitted.
-- Good: a child Bash approval carries a user-facing reason and alerts immediately.
-- Base: all main-agent and non-Codex permission events keep their existing behavior.
-- Bad: drop every event with `agentId`, `message=null`, or a particular tool name; this can hide a real child approval.
-- Bad: filter only in the desktop pet or frontend; daemon and remote notification sinks would still disagree.
-
-### 6. Tests Required
-
-- Rust classification tests for main, explicit child, and ambiguous child approvals.
-- Rust state tests for rollout growth, exact tool progress, unrelated children, child stop, parent completion, and one-time timeout escalation.
-- Hook-client test that the child rollout baseline takes priority over the parent transcript baseline.
-- Run targeted Hook/daemon tests, `npx tsc --noEmit`, `cargo check`, and `git diff --check`.
-
-### 7. Wrong vs Correct
-
-#### Wrong
-
-```rust
-if payload.agent_id.is_some() && payload.message.is_none() {
-    return; // A real child approval can be lost forever.
-}
-```
-
-#### Correct
-
-```rust
-if payload.is_ambiguous_codex_child_approval() {
-    retain_until_positive_progress_or_conservative_deadline(payload);
-}
+```typescript
+pi.on("agent_start", (_event, ctx) => {
+  void postHookEvent("UserPromptSubmit", readSessionId(ctx));
+});
 ```

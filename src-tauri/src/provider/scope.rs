@@ -248,7 +248,10 @@ async fn read_scope_override(
         .map_err(|_| "provider_scope_database_error".to_string())
 }
 
-fn parse_provider_reference(raw: Option<&str>, app_type: &str) -> Result<Option<String>, String> {
+pub(crate) fn parse_provider_reference(
+    raw: Option<&str>,
+    app_type: &str,
+) -> Result<Option<String>, String> {
     let Some(raw) = raw.filter(|value| !value.trim().is_empty()) else {
         return Ok(None);
     };

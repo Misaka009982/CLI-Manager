@@ -381,7 +381,44 @@ pub fn discovery_layout(
                 "json",
             );
         }
-        AgentKind::Pi => {}
+        AgentKind::Pi => {
+            push_config(
+                &mut layout,
+                home.join(".config").join("mcp").join("mcp.json"),
+                home,
+                cwd,
+                "user",
+                "native",
+                "json",
+            );
+            push_config(
+                &mut layout,
+                home.join(".agents").join("mcp.json"),
+                home,
+                cwd,
+                "user",
+                "native",
+                "json",
+            );
+            push_config(
+                &mut layout,
+                home.join(".agents").join("mcp").join("mcp.json"),
+                home,
+                cwd,
+                "user",
+                "native",
+                "json",
+            );
+            push_config(
+                &mut layout,
+                agent_root.join("mcp.json"),
+                home,
+                cwd,
+                "user",
+                "native",
+                "json",
+            );
+        }
     }
 
     let user_roots: Vec<(PathBuf, &str)> = match agent {
@@ -475,7 +512,26 @@ pub fn discovery_layout(
                     "json",
                 );
             }
-            AgentKind::Pi => {}
+            AgentKind::Pi => {
+                push_config(
+                    &mut layout,
+                    ancestor.join(".mcp.json"),
+                    home,
+                    cwd,
+                    "project",
+                    "native",
+                    "json",
+                );
+                push_config(
+                    &mut layout,
+                    ancestor.join(".pi").join("mcp.json"),
+                    home,
+                    cwd,
+                    "project",
+                    "native",
+                    "json",
+                );
+            }
         }
         let project_roots: Vec<(PathBuf, &str)> = match agent {
             AgentKind::Claude => vec![
@@ -724,10 +780,17 @@ fn collect_json_mcp(
     };
     if let Some(servers) = root.get(key).and_then(JsonValue::as_object) {
         for (name, value) in servers {
-            let enabled = value
-                .get("enabled")
-                .and_then(JsonValue::as_bool)
-                .unwrap_or(true);
+            let enabled = if agent == AgentKind::Pi {
+                !value
+                    .get("disabled")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false)
+            } else {
+                value
+                    .get("enabled")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(true)
+            };
             target.insert(
                 name.to_lowercase(),
                 McpItem {
@@ -1186,6 +1249,66 @@ mod tests {
         assert!(!serde_json::to_string(&snapshot)
             .unwrap()
             .contains("secret.example"));
+    }
+
+    #[test]
+    fn pi_adapter_configs_follow_their_documented_precedence() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let cwd = temp.path().join("project");
+        fs::create_dir_all(cwd.join(".git")).unwrap();
+
+        let layout = discovery_layout(AgentKind::Pi, &home, &cwd, None);
+        let paths = layout
+            .configs
+            .iter()
+            .map(|config| config.path.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            vec![
+                home.join(".config").join("mcp").join("mcp.json"),
+                home.join(".agents").join("mcp.json"),
+                home.join(".agents").join("mcp").join("mcp.json"),
+                home.join(".pi").join("agent").join("mcp.json"),
+                cwd.join(".mcp.json"),
+                cwd.join(".pi").join("mcp.json"),
+            ]
+        );
+    }
+
+    #[test]
+    fn pi_adapter_config_reports_active_and_disabled_mcp_without_unknown_diagnostic() {
+        let bundle = DiscoveryBundle {
+            configs: vec![ConfigDocument {
+                path_label: "home/.pi/agent/mcp.json".into(),
+                scope: "user".into(),
+                source_kind: "native".into(),
+                format: "json".into(),
+                content: r#"{
+                  "mcpServers": {
+                    "enabled-server": { "type": "stdio", "command": "secret-command" },
+                    "disabled-server": { "disabled": true, "command": "another-secret" }
+                  }
+                }"#
+                .into(),
+            }],
+            ..DiscoveryBundle::default()
+        };
+
+        let snapshot = assemble_snapshot(request(AgentKind::Pi), bundle);
+
+        assert_eq!(snapshot.mcp_summary.active, 1);
+        assert_eq!(snapshot.mcp_summary.disabled, 1);
+        assert_eq!(snapshot.mcp_summary.unknown, 1);
+        assert!(!snapshot
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "pi_mcp_extension_observability_unknown"));
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        assert!(!serialized.contains("secret-command"));
+        assert!(!serialized.contains("another-secret"));
     }
 
     #[test]
