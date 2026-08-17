@@ -1650,3 +1650,24 @@ Aligned sidebar provider switching with settings global CLI Home apply flow, add
 ### Next Steps
 
 - None - task complete
+
+
+## Session 50: 修复自动故障转移当前供应商高亮
+
+**Date**: 2026-08-17
+**Task**: 修复自动故障转移当前供应商高亮
+**Branch**: `master`
+
+### Summary
+
+修复自动故障转移队列首个非当前供应商成功后未提交为当前供应商的问题，并精简供应商快捷面板路由开关辅助文字；补充回归测试、产品记录与后端契约。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d9d04050` | (see git log) |
+
+### Status
+
+[OK] **Completed**
