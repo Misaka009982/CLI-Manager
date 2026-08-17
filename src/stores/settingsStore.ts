@@ -39,6 +39,7 @@ import {
   sanitizeTerminalPaneMarkerSettings,
   type TerminalPaneMarkerSettings,
 } from "../lib/terminalPaneMarker";
+import type { HistorySmartTitleSettings } from "../lib/types";
 
 export {
   DESKTOP_PET_SIZE_DEFAULT_PERCENT,
@@ -358,6 +359,7 @@ export interface Settings {
   defaultShell: string;
   sidebarWidth: number;
   historySidebarWidth: number;
+  historySmartTitle: HistorySmartTitleSettings;
   collapsedGroupIds: string[];
   useExternalTerminal: boolean;
   debugMode: boolean;
@@ -507,6 +509,13 @@ const DEFAULTS: Settings = {
   defaultShell: "powershell.exe",
   sidebarWidth: 248,
   historySidebarWidth: 276,
+  historySmartTitle: {
+    enabled: false,
+    providerAppType: null,
+    providerId: null,
+    modelId: null,
+    enabledAt: null,
+  },
   collapsedGroupIds: [],
   useExternalTerminal: false,
   debugMode: false,
@@ -767,6 +776,37 @@ function migrateLastSettingsTab(value: unknown): LastSettingsTab {
   return typeof value === "string" && LAST_SETTINGS_TABS.includes(value as LastSettingsTab)
     ? (value as LastSettingsTab)
     : DEFAULTS.lastSettingsTab;
+}
+
+export function migrateHistorySmartTitleSettings(value: unknown): HistorySmartTitleSettings {
+  const defaults = DEFAULTS.historySmartTitle;
+  if (typeof value !== "object" || value === null) {
+    return { ...defaults };
+  }
+  const raw = value as Record<string, unknown>;
+  const providerAppType = raw.providerAppType === "claude"
+    || raw.providerAppType === "codex"
+    || raw.providerAppType === "grokbuild"
+    ? raw.providerAppType
+    : null;
+  const providerId = typeof raw.providerId === "string" && raw.providerId.trim()
+    ? raw.providerId.trim()
+    : null;
+  const modelId = typeof raw.modelId === "string" && raw.modelId.trim()
+    ? raw.modelId.trim()
+    : null;
+  const enabledAt = typeof raw.enabledAt === "number"
+    && Number.isFinite(raw.enabledAt)
+    && raw.enabledAt > 0
+    ? Math.floor(raw.enabledAt)
+    : null;
+  return {
+    enabled: raw.enabled === true,
+    providerAppType,
+    providerId,
+    modelId,
+    enabledAt,
+  };
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -1274,6 +1314,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         : DEFAULTS.uiFontFamily;
     entries.sidebarWidth = clampNumber(entries.sidebarWidth, 64, 500, DEFAULTS.sidebarWidth);
     entries.historySidebarWidth = clampNumber(entries.historySidebarWidth, 180, 520, DEFAULTS.historySidebarWidth);
+    entries.historySmartTitle = migrateHistorySmartTitleSettings(entries.historySmartTitle);
     entries.uiFontSize = clampNumber(
       entries.uiFontSize,
       UI_FONT_SIZE_MIN,

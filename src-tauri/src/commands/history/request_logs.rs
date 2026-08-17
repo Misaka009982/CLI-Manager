@@ -1,12 +1,12 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{Connection, QueryBuilder, Row, Sqlite, SqliteConnection};
+#[cfg(test)]
+use sqlx::Connection;
+use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
-use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 
 const REQUEST_LOG_PARSER_VERSION: i64 = 2;
@@ -208,14 +208,7 @@ fn request_log_sync_lock() -> &'static AsyncMutex<()> {
 }
 
 async fn open_cli_manager_db() -> Result<SqliteConnection, String> {
-    let path = crate::app_paths::db_path()?;
-    let options = SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(false)
-        .busy_timeout(Duration::from_secs(15));
-    SqliteConnection::connect_with(&options)
-        .await
-        .map_err(|err| format!("request_logs_db_open_failed: {err}"))
+    crate::usage_schema::open_usage_database().await
 }
 
 fn fingerprint_matches(state: RequestLogSyncState, current: SessionFileFingerprint) -> bool {

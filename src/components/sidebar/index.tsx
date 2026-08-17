@@ -1156,7 +1156,8 @@ export function Sidebar({
         if (rejectUnsupportedCapability(project, "externalTerminal")) return;
         await openWindowsTerminal([{ title: project.name, cwd: project.path }]);
       } else {
-        await createSession(project.id, project.path, project.name, undefined, undefined, project.shell || undefined);
+        // 空字符串表示显式创建普通 Shell；undefined 会继承项目的 CLI/启动命令。
+        await createSession(project.id, project.path, project.name, "", undefined, project.shell || undefined);
       }
       if (projectScopedTerminalViewEnabled) {
         onTerminalScopeChange?.({ kind: "project", projectId: project.id });
@@ -1173,7 +1174,8 @@ export function Sidebar({
       if (compactMode || useExternalTerminal) {
         await openWindowsTerminal([{ title, cwd: worktree.path }]);
       } else {
-        await createSession(project.id, worktree.path, title, undefined, undefined, project.shell || undefined, undefined, worktree.id);
+        // Worktree 右键新建终端同样必须绕过项目启动配置。
+        await createSession(project.id, worktree.path, title, "", undefined, project.shell || undefined, undefined, worktree.id);
       }
       if (projectScopedTerminalViewEnabled) {
         onTerminalScopeChange?.({ kind: "worktree", projectId: worktree.project_id, worktreeId: worktree.id });

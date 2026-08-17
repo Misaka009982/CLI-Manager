@@ -809,6 +809,63 @@ const badge = await invoke("ccswitch_probe_projects", { projectPaths: [project.p
 
 **Tests**: Run `npx tsc --noEmit`; manually switch a Claude provider and a Codex provider and verify the project tree chip appears/clears immediately and after a fresh `fetchAll()`.
 
+### Convention: Collapsed project tree preserves expanded project semantics
+
+**What**: The collapsed project strip and group flyout must use the same CLI identity and interaction contract as the expanded project tree. Resolve the project CLI with `resolveCliToolIconKey` and render it with `CliToolIcon`; a single click selects the project and activates an existing terminal Tab, while a double click calls `onOpenProject` to start a new terminal. The running-session count remains a badge and must not replace the CLI icon with a status dot.
+
+**Why**: The collapsed tree is a presentation variant of the same project navigator, not a separate launch surface. Divergent click handlers caused a single click to start terminals, and status-first rendering hid the configured CLI tool identity.
+
+**Correct**:
+
+```tsx
+const cliIcon = resolveCliToolIconKey(project.cli_tool);
+
+<button
+  onClick={(event) => actions.onSelectProject(event, project)}
+  onDoubleClick={() => actions.onOpenProject(project)}
+>
+  {cliIcon ? <CliToolIcon icon={cliIcon} size={15} /> : <Terminal size={15} />}
+</button>
+```
+
+**Wrong**:
+
+```tsx
+// Collapsed-only behavior: single click starts a new terminal and status hides the CLI icon.
+<button onClick={() => actions.onOpenProject(project)}>
+  {status ? <StatusDot /> : <VendorIcon vendor={vendor} />}
+</button>
+```
+
+**Contracts**:
+
+- Expanded and collapsed project rows use the same `onSelectProject`/`onOpenProject` semantic boundary.
+- Group flyout project rows also reserve single click for selection and only close the flyout after the double-click launch path.
+- CLI icon lookup is shared with `TreeNodeItem`, project creation, history, and terminal Tab rendering; do not introduce a second vendor-to-icon map.
+- The collapsed flyout background is opaque enough to keep project names and icons legible over the terminal content.
+
+### Common Mistake: Passing `undefined` when a project menu needs a plain Shell
+
+**Symptom**: Project or Worktree context-menu “New Terminal” unexpectedly starts the configured CLI or custom startup command.
+
+**Cause**: `terminalStore.createSession(projectId, cwd, title, startupCmd, ...)` treats `startupCmd: undefined` as “resolve the project startup configuration”. That is different from an explicit empty string, which means the new session has no startup command.
+
+**Correct**:
+
+```tsx
+await createSession(project.id, project.path, project.name, "", undefined, project.shell || undefined);
+```
+
+**Contracts**:
+
+- Project and Worktree context-menu new-terminal handlers must pass `""` for `startupCmd` when they need a plain Shell in the target directory.
+- Preserve `projectId`, `cwd`, `shell`, and `worktreeId`; only startup-command inheritance is disabled.
+- Do not change the `undefined` semantics in the shared store: other entry points use it to inherit project configuration or resume commands.
+
+**Tests**: Inspect both local project and Worktree handlers and manually verify a project with `cli_tool`, `cli_args`, and `startup_cmd` opens at its project directory with only the Shell prompt; verify shortcut/command-palette new terminals and session restore retain their existing behavior.
+
+**Tests**: Run `npx tsc --noEmit`; manually verify a running Claude/Codex project and a stopped project in collapsed and expanded modes: single click switches to an existing Tab, double click starts a new Tab, the CLI icon stays visible, the terminal-count badge remains, and the group flyout does not show terminal content through its background.
+
 ### Convention: Terminal tab drag uses overlay plus explicit pane drop zones
 
 **What**: Terminal tab drag interactions use dnd-kit `DragOverlay` for the cursor-following tab, while pane movement/splitting is driven by explicit drop ids:

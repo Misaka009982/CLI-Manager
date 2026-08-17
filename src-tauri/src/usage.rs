@@ -1,14 +1,13 @@
 use bytes::Bytes;
 use serde_json::Value;
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{Connection, Row, SqliteConnection};
+#[cfg(test)]
+use sqlx::Connection;
+use sqlx::{Row, SqliteConnection};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 use uuid::Uuid;
 
 const MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024;
 static ROUTE_USAGE_GENERATION: AtomicU64 = AtomicU64::new(0);
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UsageTokens {
     pub input_tokens: u64,
@@ -333,14 +332,7 @@ pub async fn record_route_usage(
     } else {
         UsageStatus::Missing
     };
-    let path = crate::app_paths::db_path()?;
-    let options = SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(false)
-        .busy_timeout(Duration::from_secs(15));
-    let mut connection = SqliteConnection::connect_with(&options)
-        .await
-        .map_err(|err| format!("usage_db_open_failed: {err}"))?;
+    let mut connection = crate::usage_schema::open_usage_database().await?;
     let now_ms = crate::provider::routing::now_millis();
     let source = if context.app_type == "grokbuild" {
         "grok"
@@ -436,14 +428,7 @@ pub async fn load_route_usage_records(
     start_at: i64,
     end_at: i64,
 ) -> Result<Vec<RouteUsageRecord>, String> {
-    let path = crate::app_paths::db_path()?;
-    let options = SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(false)
-        .busy_timeout(Duration::from_secs(15));
-    let mut connection = SqliteConnection::connect_with(&options)
-        .await
-        .map_err(|err| format!("usage_db_open_failed: {err}"))?;
+    let mut connection = crate::usage_schema::open_usage_database().await?;
     let rows = sqlx::query(
         "SELECT source, session_id, project_key, file_path, started_at_ms, completed_at_ms,
                 COALESCE(outbound_model, response_model, requested_model) AS model,
@@ -498,14 +483,7 @@ pub async fn load_route_usage_records(
 }
 
 pub async fn reconcile_route_attribution() -> Result<u64, String> {
-    let path = crate::app_paths::db_path()?;
-    let options = SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(false)
-        .busy_timeout(Duration::from_secs(15));
-    let mut connection = SqliteConnection::connect_with(&options)
-        .await
-        .map_err(|err| format!("usage_db_open_failed: {err}"))?;
+    let mut connection = crate::usage_schema::open_usage_database().await?;
     reconcile_route_attribution_with_connection(
         &mut connection,
         crate::provider::routing::now_millis(),

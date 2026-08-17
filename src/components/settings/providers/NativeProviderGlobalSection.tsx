@@ -30,7 +30,7 @@ export function NativeProviderGlobalSection({
   onGlobalApplied,
 }: NativeProviderGlobalSectionProps) {
   const { t } = useI18n();
-  const { confirm, confirmDialog } = useAppConfirm();
+  const { confirm, confirmDialog } = useAppConfirm({ zIndex: 220 });
   const busy = Boolean(state.action) || state.loading;
   const homeDraftDirty = state.homeDraftDirty;
 

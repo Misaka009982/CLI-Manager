@@ -33,6 +33,7 @@ mod sync;
 mod text_encoding;
 mod third_party_notification;
 pub mod usage;
+pub(crate) mod usage_schema;
 mod webdav;
 mod wsl;
 
@@ -425,8 +426,8 @@ const MIGRATION_EXTEND_SSH_AGENT_INSTALLATIONS_SQL: &str = "
                 ALTER TABLE ssh_agent_installations ADD COLUMN previous_version TEXT NOT NULL DEFAULT '';
               ";
 
-const MIGRATION_CREATE_USAGE_RECORDS_VERSION: i64 = 27;
-const MIGRATION_CREATE_USAGE_RECORDS_SQL: &str = "
+pub(crate) const MIGRATION_CREATE_USAGE_RECORDS_VERSION: i64 = 27;
+pub(crate) const MIGRATION_CREATE_USAGE_RECORDS_SQL: &str = "
                 CREATE TABLE IF NOT EXISTS usage_records (
                     record_id              TEXT PRIMARY KEY,
                     logical_request_id     TEXT NOT NULL,
@@ -541,7 +542,7 @@ const MIGRATION_CREATE_USAGE_RECORDS_SQL: &str = "
                 );
               ";
 const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_VERSION: i64 = 28;
-const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL: &str = "
+pub(crate) const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL: &str = "
                 DROP VIEW IF EXISTS unified_usage_records;
                 CREATE VIEW unified_usage_records AS
                 SELECT
@@ -591,7 +592,40 @@ const MIGRATION_RECREATE_UNIFIED_USAGE_RECORDS_SQL: &str = "
                    );
               ";
 const MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_VERSION: i64 = 29;
-const MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_SQL: &str = "
+const MIGRATION_CREATE_HISTORY_GENERATED_TITLES_VERSION: i64 = 30;
+const MIGRATION_CREATE_HISTORY_GENERATED_TITLES_DESCRIPTION: &str =
+    "create_history_generated_titles_table";
+const MIGRATION_CREATE_HISTORY_GENERATED_TITLES_SQL: &str = "
+                CREATE TABLE IF NOT EXISTS history_generated_titles (
+                    session_key             TEXT PRIMARY KEY,
+                    source_id               TEXT NOT NULL,
+                    source_instance_id      TEXT NOT NULL DEFAULT '',
+                    source_session_id       TEXT NOT NULL,
+                    transport_kind          TEXT NOT NULL DEFAULT 'local',
+                    generated_title         TEXT,
+                    generation_state        TEXT NOT NULL DEFAULT 'idle'
+                                            CHECK (generation_state IN ('idle','pending','succeeded','failed')),
+                    generation_revision     INTEGER NOT NULL DEFAULT 0,
+                    trigger_kind            TEXT
+                                            CHECK (trigger_kind IS NULL OR trigger_kind IN ('automatic','manual')),
+                    source_message_identity TEXT,
+                    source_content_sha256   TEXT,
+                    provider_app_type       TEXT,
+                    provider_id             TEXT,
+                    model_id                TEXT,
+                    failure_code            TEXT,
+                    auto_suppressed         INTEGER NOT NULL DEFAULT 0 CHECK (auto_suppressed IN (0,1)),
+                    suppressed_fingerprint  TEXT,
+                    requested_at            INTEGER,
+                    completed_at            INTEGER,
+                    updated_at              INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_history_generated_titles_source_identity
+                    ON history_generated_titles(source_id, source_instance_id, source_session_id);
+                CREATE INDEX IF NOT EXISTS idx_history_generated_titles_state
+                    ON history_generated_titles(generation_state, updated_at DESC);
+            ";
+pub(crate) const MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_SQL: &str = "
                 CREATE INDEX IF NOT EXISTS idx_usage_records_route_dedup
                 ON usage_records(
                     source,
@@ -927,6 +961,12 @@ fn migrations() -> Vec<Migration> {
             version: MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_VERSION,
             description: "optimize_unified_usage_record_queries",
             sql: MIGRATION_OPTIMIZE_UNIFIED_USAGE_RECORDS_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: MIGRATION_CREATE_HISTORY_GENERATED_TITLES_VERSION,
+            description: MIGRATION_CREATE_HISTORY_GENERATED_TITLES_DESCRIPTION,
+            sql: MIGRATION_CREATE_HISTORY_GENERATED_TITLES_SQL,
             kind: MigrationKind::Up,
         },
     ]
@@ -1364,6 +1404,10 @@ pub fn run() {
             commands::history::history_list_prompts,
             commands::history::history_list_stats_projects,
             commands::history::history_get_stats,
+            commands::history_title::history_title_list_providers,
+            commands::history_title::history_title_generate,
+            commands::history_title::history_title_clear,
+            commands::history_title::history_title_cancel,
             commands::history::request_logs::history_sync_request_logs,
             commands::history::request_logs::history_list_request_logs,
             commands::history::request_logs::history_get_request_log_stats,
@@ -1820,6 +1864,7 @@ mod provider_migration_tests {
     use crate::provider::{
         MIGRATION_CREATE_NATIVE_PROVIDERS_VERSION, MIGRATION_LEGACY_PROVIDERS_VERSION,
     };
+    use crate::MIGRATION_CREATE_HISTORY_GENERATED_TITLES_VERSION;
 
     #[test]
     fn registry_keeps_legacy_v25_before_native_v26() {
@@ -1835,5 +1880,30 @@ mod provider_migration_tests {
         assert_eq!(legacy.description, "create_providers_and_keys_tables");
         assert_eq!(native.description, "create_native_provider_management");
         assert!(legacy.version < native.version);
+    }
+
+    #[test]
+    fn history_generated_titles_migration_is_additive_and_last() {
+        let registry = migrations();
+        let title_migrations: Vec<_> = registry
+            .iter()
+            .filter(|migration| {
+                migration.version == MIGRATION_CREATE_HISTORY_GENERATED_TITLES_VERSION
+            })
+            .collect();
+        assert_eq!(title_migrations.len(), 1);
+        let title_migration = title_migrations[0];
+        assert_eq!(title_migration.version, 30);
+        assert!(title_migration
+            .sql
+            .contains("CREATE TABLE IF NOT EXISTS history_generated_titles"));
+        assert!(title_migration
+            .sql
+            .contains("idx_history_generated_titles_state"));
+        assert!(registry
+            .iter()
+            .all(|migration| migration.version <= title_migration.version));
+        assert!(registry.iter().any(|migration| migration.version == 29
+            && migration.description == "optimize_unified_usage_record_queries"));
     }
 }

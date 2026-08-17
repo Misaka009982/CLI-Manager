@@ -4,7 +4,7 @@ import { copyAiText } from "../../lib/aiClipboard";
 import { formatAiAnchor, formatAiContextBlock, type AiTextSelection } from "../../lib/aiPathFormatter";
 import { useI18n } from "../../lib/i18n";
 import type { GitFileChange, TerminalSession } from "../../lib/types";
-import { configureMonaco, languageFromPath } from "../../lib/monacoSetup";
+import { configureMonaco, configureMonacoLocale, languageFromPath } from "../../lib/monacoSetup";
 import { isSameProjectFileContext } from "../../lib/terminalProject";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useFileExplorerStore } from "../../stores/fileExplorerStore";
@@ -51,13 +51,18 @@ function isDarkHexColor(color: string): boolean {
 }
 
 export function FileEditorPane({ session, isActive, terminalThemeBackground, onClose }: FileEditorPaneProps) {
-  const { t } = useI18n();
+  const { language: appLanguage, t } = useI18n();
   const editorRef = useRef<MonacoEditor | null>(null);
   const searchDecorationIdsRef = useRef<string[]>([]);
   const gitDecorationIdsRef = useRef<string[]>([]);
   const [editorReadyNonce, setEditorReadyNonce] = useState(0);
   const copyAiShortcut = useSettingsStore((s) => s.keyboardShortcuts.copyAi);
   const project = useFileExplorerStore((s) => s.project);
+
+  useEffect(() => {
+    configureMonacoLocale(appLanguage);
+  }, [appLanguage]);
+
   const openProject = useFileExplorerStore((s) => s.openProject);
   const openFiles = useFileExplorerStore((s) => s.openFiles);
   const activeFilePath = useFileExplorerStore((s) => s.activeFilePath);

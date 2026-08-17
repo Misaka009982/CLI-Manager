@@ -1675,6 +1675,14 @@
   transition: background-color var(--animate-duration-fast);
 }
 
+.ui-collapsed-flyout {
+  background-color: color-mix(in srgb, var(--surface-container-lowest) 94%, var(--surface) 6%);
+  border-color: color-mix(in srgb, var(--border) 34%, transparent);
+  box-shadow:
+    0 16px 36px color-mix(in srgb, var(--on-surface) 24%, transparent),
+    0 2px 8px color-mix(in srgb, var(--on-surface) 10%, transparent);
+}
+
 .ui-collapsed-flyout-item:hover {
   background-color: var(--interactive-hover-bg);
   color: var(--on-surface);
@@ -3628,7 +3636,7 @@
 }
 
 .terminal-markdown-preview .subagent-transcript-markdown.ui-markdown-terminal {
-  font-size: calc(0.75rem * var(--markdown-preview-font-scale, 1));
+  font-size: var(--markdown-preview-font-size, var(--font-size-ui));
 }
 
 /* Let the terminal's single background-image layer show through the split
@@ -5724,6 +5732,10 @@
 
 .ui-history-transcript-chat-surface {
   background-color: color-mix(in srgb, var(--surface-container-low) 54%, var(--surface) 46%);
+}
+
+.ui-history-conversation-message .ui-history-message-stack {
+  gap: 0.45rem;
 }
 
 .ui-history-message-card {

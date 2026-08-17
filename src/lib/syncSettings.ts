@@ -23,6 +23,7 @@ export const SETTING_BACKUP_POLICY = {
   defaultShell: "excluded",
   sidebarWidth: "preferences",
   historySidebarWidth: "preferences",
+  historySmartTitle: "excluded",
   collapsedGroupIds: "preferences",
   useExternalTerminal: "excluded",
   debugMode: "excluded",

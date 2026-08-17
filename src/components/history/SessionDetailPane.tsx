@@ -14,6 +14,7 @@ import {
   History,
   ListChecks,
   Pencil,
+  Sparkles,
   Square,
   Star,
   Terminal,
@@ -24,9 +25,20 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObjec
 import { toast } from "sonner";
 import aiAvatarUrl from "../../assets/history-ai-avatar.svg";
 import userAvatarUrl from "../../assets/history-user-avatar.svg";
-import type { HistoryFileChangeSummary, HistoryMessage, HistorySessionDetail, HistorySessionView } from "../../lib/types";
+import type {
+  HistoryFileChangeSummary,
+  HistoryMessage,
+  HistorySessionDetail,
+  HistorySessionView,
+} from "../../lib/types";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { resolveHistorySourceIconKey } from "../../lib/cliTools";
+import {
+  effectiveHistoryMessageParts,
+  isConversationVisibleMessage,
+  isInjectedPromptContent,
+  normalizeHistoryMessageRole,
+} from "../../lib/historyConversation";
 import { CliToolIcon } from "../CliToolIcon";
 import { EmptyState } from "../ui/EmptyState";
 import { SessionTranscriptContent } from "./SessionTranscriptContent";
@@ -40,7 +52,9 @@ import { SessionToolDiagnosticsView } from "./SessionToolDiagnosticsView";
 import { SessionSubtaskTreeView } from "./SessionSubtaskTreeView";
 import type { SessionProcessModel } from "./sessionEvents";
 
-export type HistoryDetailView = "transcript" | "timeline" | "canvas" | "context" | "changes" | "tools" | "subtasks";
+export { isConversationVisibleMessage } from "../../lib/historyConversation";
+
+export type HistoryDetailView = "conversation" | "transcript" | "timeline" | "canvas" | "context" | "changes" | "tools" | "subtasks";
 
 interface SessionDetailPaneProps {
   activeView: HistorySessionView | null;
@@ -74,6 +88,8 @@ interface SessionDetailPaneProps {
   onOpenPrompt: () => void;
   onOpenDiff: (fileChanges?: HistoryFileChangeSummary[]) => void;
   onResumeSession: () => void;
+  onGenerateSmartTitle: () => void;
+  onClearSmartTitle: () => void;
   canConvertSession: boolean;
   onConvertSession: () => void;
   onJumpToMessage: (messageIndex: number) => void;
@@ -94,6 +110,7 @@ interface SessionDetailPaneProps {
 }
 
 const DETAIL_VIEWS: Array<{ id: HistoryDetailView; labelKey: TranslationKey }> = [
+  { id: "conversation", labelKey: "history.detail.view.conversation" },
   { id: "transcript", labelKey: "history.detail.view.transcript" },
   { id: "timeline", labelKey: "history.detail.view.timeline" },
   { id: "canvas", labelKey: "history.detail.view.canvas" },
@@ -108,25 +125,98 @@ const LONG_MESSAGE_LINE_THRESHOLD = 8;
 const LONG_MESSAGE_CHAR_THRESHOLD = 900;
 const TOKEN_FORMATTER = new Intl.NumberFormat("en-US");
 
-function isInjectedPromptContent(content: string): boolean {
-  const trimmed = content.trimStart();
-  const lowerTrimmed = trimmed.toLowerCase();
-  const firstLine = lowerTrimmed.split(/\r?\n/, 1)[0]?.replace(/^#+\s*/, "").trim() ?? "";
-  return (
-    firstLine.startsWith("agents.md instructions for ") ||
-    firstLine.startsWith("system prompt") ||
-    firstLine.startsWith("developer instructions") ||
-    lowerTrimmed.startsWith("<system-reminder") ||
-    lowerTrimmed.startsWith("<codex_internal_context") ||
-    lowerTrimmed.startsWith("<session-context")
-  );
+type ConversationMessageRow = {
+  type: "message";
+  key: string;
+  messageIndex: number;
+  message: HistoryMessage;
+  content: string;
+};
+
+type ConversationRow = ConversationMessageRow;
+
+export function buildConversationRows(messages: HistoryMessage[]): ConversationRow[] {
+  const rows: ConversationRow[] = [];
+
+  messages.forEach((message, messageIndex) => {
+    if (!isConversationVisibleMessage(message)) return;
+    const parts = effectiveHistoryMessageParts(message);
+    const textParts = parts.filter((part) => part.kind === "text");
+    if (textParts.length === 0) return;
+    rows.push({
+      type: "message",
+      key: `message:${messageIndex}`,
+      messageIndex,
+      message,
+      content: textParts.map((part) => part.content).join("\n\n"),
+    });
+  });
+  return rows;
 }
 
-function normalizeMessageRole(role: string): "user" | "assistant" | "other" {
-  const normalized = role.toLowerCase();
-  if (normalized === "user" || normalized.includes("human")) return "user";
-  if (normalized === "assistant" || normalized.includes("model") || normalized.includes("llm")) return "assistant";
-  return "other";
+function conversationRowMessageIndices(row: ConversationRow): number[] {
+  return [row.messageIndex];
+}
+
+function findConversationRowIndex(rows: ConversationRow[], messageIndex: number): number {
+  return rows.findIndex((row) => conversationRowMessageIndices(row).includes(messageIndex));
+}
+
+function ConversationRowCard({
+  row,
+  virtualIndex,
+  isMatched,
+  isFocused,
+  query,
+  messageRefs,
+  measureElement,
+}: {
+  row: ConversationRow;
+  virtualIndex: number;
+  isMatched: boolean;
+  isFocused: boolean;
+  query: string;
+  messageRefs: RefObject<Record<number, HTMLDivElement | null>>;
+  measureElement: (element: Element) => void;
+}) {
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const message = row.type === "message" ? row.message : null;
+  const roleKind = message ? normalizeHistoryMessageRole(message.role) : "other";
+  const avatarUrl = roleKind === "user" ? userAvatarUrl : aiAvatarUrl;
+  const messageMeta = message ? formatMessageMeta(message) : null;
+
+  const setCardRef = (element: HTMLDivElement | null) => {
+    cardRef.current = element;
+    for (const messageIndex of conversationRowMessageIndices(row)) {
+      messageRefs.current[messageIndex] = element;
+    }
+    if (element) measureElement(element);
+  };
+
+  return (
+    <div
+      ref={setCardRef}
+      data-index={virtualIndex}
+      className="ui-history-message-card ui-history-conversation-message absolute left-0 top-0 w-full px-2.5 py-2"
+      data-role={roleKind}
+      style={{
+        borderColor: isFocused ? "var(--warning)" : isMatched ? "var(--accent)" : "transparent",
+      }}
+    >
+      {roleKind !== "user" && (
+        <span className="ui-history-message-avatar" aria-hidden="true"><img src={avatarUrl} alt="" /></span>
+      )}
+      <div className="ui-history-message-stack">
+        {messageMeta && <div className="ui-history-message-meta" title={messageMeta}>{messageMeta}</div>}
+        <div className="ui-history-message-bubble">
+          <SessionTranscriptContent content={row.content} query={query} />
+        </div>
+      </div>
+      {roleKind === "user" && (
+        <span className="ui-history-message-avatar" aria-hidden="true"><img src={avatarUrl} alt="" /></span>
+      )}
+    </div>
+  );
 }
 
 function shouldCollapseMessage(message: HistoryMessage): boolean {
@@ -289,7 +379,7 @@ function HistoryMessageCard({
   onToggleSelect,
 }: HistoryMessageCardProps) {
   const { t } = useI18n();
-  const roleKind = normalizeMessageRole(message.role);
+  const roleKind = normalizeHistoryMessageRole(message.role);
   const avatarUrl = roleKind === "user" ? userAvatarUrl : aiAvatarUrl;
   const forceOpen = isMatched || isFocused;
   const collapsible = shouldCollapseMessage(message);
@@ -591,6 +681,8 @@ export function SessionDetailPane({
   onOpenPrompt,
   onOpenDiff,
   onResumeSession,
+  onGenerateSmartTitle,
+  onClearSmartTitle,
   canConvertSession,
   onConvertSession,
   onJumpToMessage,
@@ -633,25 +725,39 @@ export function SessionDetailPane({
   // 当匹配数 N 和可见消息数 M 都达到几百时累计 O(N·M)。改 Set 后是 O(1) lookup。
   const matchSet = useMemo(() => new Set(matchIndices), [matchIndices]);
   const activeMatchIndex = matchIndices[Math.min(matchCursor, Math.max(0, matchIndices.length - 1))];
+  const conversationRows = useMemo(() => buildConversationRows(visibleMessages), [visibleMessages]);
+  const isConversationView = detailView === "conversation";
+  const virtualRowCount = isConversationView ? conversationRows.length : visibleMessages.length;
   const messageVirtualizer = useVirtualizer({
-    count: visibleMessages.length,
+    count: virtualRowCount,
     getScrollElement: () => messageListRef.current,
     estimateSize: () => 220,
     overscan: 6,
-    getItemKey: (index) => `${visibleMessages[index]?.role ?? "message"}:${index}`,
+    getItemKey: (index) => isConversationView
+      ? conversationRows[index]?.key ?? `conversation:${index}`
+      : `${visibleMessages[index]?.role ?? "message"}:${index}`,
   });
 
   useEffect(() => {
     if (activeMatchIndex === undefined) return;
-    if (detailView === "transcript" && activeMatchIndex < visibleMessages.length) {
-      messageVirtualizer.scrollToIndex(activeMatchIndex, { align: "center" });
+    if (activeMatchIndex >= visibleMessages.length) return;
+    const rowIndex = isConversationView
+      ? findConversationRowIndex(conversationRows, activeMatchIndex)
+      : activeMatchIndex;
+    if ((isConversationView || detailView === "transcript") && rowIndex >= 0) {
+      messageVirtualizer.scrollToIndex(rowIndex, { align: "center" });
     }
-  }, [activeMatchIndex, detailView, messageVirtualizer, visibleMessages.length]);
+  }, [activeMatchIndex, conversationRows, detailView, isConversationView, messageVirtualizer, visibleMessages.length]);
 
   useEffect(() => {
     if (focusedMessageIndex === null || focusedMessageIndex >= visibleMessages.length) return;
-    if (detailView === "transcript") messageVirtualizer.scrollToIndex(focusedMessageIndex, { align: "center" });
-  }, [detailView, focusedMessageIndex, focusedMessageSeq, messageVirtualizer, visibleMessages.length]);
+    const rowIndex = isConversationView
+      ? findConversationRowIndex(conversationRows, focusedMessageIndex)
+      : focusedMessageIndex;
+    if ((isConversationView || detailView === "transcript") && rowIndex >= 0) {
+      messageVirtualizer.scrollToIndex(rowIndex, { align: "center" });
+    }
+  }, [conversationRows, detailView, focusedMessageIndex, focusedMessageSeq, isConversationView, messageVirtualizer, visibleMessages.length]);
 
   if (!activeView) {
     return (
@@ -827,6 +933,39 @@ export function SessionDetailPane({
               <Terminal size={12} />
               {t("history.detail.resume")}
             </button>
+            <>
+              <button
+                onClick={onGenerateSmartTitle}
+                disabled={loadingSessionDetail || !activeSession || activeView.generatedTitle?.state === "pending"}
+                aria-label={t(
+                  activeView.generatedTitle
+                    ? "history.smartTitle.regenerate"
+                    : "history.smartTitle.generate",
+                )}
+                className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+                style={{ color: "var(--accent)" }}
+                title={t("history.smartTitle.generate")}
+              >
+                <Sparkles size={12} />
+                {activeView.generatedTitle?.state === "pending"
+                  ? t("history.smartTitle.pending")
+                  : activeView.generatedTitle
+                    ? t("history.smartTitle.regenerate")
+                    : t("history.smartTitle.generate")}
+              </button>
+              {activeView.generatedTitle?.title ? (
+                <button
+                  onClick={onClearSmartTitle}
+                  disabled={loadingSessionDetail}
+                  aria-label={t("history.smartTitle.clear")}
+                  className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
+                  title={t("history.smartTitle.clear")}
+                >
+                  <X size={12} />
+                  {t("history.smartTitle.clear")}
+                </button>
+              ) : null}
+            </>
             {canConvertSession ? (
               <button
                 onClick={onConvertSession}
@@ -965,7 +1104,7 @@ export function SessionDetailPane({
         ref={messageListRef}
         onScroll={onMessageListScroll}
         className={`[grid-row:2] min-h-0 h-full overflow-x-hidden overflow-y-auto p-3 ${
-          detailView === "transcript" ? "ui-history-transcript-chat-surface" : ""
+          detailView === "transcript" || detailView === "conversation" ? "ui-history-transcript-chat-surface" : ""
         }`}
       >
         {loadingSessionDetail && <div className="text-xs text-text-muted">{t("history.detail.loading")}</div>}
@@ -1028,6 +1167,31 @@ export function SessionDetailPane({
           </div>
         )}
 
+        {!loadingSessionDetail && detailView === "conversation" && conversationRows.length > 0 && (
+          <div className="relative w-full" style={{ height: messageVirtualizer.getTotalSize() }}>
+            {messageVirtualizer.getVirtualItems().map((virtualRow) => {
+              const row = conversationRows[virtualRow.index];
+              if (!row) return null;
+              const indices = conversationRowMessageIndices(row);
+              const isMatched = indices.some((index) => matchSet.has(index));
+              const isFocused = focusedMessageIndex !== null && indices.includes(focusedMessageIndex);
+              return (
+                <div key={virtualRow.key} className="absolute left-0 top-0 w-full" style={{ transform: `translateY(${virtualRow.start}px)` }}>
+                  <ConversationRowCard
+                    row={row}
+                    virtualIndex={virtualRow.index}
+                    isMatched={isMatched}
+                    isFocused={isFocused}
+                    query={sessionQuery}
+                    messageRefs={messageRefs}
+                    measureElement={messageVirtualizer.measureElement}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {!loadingSessionDetail && detailView === "timeline" && (
           <SessionTimelineView model={processModel} onJumpToMessage={onJumpToMessage} />
         )}
@@ -1067,7 +1231,7 @@ export function SessionDetailPane({
           <SessionSubtaskTreeView model={processModel} onJumpToMessage={onJumpToMessage} />
         )}
 
-        {!loadingSessionDetail && detailView === "transcript" && hasMoreMessages && (
+        {!loadingSessionDetail && (detailView === "transcript" || detailView === "conversation") && hasMoreMessages && (
           <button onClick={onLoadMoreMessages} className="ui-btn mt-2.5 w-full" aria-label={t("history.detail.loadMoreMessages")}>
             {t("history.detail.loadMoreMessagesCount", { visible: visibleMessageCount, total: totalMessageCount })}
           </button>
