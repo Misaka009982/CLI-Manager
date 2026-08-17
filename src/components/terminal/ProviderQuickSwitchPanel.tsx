@@ -55,10 +55,7 @@ function RoutingToggleRow({
   const trackColor = checked ? panelColorTint(TERM_PANEL.green, 55) : TERM_PANEL.track;
   return (
     <div className="flex items-center justify-between gap-3" style={{ opacity: disabled ? 0.55 : 1 }}>
-      <div className="flex min-w-0 flex-1 items-baseline gap-2">
-        <span className="shrink-0 text-[11px] font-semibold" style={{ color: TERM_PANEL.fg }}>{label}</span>
-        <span className="min-w-0 flex-1 truncate text-[10px]" style={{ color: TERM_PANEL.dim }} title={hint}>{hint}</span>
-      </div>
+      <span className="min-w-0 flex-1 truncate text-[11px] font-semibold" style={{ color: TERM_PANEL.fg }}>{label}</span>
       <button
         type="button"
         role="switch"

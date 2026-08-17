@@ -1130,6 +1130,81 @@ stop routing + remove takeovers
 - Assert the current eligible provider is promoted ahead of the saved queue
   order for daemon selection.
 
+## Scenario: Automatic failover current-provider identity commit (2026-08-17)
+
+### 1. Scope / Trigger
+
+- Trigger: automatic failover selects a provider and reaches the existing
+  non-streaming or streaming success-commit boundary.
+- Goal: keep `providers.is_current` aligned with the provider that actually
+  completed the routed request, including when the saved queue excludes the
+  previous current provider.
+
+### 2. Signatures
+
+```text
+ProviderSnapshot { provider_id, is_current, ... }
+should_hot_switch_provider(auto_failover_enabled, selected_provider_is_current, status)
+apply_hot_switch_for_active_homes(app_type, next_provider_id)
+```
+
+### 3. Contracts
+
+- Candidate position is an attempt-order property, not provider identity.
+  Queue index `0` may still be a non-current provider when the previous
+  current provider is not eligible or is absent from the queue.
+- A successful automatic request schedules the existing safe hot-switch path
+  whenever the selected request snapshot was not current. An already-current
+  provider does not schedule a redundant switch.
+- Non-streaming requests commit only after the complete successful body is
+  read. Streaming requests commit only after the protocol-specific semantic
+  completion event. Failure, incomplete stream, timeout, or client
+  cancellation must not update `is_current`.
+- `attempt_index`, `attempt_count`, and `degraded` continue to describe the
+  request's candidate traversal. Do not derive provider-current identity from
+  those usage fields.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Automatic failover off | Do not schedule automatic hot switch |
+| Selected snapshot is already current | Keep current provider; no redundant switch |
+| Non-current provider completes successfully | Run the existing hot-switch/commit path |
+| Non-current provider returns failure or its stream does not complete | Keep the previous current provider |
+
+### 5. Good / Base / Bad Cases
+
+- Good: current A is outside queue `[B, C]`; B succeeds at index `0`, becomes
+  current, and is highlighted by all `isCurrent` consumers after refresh.
+- Base: current A is eligible and succeeds at index `0`; no hot switch occurs.
+- Bad: treat `selected_provider_index > 0` as proof of provider change; B at
+  index `0` then serves requests while A remains highlighted.
+
+### 6. Tests Required
+
+- Assert a non-current candidate at index `0` requires a hot switch on success.
+- Assert current candidates, disabled automatic failover, and failed HTTP
+  responses do not require a switch.
+- Preserve streaming tracker tests proving completion succeeds while failure,
+  early EOF, timeout, and cancellation cannot commit the switch.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+should_switch = selected_provider_index > 0
+```
+
+#### Correct
+
+```text
+should_switch = auto_failover_enabled
+  && !selected_provider_is_current
+  && response_is_success
+```
+
 ## Scenario: Persisted routing intent and daemon runtime reconciliation (2026-08-09)
 
 ### 1. Scope / Trigger
