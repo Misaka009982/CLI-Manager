@@ -1209,20 +1209,80 @@ should_switch = auto_failover_enabled
 
 ### 1. Scope / Trigger
 
-- Trigger: the persisted routing service setting is enabled, but the daemon
-  has restarted or is otherwise stopped.
+- Trigger: the GUI connects to or spawns a daemon, or a later routing refresh
+  finds that persisted service intent differs from daemon runtime.
 - Goal: do not present a stopped listener as enabled, and restore the desired
-  listener when the routing page refreshes or the user enables it again.
+  listener without depending on a specific frontend page mounting.
 
-### 2. Contracts
+### 2. Signatures
+
+```text
+reconcile_persisted_service(client) -> RoutingState
+routing_set_service_enabled(enabled) -> RoutingState
+RoutingStart { listener_addresses, preferred_port, last_actual_port }
+```
+
+### 3. Contracts
 
 - `service_enabled` is the persisted desired state; `daemon.status` is the
   runtime truth used by the UI and takeover/failover gating.
+- After `connect_or_spawn` returns a valid client, the Rust startup path must
+  reconcile persisted service intent before publishing that client through
+  `DaemonBridge`. Recovery cannot be owned only by Settings or sidebar Hooks.
+- Enabled intent plus a stopped daemon sends `RoutingStart` with the complete
+  persisted local/WSL listener set, preferred port, and last actual port.
+  Running runtime is an idempotent no-op; disabled intent must not start it.
+- A successful start persists the returned actual port without changing the
+  user's enabled intent. A persistence failure rolls back the runtime action.
+- Recovery failure is logged with a sanitized error code and must not prevent
+  the valid daemon client from being installed in `DaemonBridge`.
 - If persisted service intent is enabled while the daemon is stopped, routing
   state refresh attempts `RoutingStart` and keeps the real stopped state visible
   if recovery fails.
 - Re-enabling an already-persisted service must reconcile the daemon instead of
   returning early.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Intent disabled + runtime stopped | No-op; do not start listener |
+| Intent enabled + runtime running | No-op; preserve listener and actual port |
+| Intent enabled + runtime stopped | Start complete persisted listener set and save actual port |
+| WSL NAT gateway no longer matches takeover | Reject recovery with existing gateway-changed error; keep bridge usable |
+| Runtime action succeeds but persistence fails | Roll back start/stop and return sanitized persistence error |
+| Daemon lacks routing capability | Skip recovery, install bridge, expose unsupported runtime truth |
+
+### 5. Good / Base / Bad Cases
+
+- Good: routing was enabled, a new daemon starts stopped, startup reconciliation
+  restores it before any provider UI is opened.
+- Base: an existing daemon still owns the running listener; reconnect is a no-op.
+- Bad: restore only in `useNativeProviderRouting`, leaving sidebar-only startup
+  with enabled intent and a stopped listener.
+
+### 6. Tests Required
+
+- Assert enabled/stopped chooses Start, enabled/running is a no-op,
+  disabled/running chooses Stop, and disabled/stopped is a no-op.
+- Assert the start frame preserves the complete listener list plus preferred
+  and last actual ports.
+- Run daemon routing tests, full Rust tests, and `cargo check`; manually smoke
+  test enable -> app/daemon exit -> app relaunch without opening Settings.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+daemon connected -> publish bridge -> wait for Settings Hook to restore route
+```
+
+#### Correct
+
+```text
+daemon connected -> reconcile persisted intent -> publish bridge
+```
 
 - Resetting failover circuits also resets the active route provider to the first
   ready provider in the saved queue order when an active takeover exists.

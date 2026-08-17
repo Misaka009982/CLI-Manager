@@ -1167,6 +1167,14 @@ pub fn run() {
                                     "pty daemon connected: 127.0.0.1:{}",
                                     client.info().port
                                 );
+                                if let Err(error) =
+                                    commands::routing::reconcile_persisted_service(client.clone())
+                                {
+                                    log::warn!(
+                                        "persisted local routing recovery skipped: {}",
+                                        error.code
+                                    );
+                                }
                                 handle.state::<daemon::client::DaemonBridge>().set(client);
                             }
                             Err(err) => log::warn!(
