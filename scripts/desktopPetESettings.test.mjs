@@ -10,6 +10,10 @@ const tempDir = mkdtempSync(join(tmpdir(), "cli-manager-desktop-pet-e-settings-"
 process.on("exit", () => rmSync(tempDir, { recursive: true, force: true }));
 
 const source = readFileSync(new URL("../pet-e/src/bridge/protocol.ts", import.meta.url), "utf8");
+const settingsPageSource = readFileSync(
+  new URL("../src/components/settings/pages/DesktopPetESettingsPage.tsx", import.meta.url),
+  "utf8",
+);
 const output = ts.transpileModule(source, {
   compilerOptions: {
     module: ts.ModuleKind.ES2022,
@@ -74,4 +78,19 @@ test("bridge envelopes reject unknown protocol versions and malformed revisions"
   assert.equal(protocol.isDesktopPetEEnvelope({ ...valid, protocolVersion: 99 }), false);
   assert.equal(protocol.isDesktopPetEEnvelope({ ...valid, revision: -1 }), false);
   assert.equal(protocol.isDesktopPetEEnvelope({ ...valid, revision: 1.5 }), false);
+});
+
+test("pet selection uses validated Codex artwork buttons instead of a text select", () => {
+  assert.match(settingsPageSource, /pet\.format === "codex" && pet\.manifest\.engine === "codex-sprite"/);
+  assert.match(settingsPageSource, /<SimpleGrid/);
+  assert.match(settingsPageSource, /<PetArtwork/);
+  assert.match(settingsPageSource, /width=\{88\}/);
+  assert.match(settingsPageSource, /animated=\{false\}/);
+  assert.match(settingsPageSource, /aria-pressed=\{selected\}/);
+  assert.match(settingsPageSource, /selectingPetId/);
+  assert.match(
+    settingsPageSource,
+    /if \(petsLoading \|\| codexPets\.length === 0 \|\| desktopPetE\.petId\) return;/,
+  );
+  assert.doesNotMatch(settingsPageSource, /<Select/);
 });

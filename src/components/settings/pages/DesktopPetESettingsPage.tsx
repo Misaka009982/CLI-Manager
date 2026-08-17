@@ -1,20 +1,24 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Alert,
   Box,
   Button,
   Group,
-  Select,
+  SimpleGrid,
+  Skeleton,
   Slider,
   Stack,
   Switch,
   Text,
+  UnstyledButton,
 } from "@mantine/core";
 import {
   Bell,
+  Check,
   CircleGauge,
   Eye,
+  ImageOff,
   Lock,
   MessageSquareText,
   MonitorUp,
@@ -25,6 +29,7 @@ import {
   Volume2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { PetArtwork } from "../../desktop-pet/PetArtwork";
 import {
   localizedPetText,
   type InstalledPet,
@@ -69,6 +74,71 @@ function ToggleRow({ icon, title, description, checked, disabled, onChange }: To
   );
 }
 
+interface PetSelectionButtonProps {
+  pet: InstalledPet;
+  name: string;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+}
+
+function PetSelectionButton({ pet, name, selected, disabled, onSelect }: PetSelectionButtonProps) {
+  const { t } = useI18n();
+  const [previewFailed, setPreviewFailed] = useState(false);
+
+  useEffect(() => {
+    setPreviewFailed(false);
+  }, [pet.baseDir, pet.manifest.states.idle.file]);
+
+  return (
+    <UnstyledButton
+      type="button"
+      className={`ui-focus-ring min-h-[132px] min-w-0 rounded-lg border p-2 text-left transition-colors ${
+        selected
+          ? "border-primary bg-primary/10"
+          : "border-border bg-surface-container-lowest hover:border-primary/40"
+      } disabled:cursor-not-allowed disabled:opacity-60`}
+      disabled={disabled}
+      aria-label={name}
+      aria-pressed={selected}
+      title={name}
+      onClick={onSelect}
+    >
+      <Box className="grid h-24 w-full place-items-center overflow-hidden rounded-md bg-surface-low">
+        {previewFailed ? (
+          <ImageOff
+            size={26}
+            color="var(--on-surface-variant)"
+            role="img"
+            aria-label={t("desktopPetE.settings.previewUnavailable")}
+          />
+        ) : (
+          <PetArtwork
+            pet={pet}
+            alt={t("desktopPet.settings.previewAlt", { name })}
+            width={88}
+            height={88}
+            mood="idle"
+            animated={false}
+            onError={() => setPreviewFailed(true)}
+          />
+        )}
+      </Box>
+      <Group mt={8} gap={6} wrap="nowrap">
+        <Text
+          className="min-w-0 flex-1 truncate"
+          size="xs"
+          fw={selected ? 600 : 500}
+          c={selected ? "var(--primary)" : "var(--on-surface)"}
+        >
+          {name}
+        </Text>
+        {selected ? <Check size={14} className="shrink-0 text-primary" aria-hidden="true" /> : null}
+      </Group>
+    </UnstyledButton>
+  );
+}
+
 export function DesktopPetESettingsPage() {
   const { language, t } = useI18n();
   const desktopPet = useSettingsStore((state) => state.desktopPet);
@@ -78,6 +148,7 @@ export function DesktopPetESettingsPage() {
   const [sizeDraft, setSizeDraft] = useState(desktopPetE.size);
   const [codexPets, setCodexPets] = useState<InstalledPet[]>([]);
   const [petsLoading, setPetsLoading] = useState(true);
+  const [selectingPetId, setSelectingPetId] = useState<string | null>(null);
   const enableBlockedByExistingPet = desktopPet.enabled && !desktopPetE.enabled;
   const enableBlockedByMissingPet = codexPets.length === 0 && !desktopPetE.enabled;
   const enableBlocked = enableBlockedByExistingPet || enableBlockedByMissingPet;
@@ -101,11 +172,6 @@ export function DesktopPetESettingsPage() {
     void loadCodexPets();
   }, [loadCodexPets]);
 
-  const petOptions = useMemo(() => codexPets.map((pet) => ({
-    value: pet.manifest.id,
-    label: localizedPetText(pet.manifest.name, language),
-  })), [codexPets, language]);
-
   useEffect(() => setSizeDraft(desktopPetE.size), [desktopPetE.size]);
 
   const patch = useCallback(async (delta: Partial<DesktopPetESettings>): Promise<boolean> => {
@@ -118,6 +184,14 @@ export function DesktopPetESettingsPage() {
       return false;
     }
   }, [t, updateSetting]);
+
+  const selectPet = useCallback((petId: string) => {
+    if (selectingPetId !== null || petId === desktopPetE.petId) return;
+    setSelectingPetId(petId);
+    void patch({ petId }).finally(() => {
+      setSelectingPetId((current) => current === petId ? null : current);
+    });
+  }, [desktopPetE.petId, patch, selectingPetId]);
 
   useEffect(() => {
     if (petsLoading || codexPets.length === 0 || desktopPetE.petId) return;
@@ -210,23 +284,42 @@ export function DesktopPetESettingsPage() {
                 variant="subtle"
                 leftSection={<RefreshCw size={13} />}
                 loading={petsLoading}
+                disabled={selectingPetId !== null}
                 onClick={() => void loadCodexPets()}
               >
                 {t("desktopPetE.settings.rescanPets")}
               </Button>
             </Group>
-            <Select
-              value={desktopPetE.petId}
-              data={petOptions}
-              disabled={petsLoading || petOptions.length === 0}
-              placeholder={t(petOptions.length === 0
-                ? "desktopPetE.settings.noCodexPets"
-                : "desktopPetE.settings.selectPet")}
-              onChange={(petId) => void patch({ petId })}
-              allowDeselect={false}
-              searchable
-              aria-label={t("desktopPetE.settings.pet")}
-            />
+            {petsLoading ? (
+              <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm" aria-hidden="true">
+                {[0, 1, 2].map((index) => (
+                  <Skeleton key={index} height={132} radius="md" />
+                ))}
+              </SimpleGrid>
+            ) : codexPets.length > 0 ? (
+              <SimpleGrid
+                cols={{ base: 2, sm: 3 }}
+                spacing="sm"
+                role="group"
+                aria-label={t("desktopPetE.settings.pet")}
+                aria-busy={selectingPetId !== null}
+              >
+                {codexPets.map((pet) => (
+                  <PetSelectionButton
+                    key={pet.manifest.id}
+                    pet={pet}
+                    name={localizedPetText(pet.manifest.name, language)}
+                    selected={desktopPetE.petId === pet.manifest.id}
+                    disabled={selectingPetId !== null}
+                    onSelect={() => selectPet(pet.manifest.id)}
+                  />
+                ))}
+              </SimpleGrid>
+            ) : (
+              <Text size="xs" c="var(--on-surface-variant)">
+                {t("desktopPetE.settings.noCodexPets")}
+              </Text>
+            )}
             <Text mt={6} size="xs" c="var(--on-surface-variant)">
               {t("desktopPetE.settings.petDescription")}
             </Text>
