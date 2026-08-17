@@ -79,8 +79,10 @@ import {
   createTerminalCliContext,
   isClaudeTerminalContext,
   isCodexTerminalContext,
+  isOpenCodeTerminalContext,
 } from "../terminal/browser/TerminalCliContext";
 import { createTerminalMouseInteractionOptions } from "../terminal/browser/TerminalMouseInteraction";
+import { attachOpenCodeTuiClipboard } from "../terminal/browser/OpenCodeTuiClipboard";
 import {
   createPiTerminalCompatibility,
   type PiTerminalCompatibility,
@@ -1428,6 +1430,28 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       reportPtyWriteError,
     });
     inputDisposables.push({ dispose: inputSelection.dispose });
+    if (contextMenuTarget && isOpenCodeTerminalContext(getSessionToolContext())) {
+      inputDisposables.push({
+        dispose: attachOpenCodeTuiClipboard({
+          container: contextMenuTarget,
+          terminal,
+          isActive: () => isActiveRef.current,
+          isVisible: () => isVisibleRef.current,
+          hasInputFocus: () => contextMenuTarget.contains(document.activeElement),
+          isMac: () => (
+            osPlatformRef.current === "macos"
+            || (osPlatformRef.current === "unknown" && navigator.platform.toLowerCase().includes("mac"))
+          ),
+          readClipboardText: readClipboardPasteText,
+          pasteText: (text) => pasteText(terminal, text),
+          wrapMultilinePaste: wrapTerminalPasteTextForCtrlShiftV,
+          copyText: copyTextToClipboard,
+          clearInputSelection: inputSelection.clearInputSelectionState,
+          focusTerminal: () => focusTerminalWithCodexCursorPolicy(terminal),
+          logError,
+        }),
+      });
+    }
     const onContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();

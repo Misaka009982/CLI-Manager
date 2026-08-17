@@ -17,6 +17,19 @@ const PI_RESUME_OPTIONS = new Set([
   "--fork",
 ]);
 
+const OPENCODE_RESUME_OPTIONS = new Set([
+  "-c",
+  "--continue",
+  "-s",
+  "--session",
+  "--fork",
+]);
+
+const OPENCODE_RESUME_OPTIONS_WITH_VALUE = new Set([
+  "-s",
+  "--session",
+]);
+
 interface CliArgToken {
   raw: string;
   normalized: string;
@@ -60,6 +73,27 @@ function optionName(token: CliArgToken): string {
   return equalsIndex < 0 ? token.normalized : token.normalized.slice(0, equalsIndex);
 }
 
+export function stripOpenCodeResumeCliArgs(cliArgs: string | null | undefined): string {
+  const tokens = tokenizeCliArgs(cliArgs ?? "");
+  const kept: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (!OPENCODE_RESUME_OPTIONS.has(optionName(token))) {
+      kept.push(token.raw);
+      continue;
+    }
+    if (
+      OPENCODE_RESUME_OPTIONS_WITH_VALUE.has(optionName(token))
+      && !token.raw.includes("=")
+      && tokens[index + 1]
+      && !tokens[index + 1].raw.startsWith("-")
+    ) {
+      index += 1;
+    }
+  }
+  return kept.join(" ").trim();
+}
+
 export function stripPiResumeCliArgs(cliArgs: string | null | undefined): string {
   const tokens = tokenizeCliArgs(cliArgs ?? "");
   const kept: string[] = [];
@@ -81,6 +115,11 @@ function normalizeSessionId(sessionId: string): string | null {
   return trimmed && !/[\s\0\r\n]/.test(trimmed) ? trimmed : null;
 }
 
+function normalizeOpenCodeSessionId(sessionId: string): string | null {
+  const normalized = normalizeSessionId(sessionId);
+  return normalized && /^ses_[A-Za-z0-9]+$/.test(normalized) ? normalized : null;
+}
+
 export function buildHistoryResumeCommand(
   session: Pick<HistorySessionSummary, "session_id" | "source">,
   project?: ResumeProject | null,
@@ -88,6 +127,20 @@ export function buildHistoryResumeCommand(
   const sessionId = normalizeSessionId(session.session_id);
   if (!sessionId) return null;
 
+  if (session.source === "opencode") {
+    const openCodeSessionId = normalizeOpenCodeSessionId(session.session_id);
+    if (!openCodeSessionId) return null;
+    const base = `opencode --session ${openCodeSessionId}`;
+    if (
+      !project
+      || project.startup_cmd.trim()
+      || resolveCliToolHistorySourceId(project.cli_tool) !== "opencode"
+    ) {
+      return base;
+    }
+    const cliArgs = stripOpenCodeResumeCliArgs(project.cli_args);
+    return cliArgs ? `${base} ${cliArgs}` : base;
+  }
   if (session.source === "pi") {
     const base = `pi --session ${sessionId}`;
     if (

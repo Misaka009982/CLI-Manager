@@ -1,5 +1,13 @@
 # Changelog
 
+## [V1.3.7] - 2026-08-16
+
+### OpenCode 会话兼容
+
+- 修复 OpenCode Hook 将子 Agent 会话 ID 覆盖到主终端标签页的问题：Hook 现在按 OpenCode `sessionID` 识别根会话，跟踪父子关系并忽略子会话生命周期通知，顶部 Session ID、实时状态和后续恢复保持绑定到主会话。
+- 历史会话“继续对话”新增 OpenCode 支持，使用真实 `session_id` 构造 `opencode --session <id>`；SQLite locator、无效 ID 和项目参数中的重复 `--session/-s`、`--continue/-c`、`--fork` 不会污染恢复命令。
+- OpenCode TUI 新增隔离的剪贴板快捷键适配：Windows 下选中文本后 `Ctrl+C` 复制、`Ctrl+V` 粘贴、`Ctrl+Shift+V` 多行粘贴可正常使用；无选择时 `Ctrl+C` 仍发送中断，Claude、Codex、Grok、CC/CX 和 Pi 继续使用原有通用终端输入路径。
+
 ## [TEMP] - 2026-08-11
 
 ### 远程托管
