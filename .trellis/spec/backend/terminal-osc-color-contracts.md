@@ -90,13 +90,15 @@ The negotiated daemon feature is `terminal_colors_v1`.
 
 - Trigger: a local or remote TUI writes OSC `52;Pc;Pd` (BEL or ST) or the same sequence wrapped in tmux DCS passthrough.
 - The frontend display pipeline owns this sequence. Rust color-query filtering leaves OSC 52 unchanged so the React host can decode it.
-- Live PTY frames may write the host clipboard and answer `Pd=?` queries. Replay and reset frames strip the sequence and must not write the clipboard or reply.
+- Live PTY frames may write the host clipboard. They answer `Pd=?` queries only after the user explicitly enables host clipboard reads. Replay and reset frames strip the sequence and must not write the clipboard or reply.
 
 ### 2. Contracts
 
-- Decode `Pd` as UTF-8 Base64. Invalid, empty, or `?` payloads never write the clipboard.
-- When the user setting `osc52ClipboardEnabled` is on, a live write calls `copyTextToClipboard`. A live query reads the host clipboard and writes `OSC 52 ; Pc ; <base64> BEL` back to the PTY.
-- When the setting is off, sequences are still stripped; no clipboard write and no query reply.
+- Decode `Pd` as UTF-8 Base64, accepting standard padded and unpadded payloads. Invalid, empty, or `?` payloads never write the clipboard.
+- When the user setting `osc52ClipboardEnabled` is on, a live write calls `copyTextToClipboard`.
+- A live query reads the host clipboard and writes `OSC 52 ; Pc ; <base64> BEL` back to the PTY only when the separate `osc52ClipboardQueryEnabled` setting is enabled. It defaults to `false` because the reply sends host clipboard contents to the local or remote process, and it is excluded from settings backup/sync so consent stays device-local.
+- Query authorization is checked before queuing and again after the native clipboard read. A reply is sent only when its Base64 payload is at most `OSC52_MAX_BASE64_CHARS` (2,000,000); read and write actions share a 32-action bounded queue, dropping excess events.
+- When either corresponding setting is off, sequences are still stripped. Disabling writes prevents clipboard writes; disabling queries prevents query replies.
 - Query replies are allowed from React because they are clipboard host answers, not OSC 10/11 color replies.
 - `mouseEventsRequireAlt` is true so host selection survives mouseup unless the user holds Alt.
 

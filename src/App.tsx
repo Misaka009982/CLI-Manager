@@ -657,6 +657,8 @@ function App() {
     const blockChromiumInspect = (event: KeyboardEvent) => {
       if (event.key.toLowerCase() !== "c" || !event.shiftKey || event.altKey) return;
       if (!event.ctrlKey && !event.metaKey) return;
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest(".xterm")) return;
       event.preventDefault();
     };
     window.addEventListener("keydown", handleF12, true);

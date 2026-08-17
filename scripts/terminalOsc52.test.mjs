@@ -71,8 +71,8 @@ const { useTerminalOsc } = await import(hookUrl);
 const toBase64 = (text) => Buffer.from(text, "utf8").toString("base64");
 const osc52 = (text, selection = "c", terminator = "\x07") =>
   `\x1b]52;${selection};${toBase64(text)}${terminator}`;
-const tmuxOsc52 = (text) =>
-  `\x1bPtmux;\x1b\x1b]52;c;${toBase64(text)}\x07\x1b\\`;
+const tmuxOsc52 = (text, terminator = "\x07") =>
+  `\x1bPtmux;\x1b\x1b]52;c;${toBase64(text)}${terminator.replace(/\x1b/g, "\x1b\x1b")}\x1b\\`;
 
 const collectCopies = (options = {}) => {
   const copied = [];
@@ -114,7 +114,11 @@ test("parseOsc52Body distinguishes query, clear, and invalid payloads", () => {
 test("decodeOsc52Payload accepts wrapped UTF-8 base64 and rejects junk", () => {
   assert.equal(decodeOsc52Payload(toBase64("你好")), "你好");
   assert.equal(decodeOsc52Payload("SGVs\n bG8="), "Hello");
+  assert.equal(decodeOsc52Payload("SGk"), "Hi");
+  assert.equal(decodeOsc52Payload("TQ"), "M");
   assert.equal(decodeOsc52Payload(""), null);
+  assert.equal(decodeOsc52Payload("A"), null);
+  assert.equal(decodeOsc52Payload("TQ="), null);
   assert.equal(decodeOsc52Payload("!!!!"), null);
   assert.equal(decodeOsc52Payload("A".repeat(OSC52_MAX_BASE64_CHARS + 4)), null);
 });
@@ -123,18 +127,38 @@ test("live PTY output enables OSC 52 copies and replay disables them", () => {
   const displaySource = readFileSync(new URL("../src/hooks/useTerminalDisplay.ts", import.meta.url), "utf8");
   const terminalSource = readFileSync(new URL("../src/components/XTermTerminal.tsx", import.meta.url), "utf8");
   const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const settingsSource = readFileSync(new URL("../src/stores/settingsStore.ts", import.meta.url), "utf8");
   assert.match(displaySource, /applyOsc52:\s*payload\.kind !== "replay" && payload\.kind !== "reset"/);
   assert.match(displaySource, /normalizeOutputRef\.current\(rawText, \{ applyOsc52: false \}\)/);
   assert.match(terminalSource, /osc52ClipboardEnabled/);
+  assert.match(terminalSource, /osc52ClipboardQueryEnabled/);
   assert.match(terminalSource, /formatOsc52Reply/);
   assert.match(terminalSource, /readTextFromClipboard/);
+  assert.match(terminalSource, /OSC52_MAX_PENDING_CLIPBOARD_ACTIONS/);
+  assert.match(
+    terminalSource,
+    /const text = await readTextFromClipboard\(\);\s+if \(!useSettingsStore\.getState\(\)\.osc52ClipboardQueryEnabled\) return;/,
+  );
   assert.match(terminalSource, /copyTerminalSelection/);
   assert.match(appSource, /blockChromiumInspect/);
+  assert.match(appSource, /target\.closest\("\.xterm"\)/);
+  assert.match(settingsSource, /osc52ClipboardQueryEnabled: false/);
 });
 
 test("OSC 52 payload encoding round-trips UTF-8 text", () => {
   assert.equal(decodeOsc52Payload(encodeOsc52Payload("你好\nline")), "你好\nline");
   assert.equal(formatOsc52Reply("Hi", "c"), `\x1b]52;c;${encodeOsc52Payload("Hi")}\x07`);
+});
+
+test("OSC 52 payload encoding round-trips a large payload", () => {
+  const largeText = "x".repeat(100_000);
+  assert.equal(decodeOsc52Payload(encodeOsc52Payload(largeText)), largeText);
+});
+
+test("OSC 52 query replies stay inside the protocol payload limit", () => {
+  assert.notEqual(formatOsc52Reply("x".repeat(1_500_000)), null);
+  assert.equal(formatOsc52Reply("x".repeat(1_500_001)), null);
+  assert.equal(formatOsc52Reply("😀".repeat(375_001)), null);
 });
 
 test("tmux DCS prefix matching and ESC unwrapping", () => {
@@ -208,8 +232,8 @@ test("OSC 52 copies survive every daemon frame split", () => {
   }
 });
 
-test("tmux OSC 52 copies survive every daemon frame split", () => {
-  const input = `a${tmuxOsc52("DCS")}b`;
+test("tmux OSC 52 with an ST terminator survives every daemon frame split", () => {
+  const input = `a${tmuxOsc52("DCS", "\x1b\\")}b`;
   for (let split = 0; split <= input.length; split += 1) {
     const { osc, copied } = collectCopies({ sessionId: `tmux-split-${split}` });
     const actual = osc.normalizeTerminalOutput(input.slice(0, split))

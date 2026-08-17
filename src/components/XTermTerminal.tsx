@@ -105,6 +105,8 @@ const IMAGE_ADDON_PIXEL_LIMIT = 4 * 1024 * 1024;
 const IMAGE_ADDON_SEQUENCE_LIMIT = 8 * 1024 * 1024;
 const IMAGE_ADDON_STORAGE_LIMIT_MB = 32;
 const VISIBILITY_RESTORE_REVEAL_TIMEOUT_MS = 500;
+// ponytail: fixed ceiling bounds untrusted OSC 52 bursts; add per-session rate limiting only if legitimate bursts need it.
+const OSC52_MAX_PENDING_CLIPBOARD_ACTIONS = 32;
 const CODEX_OUTPUT_SIGNATURE_PATTERN = /(?:openai\s+codex|\/model\s+to\s+change)/i;
 const ANSI_CSI_SEQUENCE_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 let terminalImageAddonFallbackLogged = false;
@@ -433,6 +435,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const codexCursorShowTimerRef = useRef<number | null>(null);
   const codexSessionDetectedRef = useRef(false);
   const osc52ClipboardChainRef = useRef(Promise.resolve());
+  const osc52ClipboardPendingRef = useRef(0);
   const displayNormalizeOutputRef = useRef<(text: string) => string>((text) => text);
   const displayTransformOutputRef = useRef<(text: string) => string>((text) => text);
   const displayAfterWriteRef = useRef<((terminal: Terminal) => void) | null>(null);
@@ -764,6 +767,21 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     logError("PTY write failed in XTermTerminal", { sessionId, stage, err });
   };
 
+  const queueOsc52ClipboardAction = (
+    action: () => Promise<void> | void,
+    onError?: (err: unknown) => void,
+  ) => {
+    if (osc52ClipboardPendingRef.current >= OSC52_MAX_PENDING_CLIPBOARD_ACTIONS) return;
+    osc52ClipboardPendingRef.current += 1;
+    osc52ClipboardChainRef.current = osc52ClipboardChainRef.current
+      .catch(() => undefined)
+      .then(action)
+      .catch((err) => onError?.(err))
+      .finally(() => {
+        osc52ClipboardPendingRef.current -= 1;
+      });
+  };
+
   const {
     normalizeTerminalOutput,
     updateSessionCwdIfChanged,
@@ -772,21 +790,23 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     osPlatformRef,
     onOsc52Write: (text) => {
       if (!useSettingsStore.getState().osc52ClipboardEnabled) return;
-      osc52ClipboardChainRef.current = osc52ClipboardChainRef.current
-        .catch(() => undefined)
-        .then(() => copyTextToClipboard(text));
+      queueOsc52ClipboardAction(() => {
+        if (!useSettingsStore.getState().osc52ClipboardEnabled) return;
+        return copyTextToClipboard(text);
+      });
     },
     onOsc52Query: (selection) => {
-      if (!useSettingsStore.getState().osc52ClipboardEnabled) return;
-      osc52ClipboardChainRef.current = osc52ClipboardChainRef.current
-        .catch(() => undefined)
-        .then(async () => {
-          const text = await readTextFromClipboard();
-          await terminalProcessManager.write(sessionId, formatOsc52Reply(text, selection || "c"));
-        })
-        .catch((err) => {
-          logError("Failed to answer OSC 52 clipboard query", { sessionId, err });
-        });
+      if (!useSettingsStore.getState().osc52ClipboardQueryEnabled) return;
+      queueOsc52ClipboardAction(async () => {
+        if (!useSettingsStore.getState().osc52ClipboardQueryEnabled) return;
+        const text = await readTextFromClipboard();
+        if (!useSettingsStore.getState().osc52ClipboardQueryEnabled) return;
+        const reply = formatOsc52Reply(text, selection || "c");
+        if (reply === null) return;
+        await terminalProcessManager.write(sessionId, reply);
+      }, (err) => {
+        logError("Failed to answer OSC 52 clipboard query", { sessionId, err });
+      });
     },
   });
   displayNormalizeOutputRef.current = normalizeTerminalOutput;

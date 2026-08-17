@@ -303,7 +303,7 @@ export function useTerminalOsc({
       const bodyStart = matched.kind === "tmux"
         ? dcsStart + TMUX_DCS_PREFIX.length
         : dcsStart + DCS_PREFIX.length;
-      const terminator = findDcsTerminator(combined, bodyStart);
+      const terminator = findDcsTerminator(combined, bodyStart, matched.kind === "tmux");
       if (terminator === null) {
         dcsBufferRef.current = combined.slice(dcsStart);
         break;

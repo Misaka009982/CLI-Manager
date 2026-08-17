@@ -105,10 +105,14 @@ export const matchDcsPrefix = (text: string, start: number): DcsPrefixMatch => {
   return { kind: "other" };
 };
 
-export const findDcsTerminator = (text: string, from: number): OscTerminator => {
+export const findDcsTerminator = (text: string, from: number, skipEscapedEsc = false): OscTerminator => {
   for (let i = from; i < text.length; i += 1) {
     if (text.charCodeAt(i) !== 0x1b) continue;
     if (i + 1 >= text.length) return null;
+    if (skipEscapedEsc && text[i + 1] === "\x1b") {
+      i += 1;
+      continue;
+    }
     if (text[i + 1] === "\\") return { index: i, length: 2 };
   }
   return null;
@@ -119,10 +123,12 @@ export const unwrapTmuxDcsBody = (body: string): string => body.replace(/\x1b\x1
 export const decodeOsc52Payload = (payload: string): string | null => {
   const compact = payload.replace(/\s+/g, "");
   if (!compact || compact.length > OSC52_MAX_BASE64_CHARS) return null;
-  if (compact.length % 4 !== 0) return null;
+  const remainder = compact.length % 4;
+  if (remainder === 1 || (remainder !== 0 && compact.includes("="))) return null;
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) return null;
+  const normalized = remainder === 0 ? compact : `${compact}${"=".repeat(4 - remainder)}`;
   try {
-    const binary = atob(compact);
+    const binary = atob(normalized);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i += 1) {
       bytes[i] = binary.charCodeAt(i);
@@ -148,15 +154,18 @@ export const parseOsc52Body = (body: string): Osc52Action | null => {
   return { kind: "write", text, selection };
 };
 
-export const encodeOsc52Payload = (text: string): string => {
-  const bytes = new TextEncoder().encode(text);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 1) {
-    binary += String.fromCharCode(bytes[i] ?? 0);
+const encodeOsc52Bytes = (bytes: Uint8Array): string => {
+  const chunks: string[] = [];
+  for (let start = 0; start < bytes.length; start += 0x8000) {
+    chunks.push(String.fromCharCode(...bytes.subarray(start, start + 0x8000)));
   }
-  return btoa(binary);
+  return btoa(chunks.join(""));
 };
 
-export const formatOsc52Reply = (text: string, selection = "c"): string => (
-  `${OSC_PREFIX}52;${selection};${encodeOsc52Payload(text)}\x07`
-);
+export const encodeOsc52Payload = (text: string): string => encodeOsc52Bytes(new TextEncoder().encode(text));
+
+export const formatOsc52Reply = (text: string, selection = "c"): string | null => {
+  const bytes = new TextEncoder().encode(text);
+  if (Math.ceil(bytes.length / 3) * 4 > OSC52_MAX_BASE64_CHARS) return null;
+  return `${OSC_PREFIX}52;${selection};${encodeOsc52Bytes(bytes)}\x07`;
+};
