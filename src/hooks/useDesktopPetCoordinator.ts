@@ -398,7 +398,8 @@ export function useDesktopPetCoordinator({
         current.size,
         nextPosition,
         current.alwaysOnTop,
-        petWindowVisibleRef.current
+        petWindowVisibleRef.current,
+        current.enabled
       );
       petAppliedWindowConfigKeyRef.current = key;
       void updateSettingRef.current("desktopPet", { ...current, position: nextPosition }).catch((err) => {
@@ -435,7 +436,8 @@ export function useDesktopPetCoordinator({
           size,
           position,
           current.alwaysOnTop,
-          petWindowVisibleRef.current
+          petWindowVisibleRef.current,
+          current.enabled
         );
         petAppliedWindowConfigKeyRef.current = key;
         void updateSettingRef.current("desktopPet", { ...current, size, position }).catch((err) => {
