@@ -1406,3 +1406,91 @@ environment select change -> provider_home_get -> wsl.exe probe $HOME
 environment select change -> provider_wsl_list_distros (enumeration only)
 explicit refresh/save/reset -> provider_home_get/select/reset -> inspect
 ```
+
+## Scenario: Provider lifecycle references and project scope gates (2026-08-17)
+
+### 1. Scope / Trigger
+
+- Trigger: disabling/deleting a provider, or selecting a provider from a
+  project/Worktree menu.
+- Goal: distinguish catalog import provenance from real runtime references,
+  keep scoped selection out of the global Home writer, and prevent new Grok
+  project/Worktree overrides.
+
+### 2. Signatures
+
+```text
+delete_provider(appType, providerId) -> Result<(), ProviderError>
+set_provider_enabled(appType, providerId, enabled) -> Result<ProviderCard, ProviderError>
+provider_reference_count(appType, providerId) -> i64
+ProviderSwitchModal.applyProvider(provider) -> persist target provider_overrides
+```
+
+### 3. Contracts
+
+- `provider_reference_count` reads `cli-manager.db` read-only and parses
+  `projects.provider_overrides` plus only `worktrees` whose status is `active`.
+  It uses the same schema-v2 parser as scope resolution: matching app type,
+  `source = cli-manager`, version 2, and exact provider ID.
+- `providers.db.provider_import_refs` records import provenance only. It must
+  never block lifecycle operations; its existing foreign-key cascade remains
+  responsible for cleanup after a provider deletion.
+- A missing app database returns zero references. Lifecycle scanning counts
+  only successfully parsed schema-v2 values. Malformed or legacy CCS
+  overrides do not resolve to a native catalog ID and therefore cannot block
+  every provider operation; scope resolution keeps its separate migration
+  diagnostics when it is asked to launch such a scope.
+- Claude/Codex selector mutations persist only the selected project or
+  Worktree override. `provider_scope_prepare` remains the launch materializer:
+  Claude uses generated settings plus `--settings`; Codex uses a non-secret
+  profile beside the real Home plus `--profile`, with the key in child process
+  environment only.
+- New Grok project/Worktree selection is unsupported. UI must not list,
+  persist, or globally apply Grok from that menu. Existing persisted Grok
+  references remain readable solely for backward compatibility.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Exact project or active Worktree reference | `provider_referenced_cannot_disable` / `provider_referenced_cannot_delete` |
+| Imported but unreferenced non-current provider | lifecycle operation proceeds |
+| Current provider | existing `provider_current_cannot_*` error |
+| Malformed or legacy CCS override during lifecycle scan | ignored; it is not a native catalog reference |
+| Grok project/Worktree switch | localized unsupported UI; no mutation |
+
+### 5. Good / Base / Bad Cases
+
+- Good: an imported, non-current Claude provider with no v2 override can be
+  disabled or deleted.
+- Base: a project and an active Worktree reference the same Claude provider;
+  both block disable/delete, while a missing Worktree does not.
+- Bad: count `provider_import_refs`, invoke global preview/apply from a
+  project selector, or create a new Grok override from the UI.
+
+### 6. Tests Required
+
+- Repository regression test covers project reference, app-type isolation,
+  active versus missing Worktree, a non-matching provider ID, and legacy or
+  malformed values that must not block catalog operations.
+- Scope tests keep schema-v2 parser and Claude/Codex launch materialization
+  coverage passing.
+- Frontend type-check verifies delete-error localization and the Grok gate.
+- Manual desktop checks cover project and Worktree selection for Claude/Codex,
+  global Home non-mutation, and the Grok unsupported prompt in both locales.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+delete -> providers.db.provider_import_refs -> block imported provider
+project switch -> provider_global_apply -> rewrite real Home
+```
+
+#### Correct
+
+```text
+delete -> cli-manager.db v2 project/active-Worktree references -> exact block
+project switch -> target provider_overrides -> next launch materializes scope
+```
