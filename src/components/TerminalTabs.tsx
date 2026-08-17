@@ -59,6 +59,7 @@ import {
 } from "./terminal/TerminalSidePanel";
 import { RemoteHandoffOverlay } from "./terminal/RemoteHandoffOverlay";
 import { DesktopPetESessionActionPanel } from "./terminal/DesktopPetESessionActionPanel";
+import { ProviderQuickSwitchPanel } from "./terminal/ProviderQuickSwitchPanel";
 import { WorktreeFinishDialog } from "./worktree/WorktreeFinishDialog";
 import { FileExplorerSidebar } from "./files/FileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
@@ -66,8 +67,9 @@ import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from
 import { projectSupportsCapability, resolveProjectCapabilities, type ProjectCapability } from "../lib/projectCapabilities";
 import { resolveCliToolHistorySourceId, resolveCliToolIconKey, type CliToolIconKey } from "../lib/cliTools";
 import { resolveHistoryProjectPath } from "../lib/historyProjectPaths";
-import { parseProjectEnvVars } from "../lib/providerSwitching";
-import { Activity, Terminal, TerminalSquare, Sparkles, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, FolderOpen, Hash, Check, Cpu, Cloud, Undo2 } from "./icons";
+import { resolveAgentRuntimeKind } from "../lib/agentCapabilities";
+import { parseProjectEnvVars, resolveProviderSwitchAppType } from "../lib/providerSwitching";
+import { Activity, ArrowLeftRight, Terminal, TerminalSquare, Sparkles, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, FolderOpen, Hash, Check, Cpu, Cloud, Undo2 } from "./icons";
 import { WorktreeIcon } from "./WorktreeIcon";
 import { VendorIcon, inferVendor, type VendorKey } from "./VendorIcon";
 import { CliToolIcon } from "./CliToolIcon";
@@ -84,6 +86,7 @@ import {
   type TerminalTabCloseRequestDetail,
 } from "../lib/terminalCloseConfirm";
 import type { HistorySourceFilter, Project, TerminalScope, TerminalSession, TreeNode, WorktreeRecord } from "../lib/types";
+import type { NativeProviderAppType } from "./settings/providers/nativeProviderTypes";
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -2447,6 +2450,8 @@ interface TerminalTabsProps {
   onToggleFullscreen?: () => void;
   projectScopedTerminalViewEnabled?: boolean;
   terminalScope?: TerminalScope;
+  onOpenProviderSettings?: () => void;
+  onOpenHistorySettings?: () => void;
 }
 
 export function TerminalTabs({
@@ -2454,6 +2459,8 @@ export function TerminalTabs({
   onToggleFullscreen,
   projectScopedTerminalViewEnabled = false,
   terminalScope = ALL_TERMINALS_SCOPE,
+  onOpenProviderSettings,
+  onOpenHistorySettings,
 }: TerminalTabsProps = {}) {
   const { t } = useI18n();
   const { prompt, promptDialog } = useAppPrompt();
@@ -2581,6 +2588,7 @@ export function TerminalTabs({
   const [replayOpen, setReplayOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [systemResourcesOpen, setSystemResourcesOpen] = useState(false);
+  const [providersOpen, setProvidersOpen] = useState(false);
   const [finishTarget, setFinishTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [discardTarget, setDiscardTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [activeToolbarDragId, setActiveToolbarDragId] = useState<string | null>(null);
@@ -2730,6 +2738,7 @@ export function TerminalTabs({
   }, [activeSession, sessions]);
   const panelSessionId = panelSession?.id ?? null;
   const panelProject = panelSession?.projectId ? projectById.get(panelSession.projectId) ?? null : null;
+  const panelProviderAppType: NativeProviderAppType = resolveProviderSwitchAppType(panelSession, panelProject) ?? "claude";
   const panelCapabilities = resolveProjectCapabilities(panelProject);
   const panelGitSupported = panelCapabilities.git || panelProject?.environment_type === "ssh";
   const activeWorktree = useMemo(
@@ -2955,6 +2964,7 @@ export function TerminalTabs({
   const replayPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "replay" : replayOpen;
   const gitPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "git" : gitOpen;
   const filesPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "files" : filesOpen;
+  const providersPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "providers" : providersOpen;
   const systemResourcesPanelActive = sidePanelMerged
     ? sidePanelOpen && sidePanelTab === "systemResources"
     : systemResourcesOpen;
@@ -2978,6 +2988,7 @@ export function TerminalTabs({
     setReplayOpen(false);
     setFilesOpen(false);
     setSystemResourcesOpen(false);
+    setProvidersOpen(false);
   }, [historyOpen, terminalSidePanelSingleOpen]);
 
   useEffect(() => {
@@ -3310,12 +3321,13 @@ export function TerminalTabs({
   const ensureStatsPanelAllowed = useCallback(async () => {
     try {
       const settings = useSettingsStore.getState();
-      const status = await invoke<{
+      const [hookStatus, openCodeStatus] = await Promise.all([
+        invoke<{
         claude: { status: string };
         codex: { status: string };
         pi: { status: string };
         grok: { status: string };
-      }>(
+        }>(
         "hook_settings_get_status",
         {
           selectedDir: settings.claudeHookConfigDir?.trim() || null,
@@ -3325,13 +3337,21 @@ export function TerminalTabs({
           ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
           autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
         }
-      );
+        ),
+        invoke<{ status: string }>("opencode_hook_status"),
+      ]);
       const hasEnabledInstalledHook =
-        (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
-        (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
-        (settings.piHookBridgeEnabled && status.pi.status === "installed") ||
-        (settings.grokHookBridgeEnabled && status.grok.status === "installed");
+        openCodeStatus.status === "installed" ||
+        (settings.claudeHookBridgeEnabled && hookStatus.claude.status === "installed") ||
+        (settings.codexHookBridgeEnabled && hookStatus.codex.status === "installed") ||
+        (settings.piHookBridgeEnabled && hookStatus.pi.status === "installed") ||
+        (settings.grokHookBridgeEnabled && hookStatus.grok.status === "installed");
       if (!hasEnabledInstalledHook) {
+        const currentProject = panelSession?.projectId ? projectById.get(panelSession.projectId) : null;
+        const currentAgent = resolveAgentRuntimeKind(
+          `${panelSession?.cliTool ?? ""} ${panelSession?.startupCmd ?? ""} ${panelSession?.title ?? ""} ${currentProject?.cli_tool ?? ""}`
+        );
+        if (currentAgent === "opencode") return true;
         toast.warning(t("notifications.stats.needHook"), {
           description: t("notifications.stats.needHookDescription"),
         });
@@ -3341,7 +3361,7 @@ export function TerminalTabs({
       logError("Failed to check hook status before opening terminal stats panel", err);
     }
     return true;
-  }, [t]);
+  }, [panelSession, projectById, t]);
 
   const handleToggleStatsPanel = useCallback(async () => {
     if (statsPanelActive) {
@@ -3366,6 +3386,7 @@ export function TerminalTabs({
         setReplayOpen(false);
         setFilesOpen(false);
         setSystemResourcesOpen(false);
+        setProvidersOpen(false);
       }
       setStatsOpen(true);
     }
@@ -3390,10 +3411,37 @@ export function TerminalTabs({
         setGitOpen(false);
         setReplayOpen(false);
         setFilesOpen(false);
+        setProvidersOpen(false);
       }
       setSystemResourcesOpen(true);
     }
   }, [closeHistory, sidePanelMerged, systemResourcesPanelActive, terminalSidePanelSingleOpen]);
+
+  const handleToggleProviderPanel = useCallback(() => {
+    if (providersPanelActive) {
+      if (sidePanelMerged) setSidePanelOpen(false);
+      else setProvidersOpen(false);
+      return;
+    }
+    if (terminalSidePanelSingleOpen) {
+      closeHistory();
+      setActiveWorkspaceTab("terminal");
+    }
+    if (sidePanelMerged) {
+      setSidePanelTab("providers");
+      setSidePanelOpen(true);
+    } else {
+      if (terminalSidePanelSingleOpen || window.innerWidth < 1100) {
+        setStatsOpen(false);
+        setGitOpen(false);
+        setReplayOpen(false);
+        setFilesOpen(false);
+        setSystemResourcesOpen(false);
+        setProvidersOpen(false);
+      }
+      setProvidersOpen(true);
+    }
+  }, [closeHistory, providersPanelActive, sidePanelMerged, terminalSidePanelSingleOpen]);
 
   const handleToggleGitChangesPanel = useCallback(() => {
     if (gitPanelActive) {
@@ -3420,6 +3468,7 @@ export function TerminalTabs({
         setReplayOpen(false);
         setFilesOpen(false);
         setSystemResourcesOpen(false);
+        setProvidersOpen(false);
       }
       setGitOpen(true);
     }
@@ -3450,6 +3499,7 @@ export function TerminalTabs({
         setGitOpen(false);
         setFilesOpen(false);
         setSystemResourcesOpen(false);
+        setProvidersOpen(false);
       }
       setReplayOpen(true);
     }
@@ -3499,6 +3549,7 @@ export function TerminalTabs({
       setGitOpen(false);
       setReplayOpen(false);
       setSystemResourcesOpen(false);
+      setProvidersOpen(false);
     }
     setFilesOpen(true);
     return true;
@@ -3565,36 +3616,47 @@ export function TerminalTabs({
     if (sidePanelMerged) return;
     const enforce = () => {
       if (!terminalSidePanelSingleOpen && window.innerWidth >= 1100) return;
-      const openPanels = [statsOpen, gitOpen, replayOpen, filesOpen, systemResourcesOpen].filter(Boolean).length;
+      const openPanels = [statsOpen, gitOpen, replayOpen, filesOpen, providersOpen, systemResourcesOpen].filter(Boolean).length;
       if (openPanels <= 1) return;
       if (statsOpen) {
         setGitOpen(false);
         setReplayOpen(false);
         setFilesOpen(false);
         setSystemResourcesOpen(false);
+        setProvidersOpen(false);
         return;
       }
       if (systemResourcesOpen) {
         setGitOpen(false);
         setReplayOpen(false);
         setFilesOpen(false);
+        setProvidersOpen(false);
+        return;
+      }
+      if (providersOpen) {
+        setGitOpen(false);
+        setReplayOpen(false);
+        setFilesOpen(false);
+        setSystemResourcesOpen(false);
         return;
       }
       if (gitOpen) {
         setReplayOpen(false);
         setFilesOpen(false);
         setSystemResourcesOpen(false);
+        setProvidersOpen(false);
         return;
       }
       if (replayOpen) {
         setFilesOpen(false);
         setSystemResourcesOpen(false);
+        setProvidersOpen(false);
       }
     };
     enforce();
     window.addEventListener("resize", enforce);
     return () => window.removeEventListener("resize", enforce);
-  }, [filesOpen, gitOpen, replayOpen, sidePanelMerged, statsOpen, systemResourcesOpen, terminalSidePanelSingleOpen]);
+  }, [filesOpen, gitOpen, providersOpen, replayOpen, sidePanelMerged, statsOpen, systemResourcesOpen, terminalSidePanelSingleOpen]);
 
   useEffect(() => {
     if (!filesPanelActive) return;
@@ -3933,6 +3995,7 @@ export function TerminalTabs({
             ? t("terminal.toolbar.closeFilesPanel")
             : t("terminal.toolbar.openFilesPanel"),
       stats: statsPanelActive ? t("terminal.toolbar.closeStatsPanel") : t("terminal.toolbar.openStatsPanel"),
+      providers: providersPanelActive ? t("terminal.toolbar.closeProvidersPanel") : t("terminal.toolbar.openProvidersPanel"),
       systemResources: systemResourcesPanelActive
         ? t("terminal.toolbar.closeSystemResourcesPanel")
         : t("terminal.toolbar.openSystemResourcesPanel"),
@@ -4031,6 +4094,17 @@ export function TerminalTabs({
           <BarChart3 size={13} strokeWidth={1.8} />
         </button>
       ),
+      providers: (
+        <button
+          onClick={handleToggleProviderPanel}
+          className="ui-focus-ring ui-icon-action ui-action-providers"
+          data-active={providersPanelActive ? "true" : "false"}
+          aria-label={providersPanelActive ? t("terminal.toolbar.closeProvidersPanel") : t("terminal.toolbar.openProvidersPanel")}
+          aria-pressed={providersPanelActive}
+        >
+          <ArrowLeftRight size={13} strokeWidth={1.8} />
+        </button>
+      ),
       systemResources: (
         <button
           onClick={handleToggleSystemResourcesPanel}
@@ -4125,6 +4199,7 @@ export function TerminalTabs({
     handleToggleGlobalFullscreen,
     handleToggleReplayPanel,
     handleToggleStatsPanel,
+    handleToggleProviderPanel,
     handleToggleSystemResourcesPanel,
     handleToolbarDragCancel,
     handleToolbarDragEnd,
@@ -4136,6 +4211,7 @@ export function TerminalTabs({
     sessionHistoryShortcutHint,
     sidePanelMerged,
     statsPanelActive,
+    providersPanelActive,
     systemResourceMonitoringEnabled,
     systemResourcesPanelActive,
     t,
@@ -4385,7 +4461,7 @@ export function TerminalTabs({
             style={{ display: historyActive ? "block" : "none" }}
           >
             <Suspense fallback={null}>
-              <HistoryWorkspace active={historyActive} />
+              <HistoryWorkspace active={historyActive} onOpenSettings={onOpenHistorySettings} />
             </Suspense>
           </div>
         )}
@@ -4680,8 +4756,10 @@ export function TerminalTabs({
               projectId={panelSession?.projectId}
               filesTabDisabled={!filePanelProject}
               systemResourcesEnabled
+              providerDefaultAppType={panelProviderAppType}
               filesPanelContent={<FileExplorerSidebar mode="panel" onClosePanel={closeFilesPanel} />}
               onTabChange={handleSidePanelTabChange}
+              onOpenProviderSettings={onOpenProviderSettings}
             />
           ) : (
             <>
@@ -4739,6 +4817,16 @@ export function TerminalTabs({
                   resizeTitle={t("terminal.panel.resizeSystemResourcesTitle")}
                 >
                   <SystemResourcesPanel open={systemResourcesOpen} embedded />
+                </ResizableTerminalPanelFrame>
+              )}
+              {providersOpen && (
+                <ResizableTerminalPanelFrame
+                  widthKey="providers"
+                  defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.providers}
+                  resizeLabel={t("terminal.panel.resizeProvidersLabel")}
+                  resizeTitle={t("terminal.panel.resizeProvidersTitle")}
+                >
+                  <ProviderQuickSwitchPanel open={providersOpen} defaultAppType={panelProviderAppType} onOpenSettings={onOpenProviderSettings} />
                 </ResizableTerminalPanelFrame>
               )}
             </>

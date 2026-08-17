@@ -2,16 +2,16 @@ import { DndContext, DragOverlay, PointerSensor, closestCenter, useSensor, useSe
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Project, TerminalScope, TreeNode as TNode } from "../../lib/types";
-import type { SessionStatus } from "../../stores/terminalStore";
 import { SidebarSkeleton } from "../ui/Skeleton";
 import { EmptyState } from "../ui/EmptyState";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Folder, Plus, Terminal } from "../icons";
-import { VendorIcon, inferVendor } from "../VendorIcon";
+import { CliToolIcon } from "../CliToolIcon";
 import { WorktreeIcon } from "../WorktreeIcon";
 import { TreeNodeItem } from "./TreeNodeItem";
 import { useTreeActions, worktreeListCollapseId, type TreeActions } from "./TreeContext";
 import { useI18n } from "../../lib/i18n";
+import { resolveCliToolIconKey } from "../../lib/cliTools";
 import { DND_ACTIVATION_CONSTRAINT } from "../../lib/dragInteraction";
 
 interface ProjectTreeProps {
@@ -34,12 +34,6 @@ interface ProjectTreeProps {
   suppressEmptyState?: boolean;
   embedded?: boolean;
 }
-
-const STATUS_COLORS: Record<SessionStatus, string> = {
-  running: "#9ece6a",
-  exited: "#ff9e64",
-  error: "#f7768e",
-};
 
 function countProjects(node: TNode): number {
   if (node.type === "project") return 1;
@@ -725,7 +719,7 @@ export function ProjectTree({
             aria-label={t("sidebar.tree.aria")}
             aria-multiselectable="true"
             tabIndex={-1}
-            className={`${shouldFillTreeArea ? "min-h-full" : ""} outline-none`}
+            className={`${shouldFillTreeArea ? "min-h-full" : ""} ui-project-tree-root outline-none`}
             onKeyDown={handleTreeKeyDown}
             onClickCapture={(event) => {
               if (performance.now() > suppressClickAfterDragUntilRef.current) return;
@@ -831,10 +825,9 @@ function CollapsedProjectButton({ node, sizeClass }: { node: TNode; sizeClass: s
   const actions = useTreeActions();
   if (node.type !== "project") return null;
   const p = node.project;
-  const status = actions.getProjectStatus(p.id);
   const terminalCount = actions.getProjectTerminalCount(p.id);
   const selected = actions.selectedId === p.id || actions.selectedProjectIds.has(p.id);
-  const cliVendor = p.cli_tool ? inferVendor(p.cli_tool) : null;
+  const cliIcon = resolveCliToolIconKey(p.cli_tool);
   return (
     <button
       className={`ui-tree-collapsed-item relative my-0.5 flex ${sizeClass} items-center justify-center rounded-xl transition-colors`}
@@ -842,14 +835,13 @@ function CollapsedProjectButton({ node, sizeClass }: { node: TNode; sizeClass: s
       title={p.name}
       aria-label={t("sidebar.tree.openProject", { name: p.name })}
       onPointerDownCapture={preventSecondaryPointerFocus}
-      onClick={() => actions.onOpenProject(p)}
+      onClick={(event) => actions.onSelectProject(event, p)}
+      onDoubleClick={() => actions.onOpenProject(p)}
       onContextMenu={(e) => actions.onContextMenuProject(e, p)}
     >
-      {status ? (
-        <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: STATUS_COLORS[status] }} />
-      ) : cliVendor ? (
+      {cliIcon ? (
         <span className="pointer-events-none" aria-hidden="true">
-          <VendorIcon vendor={cliVendor} size={15} />
+          <CliToolIcon icon={cliIcon} size={15} />
         </span>
       ) : (
         <Terminal size={15} strokeWidth={1.5} />
@@ -991,9 +983,8 @@ function renderFlyoutNodes(nodes: TNode[], depth: number, actions: TreeActions, 
     }
 
     const p = child.project;
-    const status = actions.getProjectStatus(p.id);
     const terminalCount = actions.getProjectTerminalCount(p.id);
-    const cliVendor = p.cli_tool ? inferVendor(p.cli_tool) : null;
+    const cliIcon = resolveCliToolIconKey(p.cli_tool);
     return (
       <button
         key={`p:${p.id}`}
@@ -1001,17 +992,16 @@ function renderFlyoutNodes(nodes: TNode[], depth: number, actions: TreeActions, 
         style={{ paddingLeft: padLeft }}
         title={p.name}
         onPointerDownCapture={preventSecondaryPointerFocus}
-        onClick={() => {
+        onClick={(event) => actions.onSelectProject(event, p)}
+        onDoubleClick={() => {
           actions.onOpenProject(p);
           onPick();
         }}
         onContextMenu={(e) => actions.onContextMenuProject(e, p)}
       >
         <span className="ui-tree-leading-icon flex shrink-0 items-center">
-          {status ? (
-            <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: STATUS_COLORS[status] }} />
-          ) : cliVendor ? (
-            <VendorIcon vendor={cliVendor} size={13} />
+          {cliIcon ? (
+            <CliToolIcon icon={cliIcon} size={13} />
           ) : (
             <Terminal size={13} strokeWidth={1.5} />
           )}

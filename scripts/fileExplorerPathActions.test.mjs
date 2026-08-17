@@ -14,10 +14,8 @@ test("terminal tab CLI icons inherit the terminal tab foreground color", () => {
 });
 
 test("file menus expose relative and absolute path copy actions", () => {
-  assert.match(sidebar, /function FilePathCopyMenuItems/);
-  assert.match(sidebar, /formatRelativeProjectFilePath\(path, kind\)/);
-  assert.match(sidebar, /formatAbsoluteProjectFilePath\(project, path, kind\)/);
-  assert.equal((sidebar.match(/<FilePathCopyMenuItems /g) ?? []).length, 3);
+  assert.match(sidebar, /import \{ PathCopyMenu \} from "\.\.\/PathCopyMenu"/);
+  assert.equal((sidebar.match(/<PathCopyMenu /g) ?? []).length, 4);
 });
 
 test("absolute file paths use the local root or SSH remote root", () => {

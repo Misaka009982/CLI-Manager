@@ -656,6 +656,7 @@ fn diagnostic_source(value: &str) -> &'static str {
         "codex" => "codex",
         "pi" => "pi",
         "grok" => "grok",
+        "opencode" => "opencode",
         _ => "unknown",
     }
 }
@@ -742,6 +743,11 @@ fn title_for(source: &str, event: &str) -> &'static str {
         ("grok", "ToolStart") => "Grok Build tool started",
         ("grok", "ToolStop") => "Grok Build tool done",
         ("grok", _) => "Grok Build needs attention",
+        ("opencode", "SessionStart") => "OpenCode session started",
+        ("opencode", "UserPromptSubmit") => "OpenCode running",
+        ("opencode", "Stop") => "OpenCode done",
+        ("opencode", "StopFailure") => "OpenCode failed",
+        ("opencode", _) => "OpenCode needs attention",
         (_, "SessionStart") => "Claude Code session started",
         (_, "UserPromptSubmit") => "Claude Code running",
         (_, "Stop") => "Claude Code done",
@@ -884,6 +890,17 @@ mod tests {
                 "grok",
                 "PermissionRequest",
                 &input
+            ));
+        }
+    }
+
+    #[test]
+    fn opencode_events_never_enter_permission_suppression() {
+        for event in ["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"] {
+            assert!(!should_suppress_codex_permission_request(
+                "opencode",
+                event,
+                &json!({})
             ));
         }
     }

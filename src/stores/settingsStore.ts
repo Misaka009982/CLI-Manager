@@ -46,6 +46,7 @@ import {
   sanitizeTerminalPaneMarkerSettings,
   type TerminalPaneMarkerSettings,
 } from "../lib/terminalPaneMarker";
+import type { HistorySmartTitleSettings } from "../lib/types";
 
 export {
   DESKTOP_PET_SIZE_DEFAULT_PERCENT,
@@ -96,7 +97,7 @@ type LastSettingsTab =
   | "terminal-theme"
   | "shortcuts"
   | "templates"
-  | "providers"
+  | "native-providers"
   | "model-pricing"
   | "cc-connect"
   | "ssh-hosts"
@@ -114,6 +115,7 @@ export type TerminalStatsCardKey =
   | "tokenTrend"
   | "modelContext"
   | "tools"
+  | "agentCapabilities"
   | "latestChanges"
   | "todayUsage";
 export type SystemResourceCardKey =
@@ -124,7 +126,7 @@ export type SystemResourceCardKey =
   | "disk"
   | "gpu"
   | "processes";
-export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "files" | "systemResources";
+export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "files" | "systemResources" | "providers";
 export type TerminalPanelWidthSettings = Record<TerminalPanelWidthKey, number>;
 export type TerminalSettingsSectionKey = "behavior" | "paneMarker" | "shells" | "themes" | "background";
 export type TerminalSettingsSectionsExpanded = Record<TerminalSettingsSectionKey, boolean>;
@@ -147,6 +149,7 @@ export const TERMINAL_PANEL_WIDTH_DEFAULTS: TerminalPanelWidthSettings = {
   replay: 300,
   files: 220,
   systemResources: 300,
+  providers: 320,
 };
 export const TERMINAL_SETTINGS_SECTION_KEYS: readonly TerminalSettingsSectionKey[] = [
   "behavior",
@@ -254,6 +257,7 @@ export interface TerminalToolbarVisibilitySettings {
   stats: boolean;
   gitChanges: boolean;
   systemResources: boolean;
+  providers: boolean;
   backgroundTasks: boolean;
   showText: boolean;
 }
@@ -274,6 +278,7 @@ export const TERMINAL_STATS_CARD_KEYS: readonly TerminalStatsCardKey[] = [
   "tokenTrend",
   "modelContext",
   "tools",
+  "agentCapabilities",
   "latestChanges",
   "todayUsage",
 ];
@@ -362,6 +367,7 @@ export interface Settings {
   defaultShell: string;
   sidebarWidth: number;
   historySidebarWidth: number;
+  historySmartTitle: HistorySmartTitleSettings;
   collapsedGroupIds: string[];
   useExternalTerminal: boolean;
   debugMode: boolean;
@@ -512,6 +518,13 @@ const DEFAULTS: Settings = {
   defaultShell: "powershell.exe",
   sidebarWidth: 248,
   historySidebarWidth: 276,
+  historySmartTitle: {
+    enabled: false,
+    providerAppType: null,
+    providerId: null,
+    modelId: null,
+    enabledAt: null,
+  },
   collapsedGroupIds: [],
   useExternalTerminal: false,
   debugMode: false,
@@ -535,6 +548,7 @@ const DEFAULTS: Settings = {
     stats: true,
     gitChanges: true,
     systemResources: false,
+    providers: true,
     backgroundTasks: true,
     showText: false,
   },
@@ -542,7 +556,7 @@ const DEFAULTS: Settings = {
     stats: true,
     gitChanges: true,
   },
-  terminalToolbarOrder: ["new", "templates", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "systemResources", "backgroundTasks"],
+  terminalToolbarOrder: ["new", "templates", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "providers", "systemResources", "backgroundTasks"],
   terminalSidePanelMerged: true,
   terminalSidePanelSingleOpen: true,
   terminalSidePanelSkin: "terminal",
@@ -553,6 +567,7 @@ const DEFAULTS: Settings = {
     tokenTrend: true,
     modelContext: true,
     tools: true,
+    agentCapabilities: true,
     latestChanges: true,
     todayUsage: true,
   },
@@ -695,7 +710,7 @@ const LAST_SETTINGS_TABS: readonly LastSettingsTab[] = [
   "terminal-theme",
   "shortcuts",
   "templates",
-  "providers",
+  "native-providers",
   "model-pricing",
   "cc-connect",
   "ssh-hosts",
@@ -768,9 +783,41 @@ function migrateTaskbarAttentionFlashCount(value: unknown): number {
 }
 
 function migrateLastSettingsTab(value: unknown): LastSettingsTab {
+  if (value === "providers") return "native-providers";
   return typeof value === "string" && LAST_SETTINGS_TABS.includes(value as LastSettingsTab)
     ? (value as LastSettingsTab)
     : DEFAULTS.lastSettingsTab;
+}
+
+export function migrateHistorySmartTitleSettings(value: unknown): HistorySmartTitleSettings {
+  const defaults = DEFAULTS.historySmartTitle;
+  if (typeof value !== "object" || value === null) {
+    return { ...defaults };
+  }
+  const raw = value as Record<string, unknown>;
+  const providerAppType = raw.providerAppType === "claude"
+    || raw.providerAppType === "codex"
+    || raw.providerAppType === "grokbuild"
+    ? raw.providerAppType
+    : null;
+  const providerId = typeof raw.providerId === "string" && raw.providerId.trim()
+    ? raw.providerId.trim()
+    : null;
+  const modelId = typeof raw.modelId === "string" && raw.modelId.trim()
+    ? raw.modelId.trim()
+    : null;
+  const enabledAt = typeof raw.enabledAt === "number"
+    && Number.isFinite(raw.enabledAt)
+    && raw.enabledAt > 0
+    ? Math.floor(raw.enabledAt)
+    : null;
+  return {
+    enabled: raw.enabled === true,
+    providerAppType,
+    providerId,
+    modelId,
+    enabledAt,
+  };
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -810,6 +857,7 @@ export function migrateTerminalToolbarVisibility(value: unknown): TerminalToolba
     stats: typeof raw.stats === "boolean" ? raw.stats : defaults.stats,
     gitChanges: typeof raw.gitChanges === "boolean" ? raw.gitChanges : defaults.gitChanges,
     systemResources: typeof raw.systemResources === "boolean" ? raw.systemResources : defaults.systemResources,
+    providers: typeof raw.providers === "boolean" ? raw.providers : defaults.providers,
     backgroundTasks: typeof raw.backgroundTasks === "boolean" ? raw.backgroundTasks : defaults.backgroundTasks,
     showText: typeof raw.showText === "boolean" ? raw.showText : defaults.showText,
   };
@@ -858,6 +906,7 @@ export function migrateTerminalPanelWidths(value: unknown): TerminalPanelWidthSe
     replay: clampNumber(raw.replay, TERMINAL_PANEL_WIDTH_DEFAULTS.replay, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.replay),
     files: clampNumber(raw.files, TERMINAL_PANEL_WIDTH_DEFAULTS.files, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.files),
     systemResources: clampNumber(raw.systemResources, TERMINAL_PANEL_WIDTH_DEFAULTS.systemResources, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.systemResources),
+    providers: clampNumber(raw.providers, TERMINAL_PANEL_WIDTH_DEFAULTS.providers, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.providers),
   };
 }
 
@@ -1280,6 +1329,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         : DEFAULTS.uiFontFamily;
     entries.sidebarWidth = clampNumber(entries.sidebarWidth, 64, 500, DEFAULTS.sidebarWidth);
     entries.historySidebarWidth = clampNumber(entries.historySidebarWidth, 180, 520, DEFAULTS.historySidebarWidth);
+    entries.historySmartTitle = migrateHistorySmartTitleSettings(entries.historySmartTitle);
     entries.uiFontSize = clampNumber(
       entries.uiFontSize,
       UI_FONT_SIZE_MIN,

@@ -64,9 +64,9 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
   const { t } = useI18n();
   const claudeHookConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
   const codexHookConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
+  const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
   const piHookConfigDir = useSettingsStore((s) => s.piHookConfigDir);
   const grokHookConfigDir = useSettingsStore((s) => s.grokHookConfigDir);
-  const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
   const claudeHookBridgeEnabled = useSettingsStore((s) => s.claudeHookBridgeEnabled);
   const codexHookBridgeEnabled = useSettingsStore((s) => s.codexHookBridgeEnabled);
   const piHookBridgeEnabled = useSettingsStore((s) => s.piHookBridgeEnabled);
@@ -119,10 +119,10 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
       setLoading(false);
     }
   }, [
-    ccSwitchDbPath,
     claudeHookBridgeEnabled,
     claudeHookAutoRepairKnownInstalled,
     claudeHookAutoRepairNoticeShown,
+    ccSwitchDbPath,
     codexSelectedDir,
     grokSelectedDir,
     piSelectedDir,
@@ -217,6 +217,7 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
 
 export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarVisibility }: SidebarFooterProps) {
   const { t } = useI18n();
+
   const statsButton = toolbarVisibility.stats ? (
     <button
       onClick={onOpenStats}

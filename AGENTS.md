@@ -46,6 +46,42 @@ CLI-Manager 是一款 Windows 桌面应用，用于集中管理基于 PowerShell
 - 不要硬编码中文/英文；优先通过 `src/lib/i18n.ts` 和 `useI18n()` / `translateCurrent()` 取文案。
 - 交付前至少手动切换“设置 -> 通用 -> 界面语言”，确认新增界面在中英文下都生效，时间格式不得因英文切换变成 12 小时制。
 
+## 任务分类与交付记录（强制）
+
+### 简单任务边界
+
+同时满足以下条件的任务，视为简单任务：
+
+- 目标和验收标准明确，不需要补充需求或技术调研。
+- 可以在局部范围内一次完成，不涉及跨模块调用链或多个独立交付物。
+- 不涉及新增依赖、数据库结构/迁移、IPC/API 契约、权限安全、并发进程、持久化协议或架构调整。
+- 风险可控，验证方式明确，不需要建立复杂的回滚或发布方案。
+
+典型简单任务包括：纯查询/解释、拼写或文案修正、简单 Getter/Setter、日志补充、明确的静态样式调整，以及目标明确的局部小修复。简单任务不需要询问用户是否创建 Trellis task，可直接检查、修改并验证。
+
+新增功能、需求不明确、跨模块或跨边界改动、行为链路/数据流改动、涉及上述高风险项，或无法判断是否简单的任务，一律按复杂任务处理：先询问用户是否创建 Trellis task，再进入规划；用户拒绝时不得直接进行大范围实现。
+
+### 任务开始前的分支检查
+
+每次任务开始前（包括简单任务）必须只读检查当前 Git 分支与远程的同步状态，并向用户说明结果。至少检查：
+
+```powershell
+git status --short --branch
+git branch -vv
+git rev-list --left-right --count 'HEAD...@{upstream}'
+```
+
+必须明确报告当前分支是已同步、领先、落后、分叉，还是没有配置上游分支。发现未同步时只进行告知和风险提示，不得擅自执行 pull、push、merge、rebase 或其他 Git 状态变更；只有用户明确授权后才能处理同步。
+
+### 代码变更记录
+
+每次涉及代码的变更，交付前必须同时更新 `CHANGELOG.md` 和 `docs/功能清单.md`：
+
+- `CHANGELOG.md` 必须写入对应版本号。用户未指定版本时，主动询问版本；用户仍未提供或明确不指定时，使用 `TEMP`。
+- `CHANGELOG.md` 按现有格式记录本次变更，不得只写无版本号的散文描述。
+- `docs/功能清单.md` 必须根据变更所属的功能板块写入对应位置，准确描述新增、修改或修复内容；不得无依据地归入其他板块。
+- 仅修改规则、说明或其他非代码文档时，不强制追加上述两份代码变更记录。
+
 ## 开发命令
 
 ```bash
@@ -99,7 +135,7 @@ src-tauri/src/
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **CLI-Manager** (22566 symbols, 44882 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **CLI-Manager** (25532 symbols, 51499 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

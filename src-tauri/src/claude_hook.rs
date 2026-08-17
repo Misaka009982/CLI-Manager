@@ -567,6 +567,10 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
             payload.event.as_str(),
             "SessionStart" | "UserPromptSubmit" | "Stop" | "StopFailure"
         ),
+        "opencode" => matches!(
+            payload.event.as_str(),
+            "SessionStart" | "UserPromptSubmit" | "Stop" | "StopFailure"
+        ),
         _ => false,
     }
 }
@@ -625,6 +629,7 @@ fn normalize_source(source: Option<&str>) -> &str {
         Some("codex") => "codex",
         Some("pi") => "pi",
         Some("grok") => "grok",
+        Some("opencode") => "opencode",
         Some("claude") | None => "claude",
         _ => "",
     }
@@ -699,6 +704,24 @@ mod validation_tests {
         .expect("test payload should deserialize");
 
         assert!(!is_valid_payload(&request));
+    }
+
+    #[test]
+    fn normalizes_and_accepts_opencode_session_events() {
+        assert_eq!(normalize_source(Some("opencode")), "opencode");
+        for event in ["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"] {
+            let request: ClaudeHookRequest = serde_json::from_value(json!({
+                "tabId": "external:opencode:session",
+                "source": "opencode",
+                "event": event,
+                "sessionId": "session-1",
+            }))
+            .expect("test payload should deserialize");
+            assert!(
+                is_valid_payload(&request),
+                "OpenCode event should be valid: {event}"
+            );
+        }
     }
 
     #[test]

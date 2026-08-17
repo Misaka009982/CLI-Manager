@@ -399,7 +399,7 @@ export function RequestLogsView({ onOpenSession, globalFilters }: RequestLogsVie
         {syncError && <div className="mt-2 text-[12px] text-danger" role="alert">{t("requestLogs.syncFailed", { error: syncError })}</div>}
       </Card>
 
-      <div className="grid grid-cols-2 gap-2 xl:grid-cols-5">
+      <div className="grid grid-cols-5 gap-2">
         {[
           { icon: FileText, label: t("requestLogs.summary.records"), value: formatCount(result?.summary.total ?? 0, language) },
           { icon: Layers3, label: t("requestLogs.summary.tokens"), value: formatCompact(result?.summary.total_tokens ?? 0, language) },
@@ -487,6 +487,10 @@ export function RequestLogsView({ onOpenSession, globalFilters }: RequestLogsVie
                           <VendorIcon vendor={sourceVendor} fallback={Database} size={13} />
                           {sourceLabel}
                         </button>
+                        <div className="mt-1 text-[10px] text-text-muted">
+                          {item.data_source === "route" ? t("requestLogs.dataSource.route") : t("requestLogs.dataSource.session")}
+                          {item.provider_name ? ` · ${item.provider_name}` : ""}
+                        </div>
                       </td>
                       <td className="max-w-[180px] px-3 py-2.5">
                         {item.model ? (
@@ -500,7 +504,9 @@ export function RequestLogsView({ onOpenSession, globalFilters }: RequestLogsVie
                             className="mx-auto block max-w-full cursor-pointer truncate font-medium text-text-primary transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                             title={t("requestLogs.applyQuickFilter", { value: item.model })}
                           >
-                            {item.model}
+                            {item.outbound_model && item.requested_model && item.outbound_model !== item.requested_model
+                              ? `${item.requested_model} → ${item.outbound_model}`
+                              : item.model}
                           </button>
                         ) : "—"}
                       </td>
@@ -554,9 +560,12 @@ export function RequestLogsView({ onOpenSession, globalFilters }: RequestLogsVie
                       </td>
                       <td className="px-3 py-2.5 text-text-muted">
                         <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-                          <span className="h-1.5 w-1.5 rounded-full bg-primary/55" aria-hidden="true" />
-                          {t("requestLogs.status.recorded")}
+                          <span className={`h-1.5 w-1.5 rounded-full ${item.usage_status === "complete" ? "bg-primary/55" : "bg-warning"}`} aria-hidden="true" />
+                          {item.usage_status === "complete"
+                            ? t(item.data_source === "route" ? "requestLogs.dataSource.route" : "requestLogs.status.recorded")
+                            : t(`requestLogs.usageStatus.${item.usage_status ?? "missing"}`)}
                         </span>
+                        {item.degraded && <div className="mt-1 text-[10px] text-warning">{t("requestLogs.status.degraded", { count: item.attempt_count ?? 1 })}</div>}
                       </td>
                       <td className={`sticky right-0 px-3 py-2.5 text-center transition-colors group-hover:bg-bg-tertiary ${rowIndex % 2 === 0 ? "bg-bg-tertiary/20" : "bg-bg-secondary"}`}>
                         <div className="flex items-center justify-center gap-1">

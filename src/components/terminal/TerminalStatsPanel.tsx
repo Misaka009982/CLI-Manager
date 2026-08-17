@@ -50,6 +50,8 @@ import {
 } from "../../lib/historyProjectPaths";
 import { TerminalSquare } from "../icons";
 import { TerminalPanelHeader } from "./TerminalPanelHeader";
+import { AgentCapabilitiesCard } from "./AgentCapabilitiesCard";
+import { useAgentCapabilities } from "../../hooks/useAgentCapabilities";
 
 interface TerminalStatsPanelProps {
   activeSessionId: string | null;
@@ -71,6 +73,11 @@ const TERMINAL_PANEL_SCROLLBAR_STYLE = {
 // 避免重复解析 jsonl 时的「加载中」闪烁。终端数量有限，不做淘汰。
 const sessionDetailCache = new Map<string, HistorySessionDetail>();
 
+// 按完整项目统计作用域缓存今日用量：切换回已查询过的项目时先显示缓存，后台再刷新。
+// 请求和缓存都使用 todayUsageScopeKey，避免把其它项目的统计结果串到当前面板。
+const todayProjectStatsCache = new Map<string, TodayProjectStats>();
+const todayProjectStatsInFlight = new Map<string, Promise<TodayProjectStats | null>>();
+
 const ROLE_COLORS: Record<string, string> = {
   user: TERM.green,
   assistant: TERM.blue,
@@ -86,6 +93,7 @@ function inferHistorySource(haystack: string): HistorySource | null {
   const lower = haystack.toLowerCase();
   if (/\bcodex\b/.test(lower)) return "codex";
   if (/\bclaude\b/.test(lower)) return "claude";
+  if (/\bopencode\b/.test(lower)) return "opencode";
   if (/\bgrok\b/.test(lower)) return "grok";
   if (/(?:^|\s)pi(?:\s|$)/.test(lower) || /\bpi[-_ ]?agent\b/.test(lower)) return "pi";
   return null;
@@ -503,10 +511,10 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       : null,
     [project?.id, sourceFilter, todayUsageScope]
   );
-  // 统计结果必须与当前项目作用域一致；切换项目后旧结果立即失效，等待新请求返回。
+  // 统计结果必须与当前项目作用域一致；切换项目后只读取对应作用域的缓存，避免串显。
   const todayStats = todayStatsState?.scopeKey === todayUsageScopeKey
-    ? todayStatsState.value
-    : null;
+    ? todayStatsState.value ?? (todayUsageScopeKey ? todayProjectStatsCache.get(todayUsageScopeKey) ?? null : null)
+    : (todayUsageScopeKey ? todayProjectStatsCache.get(todayUsageScopeKey) ?? null : null);
 
   // 「会话级」卡片只认 hook 绑定的当前 CLI 会话；未绑定时保持空态。
   // 「今日项目用量」仍按项目聚合，不受此门控影响。
@@ -524,6 +532,16 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const waitingForBoundSessionId = Boolean(sourceFilter) && !boundCliSessionId;
   const waitingForRemoteSessionId = isSshProject && !terminalSession?.cliSessionId?.trim();
   const panelActive = open && visible;
+  const boundSession = tokensBound ? latestSession : null;
+  const agentCapabilities = useAgentCapabilities({
+    terminalSession,
+    project,
+    boundSession,
+    projectPath: lookupProjectPath,
+    active: panelActive,
+    enabled: terminalStatsCardVisibility.agentCapabilities,
+    refreshSeq: `${refreshSeq}:${statsPanelRefreshSeq}`,
+  });
 
   // 首次打开侧栏时再触发一次刷新，避开面板激活与历史源初始化同帧完成导致的空态停留。
   useEffect(() => {
@@ -639,20 +657,35 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       return;
     }
     let cancelled = false;
+    const cached = todayProjectStatsCache.get(todayUsageScopeKey);
+    setTodayStatsState({ scopeKey: todayUsageScopeKey, value: cached ?? null });
     const loadTodayStats = async () => {
-      try {
-        const result = await fetchTodayProjectStatsMerged(
+      let request = todayProjectStatsInFlight.get(todayUsageScopeKey);
+      if (!request) {
+        request = fetchTodayProjectStatsMerged(
           todayUsageScope.projectKey,
           sourceFilter,
           todayUsageScope.projectPaths
-        );
-        if (!cancelled) {
-          setTodayStatsState({ scopeKey: todayUsageScopeKey, value: result });
-        }
-      } catch {
-        if (!cancelled) {
-          setTodayStatsState({ scopeKey: todayUsageScopeKey, value: null });
-        }
+        )
+          .then((result) => {
+            if (result) todayProjectStatsCache.set(todayUsageScopeKey, result);
+            return result;
+          })
+          .catch(() => null)
+          .finally(() => {
+            if (todayProjectStatsInFlight.get(todayUsageScopeKey) === request) {
+              todayProjectStatsInFlight.delete(todayUsageScopeKey);
+            }
+          });
+        todayProjectStatsInFlight.set(todayUsageScopeKey, request);
+      }
+      const result = await request;
+      if (!cancelled) {
+        // 刷新失败时保留当前作用域的旧缓存，避免慢查询/瞬时错误造成空白。
+        setTodayStatsState({
+          scopeKey: todayUsageScopeKey,
+          value: result ?? todayProjectStatsCache.get(todayUsageScopeKey) ?? null,
+        });
       }
     };
     void loadTodayStats();
@@ -676,7 +709,8 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     freshDetailRef.current = true;
     latestRef.current = null;
     setRefreshSeq((prev) => prev + 1);
-  }, []);
+    void agentCapabilities.refresh();
+  }, [agentCapabilities.refresh]);
 
   // 只有绑定了 cliSessionId 的 Tab 才显示保存按钮；kind 无法解析（非 claude/codex）时按钮 disabled
   const hasBoundCliSessionId = Boolean(terminalSession?.cliSessionId);
@@ -696,7 +730,6 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   );
 
   // 未绑定 hook 会话时，会话级卡片照常渲染但数据置空（保留图形骨架）
-  const boundSession = tokensBound ? latestSession : null;
   const boundStats = tokensBound ? stats : EMPTY_TOKEN_STATS;
   const latestChangesSummary = useMemo(() => buildLatestChangesSummary(boundSession), [boundSession]);
   const diffText = useMemo(
@@ -771,6 +804,25 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
         );
       case "tools":
         return <ToolsCard key={cardKey} session={boundSession} />;
+      case "agentCapabilities":
+        return (
+          <AgentCapabilitiesCard
+            key={cardKey}
+            agent={agentCapabilities.agent}
+            environment={agentCapabilities.environment}
+            cliSessionId={agentCapabilities.cliSessionId}
+            snapshot={agentCapabilities.snapshot}
+            loading={agentCapabilities.loading}
+            probing={agentCapabilities.probing}
+            errorCode={agentCapabilities.errorCode}
+            openCodeHookStatus={agentCapabilities.openCodeHookStatus}
+            openCodeHookLoading={agentCapabilities.openCodeHookLoading}
+            openCodeHookError={agentCapabilities.openCodeHookError}
+            onInstallOpenCodeHook={agentCapabilities.installOpenCodeHook}
+            onRefresh={agentCapabilities.refresh}
+            onProbe={agentCapabilities.probe}
+          />
+        );
       case "latestChanges":
         return (
           <LatestChangesCard

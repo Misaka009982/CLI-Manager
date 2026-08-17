@@ -1,5 +1,121 @@
 # History Session Contracts
 
+## Scenario: Conversation View and Structured Message Parts
+
+### 1. Scope / Trigger
+
+- Trigger: changing history message parsing, V2 catalog materialization, SSH detail payloads, favorite snapshots, session detail tabs, search jumps, or list-row open behavior.
+- Goal: make the default conversation review readable without weakening the complete transcript/audit path.
+
+### 2. Signatures
+
+- Frontend message field: `HistoryMessage.parts?: HistoryMessagePart[]`.
+- Part kinds: `text | tool_call | tool_result | reasoning | system | metadata | unknown`.
+- Part fields: `kind`, `content`, optional `tool_name`, optional `call_id`.
+- Local/WSL Rust payload: `HistoryMessage.parts` serialized as camel-case and omitted only when empty.
+- SSH payload: `RemoteHistoryMessage.parts` defaults to an empty list during deserialization for protocol compatibility.
+- V2 catalog: `history_message_parts(message_id, part_index, kind, text_content, tool_call_id, tool_name, ...)` preserves parsed parts beside `history_messages.display_content`.
+
+### 3. Contracts
+
+- Keep `HistoryMessage.content` and original message indices stable. Search, edit, conversion, snapshots, file-change/tool-event links, and the Transcript tab still use the flat message contract.
+- The Conversation tab is the default. It displays only non-empty `text` parts from `user`/`assistant` messages as bubbles; system/developer injections, tool records, reasoning, metadata, and other roles are omitted from this view.
+- The Transcript tab remains the complete audit path for omitted non-text parts. The Conversation view must not fabricate a placeholder or empty bubble when a message has no visible text.
+- The Transcript tab remains independent and complete, including long-message folding and local message edit/delete/insert actions.
+- Search scans both flat `content` and part `content`. A hit in a collapsed part, or a jump from Timeline/Changes/Tools/Subtasks, switches to Conversation, opens the relevant detail section, and keeps the original message index as the coordinate.
+- When `parts` is absent or empty, the frontend conservatively maps user/assistant to `text`, tool to `tool_result`, system/injected prompts to `system`, and other roles to `unknown`.
+- Prompt injection detection must inspect the whole normalized content, not only its first line. Codex/agent user records can start with ordinary headings such as `SKILLS` and contain `<skills_instructions>`, `<permissions instructions>`, `<environment_context>`, `<collaboration_mode>`, `[workflow-state:...]`, or `### Available skills` later in the same block; these markers classify the part as `system`.
+- Local, WSL, and SSH use the same kind names. SSH remains read-only and this view contract never routes remote messages into local mutation commands.
+- V2 catalog writes every parsed part and rehydrates it in `part_index` order. Old catalog rows without part records fall back from role/content; parser version changes must invalidate/rebuild derived rows when classification changes.
+- Outside batch selection, the complete session row is one keyboard-accessible open target. Tree toggles, selection checkboxes, delete, and other explicit actions stop propagation. The existing detail request sequence remains the last-request-wins boundary.
+- Every virtualized Conversation row must expose the configured index attribute (`data-index`) on the same node passed to `measureElement`; otherwise expanded details keep the estimate height and overlap or leave blank gaps. Conversation rows reuse the Transcript avatar/stack/bubble layout so visible text and detail sections share the same geometry.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| New payload contains valid non-empty parts | Normalize and render exact kinds in source order |
+| Unknown/empty/malformed part | Ignore malformed part; if no valid parts remain, use role fallback |
+| Old favorite snapshot has no parts | Render through role fallback; never show an empty conversation |
+| Old V2 catalog row has no `history_message_parts` | Rehydrate one fallback part from role/content |
+| Search matches only hidden reasoning/tool/system text | Mark the original message index, expand the detail section, and center it |
+| Rapidly click two session rows | Select/load the second target; the first response cannot replace it |
+| Click tree toggle/delete/selection checkbox | Perform only that explicit action; do not open the session |
+
+### 5. Good/Base/Bad Cases
+
+- Good: one assistant record contains reasoning, visible text, and a tool call; Conversation shows the answer and one expandable details section while Transcript stays byte-for-byte compatible at the message level.
+- Base: an old snapshot has only `role="user"` and `content`; Conversation displays it as ordinary text.
+- Good: consecutive system/tool/reasoning records disappear from Conversation while the same records remain available in Transcript.
+- Bad: derive Conversation only from role after structured parts exist, because mixed reasoning/tool content would remain merged into the visible answer.
+- Bad: remove or filter messages in the backend, because message-index links from Diff/Tools would shift.
+- Bad: classify only a user block whose first line says `Agents.md instructions for ...`; this leaks injected context that begins with a normal heading into the visible conversation.
+- Bad: render every `user`/`assistant` record as visible text without checking its parts; embedded system/developer context then appears as a user prompt.
+- Bad: measure a virtualized Conversation row without its `data-index`, or render detail-only rows outside the avatar/stack wrapper; expansion then produces stale heights or a layout unlike the Transcript tab.
+
+### 6. Tests Required
+
+- Rust parser tests: Claude/Codex mixed blocks classify text, tool call/result, reasoning, and injected system content while preserving flat content.
+- Rust parser tests: embedded Codex context markers and `developer` response messages classify as `system` for both local and SSH parsers.
+- SSH history-core tests: exact kind parity and missing-parts deserialization compatibility.
+- V2 catalog test: write/read `history_message_parts` in order and fall back for rows without parts.
+- Frontend regression: default Conversation plus independent Transcript, adjacent-detail grouping, old snapshot fallback, hidden search/jump expansion, whole-row click, and action propagation.
+- Run `npx tsc --noEmit`, focused Node history tests, `cargo test history --lib`, `cargo fmt -- --check`, and `cargo check`.
+- Manual desktop verification: Local/WSL/SSH, main checkout/Worktree, parent/subagent tree, batch selection, rapid row switching, keyboard opening, and `zh-CN`/`zh-TW`/`en-US` copy with 24-hour time.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+// Hides tool/reasoning by deleting messages and shifts every message-index link.
+const conversation = messages.filter((message) => message.role !== "tool");
+```
+
+#### Correct
+
+```typescript
+// Preserve message coordinates; classify parts only in the render projection.
+const rows = buildConversationRows(messages);
+const targetRow = rows.find((row) => row.messageIndices.includes(messageIndex));
+```
+
+## Scenario: Two-stage local smart history titles
+
+### 1. Scope / Trigger
+
+- Trigger: changing history session display titles, aliases, generated-title actions, history settings, search-hit labels, prompt-library labels, or automatic title scheduling.
+- Goal: keep the parser source title immediately available while layering an optional local generated title without mutating the source summary.
+
+### 2. Contracts
+
+- `displayTitle` precedence is exactly `alias.trim() > generatedTitle.trim() > source title.trim() > session id`.
+- Generated-title metadata is hydrated from `history_generated_titles` together with session metadata and overlaid on local summaries, favorite snapshots, cached remote summaries, search hits, and prompt-library labels. `summary.title` remains the source title.
+- Manual generation is allowed for old sessions and sessions with an alias. Alias remains the visible pin; a successful manual result is retained as the hidden fallback until the alias is cleared.
+- SSH sessions dispatch only after an online trusted detail is loaded; read-only local snapshots, summary-only cache, and offline detail never dispatch. Candidate extraction requires the first visible user text part and shares the Conversation classifier; injected context, tools, reasoning, metadata, empty, and attachment-only records do not qualify.
+- Automatic work is disabled by default, uses the persisted `enabledAt` watermark, is deduplicated by session key plus full candidate fingerprint, and is scheduled through one bounded FIFO queue. Disabling the setting cancels queued ownership and invalidates active automatic revisions.
+- The list toolbar and Settings -> History Sessions switch read and write the same persisted `historySmartTitle` object. Re-enabling records a new watermark; it does not reuse the previous one.
+- All generated-title actions use `useI18n()` keys for `zh-CN`/`en-US`; existing `zh-TW` fallback remains valid. Pending state is exposed through an icon/tooltip and disables duplicate generation without changing selection, filtering, or scroll position.
+
+### 3. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| No generated row or generated request fails | Show alias/source/session-id fallback immediately; automatic failures are silent |
+| Manual title action has no/invalid Provider or model | Preserve the source fallback, show a localized actionable reason, and open Session History settings; never expose raw provider errors |
+| Manual title request fails after dispatch | Map the stable backend failure category to a localized safe toast; do not discard the error category or expose response/config content |
+| Alias saved while a request is pending | Cancel/invalidate ownership; late result cannot become visible or overwrite the alias |
+| Generated title cleared | Remove visible generated text, preserve source title, and suppress automatic work for the current fingerprint until explicit manual generation |
+| Search or Prompt Library contains a titled session | Use the same display precedence as the list/detail view |
+| Provider/model selection is invalid | Keep the saved selection diagnosable, prevent enabling when off, and allow disabling when already on |
+| Locale changes | New title/settings copy changes language without changing time formatting |
+
+### 4. Tests Required
+
+- Frontend type-check after store/component changes.
+- Pure candidate/display tests for alias/generated/source/id precedence, Unicode-safe input truncation, injection markers, attachment-only records, old flat messages, and distinct source instances.
+- Manual desktop check for settings/toolbar synchronization, old-session manual generation, alias pin, clear suppression, automatic watermark, pending/restart behavior, and Chinese/English copy.
+
 ## Scenario: SSH Remote History Workspace
 
 ### 1. Scope / Trigger

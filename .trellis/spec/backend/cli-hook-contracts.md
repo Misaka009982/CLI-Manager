@@ -1,6 +1,6 @@
 # CLI Hook Contracts
 
-Concrete contracts for Claude/Codex/Pi/Grok hook integration.
+Concrete contracts for Claude/Codex/Pi/Grok/OpenCode hook integration.
 
 ## Scenario: Local Hook Source Admission
 
@@ -12,7 +12,7 @@ Concrete contracts for Claude/Codex/Pi/Grok hook integration.
 ### 2. Signatures
 
 ```text
-<cli-manager-exe> __hook --source <claude|codex|pi|grok> --event <event>
+<cli-manager-exe> __hook --source <claude|codex|pi|grok|opencode> --event <event>
 normalize_source(source: Option<&str>) -> &str
 is_valid_payload(payload: &ClaudeHookRequest) -> bool
 ```
@@ -26,6 +26,7 @@ is_valid_payload(payload: &ClaudeHookRequest) -> bool
 - Grok `permissionMode=bypassPermissions` suppresses the synthetic approval notification; `auto` does not, because dangerous tools may still require approval.
 - Grok hook stdin may use camelCase `sessionId` and `transcriptPath`; shared hook normalization must preserve them.
 - Invalid source/event pairs return HTTP 400 and never reach frontend or third-party notification sinks. The hidden Hook process still exits successfully so a bridge failure cannot interrupt the CLI.
+- OpenCode uses a marker-owned global plugin instead of the hidden `__hook` command. It posts only `SessionStart`, `UserPromptSubmit`, `Stop`, and `StopFailure` with the native OpenCode session ID; missing callback environment is a no-op and an unowned same-name plugin is never overwritten.
 
 ### 4. Validation & Error Matrix
 
@@ -36,6 +37,8 @@ is_valid_payload(payload: &ClaudeHookRequest) -> bool
 | Unknown explicit source | Normalize to empty, HTTP 400. |
 | Missing source | Preserve the legacy Claude default. |
 | Grok camelCase session id | Bind the normalized session id when present. |
+| OpenCode marker-owned plugin event | Accept only the four session lifecycle events and bind its exact native session ID. |
+| OpenCode same-name unowned plugin | Return `opencode_hook_conflict` and preserve existing bytes. |
 
 ### 5. Good/Base/Bad Cases
 
@@ -46,6 +49,7 @@ is_valid_payload(payload: &ClaudeHookRequest) -> bool
 ### 6. Tests Required
 
 - Rust unit test that every installed Grok event passes `is_valid_payload` and an unknown event fails.
+- Rust unit test that OpenCode lifecycle events pass source admission and that generated plugin source contains no embedded credentials.
 - Hook-schema unit test that Grok camelCase `sessionId` is normalized.
 - Run `cargo check` after changing source admission or payload fields.
 - Manual desktop check: start an internal Grok terminal, confirm SessionStart binds the session, then confirm Stop and an approved dangerous-tool `PermissionRequest` reach CLI-Manager.
@@ -720,6 +724,7 @@ interface HookSettingsStatus {
 - Installing Codex Hook writes normal Codex `hooks.json` commands and `config.toml` feature flags first, then best-effort merges the TOML `[features].hooks = true` flag plus any current CLI-Manager-owned Codex `[hooks.state.*]` trust blocks into `settings.common_config_codex`. Codex hook commands remain in `hooks.json`; `common_config_codex` is not JSON.
 - Hook settings UI shows the cc-switch protection card once, above system notification settings. Do not duplicate it in both Claude and Codex sections.
 - Claude common-config merge may remove/replace only CLI-Manager-owned hook commands (`__hook` marker or known legacy scripts); it must preserve non-hook fields and non-CLI-Manager hook entries. Codex common-config merge may only add or replace the TOML `features.hooks` flag and marker-owned `[hooks.state.*]` trust blocks for the current user-level Codex `hooks.json`; it must preserve other TOML fields and unrelated hook state.
+- Full uninstall strips all CLI-Manager-owned common-config entries. Module uninstall must instead rebuild the owned portion from the post-operation local `settings.json` / `hooks.json` and preserve still-installed CLI-Manager modules; a partial local status must never be treated as permission to delete every owned common-config entry.
 - `settings.value` is nullable in cc-switch DBs. A `NULL` value for `common_config_<tool>` is treated as missing config, not as `db_query_failed`.
 - When `common_config_codex` has no `[features]` table, insert the `[features]` block before the first existing TOML table header; append only when the snippet has top-level keys and no tables. This avoids leaking later text-concatenated provider keys into `[features]` while preserving tables such as `[projects.'\\?\F:\...']`, `[windows]`, and `[tui]`.
 - Common-config writes use `sqlx` and an explicit transaction. Do not add `rusqlite`.
@@ -774,6 +779,7 @@ interface HookSettingsStatus {
 - Rust regression tests for copying only current user-level CLI-Manager Codex `hooks.state` blocks into `common_config_codex`, replacing stale marker-owned hashes, and excluding project-local `.codex/hooks.json` state.
 - Rust regression tests for trust repair covering missing, disabled, and stale hashes; assert unrelated state is preserved and missing required events remain `partialInstalled` without repair.
 - Rust unit tests for strip/uninstall preserving non-CLI-Manager hooks.
+- Rust SQLite regression tests must cover full uninstall and module uninstall separately: the former removes all owned entries, while the latter keeps the remaining local CLI-Manager Hook entries and preserves user-owned content.
 - Rust regression test that Claude common-config status requires every installed event, including Claude `Notification`; Codex common-config status requires `[features].hooks = true`.
 - Rust unit test that invalid Claude common-config JSON returns `common_config_parse_failed`.
 - TypeScript type-check after adding payload fields or new frontend status states.
@@ -928,6 +934,11 @@ Stable conflict error: pi_extension_conflict
 - Base: only session-start is enabled; status is `partialInstalled` and the module UI reflects that subset.
 - Bad: reuse Claude/Codex required-module assumptions for Pi and require an attention hook that Pi does not provide.
 - Bad: listen to both `before_agent_start` and `agent_start` for the same running event; this duplicates replay and notification traffic.
+
+> **Warning**: Pi status must derive `hooks_feature_installed` and `hooks_trusted`
+> from marker ownership. Leaving either flag true after the managed extension is
+> removed makes `status_from_checks` report an installed or partial Hook after
+> uninstall.
 
 ### 6. Tests Required
 

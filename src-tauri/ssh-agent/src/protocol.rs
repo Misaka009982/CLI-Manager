@@ -268,6 +268,7 @@ fn capabilities() -> Value {
         "heartbeat",
         "requestCancellation",
         "boundedBackpressure",
+        "agentCapabilitiesV1",
         "historyIndex",
         "historySearch",
         "historyDetail",
@@ -409,6 +410,32 @@ pub fn run_bridge(
                     request_id,
                     "error",
                     json!({ "code": "history_request_invalid" }),
+                ),
+            };
+            write_frame(writer, &response)?;
+            continue;
+        }
+        if matches!(
+            frame.kind.as_str(),
+            "agentCapabilitiesInspect" | "agentCapabilitiesProbe"
+        ) {
+            let probe = frame.kind == "agentCapabilitiesProbe";
+            let response = match serde_json::from_value::<
+                cli_manager_agent_capabilities::InspectRequest,
+            >(frame.payload)
+            {
+                Ok(request) => match crate::agent_capabilities::execute(request, probe) {
+                    Ok(result) => response(
+                        request_id,
+                        "response",
+                        serde_json::to_value(result).unwrap_or(Value::Null),
+                    ),
+                    Err(code) => response(request_id, "error", json!({ "code": code })),
+                },
+                Err(_) => response(
+                    request_id,
+                    "error",
+                    json!({ "code": "agent_capability_request_invalid" }),
                 ),
             };
             write_frame(writer, &response)?;
@@ -864,6 +891,7 @@ mod tests {
             "hookSpool",
             "heartbeat",
             "requestCancellation",
+            "agentCapabilitiesV1",
             "boundedBackpressure",
             "historyDetailChunks",
             "historyResumePreflight",

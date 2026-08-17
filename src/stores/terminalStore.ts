@@ -4,6 +4,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import type {
   Project,
+  NativeProviderLaunchSnapshot,
   RemoteHandoffSessionState,
   SshConnectionState,
   SshDisconnectReason,
@@ -17,19 +18,26 @@ import {
 import { debugConsoleWarn } from "../lib/debugConsole";
 import { sourceTool, type SyncedHistoryGroup } from "../lib/externalSessionGrouping";
 import { logError, logInfo, logWarn, recordCrashActivity } from "../lib/logger";
-import { appendResumeCliArgs, isDirectCodexStartupCommand, normalizeDirectCodexStartupCommand, resolveProjectStartupCommand, withCodexLightTuiTheme } from "../lib/projectStartupCommand";
+import {
+  appendResumeCliArgs,
+  isDirectCodexStartupCommand,
+  normalizeDirectCodexStartupCommand,
+  resolveProjectStartupCommand,
+  withClaudeSettingsPath,
+  withCodexConfigOverrides,
+  withCodexProfile,
+  withCodexLightTuiTheme,
+  withGrokModelOverride,
+} from "../lib/projectStartupCommand";
 import { getTerminalTheme } from "../lib/terminalThemes";
 import { normalizeHexColor } from "../lib/terminalColor";
 import { useSettingsStore } from "./settingsStore";
 import { useSessionStore } from "./sessionStore";
 import { defaultShellForOs, getOsPlatform, normalizeShellForOs, normalizeShellKey, type OsPlatform, type ShellKey } from "../lib/shell";
 import {
-  getClaudeProviderOverride,
-  getCodexProviderOverride,
   getProviderSwitchAppType,
   isExactCodexProject,
   parseProjectEnvVars,
-  withCodexProviderOverride,
 } from "../lib/providerSwitching";
 import { useProjectStore } from "./projectStore";
 import { useSshHostStore } from "./sshHostStore";
@@ -42,12 +50,13 @@ import { buildSshConnectionSpec, type SshConnectionSpecPayload } from "../lib/ss
 import { parseStoredSshHookReport, resolveSshToolSource } from "../lib/sshToolIntegration";
 import { getSshClientInstanceId } from "../lib/sshClientIdentity";
 import { translateCurrent } from "../lib/i18n";
+import { findProjectByPath, findWorktreeByPath } from "../lib/terminalProject";
 import {
-  findProjectByPath,
-  findWorktreeByPath,
-  resolveProjectForProviderLaunch,
-} from "../lib/terminalProject";
-import { terminalProcessManager } from "../terminal/core/TerminalProcessManager";
+  terminalProcessManager,
+  type TerminalClaudeProviderLaunchConfig,
+  type TerminalCodexProviderLaunchConfig,
+  type TerminalGrokProviderLaunchConfig,
+} from "../terminal/core/TerminalProcessManager";
 import {
   shouldIncludeTerminalExitTask,
   type TerminalExitNotificationState,
@@ -89,7 +98,7 @@ import {
 } from "./terminalWorkspan";
 
 export type SessionStatus = "running" | "exited" | "error";
-export type CliHookSource = "claude" | "codex" | "pi" | "grok";
+export type CliHookSource = "claude" | "codex" | "pi" | "grok" | "opencode";
 export type CliHookEventName =
   | "SessionStart"
   | "UserPromptSubmit"
@@ -246,6 +255,10 @@ interface HookSettingsStatusPayload {
   pi: HookToolStatus;
   grok: HookToolStatus;
   claudeAutoRepaired?: boolean;
+}
+
+interface OpenCodeHookStatusPayload {
+  status: "notInstalled" | "installed" | "conflict";
 }
 
 interface PtyStatusPayload {
@@ -1143,21 +1156,22 @@ export function detectCliResumeKind(
 function buildCliResumeStartupCommand(
   kind: "claude" | "codex" | "grok",
   cliSessionId: string | undefined,
-  project: Project | undefined
+  project: Project | undefined,
+  options: { includeProviderOverrides?: boolean } = {},
 ): string {
   const id = cliSessionId?.trim();
   const hasValidId = !!id && !/\s/.test(id) && !/[\r\n]/.test(id);
   if (kind === "codex") {
     const base = hasValidId ? `codex resume --no-alt-screen ${id}` : "codex resume --no-alt-screen --last";
-    return appendResumeCliArgs(base, "codex", project ?? null);
+    return appendResumeCliArgs(base, "codex", project ?? null, options);
   }
   if (kind === "grok") {
     // Align with Claude: no --no-alt-screen by default. No id → cwd-scoped continue.
     const base = hasValidId ? `grok --resume ${id}` : "grok --continue";
-    return appendResumeCliArgs(base, "grok", project ?? null);
+    return appendResumeCliArgs(base, "grok", project ?? null, options);
   }
   const base = hasValidId ? `claude --resume ${id}` : "claude --continue";
-  return appendResumeCliArgs(base, "claude", project ?? null);
+  return appendResumeCliArgs(base, "claude", project ?? null, options);
 }
 
 
@@ -1183,19 +1197,17 @@ export interface DetachedPtyLaunchOptions {
   startupCmd?: string | null;
   envVars?: Record<string, string> | null;
   shell?: string | null;
+  providerSnapshot?: NativeProviderLaunchSnapshot | null;
 }
 
 export interface DetachedPtyLaunchResult {
   sessionId: string;
   shell: string | null;
   startupCmd?: string;
+  providerSnapshot?: NativeProviderLaunchSnapshot;
 }
 
-interface CodexProviderProfileResponse {
-  providerId: string;
-  providerName: string;
-  profileName: string;
-}
+type ProviderLaunchSnapshotResponse = NativeProviderLaunchSnapshot;
 
 function applySshExitState(session: TerminalSession, payload: PtyStatusPayload): TerminalSession {
   if (session.environmentType !== "ssh" || (payload.status !== "exited" && payload.status !== "error")) {
@@ -1256,13 +1268,15 @@ interface ResolvedPtyLaunch {
   environmentType?: "ssh";
   sshHostId?: string;
   remotePath?: string;
+  providerSnapshot: NativeProviderLaunchSnapshot | null;
   invokeArgs: {
     cwd: string | null;
     envVars: Record<string, string> | null;
     shell: string | null;
     hookEnvEnabled: boolean;
-    claudeProvider: ReturnType<typeof getClaudeProviderLaunchConfig>;
-    codexProvider: ReturnType<typeof getCodexProviderLaunchConfig>;
+    claudeProvider: TerminalClaudeProviderLaunchConfig | null;
+    codexProvider: TerminalCodexProviderLaunchConfig | null;
+    grokProvider: TerminalGrokProviderLaunchConfig | null;
     terminalColors: ReturnType<typeof getCurrentTerminalColors>;
     sshLaunch: SshLaunchPayload | null;
   };
@@ -1296,13 +1310,20 @@ function scheduleHookRunningTimeout(tabId: string, updatedAt: string) {
 
 async function shouldEnableHookEnv(): Promise<boolean> {
   const settings = useSettingsStore.getState();
+  let openCodeInstalled = false;
+  try {
+    const openCodeStatus = await invoke<OpenCodeHookStatusPayload>("opencode_hook_status");
+    openCodeInstalled = openCodeStatus.status === "installed";
+  } catch (err) {
+    logError("opencode_hook_status failed while deciding terminal hook env", { err });
+  }
   if (
     !settings.claudeHookBridgeEnabled &&
     !settings.codexHookBridgeEnabled &&
     !settings.piHookBridgeEnabled &&
     !settings.grokHookBridgeEnabled
   ) {
-    return false;
+    return openCodeInstalled;
   }
   try {
     const status = await invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
@@ -1313,7 +1334,7 @@ async function shouldEnableHookEnv(): Promise<boolean> {
       ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
       autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
     });
-    return (
+    return openCodeInstalled || (
       (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
       (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
       (settings.piHookBridgeEnabled && status.pi.status === "installed") ||
@@ -1321,7 +1342,7 @@ async function shouldEnableHookEnv(): Promise<boolean> {
     );
   } catch (err) {
     logError("hook_settings_get_status failed while deciding terminal hook env", { err });
-    return false;
+    return openCodeInstalled;
   }
 }
 
@@ -1336,13 +1357,6 @@ function buildPtyEnvVars(
     delete next[SHELL_RUNTIME_MONITORING_ENV];
   }
   return Object.keys(next).length > 0 ? next : null;
-}
-
-function getProviderLaunchProject(projectId?: string, worktreeId?: string) {
-  if (!projectId) return null;
-  const projectState = useProjectStore.getState();
-  const project = projectState.projects.find((item) => item.id === projectId);
-  return project ? resolveProjectForProviderLaunch(project, projectState.worktrees, worktreeId) : null;
 }
 
 function getProjectAgentTerminalMetadata(projectId?: string) {
@@ -1362,32 +1376,100 @@ function getRestoredAgentTerminalMetadata(
   return resolveAgentTerminalMetadata(session, project);
 }
 
-function getCodexProviderLaunchConfig(projectId?: string, startupCmd?: string | null, worktreeId?: string) {
-  const project = getProviderLaunchProject(projectId, worktreeId);
-  if (!project || !isExactCodexProject(project) || project.startup_cmd.trim() || !startupCmd?.trim()) {
-    return null;
+// 恢复不复用持久化快照：快照 ID 是一次性的（关闭会 release、启动会 GC），
+// 且无法反映用户在两次会话之间改动的项目/Worktree 覆盖或全局供应商。
+// 一律先 release 旧快照，再按当前覆盖状态重新解析。
+async function prepareProviderLaunchSnapshot(
+  project: Project | null,
+  startupCmd: string | null | undefined,
+  worktreeId?: string,
+  persistedSnapshot?: NativeProviderLaunchSnapshot | null,
+): Promise<ProviderLaunchSnapshotResponse | null> {
+  if (persistedSnapshot) releaseProviderSnapshot(persistedSnapshot);
+  const appType = project ? getProviderSwitchAppType(project) : null;
+  if (!project || !appType) return null;
+  if (!startupCmd?.trim()) return null;
+  // 跟随全局时后端返回 null：全局 apply 已写入真实 Home，启动无需任何供应商参数。
+  return invoke<ProviderLaunchSnapshotResponse | null>("provider_scope_prepare", {
+    input: {
+      appType,
+      projectId: project.id,
+      worktreeId: worktreeId ?? null,
+      providerId: null,
+    },
+  });
+}
+
+function buildNativeProviderLaunchConfigs(
+  snapshot: ProviderLaunchSnapshotResponse | null,
+): {
+  claudeProvider: TerminalClaudeProviderLaunchConfig | null;
+  codexProvider: TerminalCodexProviderLaunchConfig | null;
+  grokProvider: TerminalGrokProviderLaunchConfig | null;
+} {
+  if (!snapshot) {
+    return { claudeProvider: null, codexProvider: null, grokProvider: null };
   }
-  const override = getCodexProviderOverride(project);
-  if (!override) return null;
-  const settings = useSettingsStore.getState();
+  if (snapshot.appType === "claude") {
+    if (!snapshot.claudeSettingsPath) throw new Error("provider_snapshot_missing");
+    return {
+      claudeProvider: {
+        appType: "claude",
+        providerId: snapshot.providerId,
+        snapshotId: snapshot.snapshotId,
+        claudeSettingsPath: snapshot.claudeSettingsPath,
+      },
+      codexProvider: null,
+      grokProvider: null,
+    };
+  }
+  if (snapshot.appType === "codex") {
+    if (snapshot.generatedHome || (!snapshot.codexProfileName && snapshot.configOverrides.length === 0)) {
+      throw new Error("provider_snapshot_missing");
+    }
+    return {
+      claudeProvider: null,
+      codexProvider: {
+        appType: "codex",
+        providerId: snapshot.providerId,
+        snapshotId: snapshot.snapshotId,
+      },
+      grokProvider: null,
+    };
+  }
+  if (snapshot.generatedHome || !snapshot.grokModel?.trim()) {
+    throw new Error("provider_snapshot_missing");
+  }
   return {
-    providerId: override.providerId,
-    dbPath: settings.ccSwitchDbPath ?? undefined,
-    codexConfigDir: settings.codexHookConfigDir ?? undefined,
+    claudeProvider: null,
+    codexProvider: null,
+    grokProvider: {
+      appType: "grokbuild",
+      providerId: snapshot.providerId,
+      snapshotId: snapshot.snapshotId,
+      grokModel: snapshot.grokModel,
+    },
   };
 }
 
-function getClaudeProviderLaunchConfig(projectId?: string, worktreeId?: string) {
-  const project = getProviderLaunchProject(projectId, worktreeId);
-  if (!project || getProviderSwitchAppType(project) !== "claude") return null;
-  const override = getClaudeProviderOverride(project);
-  if (!override) return null;
-  const settings = useSettingsStore.getState();
-  return {
-    projectId: project.id,
-    providerId: override.providerId,
-    dbPath: settings.ccSwitchDbPath ?? undefined,
-  };
+async function garbageCollectProviderSnapshots(sessions: TerminalSession[]): Promise<void> {
+  try {
+    await invoke("provider_scope_gc_snapshots", {
+      activeSnapshotIds: sessions
+        .map((session) => session.providerSnapshot?.snapshotId)
+        .filter((snapshotId): snapshotId is string => Boolean(snapshotId?.trim())),
+    });
+  } catch (err) {
+    logWarn("provider snapshot garbage collection failed", { err });
+  }
+}
+
+function releaseProviderSnapshot(snapshot: NativeProviderLaunchSnapshot | null | undefined): void {
+  const snapshotId = snapshot?.snapshotId?.trim();
+  if (!snapshotId) return;
+  void invoke("provider_scope_release_snapshot", { snapshotId }).catch((err) => {
+    logWarn("provider snapshot release failed", { snapshotId, err });
+  });
 }
 
 async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatform): Promise<ResolvedPtyLaunch> {
@@ -1463,6 +1545,7 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
       environmentType: "ssh",
       sshHostId: host.id,
       remotePath,
+      providerSnapshot: null,
       invokeArgs: {
         cwd: null,
         envVars: null,
@@ -1470,6 +1553,7 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
         hookEnvEnabled: false,
         claudeProvider: null,
         codexProvider: null,
+        grokProvider: null,
         terminalColors: getCurrentTerminalColors(),
         sshLaunch: {
           ...buildSshConnectionSpec(host, hosts),
@@ -1492,17 +1576,61 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
   }
 
   const resolvedShell = resolveShellForPty(options.shell, !!options.projectId, os);
+  const resolvedStartupCmd = options.startupCmd == null && project
+    ? resolveProjectStartupCommand(project)
+    : options.startupCmd?.trim() || undefined;
+  const providerSnapshot = await prepareProviderLaunchSnapshot(
+    project ?? null,
+    resolvedStartupCmd,
+    options.worktreeId,
+    options.providerSnapshot,
+  );
+  const providerConfigs = buildNativeProviderLaunchConfigs(
+    providerSnapshot,
+  );
+  let providerStartupCmd = resolvedStartupCmd;
+  if (providerSnapshot?.appType === "codex") {
+    providerStartupCmd = providerSnapshot.codexProfileName
+      ? withCodexProfile(resolvedStartupCmd, providerSnapshot.codexProfileName)
+      : withCodexConfigOverrides(resolvedStartupCmd, providerSnapshot.configOverrides);
+    if (!providerStartupCmd) {
+      releaseProviderSnapshot(providerSnapshot);
+      throw new Error("provider_codex_command_unsupported");
+    }
+  } else if (providerSnapshot?.appType === "grokbuild") {
+    providerStartupCmd = withGrokModelOverride(
+      resolvedStartupCmd,
+      providerSnapshot.grokModel ?? "",
+    );
+    if (!providerStartupCmd) {
+      releaseProviderSnapshot(providerSnapshot);
+      throw new Error("provider_grok_command_unsupported");
+    }
+  }
+  let startupCmd = prepareStartupCommandForPty(
+    providerStartupCmd,
+    normalizeShellKey(resolvedShell) ?? null,
+  );
+  if (providerSnapshot?.appType === "claude" && CLAUDE_COMMAND_PATTERN.test(startupCmd ?? "")) {
+    startupCmd = withClaudeSettingsPath(
+      startupCmd,
+      providerSnapshot.claudeSettingsPath ?? undefined,
+      normalizeShellKey(resolvedShell) ?? null,
+    );
+  }
   return {
     shell: resolvedShell,
-    startupCmd: prepareStartupCommandForPty(options.startupCmd ?? undefined, normalizeShellKey(resolvedShell) ?? null),
+    startupCmd,
     startupHandledByLaunch: false,
+    providerSnapshot,
     invokeArgs: {
       cwd: options.cwd ?? null,
       envVars: buildPtyEnvVars(options.envVars ?? null, resolvedShell),
       shell: resolvedShell,
       hookEnvEnabled: await shouldEnableHookEnv(),
-      claudeProvider: getClaudeProviderLaunchConfig(options.projectId, options.worktreeId),
-      codexProvider: getCodexProviderLaunchConfig(options.projectId, options.startupCmd, options.worktreeId),
+      claudeProvider: providerConfigs.claudeProvider,
+      codexProvider: providerConfigs.codexProvider,
+      grokProvider: providerConfigs.grokProvider,
       terminalColors: getCurrentTerminalColors(),
       sshLaunch: null,
     },
@@ -1518,6 +1646,7 @@ export async function createDetachedPtyProcess(options: DetachedPtyLaunchOptions
     sessionId,
     shell: launch.shell,
     startupCmd: launch.startupCmd,
+    providerSnapshot: launch.providerSnapshot ?? undefined,
   };
 }
 
@@ -1714,56 +1843,50 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const os = await getOsPlatform();
     let resumeProject = project;
-    let providerProject = project;
-    let codexProvider: ReturnType<typeof getCodexProviderLaunchConfig> = null;
     const recordedProviderId = lockedSession.remoteHandoff.providerId?.trim() || null;
+    // 与 restoreSessions 一致：不复用持久化快照（可能已 release/GC，也不反映当前覆盖状态），
+    // 一律 release 后按当前 scope 重新解析；recordedProviderId 非空时作为显式恢复。
+    releaseProviderSnapshot(lockedSession.providerSnapshot);
+    let providerSnapshot: ProviderLaunchSnapshotResponse | null = null;
+    let providerConfigs = {
+      claudeProvider: null as TerminalClaudeProviderLaunchConfig | null,
+      codexProvider: null as TerminalCodexProviderLaunchConfig | null,
+      grokProvider: null as TerminalGrokProviderLaunchConfig | null,
+    };
     if (!sshHandoff) {
-      providerProject = resolveProjectForProviderLaunch(
-        project,
-        projectState.worktrees,
-        lockedSession.worktreeId
-      );
-      resumeProject = providerProject;
-      codexProvider = getCodexProviderLaunchConfig(
-        lockedSession.projectId,
-        lockedSession.startupCmd,
-        lockedSession.worktreeId
-      );
-    }
-    if (!sshHandoff && recordedProviderId) {
-      const settings = useSettingsStore.getState();
-      const prepared = await invoke<CodexProviderProfileResponse>(
-        "ccswitch_prepare_codex_provider",
+      providerSnapshot = await invoke<ProviderLaunchSnapshotResponse | null>(
+        "provider_scope_prepare",
         {
-          providerId: recordedProviderId,
-          dbPath: settings.ccSwitchDbPath ?? undefined,
-          codexConfigDir: settings.codexHookConfigDir ?? undefined,
-        }
+          input: {
+            appType: "codex",
+            projectId: lockedSession.projectId ?? project.id,
+            worktreeId: lockedSession.worktreeId ?? null,
+            providerId: recordedProviderId,
+          },
+        },
       );
-      if (prepared.providerId.trim() !== recordedProviderId) {
-        throw new Error("remote_handoff_provider_mismatch");
-      }
-      resumeProject = {
-        ...providerProject,
-        startup_cmd: "",
-        cli_args: providerProject.startup_cmd.trim() ? "" : providerProject.cli_args,
-        provider_overrides: withCodexProviderOverride(providerProject.provider_overrides, {
-          providerId: prepared.providerId,
-          providerName: prepared.providerName,
-          profileName: prepared.profileName,
-        }),
-      };
-      codexProvider = {
-        providerId: recordedProviderId,
-        dbPath: settings.ccSwitchDbPath ?? undefined,
-        codexConfigDir: settings.codexHookConfigDir ?? undefined,
-      };
     }
-    const resumeCommand = buildCliResumeStartupCommand(
+    if (!sshHandoff) {
+      providerConfigs = buildNativeProviderLaunchConfigs(
+        providerSnapshot,
+      );
+    }
+    let resumeCommand = buildCliResumeStartupCommand(
       "codex",
       lockedSession.remoteHandoff.cliSessionId || lockedSession.cliSessionId,
-      resumeProject
+      resumeProject,
+      providerSnapshot ? { includeProviderOverrides: false } : {},
     );
+    if (!sshHandoff && providerSnapshot?.appType === "codex") {
+      const scopedResumeCommand = providerSnapshot.codexProfileName
+        ? withCodexProfile(resumeCommand, providerSnapshot.codexProfileName)
+        : withCodexConfigOverrides(resumeCommand, providerSnapshot.configOverrides);
+      if (!scopedResumeCommand) {
+        releaseProviderSnapshot(providerSnapshot);
+        throw new Error("provider_codex_command_unsupported");
+      }
+      resumeCommand = scopedResumeCommand;
+    }
     const launch: ResolvedPtyLaunch = sshHandoff
       ? await resolvePtyLaunch({
           projectId: project.id,
@@ -1782,13 +1905,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
               normalizeShellKey(resolvedShell) ?? null
             ),
             startupHandledByLaunch: false,
+            providerSnapshot,
             invokeArgs: {
               cwd: lockedSession.remoteHandoff?.workDir || lockedSession.cwd || null,
               envVars: buildPtyEnvVars(lockedSession.envVars ?? null, resolvedShell),
               shell: resolvedShell,
               hookEnvEnabled: false,
-              claudeProvider: null,
-              codexProvider,
+              claudeProvider: providerConfigs.claudeProvider,
+              codexProvider: providerConfigs.codexProvider,
+              grokProvider: providerConfigs.grokProvider,
               terminalColors: getCurrentTerminalColors(),
               sshLaunch: null,
             },
@@ -1808,6 +1933,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       remotePath: launch.remotePath ?? lockedSession.remotePath,
       connectionState: sshHandoff ? "connecting" : lockedSession.connectionState,
       disconnectReason: undefined,
+      // 不回退到旧快照：旧 snapshotId 可能已被 release/GC，且不反映当前覆盖状态。
+      providerSnapshot: launch.providerSnapshot ?? undefined,
       remoteHandoff: undefined,
       initialTerminalOutput: undefined,
       deferStartupUntilInitialOutput: false,
@@ -2003,6 +2130,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       sshHostId: launch.sshHostId,
       remotePath: launch.remotePath,
       connectionState: launch.environmentType === "ssh" ? "connecting" : undefined,
+      providerSnapshot: launch.providerSnapshot ?? undefined,
       cliSessionId: cliSessionId?.trim() || undefined,
       remoteHistoryConsumerId: remoteHistoryConsumerId?.trim() || undefined,
       remoteHistorySourceInstanceId: remoteHistorySourceInstanceId?.trim() || undefined,
@@ -2186,9 +2314,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         });
       } else {
         for (const sessionId of ptySessionIds) {
-          void terminalProcessManager.close(sessionId).catch((err) => {
-            logError("PtyHost close failed while closing terminal tab", { sessionId, err });
-          });
+          void terminalProcessManager.close(sessionId)
+            .then(() => releaseProviderSnapshot(closingSession?.providerSnapshot))
+            .catch((err) => {
+              logError("PtyHost close failed while closing terminal tab", { sessionId, err });
+            });
         }
       }
     }
@@ -2601,6 +2731,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       sshHostId: launch.sshHostId,
       remotePath: launch.remotePath,
       connectionState: launch.environmentType === "ssh" ? "connecting" : undefined,
+      providerSnapshot: launch.providerSnapshot ?? undefined,
     };
 
     const unlisten = await terminalProcessManager.subscribeStatus(splitSessionId, (payload) => {
@@ -2764,6 +2895,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       shell: launch.shell,
       envVars,
       startupCmd: launch.startupCmd ?? startupCmd,
+      providerSnapshot: launch.providerSnapshot ?? undefined,
       kind: "synced-history",
       syncedHistory: {
         key: group.key,
@@ -2967,6 +3099,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       const persistedWorkspans = sessionStore.workspans;
       const persistedActiveWorkspanId = sessionStore.activeWorkspanId;
 
+      await garbageCollectProviderSnapshots(persistedSessions);
       if (persistedSessions.length === 0) return;
 
     const restoredSessions: TerminalSession[] = [];
@@ -3041,6 +3174,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
               connectionState: attachedMeta.connectionState,
               disconnectReason: attachedMeta.disconnectReason,
               envVars: ps.envVars,
+              providerSnapshot: ps.providerSnapshot,
               // 仅保留给 Tab 厂商识别；daemon attach 不会重新执行该命令。
               startupCmd: ps.startupCmd,
               ...getRestoredAgentTerminalMetadata(ps, attachedMeta.projectId),
@@ -3103,7 +3237,12 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       const restoreProject = ps.projectId ? projectMap.get(ps.projectId) : undefined;
       const cliKind = detectCliResumeKind(ps.startupCmd, restoreProject);
       const restoredStartupCmd = cliKind
-        ? buildCliResumeStartupCommand(cliKind, ps.cliSessionId, restoreProject)
+        ? buildCliResumeStartupCommand(
+            cliKind,
+            ps.cliSessionId,
+            restoreProject,
+            ps.providerSnapshot ? { includeProviderOverrides: false } : {},
+          )
         : normalizeDirectCodexStartupCommand(ps.startupCmd);
       let launch: ResolvedPtyLaunch;
       try {
@@ -3114,6 +3253,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           startupCmd: restoredStartupCmd,
           envVars: ps.envVars,
           shell: ps.shell,
+          providerSnapshot: ps.providerSnapshot,
         }, os);
       } catch (err) {
         logError("Failed to resolve restored session launch", { session: ps, err });
@@ -3171,6 +3311,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         remotePath: launch.remotePath ?? ps.remotePath,
         connectionState: (launch.environmentType ?? ps.environmentType) === "ssh" ? "connecting" : undefined,
         disconnectReason: undefined,
+        // 不回退到旧快照：恢复已按当前覆盖状态重新解析，跟随全局时应为 undefined。
+        providerSnapshot: launch.providerSnapshot ?? undefined,
         // 保留 cliSessionId：hook 上报会用它绑定实时统计；下次落盘也需要它继续 resume。
         cliSessionId: ps.cliSessionId,
         remoteHistoryConsumerId: ps.remoteHistoryConsumerId,
@@ -3321,6 +3463,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       connectionState: attachedMeta.connectionState,
       disconnectReason: attachedMeta.disconnectReason,
       envVars: persisted?.envVars,
+      providerSnapshot: persisted?.providerSnapshot,
       // 元数据用于 Tab 厂商识别；daemon attach 不会重新执行该命令。
       startupCmd: persisted?.startupCmd,
       ...getRestoredAgentTerminalMetadata(persisted, attachedMeta.projectId),

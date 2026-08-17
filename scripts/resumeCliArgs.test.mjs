@@ -80,7 +80,7 @@ const {
 } = await import(
   pathToFileURL(join(tempDir, "resumeCliArgs.mjs")).href
 );
-const { appendResumeCliArgs } = await import(pathToFileURL(projectStartupPath).href);
+const { appendResumeCliArgs, withCodexConfigOverrides, withGrokModelOverride } = await import(pathToFileURL(projectStartupPath).href);
 const { buildResumeCliArgs } = await import(pathToFileURL(saveSessionPath).href);
 const { buildHistoryResumeCommand, stripPiResumeCliArgs } = await import(
   pathToFileURL(historyResumeCommandPath).href
@@ -189,9 +189,11 @@ test("remote and history resume command construction never appends a second resu
     startup_cmd: "",
     provider_overrides: JSON.stringify({
       codex: {
+        schemaVersion: 2,
+        source: "cli-manager",
+        appType: "codex",
         providerId: "provider-id",
         providerName: "Provider",
-        profileName: "cli-manager-provider",
       },
     }),
     shell: "powershell",
@@ -205,10 +207,56 @@ test("remote and history resume command construction never appends a second resu
 
   assert.equal(
     command,
-    `codex resume --no-alt-screen ${NEW_ID} --model o3 --sandbox workspace-write --profile cli-manager-provider`,
+    `codex resume --no-alt-screen ${NEW_ID} --model o3 --sandbox workspace-write`,
   );
   assert.equal(command.match(/(?:^|\s)resume(?:\s|$)/g)?.length, 1);
-  assert.equal(command.match(/(?:^|\s)--profile(?:\s|$)/g)?.length, 1);
+  assert.equal(command.match(/(?:^|\s)--profile(?:\s|$)/g), null);
+});
+
+test("scoped Codex overrides keep the real CODEX_HOME and prepend safe config args", () => {
+  const command = withCodexConfigOverrides(
+    `codex resume ${NEW_ID}`,
+    [
+      "model_provider='cli_manager_scope'",
+      "model_providers.cli_manager_scope.base_url='https://api.example.com/v1'",
+      "model='gpt-test'",
+    ],
+  );
+
+  assert.equal(
+    command,
+    `codex -c "model_provider='cli_manager_scope'" -c "model_providers.cli_manager_scope.base_url='https://api.example.com/v1'" -c "model='gpt-test'" resume ${NEW_ID}`,
+  );
+  assert.equal(command.includes("CODEX_HOME"), false);
+  assert.equal(withCodexConfigOverrides("pwsh -File launch.ps1", ["model='gpt-test'"]), undefined);
+  assert.throws(
+    () => withCodexConfigOverrides("codex", ["model=\"unsafe\""]),
+    /provider_codex_override_invalid/,
+  );
+  assert.throws(
+    () => withCodexConfigOverrides("codex", ["model='$(whoami)'"]),
+    /provider_codex_override_invalid/,
+  );
+});
+
+test("scoped Grok overrides keep the real GROK_HOME and replace the process model", () => {
+  assert.equal(
+    withGrokModelOverride("grok --model old --continue", "grok-test"),
+    'grok --model "grok-test" --continue',
+  );
+  assert.equal(
+    withGrokModelOverride("grok -m=old --resume session-1", "grok-test"),
+    'grok --model "grok-test" --resume session-1',
+  );
+  assert.equal(withGrokModelOverride("pwsh -File launch.ps1", "grok-test"), undefined);
+  assert.throws(
+    () => withGrokModelOverride("grok", "$(whoami)"),
+    /provider_grok_model_invalid/,
+  );
+  assert.throws(
+    () => withGrokModelOverride("grok", 'model\" --always-approve'),
+    /provider_grok_model_invalid/,
+  );
 });
 
 test("saved-session CLI arguments reuse the same resume stripping rules", () => {

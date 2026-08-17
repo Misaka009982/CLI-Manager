@@ -1494,6 +1494,13 @@
   background-color: color-mix(in srgb, var(--surface-container-highest) 28%, transparent);
 }
 
+.ui-project-tree-root .ui-tree-leading-icon {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background-color: transparent;
+}
+
 .ui-tree-chevron {
   display: inline-flex;
   width: 14px;
@@ -1666,6 +1673,14 @@
 .ui-collapsed-flyout-item {
   cursor: pointer;
   transition: background-color var(--animate-duration-fast);
+}
+
+.ui-collapsed-flyout {
+  background-color: color-mix(in srgb, var(--surface-container-lowest) 94%, var(--surface) 6%);
+  border-color: color-mix(in srgb, var(--border) 34%, transparent);
+  box-shadow:
+    0 16px 36px color-mix(in srgb, var(--on-surface) 24%, transparent),
+    0 2px 8px color-mix(in srgb, var(--on-surface) 10%, transparent);
 }
 
 .ui-collapsed-flyout-item:hover {
@@ -3621,7 +3636,7 @@
 }
 
 .terminal-markdown-preview .subagent-transcript-markdown.ui-markdown-terminal {
-  font-size: calc(0.75rem * var(--markdown-preview-font-scale, 1));
+  font-size: var(--markdown-preview-font-size, var(--font-size-ui));
 }
 
 /* Let the terminal's single background-image layer show through the split
@@ -4092,6 +4107,31 @@
 
 .context-menu.file-explorer-menu [role="separator"] {
   background-color: color-mix(in srgb, var(--border) 48%, transparent);
+}
+
+/* Path format choices replace the parent menu in-place instead of opening a
+   second menu beside it. Remove the old siblings from layout so the parent
+   surface collapses to the replacement's height. */
+.context-menu:has(> .path-copy-menu-replacement) {
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  outline: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.context-menu:has(> .path-copy-menu-replacement) > :not(.path-copy-menu-replacement) {
+  display: none;
+}
+
+.context-menu.path-copy-menu-replacement {
+  position: static;
+  min-width: 148px;
+  width: 100%;
+  padding: 4px;
+  animation: none;
 }
 
 .ui-search-focus-shell {
@@ -5692,6 +5732,10 @@
 
 .ui-history-transcript-chat-surface {
   background-color: color-mix(in srgb, var(--surface-container-low) 54%, var(--surface) 46%);
+}
+
+.ui-history-conversation-message .ui-history-message-stack {
+  gap: 0.45rem;
 }
 
 .ui-history-message-card {

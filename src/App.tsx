@@ -51,6 +51,7 @@ import { debugConsoleWarn } from "./lib/debugConsole";
 import { createPerfMarker, logInfo, logWarn } from "./lib/logger";
 import { getContrastRatioFromHex, MIN_APPLY_CONTRAST_RATIO } from "./lib/contrast";
 import { getDb } from "./lib/db";
+import { getHistoryPathArgs } from "./lib/historyPathArgs";
 import { translateCurrent, useI18n } from "./lib/i18n";
 import { getOsPlatform } from "./lib/shell";
 import { normalizeFontFamilyStack } from "./lib/systemFonts";
@@ -157,26 +158,34 @@ interface SystemNotificationActionPayload {
 
 async function hasInstalledCliHook(): Promise<boolean> {
   const settings = useSettingsStore.getState();
-  const status = await invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
-    selectedDir: settings.claudeHookConfigDir?.trim() || null,
-    codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
-    piSelectedDir: settings.piHookConfigDir?.trim() || null,
-    grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
-    ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
-    autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
-  });
-  if (status.claudeAutoRepaired && !settings.claudeHookAutoRepairNoticeShown) {
+  const [hookResult, openCodeResult] = await Promise.allSettled([
+    invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
+      selectedDir: settings.claudeHookConfigDir?.trim() || null,
+      codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
+      piSelectedDir: settings.piHookConfigDir?.trim() || null,
+      grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
+      ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
+      autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
+    }),
+    invoke<{ status: string }>("opencode_hook_status"),
+  ]);
+  const status = hookResult.status === "fulfilled" ? hookResult.value : null;
+  if (status?.claudeAutoRepaired && !settings.claudeHookAutoRepairNoticeShown) {
     toast.info(translateCurrent("notifications.hook.autoRepaired.title"), {
       description: translateCurrent("notifications.hook.autoRepaired.description"),
     });
     void settings.update("claudeHookAutoRepairNoticeShown", true);
   }
-  return (
-    (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
-    (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
-    (settings.piHookBridgeEnabled && status.pi.status === "installed") ||
-    (settings.grokHookBridgeEnabled && status.grok.status === "installed")
-  );
+  const installed =
+    openCodeResult.status === "fulfilled" && openCodeResult.value.status === "installed" ||
+    Boolean(status && (
+      (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
+      (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
+      (settings.piHookBridgeEnabled && status.pi.status === "installed") ||
+      (settings.grokHookBridgeEnabled && status.grok.status === "installed")
+    ));
+  if (!installed && hookResult.status === "rejected") throw hookResult.reason;
+  return installed;
 }
 
 type ClaudeHookToastVariant = "attention" | "approval" | "finished" | "failed";
@@ -239,6 +248,7 @@ function getCliHookSourceName(payload: CliHookPayload): string {
   if (payload.source === "codex") return "Codex CLI";
   if (payload.source === "pi") return "Pi Agent";
   if (payload.source === "grok") return "Grok Build";
+  if (payload.source === "opencode") return "OpenCode";
   return "Claude Code";
 }
 
@@ -602,8 +612,7 @@ function App() {
         await getDb();
         if (disposed) return;
         await invoke("history_sync_request_logs", {
-          claudeConfigDir: claudeHookConfigDir?.trim() || null,
-          codexConfigDir: codexHookConfigDir?.trim() || null,
+          ...(await getHistoryPathArgs()),
           force: false,
         });
       } catch (err) {
@@ -1742,6 +1751,8 @@ function App() {
               onToggleFullscreen={handleToggleTerminalFullscreen}
               projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
               terminalScope={terminalScope}
+              onOpenProviderSettings={() => handleOpenSettings("native-providers")}
+              onOpenHistorySettings={() => handleOpenSettings("history-sources")}
             />
           </main>
         </div>

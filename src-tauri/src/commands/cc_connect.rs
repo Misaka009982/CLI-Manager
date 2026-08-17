@@ -2,9 +2,9 @@
 use crate::codex_app_server_proxy::HELPER_SUBCOMMAND as CODEX_PROXY_SUBCOMMAND;
 use crate::codex_app_server_proxy::{
     SshCodexLaunch, CODEX_BASE_URL_OVERRIDE_ENV, CODEX_ENV_KEY_OVERRIDE_ENV, CODEX_LAUNCHER_ENV,
-    CODEX_MODEL_CATALOG_OVERRIDE_ENV, CODEX_MODEL_OVERRIDE_ENV, CODEX_REMOTE_PROVIDER_NAME,
-    CODEX_SSH_LAUNCH_ENV, CODEX_WIRE_API_OVERRIDE_ENV, EXPECTED_SESSION_ID_ENV,
-    PROXY_EXECUTABLE_ENV,
+    CODEX_MODEL_CATALOG_OVERRIDE_ENV, CODEX_MODEL_OVERRIDE_ENV, CODEX_MODEL_PROVIDER_ENV,
+    CODEX_PROFILE_NAME_ENV, CODEX_PROVIDER_NAME_OVERRIDE_ENV, CODEX_SSH_LAUNCH_ENV,
+    CODEX_WIRE_API_OVERRIDE_ENV, EXPECTED_SESSION_ID_ENV, PROXY_EXECUTABLE_ENV,
 };
 #[cfg(target_os = "windows")]
 use crate::process_job::ChildJob;
@@ -1251,6 +1251,25 @@ fn build_managed_config_with_codex(
                 .and_then(|provider| provider.model.clone())
         })
         .flatten();
+    let mut agent_environment = [
+        (TELEGRAM_TOKEN_ENV.to_string(), String::new()),
+        (FEISHU_APP_ID_ENV.to_string(), String::new()),
+        (FEISHU_APP_SECRET_ENV.to_string(), String::new()),
+        (WEIXIN_TOKEN_ENV.to_string(), String::new()),
+        (WECOM_BOT_ID_ENV.to_string(), String::new()),
+        (WECOM_BOT_SECRET_ENV.to_string(), String::new()),
+    ]
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
+    if let Some(provider) = codex_launch.and_then(|launch| launch.provider.as_ref()) {
+        // cc-connect builds the Codex child environment from this map. Keep the
+        // credential in the managed process environment and reference it here,
+        // so the generated config never persists the secret itself.
+        agent_environment.insert(
+            provider.env_key.clone(),
+            format!("${{{}}}", provider.env_key),
+        );
+    }
     Ok(ManagedConfig {
         data_dir: config_path_value(&data_dir()?),
         language: match profile.language {
@@ -1326,19 +1345,7 @@ fn build_managed_config_with_codex(
                     app_server_url: profile.agent.app_server_url().map(str::to_string),
                     model: active_model,
                     codex_home,
-                    // cc-connect resolves platform placeholders in its own process,
-                    // then MergeEnv lets these empty values override inheritance into
-                    // Claude/Codex child processes.
-                    env: [
-                        (TELEGRAM_TOKEN_ENV.to_string(), String::new()),
-                        (FEISHU_APP_ID_ENV.to_string(), String::new()),
-                        (FEISHU_APP_SECRET_ENV.to_string(), String::new()),
-                        (WEIXIN_TOKEN_ENV.to_string(), String::new()),
-                        (WECOM_BOT_ID_ENV.to_string(), String::new()),
-                        (WECOM_BOT_SECRET_ENV.to_string(), String::new()),
-                    ]
-                    .into_iter()
-                    .collect(),
+                    env: agent_environment,
                 },
             },
             platforms,
@@ -2233,10 +2240,7 @@ fn normalize_profile(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .map(crate::commands::ccswitch::validate_ccswitch_db_path)
-        .transpose()?
-        .map(|path| user_path_string(&path));
+        .map(str::to_string);
     profile.codex_config_dir = profile
         .codex_config_dir
         .as_deref()
@@ -2366,21 +2370,11 @@ fn user_home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn default_cc_switch_db_path() -> Option<PathBuf> {
-    Some(user_home_dir()?.join(".cc-switch").join("cc-switch.db"))
-}
-
-fn configured_cc_switch_db_path(profile: Option<&CcConnectProfile>) -> Option<PathBuf> {
-    profile
-        .and_then(|profile| profile.cc_switch_db_path.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(default_cc_switch_db_path)
-}
-
 struct RemoteCodexProviderLaunch {
     name: String,
+    profile_name: String,
+    model_provider: String,
+    provider_name_override: String,
     model: Option<String>,
     models: Vec<String>,
     base_url_override: String,
@@ -2469,7 +2463,7 @@ fn resolve_codex_launcher_from_path(
 #[cfg(not(target_os = "windows"))]
 fn codex_profile_wrapper_payload() -> String {
     format!(
-        "#!/bin/sh\nif [ -n \"${{{CODEX_SSH_LAUNCH_ENV}:-}}\" ]; then\n  exec \"${PROXY_EXECUTABLE_ENV}\" {CODEX_PROXY_SUBCOMMAND} \"$@\"\nfi\nif [ \"${{1:-}}\" = \"app-server\" ]; then\n  exec \"${PROXY_EXECUTABLE_ENV}\" {CODEX_PROXY_SUBCOMMAND} \"$@\"\nfi\nif [ -z \"${{{CODEX_BASE_URL_OVERRIDE_ENV}:-}}\" ]; then\n  exec \"${CODEX_LAUNCHER_ENV}\" \"$@\"\nfi\nif [ -n \"${{{CODEX_MODEL_OVERRIDE_ENV}:-}}\" ]; then\n  exec \"${CODEX_LAUNCHER_ENV}\" -c \"model_provider={CODEX_REMOTE_PROVIDER_NAME}\" -c \"model_providers.{CODEX_REMOTE_PROVIDER_NAME}.name=CLI-Manager remote\" -c \"${CODEX_BASE_URL_OVERRIDE_ENV}\" -c \"${CODEX_ENV_KEY_OVERRIDE_ENV}\" -c \"${CODEX_WIRE_API_OVERRIDE_ENV}\" -c \"${CODEX_MODEL_CATALOG_OVERRIDE_ENV}\" -c \"${CODEX_MODEL_OVERRIDE_ENV}\" \"$@\"\nelse\n  exec \"${CODEX_LAUNCHER_ENV}\" -c \"model_provider={CODEX_REMOTE_PROVIDER_NAME}\" -c \"model_providers.{CODEX_REMOTE_PROVIDER_NAME}.name=CLI-Manager remote\" -c \"${CODEX_BASE_URL_OVERRIDE_ENV}\" -c \"${CODEX_ENV_KEY_OVERRIDE_ENV}\" -c \"${CODEX_WIRE_API_OVERRIDE_ENV}\" -c \"${CODEX_MODEL_CATALOG_OVERRIDE_ENV}\" \"$@\"\nfi\n"
+        "#!/bin/sh\nif [ -n \"${{{CODEX_SSH_LAUNCH_ENV}:-}}\" ]; then\n  exec \"${PROXY_EXECUTABLE_ENV}\" {CODEX_PROXY_SUBCOMMAND} \"$@\"\nfi\nif [ \"${{1:-}}\" = \"app-server\" ]; then\n  exec \"${PROXY_EXECUTABLE_ENV}\" {CODEX_PROXY_SUBCOMMAND} \"$@\"\nfi\nif [ -z \"${{{CODEX_BASE_URL_OVERRIDE_ENV}:-}}\" ]; then\n  exec \"${CODEX_LAUNCHER_ENV}\" \"$@\"\nfi\nif [ -n \"${{{CODEX_MODEL_OVERRIDE_ENV}:-}}\" ]; then\n  exec \"${CODEX_LAUNCHER_ENV}\" --profile \"${CODEX_PROFILE_NAME_ENV}\" -c \"${CODEX_BASE_URL_OVERRIDE_ENV}\" -c \"${CODEX_ENV_KEY_OVERRIDE_ENV}\" -c \"${CODEX_WIRE_API_OVERRIDE_ENV}\" -c \"${CODEX_MODEL_CATALOG_OVERRIDE_ENV}\" -c \"${CODEX_MODEL_OVERRIDE_ENV}\" \"$@\"\nelse\n  exec \"${CODEX_LAUNCHER_ENV}\" --profile \"${CODEX_PROFILE_NAME_ENV}\" -c \"${CODEX_BASE_URL_OVERRIDE_ENV}\" -c \"${CODEX_ENV_KEY_OVERRIDE_ENV}\" -c \"${CODEX_WIRE_API_OVERRIDE_ENV}\" -c \"${CODEX_MODEL_CATALOG_OVERRIDE_ENV}\" \"$@\"\nfi\n"
     )
 }
 
@@ -2489,7 +2483,24 @@ fn codex_wrapper_override(key: &str, value: &str) -> Result<String, String> {
     Ok(format!("{key}={value}"))
 }
 
-fn codex_base_url_override(value: &str) -> Result<String, String> {
+fn codex_provider_override_key(model_provider: &str, field: &str) -> Result<String, String> {
+    let model_provider = model_provider.trim();
+    if model_provider.is_empty() || model_provider.chars().any(char::is_control) {
+        return Err("Codex model Provider ID is invalid".to_string());
+    }
+    let segment = if model_provider
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+    {
+        model_provider.to_string()
+    } else {
+        serde_json::to_string(model_provider)
+            .map_err(|err| format!("encode Codex model Provider ID failed: {err}"))?
+    };
+    Ok(format!("model_providers.{segment}.{field}"))
+}
+
+fn codex_base_url_override(model_provider: &str, value: &str) -> Result<String, String> {
     let value = value.trim();
     let url =
         reqwest::Url::parse(value).map_err(|_| "Codex Provider base URL is invalid".to_string())?;
@@ -2497,12 +2508,12 @@ fn codex_base_url_override(value: &str) -> Result<String, String> {
         return Err("Codex Provider base URL must use HTTP or HTTPS".to_string());
     }
     codex_wrapper_override(
-        &format!("model_providers.{CODEX_REMOTE_PROVIDER_NAME}.base_url"),
+        &codex_provider_override_key(model_provider, "base_url")?,
         value,
     )
 }
 
-fn codex_env_key_override(value: &str) -> Result<String, String> {
+fn codex_env_key_override(model_provider: &str, value: &str) -> Result<String, String> {
     let value = value.trim();
     let mut chars = value.chars();
     if !chars
@@ -2513,18 +2524,18 @@ fn codex_env_key_override(value: &str) -> Result<String, String> {
         return Err("Codex Provider environment key is invalid".to_string());
     }
     codex_wrapper_override(
-        &format!("model_providers.{CODEX_REMOTE_PROVIDER_NAME}.env_key"),
+        &codex_provider_override_key(model_provider, "env_key")?,
         value,
     )
 }
 
-fn codex_wire_api_override(value: Option<&str>) -> Result<String, String> {
+fn codex_wire_api_override(model_provider: &str, value: Option<&str>) -> Result<String, String> {
     let value = value
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("responses");
     codex_wrapper_override(
-        &format!("model_providers.{CODEX_REMOTE_PROVIDER_NAME}.wire_api"),
+        &codex_provider_override_key(model_provider, "wire_api")?,
         value,
     )
 }
@@ -2896,19 +2907,24 @@ fn prepare_remote_codex_launch(
     let ssh_launch = (project.environment_type == "ssh")
         .then(|| load_ssh_codex_launch(project))
         .transpose()?;
+    let codex_home = ssh_launch
+        .is_none()
+        .then(|| codex_config_dir(profile))
+        .transpose()?;
     let provider = match (ssh_launch.is_none(), project.codex_provider_id.as_deref()) {
         (true, Some(provider_id)) => {
-            let database_path = configured_cc_switch_db_path(Some(profile))
-                .ok_or_else(|| "home_dir_unavailable".to_string())?;
             let query_runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|err| format!("create provider query runtime failed: {err}"))?;
             let runtime = query_runtime.block_on(
-                crate::commands::ccswitch::load_codex_runtime_config_from_path(
-                    provider_id,
-                    &database_path,
-                ),
+                crate::provider::runtime::load_codex_runtime_config(provider_id),
+            )?;
+            crate::provider::runtime::write_codex_profile_to_dir(
+                codex_home.as_deref().ok_or_else(|| {
+                    "Codex home is unavailable for the registered Provider".to_string()
+                })?,
+                &runtime.profile,
             )?;
             let proxy = resolve_proxy_url_if_enabled(
                 profile.proxy_enabled,
@@ -2929,6 +2945,8 @@ fn prepare_remote_codex_launch(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string);
+            let profile_name = runtime.profile.profile_name.clone();
+            let model_provider = runtime.profile.model_provider.clone();
             Some(RemoteCodexProviderLaunch {
                 name: project
                     .provider_name
@@ -2936,12 +2954,21 @@ fn prepare_remote_codex_launch(
                     .map(single_line)
                     .filter(|name| !name.is_empty())
                     .unwrap_or_else(|| provider_id.to_string()),
+                profile_name,
+                model_provider: model_provider.clone(),
+                provider_name_override: codex_wrapper_override(
+                    &codex_provider_override_key(&model_provider, "name")?,
+                    "CLI-Manager remote",
+                )?,
                 models: normalize_managed_codex_models(model.as_deref(), discovered_models),
                 model: model.clone(),
-                base_url_override: codex_base_url_override(&runtime.base_url)?,
-                env_key_override: codex_env_key_override(&runtime.env_key)?,
+                base_url_override: codex_base_url_override(&model_provider, &runtime.base_url)?,
+                env_key_override: codex_env_key_override(&model_provider, &runtime.env_key)?,
                 model_override: codex_model_override(model.as_deref())?,
-                wire_api_override: codex_wire_api_override(runtime.wire_api.as_deref())?,
+                wire_api_override: codex_wire_api_override(
+                    &model_provider,
+                    runtime.wire_api.as_deref(),
+                )?,
                 env_key: runtime.env_key,
                 secret: runtime.secret_value,
             })
@@ -2952,10 +2979,6 @@ fn prepare_remote_codex_launch(
     if provider.is_none() && ssh_launch.is_none() {
         return Ok(None);
     }
-    let codex_home = ssh_launch
-        .is_none()
-        .then(|| codex_config_dir(profile))
-        .transpose()?;
     let discovery_codex_home = match provider.as_ref() {
         Some(provider) => {
             let path = remote_manager_dir()?.join("codex-model-discovery");
@@ -3044,6 +3067,12 @@ fn apply_remote_codex_launch_environment(
                 .ok_or_else(|| "Codex model discovery directory is missing".to_string())
                 .and_then(codex_model_catalog_override)?;
             command
+                .env(CODEX_PROFILE_NAME_ENV, &provider.profile_name)
+                .env(CODEX_MODEL_PROVIDER_ENV, &provider.model_provider)
+                .env(
+                    CODEX_PROVIDER_NAME_OVERRIDE_ENV,
+                    &provider.provider_name_override,
+                )
                 .env(CODEX_BASE_URL_OVERRIDE_ENV, &provider.base_url_override)
                 .env(CODEX_ENV_KEY_OVERRIDE_ENV, &provider.env_key_override)
                 .env(CODEX_MODEL_CATALOG_OVERRIDE_ENV, model_catalog_override)
@@ -3059,6 +3088,9 @@ fn apply_remote_codex_launch_environment(
         }
         None => {
             command
+                .env_remove(CODEX_PROFILE_NAME_ENV)
+                .env_remove(CODEX_MODEL_PROVIDER_ENV)
+                .env_remove(CODEX_PROVIDER_NAME_OVERRIDE_ENV)
                 .env_remove(CODEX_BASE_URL_OVERRIDE_ENV)
                 .env_remove(CODEX_ENV_KEY_OVERRIDE_ENV)
                 .env_remove(CODEX_MODEL_CATALOG_OVERRIDE_ENV)
@@ -3130,15 +3162,8 @@ fn redact_remote_codex_probe_output(
     redact_log_line(&output_text(stdout, stderr), &secrets)
 }
 
-async fn load_provider_catalog(database_path: Option<&Path>) -> ProviderCatalog {
-    let Some(database_path) = database_path.filter(|path| path.is_file()) else {
-        return ProviderCatalog::default();
-    };
-    let options = SqliteConnectOptions::new()
-        .filename(&database_path)
-        .read_only(true)
-        .busy_timeout(Duration::from_secs(1));
-    let Ok(mut connection) = SqliteConnection::connect_with(&options).await else {
+async fn load_provider_catalog() -> ProviderCatalog {
+    let Ok(mut connection) = crate::provider::open_connection().await else {
         return ProviderCatalog::default();
     };
     let rows = sqlx::query(
@@ -3465,10 +3490,9 @@ fn order_registered_projects(
 }
 
 fn load_registered_projects(
-    profile: Option<&CcConnectProfile>,
+    _profile: Option<&CcConnectProfile>,
 ) -> Result<Vec<RegisteredProject>, String> {
     let database_path = crate::app_paths::db_path()?;
-    let provider_database_path = configured_cc_switch_db_path(profile);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -3571,7 +3595,7 @@ fn load_registered_projects(
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let provider_catalog = load_provider_catalog(provider_database_path.as_deref()).await;
+        let provider_catalog = load_provider_catalog().await;
         Ok(order_registered_projects(
             groups,
             projects,
@@ -6410,16 +6434,17 @@ allow_from = ""
     fn sample_remote_codex_launch(provider: bool) -> RemoteCodexLaunch {
         let provider = provider.then(|| RemoteCodexProviderLaunch {
             name: "Project Provider".to_string(),
+            profile_name: "cli-manager-project-provider-123".to_string(),
+            model_provider: "custom".to_string(),
+            provider_name_override: "model_providers.custom.name=CLI-Manager remote".to_string(),
             model: Some("gpt-5.4".to_string()),
             models: vec!["gpt-5.4".to_string(), "gpt-5.3-codex".to_string()],
-            base_url_override:
-                "model_providers.cli_manager_remote.base_url=https://provider.example.com/v1"
-                    .to_string(),
-            env_key_override:
-                "model_providers.cli_manager_remote.env_key=CLI_MANAGER_CODEX_PROVIDER_API_KEY"
-                    .to_string(),
+            base_url_override: "model_providers.custom.base_url=https://provider.example.com/v1"
+                .to_string(),
+            env_key_override: "model_providers.custom.env_key=CLI_MANAGER_CODEX_PROVIDER_API_KEY"
+                .to_string(),
             model_override: Some("model=gpt-5.4".to_string()),
-            wire_api_override: "model_providers.cli_manager_remote.wire_api=responses".to_string(),
+            wire_api_override: "model_providers.custom.wire_api=responses".to_string(),
             env_key: "CLI_MANAGER_CODEX_PROVIDER_API_KEY".to_string(),
             secret: "sk-provider-secret".to_string(),
         });
@@ -6438,7 +6463,7 @@ allow_from = ""
     }
 
     #[test]
-    fn managed_codex_config_keeps_provider_runtime_out_of_cc_connect_config() {
+    fn managed_codex_config_forwards_provider_key_without_persisting_secret() {
         let project = tempfile::tempdir().unwrap();
         let mut profile = sample_profile(project.path());
         profile.agent = CcConnectAgent::Codex;
@@ -6465,10 +6490,13 @@ allow_from = ""
             .unwrap()
             .contains_key("provider"));
         assert!(!agent.as_table().unwrap().contains_key("providers"));
+        assert_eq!(
+            agent["options"]["env"]["CLI_MANAGER_CODEX_PROVIDER_API_KEY"].as_str(),
+            Some("${CLI_MANAGER_CODEX_PROVIDER_API_KEY}")
+        );
         for secret in [
             "sk-provider-secret",
             "https://provider.example.com/v1",
-            "CLI_MANAGER_CODEX_PROVIDER_API_KEY",
             "Project Provider",
         ] {
             assert!(!raw.contains(secret));
@@ -6592,8 +6620,21 @@ allow_from = ""
         assert_eq!(
             environment.get(CODEX_BASE_URL_OVERRIDE_ENV),
             Some(&Some(
-                "model_providers.cli_manager_remote.base_url=https://provider.example.com/v1"
-                    .to_string()
+                "model_providers.custom.base_url=https://provider.example.com/v1".to_string()
+            ))
+        );
+        assert_eq!(
+            environment.get(CODEX_PROFILE_NAME_ENV),
+            Some(&Some("cli-manager-project-provider-123".to_string()))
+        );
+        assert_eq!(
+            environment.get(CODEX_MODEL_PROVIDER_ENV),
+            Some(&Some("custom".to_string()))
+        );
+        assert_eq!(
+            environment.get(CODEX_PROVIDER_NAME_OVERRIDE_ENV),
+            Some(&Some(
+                "model_providers.custom.name=CLI-Manager remote".to_string()
             ))
         );
         assert_eq!(
@@ -6640,6 +6681,9 @@ allow_from = ""
             })
             .collect::<BTreeMap<_, _>>();
         for key in [
+            CODEX_PROFILE_NAME_ENV,
+            CODEX_MODEL_PROVIDER_ENV,
+            CODEX_PROVIDER_NAME_OVERRIDE_ENV,
             CODEX_BASE_URL_OVERRIDE_ENV,
             CODEX_ENV_KEY_OVERRIDE_ENV,
             CODEX_MODEL_CATALOG_OVERRIDE_ENV,
@@ -6672,16 +6716,19 @@ allow_from = ""
     #[test]
     fn codex_app_server_overrides_reject_command_injection_characters() {
         assert_eq!(
-            codex_base_url_override("https://provider.example.com/v1").unwrap(),
-            "model_providers.cli_manager_remote.base_url=https://provider.example.com/v1"
+            codex_base_url_override("custom", "https://provider.example.com/v1").unwrap(),
+            "model_providers.custom.base_url=https://provider.example.com/v1"
         );
-        assert!(codex_base_url_override("https://provider.example.com/v1?x=1&whoami").is_err());
-        assert!(codex_base_url_override("file:///tmp/provider").is_err());
-        assert!(codex_env_key_override("OPENAI_API_KEY").is_ok());
-        assert!(codex_env_key_override("OPENAI_API_KEY & whoami").is_err());
+        assert!(
+            codex_base_url_override("custom", "https://provider.example.com/v1?x=1&whoami")
+                .is_err()
+        );
+        assert!(codex_base_url_override("custom", "file:///tmp/provider").is_err());
+        assert!(codex_env_key_override("custom", "OPENAI_API_KEY").is_ok());
+        assert!(codex_env_key_override("custom", "OPENAI_API_KEY & whoami").is_err());
         assert_eq!(
-            codex_wire_api_override(None).unwrap(),
-            "model_providers.cli_manager_remote.wire_api=responses"
+            codex_wire_api_override("custom", None).unwrap(),
+            "model_providers.custom.wire_api=responses"
         );
         assert_eq!(codex_model_override(None).unwrap(), None);
         assert!(codex_model_override(Some("gpt-5.4\" & whoami")).is_err());
@@ -7072,6 +7119,9 @@ allow_from = ""
         .unwrap();
         fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
         format_and_check_config_syntax(Path::new(&binary), &config_path).unwrap();
+        let formatted = fs::read_to_string(&config_path).unwrap();
+        assert!(formatted.contains("${CLI_MANAGER_CODEX_PROVIDER_API_KEY}"));
+        assert!(!formatted.contains("sk-provider-secret"));
         profile.platforms.clear();
         profile.platform = CcConnectPlatform::Weixin;
         profile.allow_from = "authorization-pending@im.wechat".to_string();

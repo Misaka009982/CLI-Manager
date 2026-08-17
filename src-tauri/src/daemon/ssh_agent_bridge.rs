@@ -270,6 +270,8 @@ impl BridgeLane {
                 | "fileAttachAnyChunk"
                 | "fileAttachAnyFinish"
                 | "fileAttachAnyAbort"
+                | "agentCapabilitiesInspect"
+                | "agentCapabilitiesProbe"
                 | "gitListRepositories"
                 | "gitChanges"
                 | "gitDiff"
@@ -582,6 +584,8 @@ impl SshAgentBridgeManager {
                     | "fileAttachAnyChunk"
                     | "fileAttachAnyFinish"
                     | "fileAttachAnyAbort"
+                    | "agentCapabilitiesInspect"
+                    | "agentCapabilitiesProbe"
                     | "gitListRepositories"
                     | "gitChanges"
                     | "gitDiff"
@@ -766,6 +770,7 @@ fn required_capability(kind: &str) -> Option<&'static str> {
         | "fileAttachAnyChunk"
         | "fileAttachAnyFinish"
         | "fileAttachAnyAbort" => Some("fileAttachAny"),
+        "agentCapabilitiesInspect" | "agentCapabilitiesProbe" => Some("agentCapabilitiesV1"),
         _ => None,
     }
 }

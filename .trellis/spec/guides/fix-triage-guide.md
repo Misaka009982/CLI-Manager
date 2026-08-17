@@ -120,6 +120,7 @@ This document does not restate those two; open them when needed.
 | Window focus | Focus in this window / in another window / app not focused |
 | Split pane | Target in the current pane / in another pane of the same window / in a deep node of the split tree |
 | Minimized / tray | Normal window / minimized / minimized to tray |
+| UI presentation mode | Expanded sidebar / collapsed sidebar / compact embedded sidebar |
 | Multi-session / Workspan | Single session / multiple sessions / switching across Workspans |
 | Focus-mode toggle | On / off |
 | Runtime environment | Local PowerShell/CMD/Pwsh / WSL / Bash |

@@ -74,6 +74,71 @@ let hits = catalog::search_sessions(&roots, &query, source, project_path, limit)
 catalog::ensure_refresh(app, roots, false, false).await?;
 ```
 
+## Scenario: Compact FTS catalog schema upgrade
+
+### 1. Scope / Trigger
+
+- Trigger: changing the rebuildable `history-catalog.db` FTS storage mode or reclaiming catalog fragmentation.
+- Goal: prevent trigram index pages and repeated replacement freelist pages from growing far beyond the indexed message text.
+
+### 2. Signatures
+
+- `ensure_schema(conn: &mut SqliteConnection) -> Result<(), String>` remains the catalog schema entry point.
+- `fts_trigram_query(query: &str) -> String` creates an `AND` expression of overlapping literal trigrams.
+- Schema version advances from 5 to 6 after the FTS rebuild and metadata update complete.
+
+### 3. Contracts
+
+- Fresh catalogs create both FTS5 tables with `detail='none'` and `tokenize='trigram case_sensitive 0'`.
+- Existing v5 catalogs drop/recreate both FTS tables and their three maintenance triggers, rebuild from the ordinary message tables, then run one `VACUUM`.
+- The v5→v6 rebuild runs for `0 < user_version < 6`; catalogs reporting `user_version >= 6` must still inspect both FTS `sqlite_master.sql` definitions and rebuild when either table is missing `detail='none'`. Fresh creation must not perform a redundant rebuild or vacuum.
+- `detail='none'` cannot evaluate the existing multi-token phrase query or provide `snippet()`. Search must bind overlapping trigrams to FTS with `AND`, then apply a case-insensitive contiguous `instr()` filter against the ordinary message content and derive a bounded prefix snippet from that content.
+- Schema/version metadata is written only after all upgrade operations succeed. The catalog remains a derived cache; source history files are never modified.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Fresh catalog | Create compact FTS directly; do not rebuild/vacuum again |
+| Existing v5 catalog | Preserve message rows, rebuild both FTS tables, compact pages, advance to v6 |
+| `user_version >= 6` but either FTS table has the legacy detail mode | Rebuild both FTS tables and restore their triggers before serving the catalog |
+| English or Chinese query of at least 3 characters | Return contiguous matches with the existing result fields |
+| Query contains quotes | Escape each trigram as a bound FTS literal; never interpolate user input |
+| FTS rebuild or metadata update fails | Return the error and do not report the new schema version |
+| Normal incremental insert/update/delete | Triggers keep FTS synchronized; do not run full `VACUUM` per refresh |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `history` becomes `"his" AND "ist" AND "sto" AND "tor" AND "ory"`, then the ordinary table verifies the contiguous match.
+- Base: a three-character Chinese query is one trigram and continues to match normally.
+- Bad: use `snippet()` or bind the complete phrase directly with `detail='none'`; SQLite rejects phrase evaluation because positional detail is absent.
+- Bad: run `VACUUM` after every changed transcript; large history refreshes become blocking maintenance operations.
+
+### 6. Tests Required
+
+- Assert fresh schema triggers support Chinese and English trigram matches.
+- Build a v5 FTS schema, call `ensure_schema`, and assert `detail='none'`, message preservation, both language matches, and `user_version=6`.
+- Assert search merging still returns V2 and legacy message hits with bounded content snippets.
+- Run `cargo test history --lib`, `cargo fmt -- --check`, and `cargo check`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+WHERE history_messages_fts MATCH ?
+// bind: "history"
+// SELECT snippet(history_messages_fts, ...)
+```
+
+#### Correct
+
+```rust
+WHERE history_messages_fts MATCH ?
+  AND instr(lower(m.display_content), lower(?)) > 0
+// bind: "his" AND "ist" AND "sto" AND "tor" AND "ory"
+```
+
 ## Scenario: Bound Terminal Markdown Preview Freshness
 
 ### 1. Scope / Trigger
@@ -357,3 +422,44 @@ let deleted = delete_session_tree_with_backup_root(&file_ref, &backups_dir)?;
 // Backup restore still refuses to overwrite while the source CLI is active.
 let plan = build_file_restore_plan(&file_ref.path, &backups_dir, Some(&file_ref.source));
 ```
+
+## Scenario: Local generated history titles
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing the optional smart title provider command, generated-title persistence, title request protocols, or history deletion/recovery.
+- Goal: keep model-derived titles in the user metadata database with a strict provider-secret boundary; the history catalog and third-party transcripts remain untouched.
+
+### 2. Signatures
+
+- SQLite table: `history_generated_titles(session_key PRIMARY KEY, source identity, generated_title, generation_state, generation_revision, trigger_kind, source fingerprint, provider composite identity, failure_code, suppression state, timestamps)`.
+- Tauri commands: `history_title_list_providers`, `history_title_generate`, `history_title_clear`, and `history_title_cancel`.
+- Generate requests contain session/source identity, trigger, expected full candidate fingerprint, bounded candidate input, bounded-input fingerprint, and non-secret provider/model identifiers. They never contain API keys, OAuth tokens, base URLs, or raw provider documents.
+
+### 3. Contracts
+
+- Migration v30 is additive and authoritative. Frontend `CREATE TABLE IF NOT EXISTS` is only a compatibility repair; catalog rebuild/reset does not touch this table.
+- Provider resolution is Rust-only through the Native Provider repository/runtime and the existing network client policy. Readiness returns redacted cards and stable reason codes only.
+- Supported request protocols are Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses. Requests are non-streaming, text-only, have no tools/reasoning, bounded input/output/body/timeout, and do not log prompt, raw output, key, or endpoint secrets.
+- Auxiliary text requests share one backend protocol helper with command suggestions. For OpenAI Responses compatibility gateways, `input` is a plain string (not a nested `input_text` message array); endpoint joining must not duplicate `/v1` or a complete endpoint.
+- HTTP/request failures keep stable backend categories (timeout, rate limit, HTTP status, response-format/empty output) so the frontend can localize safe diagnostics without exposing response bodies or provider configuration.
+- Reservation increments a monotonic revision and writes `pending`. Commit requires the same revision, source identity/fingerprint, pending state, current provider selection, and (for automatic work) an empty alias and enabled setting. Zero affected rows is stale/cancelled and never overwrites a newer result.
+- Manual reservation may run for old sessions and with an alias; alias only affects display. Manual generation clears matching automatic suppression. Clear invalidates pending work, removes generated text, and suppresses the current fingerprint until explicit manual generation.
+- Pending rows are normalized to `failed/interrupted` during frontend history metadata initialization and are never auto-dispatched after restart. Cancelled automatic work is retained as a failed attempt, preventing a background retry for the same fingerprint.
+- Deleting a local session removes its generated-title row; provider deletion/disable does not remove already successful local titles. SSH may use these commands only after the desktop has loaded an online trusted detail; the command writes local metadata and never writes remotely.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Missing/disabled/keyless/invalid/unsupported provider | Return a stable redacted failure code and persist failure state; never expose credentials |
+| 429, timeout, non-2xx, oversized/invalid response, tool call, abnormal finish, or empty title | Persist a safe failure code and retain any previous generated title |
+| Alias added, clear, delete, provider switch, or switch-off while request is in flight | Revision/CAS or commit guard rejects the late result |
+| Candidate exceeds 4096 UTF-8 bytes | Hash the normalized complete text, send only a Unicode-safe bounded prefix, and validate the bounded-input fingerprint |
+| Catalog rebuild or WebDAV sync | Generated-title rows remain local and unchanged |
+
+### 5. Tests Required
+
+- Migration registry uniqueness/order and table/index presence.
+- Sanitizer/protocol tests for controls, bidi/invisible characters, CJK/emoji, tools, abnormal finish, malformed/empty response, and bounded output.
+- Targeted Rust tests plus `cargo check`; verify no secret/prompt/raw response reaches frontend state or logs.

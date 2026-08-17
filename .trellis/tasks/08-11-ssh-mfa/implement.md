@@ -25,6 +25,7 @@
 - [x] `cargo check --locked --manifest-path src-tauri/Cargo.toml`
 - [x] `npx tsc --noEmit`
 - [x] 使用 GitNexus `detect_changes` 检查变更范围：changed_symbols/processes 为空，risk low；Rust FTS 仍不可用。
+- [x] 修复 Git Diff 多文件首次打开目标错位：首帧同步绑定 `initialFilePath`，新增导航回归测试。
 - [x] 未运行 `npm run tauri dev/build`；真实 MFA 主机不可用，未做平台实机验收。
 - [ ] 发布前收集一次真实失败样本，连同普通 CLI-Manager 日志一起验证诊断字段足够定位问题。
 
