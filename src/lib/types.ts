@@ -407,6 +407,7 @@ export type RemoteHandoffPhase = "pending" | "active" | "cancelling" | "recovery
 
 export interface RemoteHandoffSessionState {
   phase: RemoteHandoffPhase;
+  agent?: import("./remoteHandoff").RemoteHandoffAgent;
   cliSessionId: string;
   projectName: string;
   workDir: string;

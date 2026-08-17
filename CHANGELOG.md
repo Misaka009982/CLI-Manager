@@ -2,6 +2,10 @@
 
 ## [TEMP] - 2026-08-11
 
+### Hook 审批通知
+
+- 修复 Codex 子 Agent 的非交互工具 Hook 被直接当成父会话待审批、导致桌面宠物和通知渠道误报的问题；共享 Hook 入口现在暂存缺少显式审批证据的子 Agent `PermissionRequest`，通过 Hook 时记录的 rollout 字节基线、同一子 Agent 工具进展或会话结束确认任务已继续，无法确认时在 15 秒后保守提醒。主 Agent、携带明确说明的真实子 Agent 审批、后台 daemon、SSH 与远程托管通知保持原有即时/保守行为。
+- 收紧共享审批仲裁边界：SSH spool 的 Codex 权限请求立即进入既有全局通知链路；本地/WSL 暂缓记录必须同 source、环境、tab、session 与子 Agent 才能被消解。转录路径复用允许根校验，越界路径不再被 daemon 轮询，WSL UNC 仅保留事件相关性和超时兜底。
 ### Trellis Codex 工作流
 
 - Codex 的 Trellis 执行流默认改由主会话直接处理；只有用户明确要求子任务，或主会话提前询问并获得明确同意后，才会派发研究、实现或检查子任务。
@@ -34,6 +38,10 @@
 
 ### 远程托管
 
+- 桌面宠物远程托管新增本地 Claude Code、Pi 和 OpenCode 会话支持，并保留现有本地/SSH Codex 链路；Agent 类型现贯穿资格判断、cc-connect 配置、托管记录、Hook 归属和取消恢复，Grok Build、WSL 及非 Codex SSH 会话继续明确拒绝。
+- 本地托管的预检、cc-connect 配置和 Codex app-server 代理统一使用项目登记的 `cli_tool + cli_args`；绝对路径、Windows 脚本启动器及安全的附加参数不再回退为 PATH 中的默认命令，自由 `startup_cmd` 仍不会交给远程托管执行。
+- 交接记录只对 schema v1 缺失的 Agent 兼容注入 Codex；schema v2 缺失或非法 Agent 会拒绝读取，避免损坏记录静默切换到错误 CLI。
+- Claude Code 托管复用项目/Worktree 登记的 Provider 快照，取消后按原 Session 与 Provider 恢复；Pi、OpenCode 跟随各自配置，Pi 启用 cc-connect RPC，OpenCode 在桌宠候选中提示审批能力边界。Provider 密钥和项目敏感环境变量只注入受管进程环境，不写入 cc-connect TOML。
 - 修复项目 Provider 锁定逻辑把运行时专用的 `--profile` 传给 Codex app-server、导致 cc-connect 启动探针立即失败的问题；app-server 继续使用完整 `-c` 覆盖锁定登记 Provider，普通 Codex 运行命令仍保留生成的 Provider profile。
 - 修复 Provider 密钥只注入 cc-connect 父进程、未传入 Codex Agent 子进程的问题；受管配置仅保存环境变量占位符，不落盘密钥明文。
 
