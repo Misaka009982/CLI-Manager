@@ -8,8 +8,13 @@ import type {
 import { createActionDraft, isDraftComplete, serializeAnswers, type ActionDraft } from "./agent-action.js";
 import { canClearTask, canOpenTask, COLOR_ORDER, firstAvailableColor, tasksForColor } from "./task-state.js";
 
-const app = document.querySelector<HTMLElement>("#app");
-if (!app) throw new Error("desktop_pet_e_root_missing");
+function requireAppRoot(): HTMLElement {
+  const root = document.querySelector<HTMLElement>("#app");
+  if (!root) throw new Error("desktop_pet_e_root_missing");
+  return root;
+}
+
+const app = requireAppRoot();
 let config: DesktopPetEConfigPayload | null = null;
 let snapshot: import("../bridge/protocol.js").DesktopPetESnapshot | null = null;
 let expandedColor: DesktopPetEColor | null = null;

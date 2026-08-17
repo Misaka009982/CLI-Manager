@@ -372,7 +372,7 @@ function createWindow(): void {
   });
   win.on("move", () => {
     if (!latestSnapshot || latestConfig?.settings.lockPosition) return;
-    const [x, y] = win.getPosition();
+    const { x, y } = win.getBounds();
     if (isProgrammaticMove(x, y)) return;
     clearProgrammaticMoveTarget();
     if (movePublishTimer !== null) clearTimeout(movePublishTimer);
@@ -384,10 +384,10 @@ function createWindow(): void {
       const scale = scaleForWorkArea(latestConfig.settings.size, area);
       const width = Math.min(area.width, Math.round(BASE_WIDTH * scale));
       const height = Math.min(area.height, Math.round(BASE_HEIGHT * scale));
-      const [currentX, currentY] = win.getPosition();
+      const currentBounds = win.getBounds();
+      const { x: currentX, y: currentY } = currentBounds;
       const nextX = Math.min(area.x + area.width - width, Math.max(area.x, currentX));
       const nextY = Math.min(area.y + area.height - height, Math.max(area.y, currentY));
-      const currentBounds = win.getBounds();
       if (
         nextX !== currentX
         || nextY !== currentY
