@@ -15,7 +15,9 @@ use super::protocol::{
 };
 use super::routing::{PortAllocator, RoutingRuntime, FALLBACK_PORT_START};
 use super::ssh_agent_bridge::SshAgentBridgeManager;
-use crate::claude_hook::{remote_hook_payload_from_spool, spawn_hook_listener, HookPayloadSink};
+use crate::claude_hook::{
+    approval_aware_hook_sink, remote_hook_payload_from_spool, spawn_hook_listener, HookPayloadSink,
+};
 use crate::commands::cc_connect::handoff_notification::RemoteHandoffNotifier;
 use crate::pty::manager::{PtyEventSink, PtyManager, PtyProcessStatus};
 use crate::ssh_launch::SshLaunchPlan;
@@ -1639,7 +1641,7 @@ impl DaemonServer {
         let hook_host = Arc::clone(&server.host);
         let dispatcher = DispatcherHandle::start("daemon");
         let handoff_notifier = RemoteHandoffNotifier::start();
-        let hook_sink: HookPayloadSink = Arc::new(move |payload| {
+        let delivery_sink: HookPayloadSink = Arc::new(move |payload| {
             // 仅当没有已连接的前端客户端时（app 已彻底退到后台，例如托盘退出后
             // 转入后台继续执行）才拉起 app 处理审批或回答。app 正在运行时，事件会通过
             // 下方 broadcast_hook 送达前端，由前端决定是否通知/切换，绝不在此
@@ -1658,6 +1660,7 @@ impl DaemonServer {
                 Err(err) => log::warn!("daemon hook payload serialize failed: {err}"),
             }
         });
+        let hook_sink = approval_aware_hook_sink(delivery_sink);
         server.host.set_hook_sink(Arc::clone(&hook_sink));
         spawn_hook_listener(hook_listener, token, hook_sink);
 

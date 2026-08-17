@@ -1,11 +1,13 @@
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::third_party_notification::HookNotificationJob;
 
@@ -15,6 +17,9 @@ const MAX_HEADER_BYTES: usize = 16 * 1024;
 const RECENT_HOOK_EVENT_LIMIT: usize = 1024;
 const CLAUDE_QUESTION_TOOL_NAME: &str = "AskUserQuestion";
 const CODEX_QUESTION_TOOL_NAME: &str = "request_user_input";
+const PROVISIONAL_APPROVAL_GRACE: Duration = Duration::from_secs(15);
+const PROVISIONAL_APPROVAL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const MAX_PROVISIONAL_APPROVALS: usize = 256;
 
 #[derive(Default)]
 struct RecentHookEvents {
@@ -66,6 +71,7 @@ struct ClaudeHookRequest {
     agent_type: Option<String>,
     agent_transcript_path: Option<String>,
     transcript_path: Option<String>,
+    transcript_bytes: Option<u64>,
     reasoning_effort: Option<String>,
     wsl_distro_name: Option<String>,
     environment_type: Option<String>,
@@ -96,6 +102,7 @@ pub struct ClaudeHookPayload {
     agent_type: Option<String>,
     agent_transcript_path: Option<String>,
     transcript_path: Option<String>,
+    transcript_bytes: Option<u64>,
     reasoning_effort: Option<String>,
     wsl_distro_name: Option<String>,
     environment_type: Option<String>,
@@ -123,6 +130,27 @@ impl ClaudeHookPayload {
                 ))
     }
 
+    fn is_ambiguous_codex_child_approval(&self) -> bool {
+        self.source == "codex"
+            && self.event == "PermissionRequest"
+            && non_empty(self.agent_id.as_deref()).is_some()
+            && non_empty(self.message.as_deref()).is_none()
+    }
+
+    fn approval_scope(&self) -> Option<ApprovalScope> {
+        Some(ApprovalScope {
+            tab_id: self.tab_id.clone(),
+            session_id: non_empty(self.session_id.as_deref()).map(str::to_string),
+            agent_id: non_empty(self.agent_id.as_deref())?.to_string(),
+        })
+    }
+
+    fn approval_transcript_path(&self) -> Option<PathBuf> {
+        non_empty(self.agent_transcript_path.as_deref())
+            .or_else(|| non_empty(self.transcript_path.as_deref()))
+            .map(PathBuf::from)
+    }
+
     pub fn with_remote_project_name(mut self, project_name: String) -> Self {
         self.remote_project_name =
             (!project_name.trim().is_empty()).then(|| project_name.trim().to_string());
@@ -139,6 +167,240 @@ impl ClaudeHookPayload {
             timestamp: self.timestamp.clone(),
         }
     }
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ApprovalScope {
+    tab_id: String,
+    session_id: Option<String>,
+    agent_id: String,
+}
+
+impl ApprovalScope {
+    fn same_parent(&self, payload: &ClaudeHookPayload) -> bool {
+        if self.tab_id != payload.tab_id {
+            return false;
+        }
+        match (
+            self.session_id.as_deref(),
+            non_empty(payload.session_id.as_deref()),
+        ) {
+            (Some(expected), Some(actual)) => expected == actual,
+            _ => true,
+        }
+    }
+
+    fn same_child(&self, payload: &ClaudeHookPayload) -> bool {
+        self.same_parent(payload)
+            && non_empty(payload.agent_id.as_deref()) == Some(self.agent_id.as_str())
+    }
+}
+
+struct ProvisionalApproval {
+    payload: ClaudeHookPayload,
+    scope: ApprovalScope,
+    tool_use_id: Option<String>,
+    tool_name: Option<String>,
+    event_id: Option<String>,
+    transcript_path: Option<PathBuf>,
+    transcript_bytes: Option<u64>,
+    deadline: Instant,
+}
+
+impl ProvisionalApproval {
+    fn from_payload(payload: ClaudeHookPayload, now: Instant) -> Self {
+        let transcript_path = payload.approval_transcript_path();
+        let transcript_bytes = payload.transcript_bytes.or_else(|| {
+            transcript_path
+                .as_deref()
+                .and_then(|path| fs::metadata(path).ok())
+                .map(|metadata| metadata.len())
+        });
+        Self {
+            scope: payload
+                .approval_scope()
+                .expect("ambiguous child approval must have an agent id"),
+            tool_use_id: non_empty(payload.tool_use_id.as_deref()).map(str::to_string),
+            tool_name: non_empty(payload.tool_name.as_deref()).map(str::to_string),
+            event_id: non_empty(payload.remote_event_id.as_deref()).map(str::to_string),
+            transcript_path,
+            transcript_bytes,
+            deadline: now + PROVISIONAL_APPROVAL_GRACE,
+            payload,
+        }
+    }
+
+    fn transcript_progressed(&self) -> bool {
+        let (Some(path), Some(baseline)) = (self.transcript_path.as_deref(), self.transcript_bytes)
+        else {
+            return false;
+        };
+        fs::metadata(path)
+            .map(|metadata| metadata.len() > baseline)
+            .unwrap_or(false)
+    }
+
+    fn matches_request(&self, payload: &ClaudeHookPayload) -> bool {
+        if !self.scope.same_child(payload) {
+            return false;
+        }
+        let incoming_tool_use_id = non_empty(payload.tool_use_id.as_deref());
+        if let (Some(expected), Some(actual)) = (self.tool_use_id.as_deref(), incoming_tool_use_id)
+        {
+            return expected == actual;
+        }
+        let incoming_tool_name = non_empty(payload.tool_name.as_deref());
+        matches!(
+            (self.tool_name.as_deref(), incoming_tool_name),
+            (Some(expected), Some(actual)) if expected == actual
+        )
+    }
+}
+
+#[derive(Default)]
+struct ApprovalArbiterState {
+    pending: VecDeque<ProvisionalApproval>,
+}
+
+impl ApprovalArbiterState {
+    fn accept(&mut self, payload: ClaudeHookPayload, now: Instant) -> Vec<ClaudeHookPayload> {
+        let mut deliver = self.poll(now);
+        self.resolve_from_event(&payload);
+        if !payload.is_ambiguous_codex_child_approval() {
+            deliver.push(payload);
+            return deliver;
+        }
+
+        if self.pending.len() >= MAX_PROVISIONAL_APPROVALS {
+            if let Some(oldest) = self.pending.pop_front() {
+                warn!(
+                    "provisional approval capacity reached; delivering oldest event id={}",
+                    oldest.event_id.as_deref().unwrap_or("unknown")
+                );
+                deliver.push(oldest.payload);
+            }
+        }
+        self.pending
+            .push_back(ProvisionalApproval::from_payload(payload, now));
+        deliver
+    }
+
+    fn poll(&mut self, now: Instant) -> Vec<ClaudeHookPayload> {
+        let mut retained = VecDeque::with_capacity(self.pending.len());
+        let mut deliver = Vec::new();
+        while let Some(pending) = self.pending.pop_front() {
+            if pending.transcript_progressed() {
+                debug!(
+                    "resolved provisional child approval from rollout progress: event_id={}",
+                    pending.event_id.as_deref().unwrap_or("unknown")
+                );
+            } else if now >= pending.deadline {
+                debug!(
+                    "escalating unresolved provisional child approval: event_id={}",
+                    pending.event_id.as_deref().unwrap_or("unknown")
+                );
+                deliver.push(pending.payload);
+            } else {
+                retained.push_back(pending);
+            }
+        }
+        self.pending = retained;
+        deliver
+    }
+
+    fn resolve_from_event(&mut self, payload: &ClaudeHookPayload) {
+        let event = payload.event.as_str();
+        self.pending.retain(|pending| {
+            let resolved = match event {
+                "UserPromptSubmit" | "Stop" | "StopFailure" => pending.scope.same_parent(payload),
+                "SubagentStop" => pending.scope.same_child(payload),
+                "ToolStart" | "ToolStop" | "AgentToolStart" | "AgentToolStop"
+                | "PermissionRequest" => pending.matches_request(payload),
+                _ => false,
+            };
+            if resolved {
+                debug!(
+                    "resolved provisional child approval from hook progress: event_id={}",
+                    pending.event_id.as_deref().unwrap_or("unknown")
+                );
+            }
+            !resolved
+        });
+    }
+}
+
+struct ApprovalArbiter {
+    state: Mutex<ApprovalArbiterState>,
+    delivery: HookPayloadSink,
+}
+
+impl ApprovalArbiter {
+    fn submit(&self, payload: ClaudeHookPayload) {
+        let deliver = match self.state.lock() {
+            Ok(mut state) => state.accept(payload, Instant::now()),
+            Err(poisoned) => {
+                warn!("approval arbiter state poisoned; delivering retained events immediately");
+                let mut state = poisoned.into_inner();
+                let mut deliver = state
+                    .pending
+                    .drain(..)
+                    .map(|pending| pending.payload)
+                    .collect::<Vec<_>>();
+                deliver.push(payload);
+                deliver
+            }
+        };
+        self.deliver_all(deliver);
+    }
+
+    fn poll(&self) {
+        let deliver = match self.state.lock() {
+            Ok(mut state) => state.poll(Instant::now()),
+            Err(poisoned) => {
+                warn!("approval arbiter state poisoned; delivering retained events immediately");
+                poisoned
+                    .into_inner()
+                    .pending
+                    .drain(..)
+                    .map(|pending| pending.payload)
+                    .collect()
+            }
+        };
+        self.deliver_all(deliver);
+    }
+
+    fn deliver_all(&self, payloads: Vec<ClaudeHookPayload>) {
+        for payload in payloads {
+            (self.delivery)(payload);
+        }
+    }
+}
+
+pub fn approval_aware_hook_sink(delivery: HookPayloadSink) -> HookPayloadSink {
+    let arbiter = Arc::new(ApprovalArbiter {
+        state: Mutex::new(ApprovalArbiterState::default()),
+        delivery: Arc::clone(&delivery),
+    });
+    let weak = Arc::downgrade(&arbiter);
+    if thread::Builder::new()
+        .name("hook-approval-arbiter".to_string())
+        .spawn(move || loop {
+            thread::sleep(PROVISIONAL_APPROVAL_POLL_INTERVAL);
+            let Some(arbiter) = weak.upgrade() else {
+                break;
+            };
+            arbiter.poll();
+        })
+        .is_err()
+    {
+        warn!("approval arbiter worker failed to start; approvals will be delivered immediately");
+        return delivery;
+    }
+    Arc::new(move |payload| arbiter.submit(payload))
 }
 
 /// 在给定 listener 上跑 hook HTTP 服务：解析/鉴权/校验后把 payload 交给 sink。
@@ -233,6 +495,7 @@ fn handle_stream(
         agent_type: payload.agent_type,
         agent_transcript_path: payload.agent_transcript_path,
         transcript_path: payload.transcript_path,
+        transcript_bytes: payload.transcript_bytes,
         reasoning_effort: payload.reasoning_effort,
         wsl_distro_name: payload.wsl_distro_name,
         environment_type: payload.environment_type,
@@ -313,6 +576,7 @@ pub fn remote_hook_payload_from_spool(
         agent_type: string("agentType"),
         agent_transcript_path: None,
         transcript_path: None,
+        transcript_bytes: None,
         reasoning_effort: string("reasoningEffort"),
         wsl_distro_name: None,
         environment_type: Some("ssh".to_string()),
@@ -343,6 +607,7 @@ pub fn remote_hook_payload_from_spool(
         agent_type: request.agent_type,
         agent_transcript_path: None,
         transcript_path: None,
+        transcript_bytes: None,
         reasoning_effort: request.reasoning_effort,
         wsl_distro_name: None,
         environment_type: request.environment_type,
@@ -747,5 +1012,215 @@ mod remote_tests {
         let job = payload.to_notification_job();
         assert_eq!(job.cwd, None);
         assert_eq!(job.project.as_deref(), Some("Sidebar Project"));
+    }
+}
+
+#[cfg(test)]
+mod approval_tests {
+    use super::{ApprovalArbiterState, ClaudeHookPayload, PROVISIONAL_APPROVAL_GRACE};
+    use std::fs::{self, OpenOptions};
+    use std::io::Write;
+    use std::time::Instant;
+
+    fn payload(
+        event: &str,
+        agent_id: Option<&str>,
+        message: Option<&str>,
+        tool_name: Option<&str>,
+    ) -> ClaudeHookPayload {
+        ClaudeHookPayload {
+            tab_id: "tab-1".to_string(),
+            source: "codex".to_string(),
+            event: event.to_string(),
+            title: None,
+            message: message.map(str::to_string),
+            session_id: Some("session-1".to_string()),
+            cwd: None,
+            timestamp: None,
+            agent_id: agent_id.map(str::to_string),
+            tool_use_id: None,
+            tool_name: tool_name.map(str::to_string),
+            mcp_server: None,
+            skill_name: None,
+            agent_type: None,
+            agent_transcript_path: None,
+            transcript_path: None,
+            transcript_bytes: None,
+            reasoning_effort: None,
+            wsl_distro_name: None,
+            environment_type: None,
+            remote_host_id: None,
+            remote_project_id: None,
+            remote_project_name: None,
+            remote_transcript_ref: None,
+            remote_agent_transcript_ref: None,
+            remote_event_id: Some(uuid::Uuid::new_v4().to_string()),
+            remote_sequence: None,
+        }
+    }
+
+    #[test]
+    fn main_agent_permission_is_delivered_immediately() {
+        let now = Instant::now();
+        let mut state = ApprovalArbiterState::default();
+        let delivered = state.accept(
+            payload("PermissionRequest", None, None, Some("apply_patch")),
+            now,
+        );
+        assert_eq!(delivered.len(), 1);
+        assert!(state.pending.is_empty());
+    }
+
+    #[test]
+    fn explicit_child_permission_is_delivered_immediately() {
+        let now = Instant::now();
+        let mut state = ApprovalArbiterState::default();
+        let delivered = state.accept(
+            payload(
+                "PermissionRequest",
+                Some("child-1"),
+                Some("Allow this command?"),
+                Some("Bash"),
+            ),
+            now,
+        );
+        assert_eq!(delivered.len(), 1);
+        assert!(state.pending.is_empty());
+    }
+
+    #[test]
+    fn ambiguous_child_permission_waits_for_positive_evidence() {
+        let now = Instant::now();
+        let mut state = ApprovalArbiterState::default();
+        let delivered = state.accept(
+            payload(
+                "PermissionRequest",
+                Some("child-1"),
+                None,
+                Some("apply_patch"),
+            ),
+            now,
+        );
+        assert!(delivered.is_empty());
+        assert_eq!(state.pending.len(), 1);
+    }
+
+    #[test]
+    fn rollout_growth_resolves_ambiguous_child_permission() {
+        let temp = tempfile::tempdir().unwrap();
+        let transcript = temp.path().join("rollout.jsonl");
+        fs::write(&transcript, b"before").unwrap();
+        let baseline = fs::metadata(&transcript).unwrap().len();
+        let now = Instant::now();
+        let mut pending = payload(
+            "PermissionRequest",
+            Some("child-1"),
+            None,
+            Some("apply_patch"),
+        );
+        pending.transcript_path = Some(transcript.to_string_lossy().to_string());
+        pending.transcript_bytes = Some(baseline);
+        let mut state = ApprovalArbiterState::default();
+        assert!(state.accept(pending, now).is_empty());
+
+        OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .unwrap()
+            .write_all(b"\nafter")
+            .unwrap();
+        assert!(state.poll(now + PROVISIONAL_APPROVAL_GRACE).is_empty());
+        assert!(state.pending.is_empty());
+    }
+
+    #[test]
+    fn unresolved_child_permission_escalates_once() {
+        let now = Instant::now();
+        let mut state = ApprovalArbiterState::default();
+        assert!(state
+            .accept(
+                payload(
+                    "PermissionRequest",
+                    Some("child-1"),
+                    None,
+                    Some("apply_patch"),
+                ),
+                now,
+            )
+            .is_empty());
+        assert_eq!(state.poll(now + PROVISIONAL_APPROVAL_GRACE).len(), 1);
+        assert!(state.poll(now + PROVISIONAL_APPROVAL_GRACE).is_empty());
+    }
+
+    #[test]
+    fn matching_tool_progress_resolves_only_matching_child() {
+        let now = Instant::now();
+        let mut state = ApprovalArbiterState::default();
+        for child in ["child-1", "child-2"] {
+            assert!(state
+                .accept(
+                    payload("PermissionRequest", Some(child), None, Some("apply_patch"),),
+                    now,
+                )
+                .is_empty());
+        }
+
+        let delivered = state.accept(
+            payload("ToolStop", Some("child-1"), None, Some("apply_patch")),
+            now,
+        );
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(state.pending.len(), 1);
+        assert_eq!(state.pending[0].scope.agent_id, "child-2");
+    }
+
+    #[test]
+    fn unrelated_child_progress_does_not_clear_pending_approval() {
+        let now = Instant::now();
+        let mut state = ApprovalArbiterState::default();
+        assert!(state
+            .accept(
+                payload(
+                    "PermissionRequest",
+                    Some("child-1"),
+                    None,
+                    Some("apply_patch"),
+                ),
+                now,
+            )
+            .is_empty());
+        let delivered = state.accept(
+            payload("ToolStop", Some("child-2"), None, Some("apply_patch")),
+            now,
+        );
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(state.pending.len(), 1);
+    }
+
+    #[test]
+    fn subagent_stop_and_parent_completion_clear_their_scopes() {
+        let now = Instant::now();
+        let mut state = ApprovalArbiterState::default();
+        for child in ["child-1", "child-2"] {
+            assert!(state
+                .accept(
+                    payload("PermissionRequest", Some(child), None, Some("apply_patch"),),
+                    now,
+                )
+                .is_empty());
+        }
+
+        assert_eq!(
+            state
+                .accept(payload("SubagentStop", Some("child-1"), None, None), now)
+                .len(),
+            1
+        );
+        assert_eq!(state.pending.len(), 1);
+        assert_eq!(
+            state.accept(payload("Stop", None, None, None), now).len(),
+            1
+        );
+        assert!(state.pending.is_empty());
     }
 }
