@@ -654,8 +654,17 @@ function App() {
       if (!debugMode) return;
       void invoke("app_open_devtools").catch((err) => logWarn("Failed to open devtools", err));
     };
+    const blockChromiumInspect = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "c" || !event.shiftKey || event.altKey) return;
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+    };
     window.addEventListener("keydown", handleF12, true);
-    return () => window.removeEventListener("keydown", handleF12, true);
+    window.addEventListener("keydown", blockChromiumInspect, true);
+    return () => {
+      window.removeEventListener("keydown", handleF12, true);
+      window.removeEventListener("keydown", blockChromiumInspect, true);
+    };
   }, [debugMode]);
 
   useEffect(() => {

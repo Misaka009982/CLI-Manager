@@ -76,3 +76,87 @@ export const formatSpecialColorReply = (queryId: SpecialColorQueryId, hex: strin
   const b = normalized.slice(5, 7);
   return `${OSC_PREFIX}${queryId};rgb:${r}${r}/${g}${g}/${b}${b}\x1b\\`;
 };
+
+export const DCS_PREFIX = "\x1bP";
+export const TMUX_DCS_PREFIX = "\x1bPtmux;";
+export const OSC52_MAX_BASE64_CHARS = 2_000_000;
+
+export type Osc52Action =
+  | { kind: "write"; text: string; selection: string }
+  | { kind: "query"; selection: string }
+  | { kind: "clear" }
+  | { kind: "invalid" };
+
+export type DcsPrefixMatch =
+  | { kind: "tmux" }
+  | { kind: "other" }
+  | { kind: "partial" }
+  | { kind: "none" };
+
+export const matchDcsPrefix = (text: string, start: number): DcsPrefixMatch => {
+  const available = text.length - start;
+  if (available <= 0 || text.charCodeAt(start) !== 0x1b) return { kind: "none" };
+  if (available === 1) return { kind: "partial" };
+  if (text[start + 1] !== "P") return { kind: "none" };
+  const tmuxAvailable = Math.min(TMUX_DCS_PREFIX.length, available);
+  if (text.startsWith(TMUX_DCS_PREFIX.slice(0, tmuxAvailable), start)) {
+    return tmuxAvailable === TMUX_DCS_PREFIX.length ? { kind: "tmux" } : { kind: "partial" };
+  }
+  return { kind: "other" };
+};
+
+export const findDcsTerminator = (text: string, from: number): OscTerminator => {
+  for (let i = from; i < text.length; i += 1) {
+    if (text.charCodeAt(i) !== 0x1b) continue;
+    if (i + 1 >= text.length) return null;
+    if (text[i + 1] === "\\") return { index: i, length: 2 };
+  }
+  return null;
+};
+
+export const unwrapTmuxDcsBody = (body: string): string => body.replace(/\x1b\x1b/g, "\x1b");
+
+export const decodeOsc52Payload = (payload: string): string | null => {
+  const compact = payload.replace(/\s+/g, "");
+  if (!compact || compact.length > OSC52_MAX_BASE64_CHARS) return null;
+  if (compact.length % 4 !== 0) return null;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) return null;
+  try {
+    const binary = atob(compact);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+};
+
+export const parseOsc52Body = (body: string): Osc52Action | null => {
+  if (body !== "52" && !body.startsWith("52;")) return null;
+  const firstSep = body.indexOf(";");
+  if (firstSep < 0) return { kind: "clear" };
+  const remainder = body.slice(firstSep + 1);
+  const secondSep = remainder.indexOf(";");
+  const selection = secondSep < 0 ? remainder : remainder.slice(0, secondSep);
+  const payload = secondSep < 0 ? "" : remainder.slice(secondSep + 1);
+  if (payload === "?") return { kind: "query", selection };
+  if (payload === "") return { kind: "clear" };
+  const text = decodeOsc52Payload(payload);
+  if (text === null) return { kind: "invalid" };
+  return { kind: "write", text, selection };
+};
+
+export const encodeOsc52Payload = (text: string): string => {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i] ?? 0);
+  }
+  return btoa(binary);
+};
+
+export const formatOsc52Reply = (text: string, selection = "c"): string => (
+  `${OSC_PREFIX}52;${selection};${encodeOsc52Payload(text)}\x07`
+);

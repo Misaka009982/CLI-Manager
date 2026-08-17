@@ -374,6 +374,7 @@ export interface Settings {
   backgroundIncludeFinishedTasks: boolean;
   keyboardShortcuts: KeyboardShortcutMap;
   terminalNewlineShortcut: TerminalNewlineShortcut;
+  osc52ClipboardEnabled: boolean;
   unsplitBehavior: UnsplitBehavior;
   terminalToolbarVisibility: TerminalToolbarVisibilitySettings;
   sidebarToolbarVisibility: SidebarToolbarVisibilitySettings;
@@ -529,6 +530,7 @@ const DEFAULTS: Settings = {
   backgroundIncludeFinishedTasks: false,
   keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
   terminalNewlineShortcut: "Shift+Enter",
+  osc52ClipboardEnabled: true,
   unsplitBehavior: "merge",
   terminalToolbarVisibility: {
     templates: true,
@@ -1650,6 +1652,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       entries.terminalNewlineShortcut === "Alt+Enter"
         ? entries.terminalNewlineShortcut
         : DEFAULTS.terminalNewlineShortcut;
+    entries.osc52ClipboardEnabled =
+      typeof entries.osc52ClipboardEnabled === "boolean"
+        ? entries.osc52ClipboardEnabled
+        : DEFAULTS.osc52ClipboardEnabled;
     entries.projectScopedTerminalViewEnabled =
       typeof entries.projectScopedTerminalViewEnabled === "boolean"
         ? entries.projectScopedTerminalViewEnabled

@@ -45,7 +45,7 @@ The negotiated daemon feature is `terminal_colors_v1`.
 - The PTY reader first uses `safe_emit_boundary`, so OSC sequences split across OS reads remain buffered until BEL (`0x07`) or ST (`ESC \\`) arrives.
 - A safe output batch may contain multiple queries. Remove all OSC 10/11 queries, preserve their order, build one reply buffer, take the shared writer lock once, `write_all`, then `flush`.
 - Reply format is `ESC ] <10|11> ; rgb:RRRR/GGGG/BBBB ESC \\` using uppercase hex.
-- OSC 7/8/133/633/777, other OSC bodies, CSI, UTF-8 bytes, output sequence/ACK semantics, replay and snapshots remain unchanged.
+- OSC 7/8/133/633/777, other OSC bodies, CSI, UTF-8 bytes, output sequence/ACK semantics, replay and snapshots remain unchanged, except OSC 52 which the frontend clipboard host consumes (see OSC 52 contract below).
 
 ### 4. Validation & Error Matrix
 
@@ -58,7 +58,7 @@ The negotiated daemon feature is `terminal_colors_v1`.
 | Colors are missing on create | Consume OSC 10/11 without replying |
 | Session is SSH | Consume OSC 10/11 without replying |
 | OSC is incomplete | Keep it buffered through `safe_emit_boundary`; do not partially parse or reply |
-| OSC body is not exactly `10;?` or `11;?` | Preserve it byte-for-byte |
+| OSC body is not exactly `10;?` or `11;?` | Preserve it byte-for-byte, except OSC 52 which the frontend clipboard host strips |
 
 ### 5. Good/Base/Bad Cases
 
@@ -83,6 +83,22 @@ The negotiated daemon feature is `terminal_colors_v1`.
   - create/update frames carry terminal colors behind the process-manager boundary.
 - `npx tsc --noEmit` and `cargo check` must pass.
 - Manual matrix: PowerShell, CMD, Git Bash, WSL, SSH, reconnect/replay, and a theme change followed by a new query.
+
+## Scenario: OSC 52 host clipboard
+
+### 1. Scope / Trigger
+
+- Trigger: a local or remote TUI writes OSC `52;Pc;Pd` (BEL or ST) or the same sequence wrapped in tmux DCS passthrough.
+- The frontend display pipeline owns this sequence. Rust color-query filtering leaves OSC 52 unchanged so the React host can decode it.
+- Live PTY frames may write the host clipboard and answer `Pd=?` queries. Replay and reset frames strip the sequence and must not write the clipboard or reply.
+
+### 2. Contracts
+
+- Decode `Pd` as UTF-8 Base64. Invalid, empty, or `?` payloads never write the clipboard.
+- When the user setting `osc52ClipboardEnabled` is on, a live write calls `copyTextToClipboard`. A live query reads the host clipboard and writes `OSC 52 ; Pc ; <base64> BEL` back to the PTY.
+- When the setting is off, sequences are still stripped; no clipboard write and no query reply.
+- Query replies are allowed from React because they are clipboard host answers, not OSC 10/11 color replies.
+- `mouseEventsRequireAlt` is true so host selection survives mouseup unless the user holds Alt.
 
 ### 7. Wrong vs Correct
 

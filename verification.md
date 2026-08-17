@@ -1,3 +1,26 @@
+# OSC 52 本机剪贴板验证（2026-08-17）
+
+## 根因与发现清单
+
+- 根因位于宿主终端 OSC / 鼠标边界：PTY 已转发 OSC 52，前端只处理颜色查询，不写入 Tauri 剪贴板。远端 GUI/`xclip` 写不到 Windows。修复落在 `terminalOscParse` + `useTerminalOsc` + `useTerminalDisplay` + `XTermTerminal`。
+- 触点：`src/lib/terminalOscParse.ts`、`src/hooks/useTerminalOsc.ts`、`src/hooks/useTerminalDisplay.ts`、`src/components/XTermTerminal.tsx`、`src/App.tsx`、`src/terminal/browser/TerminalMouseInteraction.ts`、`src/stores/settingsStore.ts`、`src/lib/syncSettings.ts`、`src/lib/i18n.ts`、`ShortcutSettingsPage.tsx`、`.trellis/spec/backend/terminal-osc-color-contracts.md`。
+- 确认无关：Rust `osc_color.rs` 仍放过非 10/11 OSC；`systemClipboard.ts` 复用；不改 PTY ACK / daemon 分帧。
+- 场景：live 写剪贴板；replay/reset 不写；query 回包；设置关闭；普通拖选 vs Alt 交给 TUI；`Ctrl+Shift+C` 阻止检查元素。
+
+## 验证结果
+
+- `node --test scripts/terminalOsc52.test.mjs scripts/terminalOsc.test.mjs scripts/terminalMouseInteraction.test.mjs`：26 项通过。
+- `DISPLAY=:11 bash scripts/terminalOsc52.clipboard.e2e.sh`：live / tmux / replay 三项本机 X11 剪贴板 e2e 通过。
+- `npx tsc --noEmit`、`git diff --check`：通过。
+- 未在 Windows Tauri 窗口对 Grok 做端到端手测。
+
+## 未覆盖
+
+- Tauri `clipboard-manager` 插件路径依赖桌面 WebView；此处用同一 hook + 本机 `xclip` 验证解码与写剪贴板语义。
+- Chromium 检查元素在部分 WebView 版本仍可能有独立绑定，需在 `tauri dev` 下确认 `preventDefault` 生效。
+
+---
+
 # SSH NVM Codex 启动环境修复验证（2026-07-28）
 
 ## 根因与发现清单
