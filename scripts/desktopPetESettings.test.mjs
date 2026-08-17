@@ -88,6 +88,9 @@ test("pet selection uses validated Codex artwork buttons instead of a text selec
   assert.match(settingsPageSource, /animated=\{false\}/);
   assert.match(settingsPageSource, /aria-pressed=\{selected\}/);
   assert.match(settingsPageSource, /selectingPetId/);
+  assert.match(settingsPageSource, /selectionInFlightRef/);
+  assert.match(settingsPageSource, /if \(preferredId\) selectPet\(preferredId\);/);
+  assert.match(settingsPageSource, /setPreviewFailed\(false\);\s*\}, \[pet\]\);/);
   assert.match(
     settingsPageSource,
     /if \(petsLoading \|\| codexPets\.length === 0 \|\| desktopPetE\.petId\) return;/,

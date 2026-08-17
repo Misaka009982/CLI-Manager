@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Alert,
@@ -88,7 +88,7 @@ function PetSelectionButton({ pet, name, selected, disabled, onSelect }: PetSele
 
   useEffect(() => {
     setPreviewFailed(false);
-  }, [pet.baseDir, pet.manifest.states.idle.file]);
+  }, [pet]);
 
   return (
     <UnstyledButton
@@ -149,6 +149,7 @@ export function DesktopPetESettingsPage() {
   const [codexPets, setCodexPets] = useState<InstalledPet[]>([]);
   const [petsLoading, setPetsLoading] = useState(true);
   const [selectingPetId, setSelectingPetId] = useState<string | null>(null);
+  const selectionInFlightRef = useRef<string | null>(null);
   const enableBlockedByExistingPet = desktopPet.enabled && !desktopPetE.enabled;
   const enableBlockedByMissingPet = codexPets.length === 0 && !desktopPetE.enabled;
   const enableBlocked = enableBlockedByExistingPet || enableBlockedByMissingPet;
@@ -186,12 +187,15 @@ export function DesktopPetESettingsPage() {
   }, [t, updateSetting]);
 
   const selectPet = useCallback((petId: string) => {
-    if (selectingPetId !== null || petId === desktopPetE.petId) return;
+    const currentPetId = useSettingsStore.getState().desktopPetE.petId;
+    if (selectionInFlightRef.current !== null || petId === currentPetId) return;
+    selectionInFlightRef.current = petId;
     setSelectingPetId(petId);
     void patch({ petId }).finally(() => {
+      if (selectionInFlightRef.current === petId) selectionInFlightRef.current = null;
       setSelectingPetId((current) => current === petId ? null : current);
     });
-  }, [desktopPetE.petId, patch, selectingPetId]);
+  }, [patch]);
 
   useEffect(() => {
     if (petsLoading || codexPets.length === 0 || desktopPetE.petId) return;
@@ -199,8 +203,8 @@ export function DesktopPetESettingsPage() {
     const preferredId = availableIds.has(desktopPet.petId)
       ? desktopPet.petId
       : codexPets[0]?.manifest.id;
-    if (preferredId) void patch({ petId: preferredId });
-  }, [codexPets, desktopPet.petId, desktopPetE.petId, patch, petsLoading]);
+    if (preferredId) selectPet(preferredId);
+  }, [codexPets, desktopPet.petId, desktopPetE.petId, petsLoading, selectPet]);
 
   const commitSize = useCallback((value: number) => {
     const next = Math.round(Math.min(

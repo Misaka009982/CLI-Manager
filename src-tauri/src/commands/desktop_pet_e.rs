@@ -861,6 +861,23 @@ pub fn desktop_pet_e_runtime_state(
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn process_paths_remove_windows_verbatim_prefixes() {
+        assert_eq!(
+            normalize_process_path(PathBuf::from(
+                r"\\?\C:\Program Files\CLI-Manager\pet-e\app\main.js",
+            )),
+            PathBuf::from(r"C:\Program Files\CLI-Manager\pet-e\app\main.js"),
+        );
+        assert_eq!(
+            normalize_process_path(PathBuf::from(
+                r"\\?\UNC\server\share\CLI-Manager\pet-e\app\main.js",
+            )),
+            PathBuf::from(r"\\server\share\CLI-Manager\pet-e\app\main.js"),
+        );
+    }
+
     #[test]
     fn runtime_state_does_not_report_ready_without_a_process() {
         let state = ManagerState {
