@@ -476,6 +476,11 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       : null
   ));
   const markdownPreviewSupported = isTerminalMarkdownPreviewSupported(terminalSession, terminalProject);
+  const markdownPreviewButtonVisible = Boolean(
+    terminalSession?.isAgentSession
+    || terminalSession?.cliTool?.trim()
+    || terminalProject?.cli_tool?.trim(),
+  );
   const markdownPreviewCanOpen = markdownPreviewSupported
     && Boolean(terminalSession?.cliSessionId?.trim());
 
@@ -1797,7 +1802,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     : "12px";
   const searchRightOffset = markdownPreviewOpen
     ? `calc(${markdownPreviewPanelPercent}% + 56px)`
-    : markdownPreviewSupported
+    : markdownPreviewButtonVisible
       ? "56px"
       : "12px";
 
@@ -1921,7 +1926,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       data-bg-fit={showBackgroundImage ? background.fit : undefined}
       data-bg-position={showBackgroundImage ? background.position : undefined}
     >
-      {markdownPreviewSupported && (
+      {markdownPreviewButtonVisible && (
         <button
           type="button"
           onClick={() => {
