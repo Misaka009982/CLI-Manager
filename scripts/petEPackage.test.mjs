@@ -146,6 +146,12 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   assert.match(manager, /pet-e\/app\/main\.js/);
   assert.match(manager, /fn normalize_process_path/);
   assert.match(manager, /fn electron_app_dir_argument/);
+  assert.match(manager, /struct DesktopPetEHostPipe/);
+  assert.match(manager, /CreateNamedPipeW/);
+  assert.match(manager, /PIPE_REJECT_REMOTE_CLIENTS/);
+  assert.match(manager, /\.arg\("--host-pipe"\)/);
+  assert.match(manager, /host_pipe\.connect\(HOST_PIPE_CONNECT_TIMEOUT\)/);
+  assert.match(manager, /\.stdin\(Stdio::null\(\)\)/);
   assert.match(manager, /let app_dir_arg = electron_app_dir_argument\(&entry\)/);
   assert.match(manager, /let runtime_arg = normalize_process_path\(runtime\)/);
   assert.match(manager, /silent_command\(&runtime_arg\.to_string_lossy\(\)\)/);
@@ -161,6 +167,9 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   assert.match(manager, /fn child_diagnostic_summary/);
   assert.match(manager, /state\.last_error = Some\(child_failure_diagnostic\(/);
   assert.match(companion, /webContents\.on\("did-fail-load"/);
+  assert.match(companion, /createConnection\(argument\("--host-pipe"\)\)/);
+  assert.match(companion, /consumeInput\(socket\)/);
+  assert.match(companion, /if \(process\.platform !== "win32"\) \{[\s\S]*consumeInput\(process\.stdin\)/);
   assert.match(companion, /webContents\.on\("preload-error"/);
   assert.match(companion, /webContents\.on\("console-message"/);
   assert.match(companion, /loadURL\(`\$\{APP_SCHEME\}:\/\/app\/index\.html`\)\.catch/);

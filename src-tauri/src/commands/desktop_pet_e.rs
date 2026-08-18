@@ -11,7 +11,13 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Stdio};
+use std::process::{Child, Stdio};
+#[cfg(target_os = "windows")]
+use std::ffi::OsStr;
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(target_os = "windows")]
+use std::os::windows::io::FromRawHandle;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -21,10 +27,22 @@ use uuid::Uuid;
 #[cfg(target_os = "windows")]
 use crate::process_job::ChildJob;
 
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, ERROR_PIPE_LISTENING, INVALID_HANDLE_VALUE,
+};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::Pipes::{
+    ConnectNamedPipe, CreateNamedPipeW, SetNamedPipeHandleState, PIPE_ACCESS_DUPLEX,
+    PIPE_NOWAIT, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
+};
+
 const ACTION_EVENT: &str = "desktop-pet-e-action";
 const RUNTIME_STATE_EVENT: &str = "desktop-pet-e-runtime-state";
 const DIAGNOSTIC_EVENT: &str = "desktop-pet-e-event";
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(target_os = "windows")]
+const HOST_PIPE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const CHILD_DIAGNOSTIC_CODE_LIMIT: usize = 160;
 const CHILD_DIAGNOSTIC_DETAIL_LIMIT: usize = 512;
 const ELECTRON_RUNTIME_RELATIVE_PATH: &str = "pet-e/runtime/electron.exe";
@@ -118,9 +136,89 @@ pub struct DesktopPetERuntimeState {
     last_error: Option<DesktopPetEDiagnostic>,
 }
 
+#[cfg(target_os = "windows")]
+struct DesktopPetEHostPipe {
+    name: String,
+    handle: windows_sys::Win32::Foundation::HANDLE,
+}
+
+#[cfg(target_os = "windows")]
+impl DesktopPetEHostPipe {
+    fn create() -> Result<Self, String> {
+        let name = format!(r"\\.\pipe\cli-manager-desktop-pet-e-{}", Uuid::new_v4());
+        let wide_name: Vec<u16> = OsStr::new(&name).encode_wide().chain(Some(0)).collect();
+        let handle = unsafe {
+            CreateNamedPipeW(
+                wide_name.as_ptr(),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_BYTE
+                    | PIPE_READMODE_BYTE
+                    | PIPE_NOWAIT
+                    | PIPE_REJECT_REMOTE_CLIENTS,
+                1,
+                1024 * 1024,
+                4096,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(format!("desktop_pet_e_host_pipe_create_failed:{}", unsafe {
+                GetLastError()
+            }));
+        }
+        Ok(Self { name, handle })
+    }
+
+    fn connect(mut self, timeout: Duration) -> Result<Box<dyn Write + Send>, String> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let connected = unsafe { ConnectNamedPipe(self.handle, std::ptr::null_mut()) } != 0;
+            let error = if connected { 0 } else { unsafe { GetLastError() } };
+            if connected || error == ERROR_PIPE_CONNECTED {
+                let mut mode = PIPE_READMODE_BYTE | PIPE_WAIT;
+                let updated = unsafe {
+                    SetNamedPipeHandleState(
+                        self.handle,
+                        &mut mode,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                } != 0;
+                if !updated {
+                    return Err(format!("desktop_pet_e_host_pipe_mode_failed:{}", unsafe {
+                        GetLastError()
+                    }));
+                }
+                let handle = std::mem::replace(&mut self.handle, INVALID_HANDLE_VALUE);
+                let file = unsafe { fs::File::from_raw_handle(handle) };
+                return Ok(Box::new(file));
+            }
+            if error != ERROR_PIPE_LISTENING {
+                return Err(format!("desktop_pet_e_host_pipe_connect_failed:{error}"));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("desktop_pet_e_host_pipe_connect_timeout".to_string());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for DesktopPetEHostPipe {
+    fn drop(&mut self) {
+        if self.handle != INVALID_HANDLE_VALUE {
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
 struct ManagedCompanion {
     child: Child,
-    stdin: ChildStdin,
+    input: Box<dyn Write + Send>,
     #[cfg(target_os = "windows")]
     job: ChildJob,
     instance_id: String,
@@ -656,6 +754,8 @@ fn start_process<R: Runtime>(
     let instance_id = Uuid::new_v4().to_string();
     let app_dir_arg = electron_app_dir_argument(&entry)?;
     let runtime_arg = normalize_process_path(runtime);
+    #[cfg(target_os = "windows")]
+    let host_pipe = DesktopPetEHostPipe::create()?;
     let mut command = silent_command(&runtime_arg.to_string_lossy());
     command
         .arg(&app_dir_arg)
@@ -663,10 +763,15 @@ fn start_process<R: Runtime>(
         .arg("--instance-id")
         .arg(&instance_id)
         .arg("--generation")
-        .arg(generation.to_string())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .arg(generation.to_string());
+    #[cfg(target_os = "windows")]
+    command
+        .arg("--host-pipe")
+        .arg(&host_pipe.name)
+        .stdin(Stdio::null());
+    #[cfg(not(target_os = "windows"))]
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
         .spawn()
         .map_err(|error| format!("desktop_pet_e_spawn_failed: {error}"))?;
@@ -679,11 +784,20 @@ fn start_process<R: Runtime>(
             return Err(error);
         }
     };
-    let stdin = match child.stdin.take() {
-        Some(stdin) => stdin,
-        None => {
-            #[cfg(target_os = "windows")]
+    #[cfg(target_os = "windows")]
+    let input = match host_pipe.connect(HOST_PIPE_CONNECT_TIMEOUT) {
+        Ok(input) => input,
+        Err(error) => {
             job.terminate();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    #[cfg(not(target_os = "windows"))]
+    let input: Box<dyn Write + Send> = match child.stdin.take() {
+        Some(stdin) => Box::new(stdin),
+        None => {
             let _ = child.kill();
             let _ = child.wait();
             return Err("desktop_pet_e_stdin_unavailable".to_string());
@@ -711,7 +825,7 @@ fn start_process<R: Runtime>(
     };
     state.process = Some(ManagedCompanion {
         child,
-        stdin,
+        input,
         #[cfg(target_os = "windows")]
         job,
         instance_id: instance_id.clone(),
@@ -855,9 +969,9 @@ fn send_message(state: &mut ManagerState, message_type: &str, payload: Value) ->
         payload,
     )?;
     process
-        .stdin
+        .input
         .write_all(&encoded)
-        .and_then(|_| process.stdin.flush())
+        .and_then(|_| process.input.flush())
         .map_err(|error| format!("desktop_pet_e_write_failed: {error}"))
 }
 
@@ -901,8 +1015,8 @@ fn stop_process(state: &mut ManagerState, reason: &str) {
         "shutdown",
         json!({ "reason": reason }),
     ) {
-        let _ = process.stdin.write_all(&message);
-        let _ = process.stdin.flush();
+        let _ = process.input.write_all(&message);
+        let _ = process.input.flush();
     }
     #[cfg(target_os = "windows")]
     process.job.terminate();

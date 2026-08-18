@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, protocol, screen, shell } from "electron";
 import { readFile, stat } from "node:fs/promises";
+import { createConnection } from "node:net";
 import path from "node:path";
 import process from "node:process";
 import {
@@ -275,11 +276,11 @@ async function handleHostMessage(message: DesktopPetEHostMessage): Promise<void>
   windowRef?.webContents.send("pet-e:action-result", message.payload);
 }
 
-function consumeInput(): void {
+function consumeInput(input: NodeJS.ReadableStream): void {
   const pending = Buffer.allocUnsafe(DESKTOP_PET_E_MAX_LINE_BYTES);
   let pendingLength = 0;
   let discarding = false;
-  process.stdin.on("data", (chunk: Buffer) => {
+  input.on("data", (chunk: Buffer) => {
     for (const byte of chunk) {
       if (byte === 10) {
         if (!discarding && pendingLength > 0) {
@@ -317,10 +318,23 @@ function consumeInput(): void {
       }
     }
   });
-  process.stdin.on("end", () => {
+  input.on("end", () => {
+    if (expectedExit) return;
     expectedExit = true;
     app.quit();
   });
+}
+
+function connectHostInput(): void {
+  if (process.platform !== "win32") {
+    consumeInput(process.stdin);
+    return;
+  }
+  const socket = createConnection(argument("--host-pipe"));
+  socket.on("error", (error) => {
+    failCompanion("desktop_pet_e_host_pipe_failed", String(error));
+  });
+  consumeInput(socket);
 }
 
 async function registerProtocols(): Promise<void> {
@@ -516,4 +530,4 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => app.quit());
-consumeInput();
+connectHostInput();
