@@ -61,6 +61,7 @@ ProjectFilesChangedPayload { project_path: String, changed_paths: Vec<String> }
 - The project-creation WSL symlink picker must filter entries to `kind === "directory" && isSymlink === true`; ordinary directories remain visible in the normal project file browser but are not shown in the symlink picker.
 - `file_read_text` only returns UTF-8 text and rejects files larger than 1 MiB; known video extensions are rejected before reading bytes. This stable command remains the internal Replay/sync file contract.
 - `file_read_project_text` is the user-project editor command. It detects UTF-8/BOM, UTF-16 BOM, and common legacy encodings, rejects binary/undecodable content, and returns canonical encoding plus BOM metadata.
+- Video-extension eligibility is mirrored by the frontend precheck, local file command, and SSH Agent. The three lists must stay semantically aligned: TypeScript `.ts` is source text for project preview and must reach normal decoding rather than return `video_preview_unsupported`; a genuinely binary `.ts` payload is still handled by the existing binary/decode guard.
 - `file_write_text` keeps its existing UTF-8 signature and behavior for internal data.
 - `file_write_project_text` strictly encodes with the metadata returned by `file_read_project_text`; it must preserve BOM policy and reject unmappable characters instead of replacing them or silently converting to UTF-8.
 - `file_read_image` returns base64 plus MIME type, but must reject images larger than 5 MiB before reading bytes. JPEG/PNG/GIF/WebP/BMP dimensions are read before Base64 conversion and raster images above 12,000,000 pixels are rejected. SVG remains size-bounded without a raster pixel check.
@@ -88,6 +89,7 @@ ProjectFilesChangedPayload { project_path: String, changed_paths: Vec<String> }
 | Destination exists without overwrite | `target_exists` |
 | Text file is too large | `file_too_large` |
 | Text path has a known video extension | `video_preview_unsupported` |
+| TypeScript `.ts` source path | normal text decode; never `video_preview_unsupported` solely because of the extension |
 | Text file is not UTF-8 | `not_utf8` |
 | Project text file is binary | `binary_file` |
 | Project text encoding cannot be decoded | `text_decode_failed` |
@@ -109,6 +111,7 @@ ProjectFilesChangedPayload { project_path: String, changed_paths: Vec<String> }
 - Good: watcher events for `src/main.ts` emit `changedPaths: ["src/main.ts"]`, allowing the frontend to refresh `src` instead of every expanded directory.
 - Base: `file_write_text(rootPath, "src/App.tsx", content)` writes only if `src` remains inside `rootPath`.
 - Good: `file_read_project_text` opens GBK or UTF-16 BOM source files and `file_write_project_text` writes them back with the same encoding/BOM.
+- Good: local and SSH `src/main.ts` source files bypass video classification and return text; `clip.mp4` remains rejected before content reading on both paths.
 - Good: the frontend rejects a known oversized entry before invoking Rust; Rust repeats size and pixel checks for search results with unknown size and direct IPC calls.
 - Bad: reading or Base64-encoding a video, oversized file, or oversized raster image before enforcing its preview limit.
 - Bad: an unmappable character in a legacy-encoded file is replaced with `?` or triggers an implicit UTF-8 conversion.
@@ -132,6 +135,7 @@ ProjectFilesChangedPayload { project_path: String, changed_paths: Vec<String> }
 - Unit-test project text read/write preserves GBK bytes and leaves the file unchanged when saving unmappable content.
 - Unit-test shared encoding logic covers UTF-8 BOM, UTF-16 LE/BE BOM, legacy encoding detection, binary rejection, and strict encoding failure.
 - Unit-test the exact 12,000,000-pixel boundary and rejection above it; assert known video extensions are rejected before content decoding.
+- Regression-test the extension collision across both readers: local and SSH `.ts` source must decode as text while `.mp4` still returns `video_preview_unsupported`.
 - Unit-test watcher path filtering keeps project-relative paths stable and ignores generated/noisy directories.
 - Focused frontend tests cover nested bare-directory rules, root-anchored rules, wildcards, negation, directory-only matching, fallback defaults, and `.gitignore` watcher-path detection.
 - Focused frontend tests cover case-distinct directory names for Windows, regular UNC, WSL UNC, and POSIX project paths.
@@ -193,3 +197,16 @@ const matches = await invoke<ProjectFileContentMatch[]>("file_search_content", {
 ```
 
 Rust owns traversal, root validation, skipped directories, file-size limits, UTF-8 checks, and result caps.
+
+#### Wrong
+
+```text
+Frontend allows .ts → local or SSH reader still rejects .ts as video
+```
+
+#### Correct
+
+```text
+Frontend precheck, local is_video_path, and SSH is_video all treat .ts as text;
+binary or undecodable content is rejected by the existing decode guard.
+```
