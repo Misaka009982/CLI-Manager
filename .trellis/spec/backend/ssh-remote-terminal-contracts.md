@@ -217,7 +217,7 @@ Only the exact value `1` enables control-terminal input. One-shot probes, direct
 - The serialized launch environment may contain only the credential reference. Password values remain in the local credential store and are delivered through the one-shot AskPass broker.
 - During SSH handoff, the proxy rewrites only matching `thread/resume` requests to the registered remote directory and rejects fresh-thread or session-drift requests.
 - Remote app-server turn, approval, completion, and non-retrying error events are converted locally into the existing handoff Hook events. Telegram, Feishu, Weixin, and WeCom therefore share the same progress, permission, completion, and failure notification path without a remote Hook installation.
-- Persist handoff transport, SSH host ID, and remote path with the existing schema-version-1 record using defaulted fields for backward compatibility.
+- Persist handoff transport, SSH host ID, remote path, and `agent=codex` in the schema-version-2 record. Schema v1 records migrate in memory with Codex as the default; unknown versions fail closed. Adding local Claude/Pi/OpenCode handoff must not widen this SSH Codex-only boundary.
 - On cancellation, re-resolve a structured SSH PTY launch and run `codex resume --no-alt-screen <cliSessionId>` on the same registered host and path. If the project host/path changed, fail closed and keep the recovery lock visible.
 
 ### Sync

@@ -669,6 +669,13 @@ function SortableTab({
             hideHoverCard();
             onActivate();
           }}
+          onAuxClick={(event) => {
+            if (event.button !== 1 || isEditing || isDragging) return;
+            event.preventDefault();
+            event.stopPropagation();
+            hideHoverCard();
+            onClose(event.currentTarget.getBoundingClientRect());
+          }}
           onPointerEnter={scheduleHoverCard}
           onPointerLeave={scheduleHideHoverCard}
           onContextMenu={(event) => {
@@ -1010,6 +1017,13 @@ function SortableWorkspanTab({
             onClick={() => {
               hideHoverCard();
               onActivate();
+            }}
+            onAuxClick={(event) => {
+              if (event.button !== 1 || editing || isDragging) return;
+              event.preventDefault();
+              event.stopPropagation();
+              hideHoverCard();
+              onClose(event.currentTarget.getBoundingClientRect());
             }}
             onPointerEnter={scheduleHoverCard}
             onPointerLeave={scheduleHideHoverCard}

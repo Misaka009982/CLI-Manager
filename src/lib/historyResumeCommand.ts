@@ -1,5 +1,6 @@
 import { resolveCliToolHistorySourceId } from "./cliTools";
 import { appendResumeCliArgs } from "./projectStartupCommand";
+import type { RemoteHandoffAgent } from "./remoteHandoff";
 import type { HistorySessionSummary, Project } from "./types";
 
 type ResumeProject = Pick<
@@ -120,6 +121,50 @@ function normalizeOpenCodeSessionId(sessionId: string): string | null {
   return normalized && /^ses_[A-Za-z0-9]+$/.test(normalized) ? normalized : null;
 }
 
+function appendSessionCliArgs(
+  base: string,
+  source: "pi" | "opencode",
+  project?: ResumeProject | null,
+): string {
+  if (
+    !project
+    || project.startup_cmd.trim()
+    || resolveCliToolHistorySourceId(project.cli_tool) !== source
+  ) {
+    return base;
+  }
+  const cliArgs = stripPiResumeCliArgs(project.cli_args);
+  return cliArgs ? `${base} ${cliArgs}` : base;
+}
+
+export function buildRemoteHandoffResumeCommand(
+  agent: RemoteHandoffAgent,
+  sessionId: string,
+  project?: ResumeProject | null,
+): string | null {
+  const normalizedId = normalizeSessionId(sessionId);
+  if (!normalizedId) return null;
+
+  if (agent === "codex") {
+    return appendResumeCliArgs(
+      `codex resume --no-alt-screen ${normalizedId}`,
+      "codex",
+      project,
+      { includeProviderOverrides: false },
+    );
+  }
+  if (agent === "claude") {
+    return appendResumeCliArgs(
+      `claude --resume ${normalizedId}`,
+      "claude",
+      project,
+      { includeProviderOverrides: false },
+    );
+  }
+  return appendSessionCliArgs(`${agent} --session ${normalizedId}`, agent, project);
+}
+}
+
 export function buildHistoryResumeCommand(
   session: Pick<HistorySessionSummary, "session_id" | "source">,
   project?: ResumeProject | null,
@@ -142,16 +187,10 @@ export function buildHistoryResumeCommand(
     return cliArgs ? `${base} ${cliArgs}` : base;
   }
   if (session.source === "pi") {
-    const base = `pi --session ${sessionId}`;
-    if (
-      !project
-      || project.startup_cmd.trim()
-      || resolveCliToolHistorySourceId(project.cli_tool) !== "pi"
-    ) {
-      return base;
-    }
-    const cliArgs = stripPiResumeCliArgs(project.cli_args);
-    return cliArgs ? `${base} ${cliArgs}` : base;
+    return appendSessionCliArgs(`pi --session ${sessionId}`, "pi", project);
+  }
+  if (session.source === "opencode") {
+    return appendSessionCliArgs(`opencode --session ${sessionId}`, "opencode", project);
   }
   if (session.source === "claude") {
     return appendResumeCliArgs(`claude --resume ${sessionId}`, "claude", project);

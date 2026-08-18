@@ -27,6 +27,7 @@ is_valid_payload(payload: &ClaudeHookRequest) -> bool
 - Grok hook stdin may use camelCase `sessionId` and `transcriptPath`; shared hook normalization must preserve them.
 - Invalid source/event pairs return HTTP 400 and never reach frontend or third-party notification sinks. The hidden Hook process still exits successfully so a bridge failure cannot interrupt the CLI.
 - OpenCode uses a marker-owned global plugin instead of the hidden `__hook` command. It posts only `SessionStart`, `UserPromptSubmit`, `Stop`, and `StopFailure` with the native OpenCode session ID; missing callback environment is a no-op and an unowned same-name plugin is never overwritten.
+- During a local cc-connect handoff, the managed process tree receives only the daemon port/token and handed-off Tab ID owned by CLI-Manager. Notification admission additionally requires the Hook source to equal the persisted Agent (`claude`, `codex`, `pi`, or `opencode`) and the optional CLI Session ID to match. A different Agent, Tab, or Session cannot update or notify the active handoff.
 
 ### 4. Validation & Error Matrix
 
@@ -902,6 +903,8 @@ Pi extension path: ~/.pi/agent/extensions/cli-manager-hook.ts
 Pi source: pi
 Pi events: SessionStart | UserPromptSubmit | Stop
 Stable conflict error: pi_extension_conflict
+Generated lifecycle reporter: postHookEvent(event, sessionId) -> Promise<void>
+Generated reporter deadline: HOOK_TIMEOUT_MS = 1_000
 ```
 
 ### 3. Contracts
@@ -913,6 +916,8 @@ Stable conflict error: pi_extension_conflict
 - Full Pi installation reports `installed`; any non-empty strict subset reports `partialInstalled`; no modules reports `notInstalled`.
 - `session_start` maps to one `SessionStart`, `agent_start` maps to one `UserPromptSubmit`, and `agent_settled` maps to one `Stop`. Do not also map `before_agent_start` to `UserPromptSubmit`, because one Pi run emits both lifecycle events.
 - The extension reads `CLI_MANAGER_TAB_ID`, `CLI_MANAGER_NOTIFY_PORT`, and `CLI_MANAGER_NOTIFY_TOKEN` from its PTY environment and silently skips reporting if any are missing.
+- Pi lifecycle handlers must detach bridge delivery with `void postHookEvent(...)`; they must never `await` a loopback HTTP request, because Pi awaits extension handlers before continuing the agent lifecycle.
+- `postHookEvent` is best-effort and owns a bounded `AbortController` timeout of `HOOK_TIMEOUT_MS`. Timeout, connection failure, or abort is swallowed after cleanup and cannot delay terminal input, agent start, or settle.
 - New user-visible Pi errors must pass through the frontend language selector in every install consumer, including Hook settings and sidebar repair; `zh-TW` uses the existing OpenCC conversion path.
 
 ### 4. Validation & Error Matrix
@@ -925,15 +930,18 @@ Stable conflict error: pi_extension_conflict
 | Selected Pi directory is missing during install | Create it. |
 | Selected Pi directory is missing during status/uninstall | Return the existing directory-missing behavior; do not invent installed state. |
 | Hook callback environment is incomplete | Extension returns without throwing or interrupting Pi. |
+| Loopback bridge is slow, unreachable, or times out | Return from the Pi event handler immediately; abort the detached request within `HOOK_TIMEOUT_MS` and swallow its failure. |
 | Full three-module install | Return `installed`, allowing PTY callback environment injection. |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: a Pi-only user installs all modules, the shared Hook environment is injected, `SessionStart` binds the Pi session id, and realtime stats load.
+- Good: the local bridge is unavailable while a Pi prompt is submitted; Pi starts the run immediately and the detached report expires within one second.
 - Good: a user already has an unrelated `cli-manager-hook.ts`; install fails with a localized conflict message and preserves the file byte-for-byte.
 - Base: only session-start is enabled; status is `partialInstalled` and the module UI reflects that subset.
 - Bad: reuse Claude/Codex required-module assumptions for Pi and require an attention hook that Pi does not provide.
 - Bad: listen to both `before_agent_start` and `agent_start` for the same running event; this duplicates replay and notification traffic.
+- Bad: await `postHookEvent` from a Pi lifecycle handler; a slow loopback bridge then adds network latency to every prompt.
 
 > **Warning**: Pi status must derive `hooks_feature_installed` and `hooks_trusted`
 > from marker ownership. Leaving either flag true after the managed extension is
@@ -946,6 +954,7 @@ Stable conflict error: pi_extension_conflict
 - Rust: one selected module reports `HookInstallStatus::PartialInstalled`.
 - Rust: install against an unowned same-name extension returns `pi_extension_conflict` and preserves exact content.
 - Rust: install then uninstall removes the marker-owned extension.
+- Rust: generated Pi extension source uses `void postHookEvent` for every lifecycle mapping, contains `AbortController` and `HOOK_TIMEOUT_MS = 1_000`, and contains no `await postHookEvent`.
 - TypeScript: type-check after frontend status or localized error handling changes.
 - Manual: verify Hook settings in `zh-CN`, `zh-TW`, and `en-US`, then start one Pi run and confirm exactly one running transition.
 
@@ -963,6 +972,12 @@ pi.on("before_agent_start", reportRunning);
 pi.on("agent_start", reportRunning);
 ```
 
+```typescript
+pi.on("agent_start", async (_event, ctx) => {
+  await postHookEvent("UserPromptSubmit", readSessionId(ctx));
+});
+```
+
 #### Correct
 
 ```rust
@@ -973,4 +988,78 @@ if checks.attention_hook_required {
 
 ```typescript
 pi.on("agent_start", reportRunning);
+```
+
+```typescript
+pi.on("agent_start", (_event, ctx) => {
+  void postHookEvent("UserPromptSubmit", readSessionId(ctx));
+});
+```
+
+## Scenario: Remote Handoff Approval Arbitration Boundaries
+
+### 1. Scope / Trigger
+
+- Trigger: a remote-handoff-managed child emits `PermissionRequest` and the shared local Hook sink must decide whether to defer it for a matching Codex transcript decision.
+- Applies to: `ApprovalArbiterState`, `approval_aware_hook_sink`, remote spool replay, transcript-path normalization, and local/WSL/SSH runtime boundaries.
+
+### 2. Signatures
+
+```text
+ApprovalArbiterState::accept(payload) -> Option<ApprovalRoute>
+approval_aware_hook_sink(payload) -> Hook delivery
+normalize_explicit_transcript_path(path, wslDistroName) -> PathBuf | error
+validate_explicit_transcript_path(path) -> PathBuf | error
+```
+
+### 3. Contracts
+
+- One global sink remains the sole classifier before app, daemon, third-party, and remote-handoff fan-out; no downstream sink may independently defer or duplicate an approval.
+- Only a message-less Codex child event from `local` or `wsl` is a provisional candidate. SSH spool/replay events always deliver immediately.
+- A provisional approval may resolve only against the same source, environment, tab, parent session, and child-agent scope. `Some(session)` and `None` are never equivalent.
+- Transcript metadata is read only after explicit path normalization and transcript-root validation. Native metadata polling of `\\wsl$` / `\\wsl.localhost` paths is forbidden.
+- Missing, untrusted, unreadable, or non-local transcript metadata leaves the approval unresolved; the bounded fallback delivery remains authoritative and must never suppress it permanently.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| SSH `PermissionRequest` from spool replay | Forward immediately; do not enter provisional state. |
+| Local/WSL message-less Codex child request | Hold only for the bounded arbitration window. |
+| Source/environment/tab/session/agent mismatch | Do not resolve or cancel the other approval. |
+| Explicit path outside a trusted transcript root | Do not read metadata; use normal fallback delivery. |
+| WSL UNC transcript path | Do not call native `fs::metadata`; rely on Hook event/timing flow. |
+| No decisive transcript event before deadline | Deliver exactly once through the original sink chain. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a local Codex child emits an empty approval followed by a matching transcript decision; only that scoped approval is resolved.
+- Good: an SSH Agent replays a Codex `PermissionRequest`; it reaches normal notification delivery without a 15-second delay.
+- Base: ordinary local approvals keep existing immediate delivery unless they meet every provisional-candidate predicate.
+- Bad: treating a missing session as a wildcard, accepting a spool event as a candidate, or reading an arbitrary UNC path from the payload.
+
+### 6. Tests Required
+
+- Rust tests cover SSH immediate delivery, local/WSL candidate admission, source/environment/session isolation, and timeout fallback delivery.
+- Rust tests cover rejected untrusted paths and WSL UNC paths without native metadata polling.
+- Run `cargo fmt --check`, targeted approval/remote Hook tests, `cargo check --lib`, and `git diff --check`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+// A missing session becomes a wildcard and can resolve another child request.
+scope.session_id.as_deref() == payload.session_id.as_deref()
+```
+
+#### Correct
+
+```rust
+// All correlation dimensions, including Option presence, must match exactly.
+scope.source == payload.source
+    && scope.environment == approval_environment(payload)
+    && scope.tab_id == payload.tab_id
+    && scope.session_id == payload.session_id
+    && scope.agent_id == payload.agent_id
 ```

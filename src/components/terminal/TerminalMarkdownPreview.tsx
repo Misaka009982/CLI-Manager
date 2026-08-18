@@ -23,7 +23,6 @@ import { FileText, RefreshCw, X } from "../icons";
 import { SessionTranscriptContent } from "../history/SessionTranscriptContent";
 import { FontSizeControl, useFontSizeControlVisibility } from "../ui/FontSizeControl";
 
-const PREVIEW_SOURCES = new Set<HistorySource>(["claude", "codex"]);
 const LOCAL_RETRY_DELAYS_MS = [0, 180, 420];
 type PreviewError = "noSession" | "loadFailed";
 
@@ -31,7 +30,7 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
-function inferSourceFromText(value: string): "claude" | "codex" | null {
+function inferSourceFromText(value: string): HistorySource | null {
   const normalized = value.toLowerCase();
   if (/\bclaude\b/u.test(normalized)) return "claude";
   if (/\bcodex\b/u.test(normalized)) return "codex";
@@ -80,17 +79,17 @@ function buildTerminalMarkdownPreviewStyle(theme: ITheme): CSSProperties {
 export function resolveTerminalMarkdownSource(
   session: TerminalSession | null | undefined,
   project: Project | null | undefined,
-): "claude" | "codex" | null {
+): HistorySource | null {
   if (!session && !project) return null;
   const explicitSource = [session?.cliTool, project?.cli_tool]
     .map((value) => resolveCliToolHistorySourceId(value))
-    .find((value): value is "claude" | "codex" => value === "claude" || value === "codex");
+    .find((value): value is HistorySource => value !== null);
   if (explicitSource) return explicitSource;
 
   const inferredSource = inferSourceFromText(
     `${session?.startupCmd ?? ""} ${session?.title ?? ""} ${project?.cli_tool ?? ""}`,
   );
-  return inferredSource && PREVIEW_SOURCES.has(inferredSource) ? inferredSource : null;
+  return inferredSource;
 }
 
 export function isTerminalMarkdownPreviewSupported(

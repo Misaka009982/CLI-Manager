@@ -37,6 +37,8 @@ export const SETTING_BACKUP_POLICY = {
   backgroundIncludeFinishedTasks: "preferences",
   keyboardShortcuts: "preferences",
   terminalNewlineShortcut: "preferences",
+  osc52ClipboardEnabled: "preferences",
+  osc52ClipboardQueryEnabled: "excluded",
   unsplitBehavior: "preferences",
   terminalToolbarVisibility: "preferences",
   sidebarToolbarVisibility: "preferences",

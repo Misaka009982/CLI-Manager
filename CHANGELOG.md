@@ -10,8 +10,55 @@
 
 ## [TEMP] - 2026-08-11
 
+### 终端 OSC 52 剪贴板
+
+- 内置终端现在拦截远程/全屏 TUI 发出的 OSC 52（含 tmux DCS passthrough），解码后写入 Tauri 本机剪贴板，不再依赖远端 `xclip`/`DISPLAY`。序列会从可见输出中剥离，避免刷出 base64。
+- 仅实时 PTY 输出会写剪贴板；daemon replay、reset 和会话回放不会用历史 OSC 52 覆盖当前剪贴板。查询仅在用户显式开启默认关闭的读取权限后回应当前剪贴板内容，清空和非法 payload 不改剪贴板。（Refs #211）
+- 「设置 -> 快捷键」提供独立的 OSC 52 写入与读取本机剪贴板开关；关闭后仍剥离序列，且对应操作不会发生。
+- `Ctrl+Shift+C` 在终端中复制选区（可在「设置 -> 快捷键」改绑），并仅在终端区域阻止 Chromium 检查元素；调试仍用 F12。
+- 恢复 V1.3.2 鼠标策略：普通拖动选择终端文本，按住 Alt 才把点击/拖动发给底层 TUI，避免 Grok 松手重绘清掉选区。
+
+### Hook 审批通知
+
+- 修复 Codex 子 Agent 的非交互工具 Hook 被直接当成父会话待审批、导致桌面宠物和通知渠道误报的问题；共享 Hook 入口现在暂存缺少显式审批证据的子 Agent `PermissionRequest`，通过 Hook 时记录的 rollout 字节基线、同一子 Agent 工具进展或会话结束确认任务已继续，无法确认时在 15 秒后保守提醒。主 Agent、携带明确说明的真实子 Agent 审批、后台 daemon、SSH 与远程托管通知保持原有即时/保守行为。
+- 收紧共享审批仲裁边界：SSH spool 的 Codex 权限请求立即进入既有全局通知链路；本地/WSL 暂缓记录必须同 source、环境、tab、session 与子 Agent 才能被消解。转录路径复用允许根校验，越界路径不再被 daemon 轮询，WSL UNC 仅保留事件相关性和超时兜底。
+
+### Trellis Codex 工作流
+
+- Codex 的 Trellis 执行流默认改由主会话直接处理；只有用户明确要求子任务，或主会话提前询问并获得明确同意后，才会派发研究、实现或检查子任务。
+
+## [V1.3.7] - 2026-08-17
+
+### 供应商快捷切换
+
+- 终端右侧供应商面板的切换确认改为紧跟所选供应商卡片的紧凑内嵌确认条，沿用终端配色并精简为切换目标、生效范围和确认/取消操作，不再显示脱离终端风格的通用大弹框与冗长配置路径。
+- 精简供应商快捷面板的路由开关区域，移除“本地路由”和“自动故障转移”旁的辅助小字，保留开关悬浮说明与无障碍标签。
+- 修复自动故障转移队列未包含原当前供应商时的状态提交：队列首个实际成功的供应商现在也会通过既有安全热切换流程成为当前供应商，使快捷面板与设置页高亮保持一致。
+- 修复应用重启后仅保留本地路由开启配置、daemon listener 未恢复的问题；daemon 连接完成后会自动协调持久化路由意图，并恢复本地与 WSL 接管所需的 listener 地址和实际端口。
+
+### 供应商生命周期与项目级配置
+
+- 修复停用、删除供应商时误把外部导入追踪或旧版 CCS 覆盖当作项目引用的问题：现在只检查项目及活跃 Worktree 的有效 schema-v2 `provider_overrides`，未被使用的已导入供应商可以正常操作；真实引用仍会被阻止，并在删除时显示准确原因。
+- 供应商三点菜单的删除、上移、下移失败会显示具体可处理原因（引用、列表变更或数据暂不可用），不再统一提示“请稍后重试”。
+- 项目/Worktree 切换供应商重新只写入自身覆盖，不再改写全局 CLI Home：Claude 在启动时使用独立 settings 加 `--settings`，Codex 使用真实 Home 下的独立 profile 加 `--profile`，密钥继续仅注入新进程环境。
+- Grok Build 项目/Worktree 切换入口现在直接提示暂不支持，不展示可切换供应商，也不会写入覆盖或改动全局配置。
+
+### 终端 Tab 与 Markdown 预览
+
+- 终端会话 Tab 与 Workspan Tab 支持鼠标中键关闭，沿用原有关闭确认和焦点处理，不影响拖拽、重命名或右键菜单。
+- 已配置 CLI 工具的终端始终保留右上角 Markdown 预览入口；Pi 等已登记历史来源会使用自身来源加载已绑定会话，尚未绑定会话或无可用历史时明确显示不可用状态。
+
+### Pi Hook 与 Agent 能力
+
+- 修复 Pi Agent 启动消息时被 CLI-Manager Hook 上报阻塞的问题：生命周期通知改为非阻塞发送，并为本地 bridge 请求加入 1 秒超时；SessionStart、运行中和停止状态映射保持不变。
+- Agent 能力卡片现在识别 Pi MCP Adapter 的共享全局、Pi 全局及项目级配置，显示已激活和禁用的 MCP；静态配置仍按“健康状态未知”处理，但不再错误显示 `pi_mcp_extension_observability_unknown`。本机、WSL 与 SSH Agent 均复用同一发现语义，且不会启动 MCP Server 或暴露配置敏感内容。
+
 ### 远程托管
 
+- 桌面宠物远程托管新增本地 Claude Code、Pi 和 OpenCode 会话支持，并保留现有本地/SSH Codex 链路；Agent 类型现贯穿资格判断、cc-connect 配置、托管记录、Hook 归属和取消恢复，Grok Build、WSL 及非 Codex SSH 会话继续明确拒绝。
+- 本地托管的预检、cc-connect 配置和 Codex app-server 代理统一使用项目登记的 `cli_tool + cli_args`；绝对路径、Windows 脚本启动器及安全的附加参数不再回退为 PATH 中的默认命令，自由 `startup_cmd` 仍不会交给远程托管执行。
+- 交接记录只对 schema v1 缺失的 Agent 兼容注入 Codex；schema v2 缺失或非法 Agent 会拒绝读取，避免损坏记录静默切换到错误 CLI。
+- Claude Code 托管复用项目/Worktree 登记的 Provider 快照，取消后按原 Session 与 Provider 恢复；Pi、OpenCode 跟随各自配置，Pi 启用 cc-connect RPC，OpenCode 在桌宠候选中提示审批能力边界。Provider 密钥和项目敏感环境变量只注入受管进程环境，不写入 cc-connect TOML。
 - 修复项目 Provider 锁定逻辑把运行时专用的 `--profile` 传给 Codex app-server、导致 cc-connect 启动探针立即失败的问题；app-server 继续使用完整 `-c` 覆盖锁定登记 Provider，普通 Codex 运行命令仍保留生成的 Provider profile。
 - 修复 Provider 密钥只注入 cc-connect 父进程、未传入 Codex Agent 子进程的问题；受管配置仅保存环境变量占位符，不落盘密钥明文。
 
@@ -139,7 +186,6 @@
 
 ### 终端、历史、统计与文件面板
 
-- 文件预览的源码编辑器与 Markdown 渲染现在跟随“设置 -> 通用”的应用字体和字号；在文本或 Markdown 预览内按住 Ctrl 滚动鼠标滚轮可按 1px 临时缩放，范围为 8px～32px，不修改全局设置，普通滚轮、图片预览和 Git Diff 保持原有行为。
 - 修复新建普通 Shell 终端初始化时误执行快照恢复光标定位，避免初始提示符被推到终端底部；保留已有历史快照恢复后的光标重锚定。
 - 修复终端恢复历史画面后尺寸重排导致 PTY 从过期光标位置写入、覆盖已恢复内容的问题；恢复时重新同步终端尺寸与快照光标坐标，兼容 PowerShell、CMD、Git Bash 和 WSL。
 - 修复多个终端持续输出时各自调度 xterm 写入集中占用浏览器帧主线程的问题：daemon live 输出改为 64 KiB 有界聚合，前端按可见优先且隐藏不饥饿的全局队列每帧只启动一个写入批次，并保持 Replay、Reset 与 write callback 后 ACK 时序。

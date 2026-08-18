@@ -2233,6 +2233,7 @@ const ENABLED = {{
 }};
 
 type NotifyEvent = "SessionStart" | "UserPromptSubmit" | "Stop";
+const HOOK_TIMEOUT_MS = 1_000;
 
 function nonEmpty(value: string | undefined | null): string | null {{
   const trimmed = value?.trim();
@@ -2256,6 +2257,8 @@ async function postHookEvent(event: NotifyEvent, sessionId: string | null, messa
     timestamp: new Date().toISOString(),
   }};
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), HOOK_TIMEOUT_MS);
   try {{
     await fetch(`http://127.0.0.1:${{port}}/api/claude-hook`, {{
       method: "POST",
@@ -2264,9 +2267,12 @@ async function postHookEvent(event: NotifyEvent, sessionId: string | null, messa
         "Content-Type": "application/json",
       }},
       body: JSON.stringify(payload),
+      signal: controller.signal,
     }});
   }} catch {{
     // Hook bridge failures must never interrupt Pi.
+  }} finally {{
+    clearTimeout(timeout);
   }}
 }}
 
@@ -2291,20 +2297,20 @@ function readSessionId(ctx: {{ sessionManager?: {{ getSessionId?: () => string |
 
 export default function (pi: ExtensionAPI) {{
   if (ENABLED.sessionStart) {{
-    pi.on("session_start", async (_event, ctx) => {{
-      await postHookEvent("SessionStart", readSessionId(ctx));
+    pi.on("session_start", (_event, ctx) => {{
+      void postHookEvent("SessionStart", readSessionId(ctx));
     }});
   }}
 
   if (ENABLED.running) {{
-    pi.on("agent_start", async (_event, ctx) => {{
-      await postHookEvent("UserPromptSubmit", readSessionId(ctx));
+    pi.on("agent_start", (_event, ctx) => {{
+      void postHookEvent("UserPromptSubmit", readSessionId(ctx));
     }});
   }}
 
   if (ENABLED.stop) {{
-    pi.on("agent_settled", async (_event, ctx) => {{
-      await postHookEvent("Stop", readSessionId(ctx));
+    pi.on("agent_settled", (_event, ctx) => {{
+      void postHookEvent("Stop", readSessionId(ctx));
     }});
   }}
 
@@ -4053,6 +4059,10 @@ yolo = false
         assert!(extension.contains("agent_start"));
         assert!(extension.contains("agent_settled"));
         assert!(!extension.contains("before_agent_start"));
+        assert!(extension.contains("void postHookEvent"));
+        assert!(!extension.contains("await postHookEvent"));
+        assert!(extension.contains("AbortController"));
+        assert!(extension.contains("HOOK_TIMEOUT_MS = 1_000"));
 
         uninstall_pi_hooks(&pi_dir).unwrap();
         let after = build_pi_status(Some(pi_dir.clone())).unwrap();
