@@ -63,6 +63,10 @@
 
 - 修复 OpenCode 和 Pi 终端 Tab 图标使用全局文本色导致在终端主题下对比度不足的问题，改为继承当前 Tab 前景色。
 
+### SSH 会话历史
+
+- 修复 SSH Grok Build 项目打开会话历史时泄露 `history_remote_source_required` 的问题：能力校验现在与远程桥接一致，仅放行 Claude Code 和 Codex CLI；Grok Build 显示本地化的暂不支持提示，其他未支持 SSH CLI 显示通用提示，本地与 WSL Grok 历史不受影响。
+
 ### 历史会话索引
 
 - 优化历史会话 catalog：FTS5 trigram 索引改用紧凑 detail 模式，旧数据库首次打开时自动校验真实 FTS schema、重建索引并回收碎片；即使历史版本号已更新但 FTS 定义未完成迁移，也会自动修复；保留中英文三字符全文搜索和增量索引能力，不修改原始历史文件。

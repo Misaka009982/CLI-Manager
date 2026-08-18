@@ -148,6 +148,69 @@ const targetRow = rows.find((row) => row.messageIndices.includes(messageIndex));
 - Verify exact project resume, multiple same-Host project selection, original remote location, current-client Tab jump, active-elsewhere refusal, missing source/cwd, custom config root, and Hook-not-installed behavior.
 - Disconnect after a successful sync and verify cached summaries remain visible with stale/offline state while uncached detail stays unavailable.
 
+## Scenario: SSH History Capability Aligns With the Remote Bridge
+
+### 1. Scope / Trigger
+
+- Trigger: changing SSH project capabilities, supported remote history CLI sources, or a project/terminal history entry point.
+- Goal: prevent an unsupported SSH CLI from reaching `buildSshAgentHistoryContext()` and exposing its internal `history_remote_source_required` guard to the user.
+
+### 2. Signatures
+
+- SSH source resolver: `resolveSshToolSource(command: string | null | undefined): SshToolSource | null`.
+- Capability gate: `projectSupportsCapability(project, "history"): boolean`.
+- UI reason helpers: `isSshHistorySourceUnsupported(project)` and `isSshGrokHistoryUnsupported(project)`.
+- Defensive bridge guard: `buildSshAgentHistoryContext(project)`.
+
+### 3. Contracts
+
+- SSH `history` is available only when `resolveSshToolSource(project.cli_tool)` resolves to the currently bridge-supported Claude or Codex source.
+- SSH Grok Build, another unsupported SSH CLI, and an SSH project without a configured CLI all have `history=false`; this does not alter `statistics` or unrelated project capabilities.
+- Local and WSL Grok Build keep their native history capability. Do not infer remote support from the local history-source registry.
+- Sidebar and terminal-toolbar history entry points must stop at the capability gate. Grok uses the localized `remoteCapabilities.grokHistoryUnsupportedTitle`; another unsupported SSH CLI uses the generic SSH-history title and description.
+- `history_remote_source_required` remains a defensive bridge error for non-UI callers. Normal UI interactions must not reach it.
+- `HistoryWorkspace` must derive its selectable project list from `projectSupportsCapability(project, "history")`; do not add a second Grok-only filter.
+
+### 4. Validation & Error Matrix
+
+| Condition | Capability / UI result |
+| --- | --- |
+| SSH Claude or Codex command | `history=true`; existing remote bridge opens |
+| SSH Grok Build command | `history=false`; show Grok localized unavailable toast; do not open the bridge |
+| SSH unsupported or empty CLI command | `history=false`; show generic SSH CLI unavailable toast |
+| Local or WSL Grok Build | `history=true`; retain existing native history flow |
+| Direct invalid bridge caller | `history_remote_source_required` remains a defensive error |
+
+### 5. Good / Base / Bad Cases
+
+- Good: the sidebar and terminal toolbar both show the same Grok-specific toast and leave the current workspace unchanged.
+- Base: an unsupported SSH OpenCode project receives the generic message instead of being mislabeled as Grok.
+- Good: SSH Claude/Codex and local/WSL Grok continue to pass the same capability API.
+- Bad: leave `SSH_CAPABILITIES.history=true` for every SSH project and catch `history_remote_source_required` separately in each caller.
+- Bad: disable every Grok history flow, including local/WSL, because the SSH bridge has not implemented Grok.
+
+### 6. Tests Required
+
+- Run `node --test scripts/projectCapabilities.test.mjs` and assert SSH Claude/Codex allow history, SSH Grok/unsupported/empty CLI deny it, local/WSL Grok remain allowed, and SSH Grok statistics remain unchanged.
+- Assert both project history entry components use the shared helper and i18n keys.
+- Run `node --test scripts/sshRemoteFileContext.test.mjs`, `npx tsc --noEmit`, and `npm run build`.
+- Manually verify both sidebar and terminal-toolbar entries in `zh-CN` and `en-US`; no raw internal error may be shown.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+const SSH_CAPABILITIES = { history: true };
+await buildSshAgentHistoryContext(project);
+```
+
+#### Correct
+
+```typescript
+if (capability === "history" && isSshHistorySourceUnsupported(project)) return false;
+```
+
 ## Scenario: Favorite Session Snapshots
 
 ### 1. Scope / Trigger
