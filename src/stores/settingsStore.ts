@@ -181,6 +181,7 @@ export type ShortcutAction =
   | "commandPalette"
   | "sessionHistory"
   | "copyAi"
+  | "copyTerminalSelection"
   | "toggleSidebar"
   | "toggleTerminalFullscreen";
 export type TabSwitchShortcutModifier = "Alt" | "Ctrl" | "Shift";
@@ -236,6 +237,7 @@ const SHORTCUT_ACTIONS: readonly ShortcutAction[] = [
   "commandPalette",
   "sessionHistory",
   "copyAi",
+  "copyTerminalSelection",
   "toggleSidebar",
   "toggleTerminalFullscreen",
 ];
@@ -293,6 +295,7 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutMap = {
   commandPalette: "Ctrl+P",
   sessionHistory: "Ctrl+K",
   copyAi: "Alt+P",
+  copyTerminalSelection: "Ctrl+Shift+C",
   toggleSidebar: "Ctrl+B",
   toggleTerminalFullscreen: "F11",
 };
@@ -374,6 +377,8 @@ export interface Settings {
   backgroundIncludeFinishedTasks: boolean;
   keyboardShortcuts: KeyboardShortcutMap;
   terminalNewlineShortcut: TerminalNewlineShortcut;
+  osc52ClipboardEnabled: boolean;
+  osc52ClipboardQueryEnabled: boolean;
   unsplitBehavior: UnsplitBehavior;
   terminalToolbarVisibility: TerminalToolbarVisibilitySettings;
   sidebarToolbarVisibility: SidebarToolbarVisibilitySettings;
@@ -529,6 +534,8 @@ const DEFAULTS: Settings = {
   backgroundIncludeFinishedTasks: false,
   keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
   terminalNewlineShortcut: "Shift+Enter",
+  osc52ClipboardEnabled: true,
+  osc52ClipboardQueryEnabled: false,
   unsplitBehavior: "merge",
   terminalToolbarVisibility: {
     templates: true,
@@ -1650,6 +1657,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       entries.terminalNewlineShortcut === "Alt+Enter"
         ? entries.terminalNewlineShortcut
         : DEFAULTS.terminalNewlineShortcut;
+    entries.osc52ClipboardEnabled =
+      typeof entries.osc52ClipboardEnabled === "boolean"
+        ? entries.osc52ClipboardEnabled
+        : DEFAULTS.osc52ClipboardEnabled;
+    entries.osc52ClipboardQueryEnabled =
+      typeof entries.osc52ClipboardQueryEnabled === "boolean"
+        ? entries.osc52ClipboardQueryEnabled
+        : DEFAULTS.osc52ClipboardQueryEnabled;
     entries.projectScopedTerminalViewEnabled =
       typeof entries.projectScopedTerminalViewEnabled === "boolean"
         ? entries.projectScopedTerminalViewEnabled
