@@ -40,7 +40,7 @@ writeFileSync(
   join(tempDir, "cliTools.mjs"),
   `export const resolveCliToolHistorySourceId = (tool) => {
     const value = tool?.trim().toLowerCase();
-    return ["claude", "codex", "grok", "pi"].includes(value) ? value : null;
+    return ["claude", "codex", "grok", "pi", "opencode"].includes(value) ? value : null;
   };\n`,
   "utf8",
 );
@@ -82,7 +82,7 @@ const {
 );
 const { appendResumeCliArgs, withCodexConfigOverrides, withGrokModelOverride } = await import(pathToFileURL(projectStartupPath).href);
 const { buildResumeCliArgs } = await import(pathToFileURL(saveSessionPath).href);
-const { buildHistoryResumeCommand, stripPiResumeCliArgs } = await import(
+const { buildHistoryResumeCommand, buildRemoteHandoffResumeCommand, stripPiResumeCliArgs } = await import(
   pathToFileURL(historyResumeCommandPath).href
 );
 const historySourcesPath = transpile(
@@ -287,6 +287,34 @@ test("Pi history resume uses --session and strips every conflicting selector", (
     stripPiResumeCliArgs("--model opus --session-dir custom --fork=old"),
     "--model opus --session-dir custom",
   );
+});
+
+test("remote handoff resume preserves each Agent identity and strips conflicting selectors", () => {
+  const project = (cliTool, cliArgs) => ({
+    cli_tool: cliTool,
+    cli_args: cliArgs,
+    startup_cmd: "",
+    provider_overrides: "{}",
+    shell: "powershell",
+  });
+
+  assert.equal(
+    buildRemoteHandoffResumeCommand("codex", NEW_ID, project("codex", `--model o3 resume ${OLD_ID}`)),
+    `codex resume --no-alt-screen ${NEW_ID} --model o3`,
+  );
+  assert.equal(
+    buildRemoteHandoffResumeCommand("claude", NEW_ID, project("claude", "--continue --model sonnet")),
+    `claude --resume ${NEW_ID} --model sonnet`,
+  );
+  assert.equal(
+    buildRemoteHandoffResumeCommand("pi", NEW_ID, project("pi", `--model opus --session ${OLD_ID}`)),
+    `pi --session ${NEW_ID} --model opus`,
+  );
+  assert.equal(
+    buildRemoteHandoffResumeCommand("opencode", NEW_ID, project("opencode", `--model openai/gpt-5 --session=${OLD_ID}`)),
+    `opencode --session ${NEW_ID} --model openai/gpt-5`,
+  );
+  assert.equal(buildRemoteHandoffResumeCommand("opencode", "bad id"), null);
 });
 
 test("existing Claude Codex and Grok history resume commands stay unchanged", () => {

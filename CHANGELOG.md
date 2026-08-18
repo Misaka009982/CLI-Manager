@@ -10,10 +10,10 @@
 - `Ctrl+Shift+C` 在终端中复制选区（可在「设置 -> 快捷键」改绑），并仅在终端区域阻止 Chromium 检查元素；调试仍用 F12。
 - 恢复 V1.3.2 鼠标策略：普通拖动选择终端文本，按住 Alt 才把点击/拖动发给底层 TUI，避免 Grok 松手重绘清掉选区。
 
-### PR #212 审查修复
+### Hook 审批通知
 
-- **OSC 52 查询权限与兼容性**：读取本机剪贴板并回传给终端改为独立、默认关闭的显式开关；tmux DCS 内层 ST 终止符、无填充 Base64 和大剪贴板编码均正确处理。异步读取后会再次确认授权，超过 2,000,000 个 Base64 字符的回复或满载队列中的请求会被跳过，读取授权不随备份/同步迁移。
-- **终端快捷键范围**：`Ctrl+Shift+C` 的 Chromium DevTools 拦截仅在 xterm 内生效，设置页、搜索框等非终端区域不再被阻止。
+- 修复 Codex 子 Agent 的非交互工具 Hook 被直接当成父会话待审批、导致桌面宠物和通知渠道误报的问题；共享 Hook 入口现在暂存缺少显式审批证据的子 Agent `PermissionRequest`，通过 Hook 时记录的 rollout 字节基线、同一子 Agent 工具进展或会话结束确认任务已继续，无法确认时在 15 秒后保守提醒。主 Agent、携带明确说明的真实子 Agent 审批、后台 daemon、SSH 与远程托管通知保持原有即时/保守行为。
+- 收紧共享审批仲裁边界：SSH spool 的 Codex 权限请求立即进入既有全局通知链路；本地/WSL 暂缓记录必须同 source、环境、tab、session 与子 Agent 才能被消解。转录路径复用允许根校验，越界路径不再被 daemon 轮询，WSL UNC 仅保留事件相关性和超时兜底。
 
 ### Trellis Codex 工作流
 
@@ -24,6 +24,9 @@
 ### 供应商快捷切换
 
 - 终端右侧供应商面板的切换确认改为紧跟所选供应商卡片的紧凑内嵌确认条，沿用终端配色并精简为切换目标、生效范围和确认/取消操作，不再显示脱离终端风格的通用大弹框与冗长配置路径。
+- 精简供应商快捷面板的路由开关区域，移除“本地路由”和“自动故障转移”旁的辅助小字，保留开关悬浮说明与无障碍标签。
+- 修复自动故障转移队列未包含原当前供应商时的状态提交：队列首个实际成功的供应商现在也会通过既有安全热切换流程成为当前供应商，使快捷面板与设置页高亮保持一致。
+- 修复应用重启后仅保留本地路由开启配置、daemon listener 未恢复的问题；daemon 连接完成后会自动协调持久化路由意图，并恢复本地与 WSL 接管所需的 listener 地址和实际端口。
 
 ### 供应商生命周期与项目级配置
 
@@ -44,6 +47,10 @@
 
 ### 远程托管
 
+- 桌面宠物远程托管新增本地 Claude Code、Pi 和 OpenCode 会话支持，并保留现有本地/SSH Codex 链路；Agent 类型现贯穿资格判断、cc-connect 配置、托管记录、Hook 归属和取消恢复，Grok Build、WSL 及非 Codex SSH 会话继续明确拒绝。
+- 本地托管的预检、cc-connect 配置和 Codex app-server 代理统一使用项目登记的 `cli_tool + cli_args`；绝对路径、Windows 脚本启动器及安全的附加参数不再回退为 PATH 中的默认命令，自由 `startup_cmd` 仍不会交给远程托管执行。
+- 交接记录只对 schema v1 缺失的 Agent 兼容注入 Codex；schema v2 缺失或非法 Agent 会拒绝读取，避免损坏记录静默切换到错误 CLI。
+- Claude Code 托管复用项目/Worktree 登记的 Provider 快照，取消后按原 Session 与 Provider 恢复；Pi、OpenCode 跟随各自配置，Pi 启用 cc-connect RPC，OpenCode 在桌宠候选中提示审批能力边界。Provider 密钥和项目敏感环境变量只注入受管进程环境，不写入 cc-connect TOML。
 - 修复项目 Provider 锁定逻辑把运行时专用的 `--profile` 传给 Codex app-server、导致 cc-connect 启动探针立即失败的问题；app-server 继续使用完整 `-c` 覆盖锁定登记 Provider，普通 Codex 运行命令仍保留生成的 Provider profile。
 - 修复 Provider 密钥只注入 cc-connect 父进程、未传入 Codex Agent 子进程的问题；受管配置仅保存环境变量占位符，不落盘密钥明文。
 

@@ -51,6 +51,7 @@ import { parseStoredSshHookReport, resolveSshToolSource } from "../lib/sshToolIn
 import { getSshClientInstanceId } from "../lib/sshClientIdentity";
 import { translateCurrent } from "../lib/i18n";
 import { findProjectByPath, findWorktreeByPath } from "../lib/terminalProject";
+import { buildRemoteHandoffResumeCommand } from "../lib/historyResumeCommand";
 import {
   terminalProcessManager,
   type TerminalClaudeProviderLaunchConfig,
@@ -203,6 +204,7 @@ export interface CliHookPayload {
   agentType?: string | null;
   agentTranscriptPath?: string | null;
   transcriptPath?: string | null;
+  transcriptBytes?: number | null;
   reasoningEffort?: string | null;
   wslDistroName?: string | null;
   environmentType?: "ssh" | null;
@@ -1195,6 +1197,7 @@ export interface DetachedPtyLaunchOptions {
   envVars?: Record<string, string> | null;
   shell?: string | null;
   providerSnapshot?: NativeProviderLaunchSnapshot | null;
+  providerId?: string | null;
 }
 
 export interface DetachedPtyLaunchResult {
@@ -1381,6 +1384,7 @@ async function prepareProviderLaunchSnapshot(
   startupCmd: string | null | undefined,
   worktreeId?: string,
   persistedSnapshot?: NativeProviderLaunchSnapshot | null,
+  providerId?: string | null,
 ): Promise<ProviderLaunchSnapshotResponse | null> {
   if (persistedSnapshot) releaseProviderSnapshot(persistedSnapshot);
   const appType = project ? getProviderSwitchAppType(project) : null;
@@ -1392,7 +1396,7 @@ async function prepareProviderLaunchSnapshot(
       appType,
       projectId: project.id,
       worktreeId: worktreeId ?? null,
-      providerId: null,
+      providerId: providerId?.trim() || null,
     },
   });
 }
@@ -1581,6 +1585,7 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
     resolvedStartupCmd,
     options.worktreeId,
     options.providerSnapshot,
+    options.providerId,
   );
   const providerConfigs = buildNativeProviderLaunchConfigs(
     providerSnapshot,
@@ -1839,51 +1844,20 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }
 
     const os = await getOsPlatform();
-    let resumeProject = project;
+    const resumeProject = project;
     const recordedProviderId = lockedSession.remoteHandoff.providerId?.trim() || null;
     // 与 restoreSessions 一致：不复用持久化快照（可能已 release/GC，也不反映当前覆盖状态），
     // 一律 release 后按当前 scope 重新解析；recordedProviderId 非空时作为显式恢复。
-    releaseProviderSnapshot(lockedSession.providerSnapshot);
-    let providerSnapshot: ProviderLaunchSnapshotResponse | null = null;
-    let providerConfigs = {
-      claudeProvider: null as TerminalClaudeProviderLaunchConfig | null,
-      codexProvider: null as TerminalCodexProviderLaunchConfig | null,
-      grokProvider: null as TerminalGrokProviderLaunchConfig | null,
-    };
-    if (!sshHandoff) {
-      providerSnapshot = await invoke<ProviderLaunchSnapshotResponse | null>(
-        "provider_scope_prepare",
-        {
-          input: {
-            appType: "codex",
-            projectId: lockedSession.projectId ?? project.id,
-            worktreeId: lockedSession.worktreeId ?? null,
-            providerId: recordedProviderId,
-          },
-        },
-      );
+    const handoffAgent = lockedSession.remoteHandoff.agent ?? "codex";
+    if (sshHandoff && handoffAgent !== "codex") {
+      throw new Error("handoff_ssh_agent_unsupported");
     }
-    if (!sshHandoff) {
-      providerConfigs = buildNativeProviderLaunchConfigs(
-        providerSnapshot,
-      );
-    }
-    let resumeCommand = buildCliResumeStartupCommand(
-      "codex",
-      lockedSession.remoteHandoff.cliSessionId || lockedSession.cliSessionId,
+    const resumeCommand = buildRemoteHandoffResumeCommand(
+      handoffAgent,
+      lockedSession.remoteHandoff.cliSessionId || lockedSession.cliSessionId || "",
       resumeProject,
-      providerSnapshot ? { includeProviderOverrides: false } : {},
     );
-    if (!sshHandoff && providerSnapshot?.appType === "codex") {
-      const scopedResumeCommand = providerSnapshot.codexProfileName
-        ? withCodexProfile(resumeCommand, providerSnapshot.codexProfileName)
-        : withCodexConfigOverrides(resumeCommand, providerSnapshot.configOverrides);
-      if (!scopedResumeCommand) {
-        releaseProviderSnapshot(providerSnapshot);
-        throw new Error("provider_codex_command_unsupported");
-      }
-      resumeCommand = scopedResumeCommand;
-    }
+    if (!resumeCommand) throw new Error("remote_handoff_session_id_invalid");
     const launch: ResolvedPtyLaunch = sshHandoff
       ? await resolvePtyLaunch({
           projectId: project.id,
@@ -1893,32 +1867,18 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           envVars: lockedSession.envVars,
           shell: null,
         }, os)
-      : (() : ResolvedPtyLaunch => {
-          const resolvedShell = resolveShellForPty(lockedSession.shell, true, os);
-          return {
-            shell: resolvedShell,
-            startupCmd: prepareStartupCommandForPty(
-              resumeCommand,
-              normalizeShellKey(resolvedShell) ?? null
-            ),
-            startupHandledByLaunch: false,
-            providerSnapshot,
-            invokeArgs: {
-              cwd: lockedSession.remoteHandoff?.workDir || lockedSession.cwd || null,
-              envVars: buildPtyEnvVars(lockedSession.envVars ?? null, resolvedShell),
-              shell: resolvedShell,
-              hookEnvEnabled: false,
-              claudeProvider: providerConfigs.claudeProvider,
-              codexProvider: providerConfigs.codexProvider,
-              grokProvider: providerConfigs.grokProvider,
-              terminalColors: getCurrentTerminalColors(),
-              sshLaunch: null,
-            },
-          };
-        })();
-    if (!sshHandoff) {
-      launch.invokeArgs.hookEnvEnabled = await shouldEnableHookEnv();
-    }
+      : await resolvePtyLaunch({
+          projectId: project.id,
+          worktreeId: lockedSession.worktreeId,
+          cwd: lockedSession.remoteHandoff.workDir || lockedSession.cwd || null,
+          startupCmd: resumeCommand,
+          envVars: lockedSession.envVars,
+          shell: lockedSession.shell,
+          providerSnapshot: lockedSession.providerSnapshot,
+          providerId: handoffAgent === "claude" || handoffAgent === "codex"
+            ? recordedProviderId
+            : null,
+        }, os);
     const newSessionId = await terminalProcessManager.create(launch.invokeArgs);
     const replacement: TerminalSession = {
       ...lockedSession,
@@ -2005,8 +1965,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           newSessionId,
           formatStartupInputForPty(launch.startupCmd as string, shellKey),
         ).catch((err) => {
-          logError("Failed to resume remotely handed-off Codex session", {
+          logError("Failed to resume remotely handed-off Agent session", {
             sessionId: newSessionId,
+            agent: handoffAgent,
             err,
           });
         });
