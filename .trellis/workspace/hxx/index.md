@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 89
+- **Total Sessions**: 90
 - **Last Active**: 2026-08-18
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1018 | Active |
+| `journal-2.md` | ~1039 | Active |
 | `journal-1.md` | ~2014 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 90 | 2026-08-18 | 历史会话对话消息操作栏 | `9f8602bb` | `master` |
 | 89 | 2026-08-18 | 修复 SSH Grok 会话历史打开提示 | `60372d68` | `master` |
 | 88 | 2026-08-17 | 修复供应商作用域与 Pi 终端诊断 | `3207bc68` | `master` |
 | 87 | 2026-08-13 | 修复 Diff 回退确认与折叠项目交互 | `47661dcc` | `master` |

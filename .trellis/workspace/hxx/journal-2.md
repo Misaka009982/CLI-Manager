@@ -1016,3 +1016,24 @@ SSH Grok 在历史入口改为显示明确的暂不支持提示，避免暴露�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 90: 历史会话对话消息操作栏
+
+**Date**: 2026-08-18
+**Task**: 历史会话对话消息操作栏
+**Branch**: `master`
+
+### Summary
+
+对话页复用原文消息操作栏；编辑和插入通过既有闸门后切换原文表单，SSH/快照保持只读，并补齐 V1.3.7 记录与历史会话契约。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9f8602bb` | (see git log) |
+
+### Status
+
+[OK] **Completed**
