@@ -126,6 +126,7 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   const prepareBundle = readFileSync(path.join(repositoryRoot, "scripts/prepare-bundle-binaries.mjs"), "utf8");
   const prepare = readFileSync(path.join(repositoryRoot, "scripts/prepare-pet-e-runtime.mjs"), "utf8");
   const manager = readFileSync(path.join(repositoryRoot, "src-tauri/src/commands/desktop_pet_e.rs"), "utf8");
+  const companion = readFileSync(path.join(repositoryRoot, "pet-e/src/main.ts"), "utf8");
   const portable = readFileSync(path.join(repositoryRoot, "scripts/package-portable.ps1"), "utf8");
 
   assert.match(tauri, /"resources\/pet-e\/":\s*"pet-e\/"/);
@@ -154,6 +155,18 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   assert.match(manager, /ELECTRON_RUNTIME_SHA256/);
   assert.match(manager, /sha256_file/);
   assert.match(manager, /eq_ignore_ascii_case\(&actual_sha256\)/);
+  assert.match(manager, /desktop_pet_e_stderr/);
+  assert.match(manager, /drain_stderr\(stderr_manager, stderr_app, generation, stderr\)/);
+  assert.match(manager, /fn child_failure_diagnostic/);
+  assert.match(manager, /fn child_diagnostic_summary/);
+  assert.match(manager, /state\.last_error = Some\(child_failure_diagnostic\(/);
+  assert.match(companion, /webContents\.on\("did-fail-load"/);
+  assert.match(companion, /webContents\.on\("preload-error"/);
+  assert.match(companion, /webContents\.on\("console-message"/);
+  assert.match(companion, /loadURL\(`\$\{APP_SCHEME\}:\/\/app\/index\.html`\)\.catch/);
+  assert.match(companion, /onWritten\?: \(\) => void/);
+  assert.match(companion, /if \(onWritten\) process\.stdout\.write/);
+  assert.match(companion, /\(\) => app\.exit\(1\)/);
   assert.match(portable, /verify-pet-e-package\.mjs/);
   assert.doesNotMatch(manager, /fetch\(|reqwest::/);
 });

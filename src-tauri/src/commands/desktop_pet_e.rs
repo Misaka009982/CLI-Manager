@@ -25,6 +25,8 @@ const ACTION_EVENT: &str = "desktop-pet-e-action";
 const RUNTIME_STATE_EVENT: &str = "desktop-pet-e-runtime-state";
 const DIAGNOSTIC_EVENT: &str = "desktop-pet-e-event";
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
+const CHILD_DIAGNOSTIC_CODE_LIMIT: usize = 160;
+const CHILD_DIAGNOSTIC_DETAIL_LIMIT: usize = 512;
 const ELECTRON_RUNTIME_RELATIVE_PATH: &str = "pet-e/runtime/electron.exe";
 const ELECTRON_ENTRY_RELATIVE_PATH: &str = "pet-e/app/main.js";
 #[cfg(target_os = "windows")]
@@ -136,6 +138,8 @@ struct ManagerState {
     latest_config: Option<Value>,
     latest_snapshot: Option<Value>,
     last_error: Option<DesktopPetEDiagnostic>,
+    // 子进程最近一次自报诊断/标准错误输出（code, detail），仅在进程异常退出时用于还原真正原因。
+    child_diagnostic: Option<(String, String)>,
     existing_desktop_pet_enabled: bool,
     shutting_down: bool,
 }
@@ -152,6 +156,7 @@ impl Default for ManagerState {
             latest_config: None,
             latest_snapshot: None,
             last_error: None,
+            child_diagnostic: None,
             existing_desktop_pet_enabled: false,
             shutting_down: false,
         }
@@ -289,6 +294,7 @@ impl DesktopPetEManager {
             DesktopPetEInboundMessage::Ready => {
                 state.ready = true;
                 state.last_error = None;
+                state.child_diagnostic = None;
                 if let Err(error) = send_latest_state(&mut state) {
                     state.last_error = Some(diagnostic("desktop_pet_e_state_send_failed", error));
                     finish_current_process(&mut state);
@@ -307,6 +313,9 @@ impl DesktopPetEManager {
                 let _ = app.emit(ACTION_EVENT, payload);
             }
             DesktopPetEInboundMessage::Diagnostic(payload) => {
+                if let Some(summary) = child_diagnostic_summary(&payload) {
+                    state.child_diagnostic = Some(summary);
+                }
                 drop(state);
                 let _ = app.emit(DIAGNOSTIC_EVENT, json!({
                     "type": "diagnostic",
@@ -326,7 +335,8 @@ impl DesktopPetEManager {
                 return;
             }
             finish_current_process(&mut state);
-            state.last_error = Some(diagnostic(
+            state.last_error = Some(child_failure_diagnostic(
+                &mut state,
                 "desktop_pet_e_ready_timeout",
                 format!("generation {generation} did not become ready within 5 seconds"),
             ));
@@ -366,7 +376,11 @@ impl DesktopPetEManager {
                 return;
             }
             state.ready = false;
-            state.last_error = Some(diagnostic("desktop_pet_e_process_exited", detail));
+            state.last_error = Some(child_failure_diagnostic(
+                &mut state,
+                "desktop_pet_e_process_exited",
+                detail,
+            ));
             should_restart = schedule_restart_after_failure(&mut state);
             emit_runtime_state(&app, &state);
         }
@@ -439,6 +453,41 @@ fn diagnostic(code: &str, detail: String) -> DesktopPetEDiagnostic {
             .unwrap_or_default()
             .as_millis() as u64,
     }
+}
+
+// 子进程异常结束时优先使用 Electron 自报的真实错误，避免只看到 "stdout closed"。
+fn child_failure_diagnostic(
+    state: &mut ManagerState,
+    fallback_code: &str,
+    fallback_detail: String,
+) -> DesktopPetEDiagnostic {
+    match state.child_diagnostic.take() {
+        Some((code, cause)) => {
+            diagnostic(&code, format!("{cause} ({fallback_code}: {fallback_detail})"))
+        }
+        None => diagnostic(fallback_code, fallback_detail),
+    }
+}
+
+fn clamp_diagnostic_text(value: &str, limit: usize) -> String {
+    value.chars().take(limit).collect()
+}
+
+fn child_diagnostic_summary(payload: &Value) -> Option<(String, String)> {
+    let code = payload.get("code").and_then(Value::as_str)?.trim();
+    if code.is_empty() {
+        return None;
+    }
+    let cause = payload
+        .get("detail")
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("message").and_then(Value::as_str))
+        .unwrap_or(code)
+        .trim();
+    Some((
+        clamp_diagnostic_text(code, CHILD_DIAGNOSTIC_CODE_LIMIT),
+        clamp_diagnostic_text(cause, CHILD_DIAGNOSTIC_DETAIL_LIMIT),
+    ))
 }
 
 #[cfg(target_os = "windows")]
@@ -670,6 +719,7 @@ fn start_process<R: Runtime>(
         expected_exit: false,
     });
     state.last_error = None;
+    state.child_diagnostic = None;
     emit_runtime_state(&app, state);
 
     let timeout_manager = manager.clone();
@@ -683,7 +733,9 @@ fn start_process<R: Runtime>(
     thread::spawn(move || {
         read_stdout(reader_manager, reader_app, stdout, instance_id, generation);
     });
-    thread::spawn(move || drain_stderr(stderr));
+    let stderr_manager = manager.clone();
+    let stderr_app = app.clone();
+    thread::spawn(move || drain_stderr(stderr_manager, stderr_app, generation, stderr));
     Ok(())
 }
 
@@ -729,16 +781,41 @@ fn read_stdout<R: Runtime>(
     manager.handle_reader_end(app, generation, "stdout closed".to_string());
 }
 
-fn drain_stderr(mut stderr: impl Read) {
+fn drain_stderr<R: Runtime>(
+    manager: DesktopPetEManager,
+    app: AppHandle<R>,
+    generation: u64,
+    mut stderr: impl Read,
+) {
     let mut buffer = [0u8; 4096];
     while let Ok(count) = stderr.read(&mut buffer) {
         if count == 0 {
             break;
         }
-        log::warn!(
-            "Desktop Pet E stderr: {}",
-            String::from_utf8_lossy(&buffer[..count]).trim()
+        let detail = String::from_utf8_lossy(&buffer[..count]).trim().to_string();
+        if detail.is_empty() {
+            continue;
+        }
+        log::warn!("Desktop Pet E stderr: {}", detail);
+        let summary = clamp_diagnostic_text(&detail, CHILD_DIAGNOSTIC_DETAIL_LIMIT);
+        let payload = diagnostic(
+            "desktop_pet_e_stderr",
+            format!("generation {generation}: {summary}"),
         );
+        {
+            let Ok(mut state) = manager.state.lock() else {
+                return;
+            };
+            if state.generation != generation || state.process.is_none() {
+                return;
+            }
+            // Electron 的 stderr 包含无害噪音，所以只暂存为退出原因候选，不直接当成错误展示。
+            state.child_diagnostic = Some(("desktop_pet_e_stderr".to_string(), summary));
+        }
+        let _ = app.emit(DIAGNOSTIC_EVENT, json!({
+            "type": "diagnostic",
+            "payload": payload,
+        }));
     }
 }
 
@@ -953,5 +1030,56 @@ mod tests {
         assert_eq!(value.code, "desktop_pet_e_test");
         assert_eq!(value.message, "desktop_pet_e_test");
         assert!(value.occurred_at > 0);
+    }
+
+    #[test]
+    fn child_reported_failures_survive_the_stdout_close() {
+        let mut state = ManagerState {
+            enabled: true,
+            ..ManagerState::default()
+        };
+        let summary = child_diagnostic_summary(&json!({
+            "code": "desktop_pet_e_load_failed",
+            "message": "desktop_pet_e_load_failed",
+            "detail": "-6: ERR_FILE_NOT_FOUND (pet-e-app://app/index.html)",
+        }))
+        .expect("child diagnostic should be accepted");
+        state.child_diagnostic = Some(summary);
+
+        let failure = child_failure_diagnostic(
+            &mut state,
+            "desktop_pet_e_process_exited",
+            "stdout closed".to_string(),
+        );
+        assert_eq!(failure.code, "desktop_pet_e_load_failed");
+        let detail = failure.detail.expect("detail should be present");
+        assert!(detail.contains("ERR_FILE_NOT_FOUND"));
+        assert!(detail.contains("stdout closed"));
+        assert!(state.child_diagnostic.is_none());
+    }
+
+    #[test]
+    fn exit_without_child_diagnostics_keeps_the_transport_reason() {
+        let mut state = ManagerState::default();
+        let failure = child_failure_diagnostic(
+            &mut state,
+            "desktop_pet_e_process_exited",
+            "stdout closed".to_string(),
+        );
+        assert_eq!(failure.code, "desktop_pet_e_process_exited");
+        assert_eq!(failure.detail.as_deref(), Some("stdout closed"));
+    }
+
+    #[test]
+    fn child_diagnostics_require_a_code_and_stay_bounded() {
+        assert!(child_diagnostic_summary(&json!({ "detail": "no code" })).is_none());
+        assert!(child_diagnostic_summary(&json!({ "code": "   " })).is_none());
+        let (code, detail) = child_diagnostic_summary(&json!({
+            "code": "x".repeat(CHILD_DIAGNOSTIC_CODE_LIMIT + 40),
+            "detail": "y".repeat(CHILD_DIAGNOSTIC_DETAIL_LIMIT + 40),
+        }))
+        .expect("child diagnostic should be accepted");
+        assert_eq!(code.chars().count(), CHILD_DIAGNOSTIC_CODE_LIMIT);
+        assert_eq!(detail.chars().count(), CHILD_DIAGNOSTIC_DETAIL_LIMIT);
     }
 }

@@ -88,6 +88,7 @@ function clearProgrammaticMoveTarget(): void {
 function writeMessage<T extends DesktopPetEChildMessage["type"]>(
   type: T,
   payload: Extract<DesktopPetEChildMessage, { type: T }>["payload"],
+  onWritten?: () => void,
 ): void {
   childRevision += 1;
   const message = {
@@ -103,7 +104,8 @@ function writeMessage<T extends DesktopPetEChildMessage["type"]>(
     if (type !== "diagnostic") diagnostic("desktop_pet_e_child_line_too_large", "Child message exceeded 1 MiB");
     return;
   }
-  process.stdout.write(`${line}\n`);
+  if (onWritten) process.stdout.write(`${line}\n`, onWritten);
+  else process.stdout.write(`${line}\n`);
 }
 
 function diagnostic(code: string, detail: string): void {
@@ -118,8 +120,16 @@ function diagnostic(code: string, detail: string): void {
 function failCompanion(code: string, detail: string): void {
   if (expectedExit) return;
   expectedExit = true;
-  diagnostic(code, detail);
-  app.exit(1);
+  writeMessage(
+    "diagnostic",
+    {
+      code,
+      message: code,
+      detail,
+      occurredAt: Date.now(),
+    },
+    () => app.exit(1),
+  );
 }
 
 function rendererConfig(config: DesktopPetEConfigPayload): DesktopPetEConfigPayload {
@@ -364,6 +374,24 @@ function createWindow(): void {
   win.setMenuBarVisibility(false);
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (isMainFrame) {
+      failCompanion(
+        "desktop_pet_e_load_failed",
+        `${errorCode}: ${errorDescription} (${validatedURL})`,
+      );
+    }
+  });
+  win.webContents.on("preload-error", (_event, preloadPath, error) => {
+    failCompanion("desktop_pet_e_preload_failed", `${preloadPath}: ${String(error)}`);
+  });
+  win.webContents.on("console-message", (details) => {
+    if (details.level !== "error") return;
+    diagnostic(
+      "desktop_pet_e_renderer_console_error",
+      `${details.message} (${details.sourceId}:${details.lineNumber})`,
+    );
+  });
   win.webContents.on("render-process-gone", (_event, details) => {
     failCompanion("desktop_pet_e_renderer_gone", `${details.reason}: ${details.exitCode}`);
   });
@@ -416,7 +444,9 @@ function createWindow(): void {
       });
     }
   });
-  void win.loadURL(`${APP_SCHEME}://app/index.html`);
+  void win.loadURL(`${APP_SCHEME}://app/index.html`).catch((error) => {
+    failCompanion("desktop_pet_e_load_failed", String(error));
+  });
 }
 
 ipcMain.on("pet-e:renderer-ready", (event) => {
