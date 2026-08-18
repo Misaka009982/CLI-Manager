@@ -1038,6 +1038,8 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
           <EmptyHint text={t("git.empty.noProject")} />
         ) : (contextLoading || loading) && changes.length === 0 ? (
           <EmptyHint text={t("common.loading")} />
+        ) : error && changes.length === 0 ? (
+          <EmptyHint text={formatGitNetError(t("git.title"), error, t)} />
         ) : changes.length === 0 ? (
           <EmptyHint text={t("git.empty.noChanges")} />
         ) : (
