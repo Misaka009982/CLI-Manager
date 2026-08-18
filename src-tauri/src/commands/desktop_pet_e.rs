@@ -10,9 +10,7 @@ use sha2::{Digest, Sha256};
 #[cfg(target_os = "windows")]
 use std::fs;
 use std::io::{Read, Write};
-use std::path::PathBuf;
-#[cfg(target_os = "windows")]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -588,6 +586,14 @@ fn normalize_process_path(path: PathBuf) -> PathBuf {
     path
 }
 
+fn electron_app_dir_argument(entry: &Path) -> Result<PathBuf, String> {
+    let app_dir = entry
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "desktop_pet_e_app_dir_missing".to_string())?;
+    Ok(normalize_process_path(app_dir.to_path_buf()))
+}
+
 fn start_process<R: Runtime>(
     manager: DesktopPetEManager,
     app: AppHandle<R>,
@@ -599,11 +605,11 @@ fn start_process<R: Runtime>(
     state.ready = false;
     let generation = state.generation;
     let instance_id = Uuid::new_v4().to_string();
+    let app_dir_arg = electron_app_dir_argument(&entry)?;
     let runtime_arg = normalize_process_path(runtime);
-    let entry_arg = normalize_process_path(entry);
     let mut command = silent_command(&runtime_arg.to_string_lossy());
     command
-        .arg(&entry_arg)
+        .arg(&app_dir_arg)
         .arg("--cli-manager-pet-e")
         .arg("--instance-id")
         .arg(&instance_id)
@@ -860,6 +866,25 @@ pub fn desktop_pet_e_runtime_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn electron_receives_the_app_directory_argument() {
+        assert_eq!(
+            electron_app_dir_argument(Path::new(
+                r"\\?\C:\Program Files\CLI-Manager\pet-e\app\main.js",
+            ))
+            .unwrap(),
+            PathBuf::from(r"C:\Program Files\CLI-Manager\pet-e\app"),
+        );
+        assert_eq!(
+            electron_app_dir_argument(Path::new(
+                r"\\?\UNC\server\share\CLI-Manager\pet-e\app\main.js",
+            ))
+            .unwrap(),
+            PathBuf::from(r"\\server\share\CLI-Manager\pet-e\app"),
+        );
+    }
 
     #[cfg(target_os = "windows")]
     #[test]
