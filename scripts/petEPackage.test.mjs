@@ -147,7 +147,9 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   assert.match(manager, /fn normalize_process_path/);
   assert.match(manager, /fn electron_app_dir_argument/);
   assert.match(manager, /struct DesktopPetEHostPipe/);
+  assert.match(manager, /use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX/);
   assert.match(manager, /CreateNamedPipeW/);
+  assert.doesNotMatch(manager, /System::Pipes::\{[^}]*PIPE_ACCESS_DUPLEX/s);
   assert.match(manager, /PIPE_REJECT_REMOTE_CLIENTS/);
   assert.match(manager, /\.arg\("--host-pipe"\)/);
   assert.match(manager, /host_pipe\.connect\(HOST_PIPE_CONNECT_TIMEOUT\)/);

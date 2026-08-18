@@ -32,9 +32,11 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, ERROR_PIPE_LISTENING, INVALID_HANDLE_VALUE,
 };
 #[cfg(target_os = "windows")]
+use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+#[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, SetNamedPipeHandleState, PIPE_ACCESS_DUPLEX,
-    PIPE_NOWAIT, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, SetNamedPipeHandleState, PIPE_NOWAIT,
+    PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
 };
 
 const ACTION_EVENT: &str = "desktop-pet-e-action";
