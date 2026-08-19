@@ -1080,3 +1080,24 @@ Fixed CRLF-safe Kimi frontend test extraction and Unix-only SSH Agent planner co
 ### Status
 
 [OK] **Completed**
+
+
+## Session 93: Review and harden PR 220 Kimi history
+
+**Date**: 2026-08-20
+**Task**: Review and harden PR 220 Kimi history
+**Branch**: `pr220`
+
+### Summary
+
+Reviewed PR #220 against current Kimi Code, fixed wire usage parsing, append-only index and tombstone behavior, session-id command validation, added regression coverage, ran full checks, and updated V1.3.7 documentation.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c52a9b7f` | (see git log) |
+
+### Status
+
+[OK] **Completed**
