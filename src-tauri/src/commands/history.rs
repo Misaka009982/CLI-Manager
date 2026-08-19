@@ -1755,9 +1755,12 @@ pub async fn history_delete_session(
     source: String,
     project_key: String,
 ) -> Result<(), String> {
+    let source = source.trim().to_lowercase();
+    if source == "opencode" {
+        return delete_opencode_session_from_locator(&file_path).await;
+    }
     tokio::task::spawn_blocking(move || {
         let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
-        let source = source.trim().to_lowercase();
         if !matches!(source.as_str(), "claude" | "codex") {
             return Err("unsupported_history_mutation_source".to_string());
         }
@@ -5705,10 +5708,17 @@ fn opencode_session_locator(db_path: &Path, session_id: &str) -> PathBuf {
     ))
 }
 
+fn is_valid_opencode_session_id(session_id: &str) -> bool {
+    let Some(suffix) = session_id.strip_prefix("ses_") else {
+        return false;
+    };
+    !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
 fn parse_opencode_session_locator(file_path: &str) -> Option<(PathBuf, String)> {
     let (db_path, session_id) = file_path.rsplit_once(OPENCODE_SESSION_LOCATOR_MARKER)?;
     let session_id = session_id.trim();
-    if db_path.trim().is_empty() || session_id.is_empty() {
+    if db_path.trim().is_empty() || !is_valid_opencode_session_id(session_id) {
         return None;
     }
     Some((PathBuf::from(db_path), session_id.to_string()))
@@ -5735,11 +5745,30 @@ fn opencode_sqlite_options(path: &Path) -> SqliteConnectOptions {
         .busy_timeout(Duration::from_secs(5))
 }
 
+fn opencode_sqlite_mutation_options(path: &Path) -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(false)
+        .create_if_missing(false)
+        .busy_timeout(Duration::from_secs(15))
+}
+
 async fn open_opencode_database(path: &Path) -> Result<SqliteConnection, String> {
     if !path.is_file() {
         return Err("opencode_database_not_found".to_string());
     }
     let mut conn = SqliteConnection::connect_with(&opencode_sqlite_options(path))
+        .await
+        .map_err(|err| err.to_string())?;
+    validate_opencode_schema(&mut conn).await?;
+    Ok(conn)
+}
+
+async fn open_opencode_database_for_mutation(path: &Path) -> Result<SqliteConnection, String> {
+    if !path.is_file() {
+        return Err("opencode_database_not_found".to_string());
+    }
+    let mut conn = SqliteConnection::connect_with(&opencode_sqlite_mutation_options(path))
         .await
         .map_err(|err| err.to_string())?;
     validate_opencode_schema(&mut conn).await?;
@@ -5760,6 +5789,51 @@ async fn validate_opencode_schema(conn: &mut SqliteConnection) -> Result<(), Str
     } else {
         Err("opencode_schema_unsupported".to_string())
     }
+}
+
+async fn delete_opencode_session_from_locator(file_path: &str) -> Result<(), String> {
+    let (db_path, session_id) = parse_opencode_session_locator(file_path)
+        .ok_or_else(|| "invalid_session_file".to_string())?;
+    if !path_equals_lenient(&db_path, &resolve_opencode_database_path()) {
+        return Err("session_file_outside_history_scope".to_string());
+    }
+    ensure_source_mutation_unlocked("opencode")?;
+    delete_opencode_session_from_database(&db_path, &session_id).await?;
+    invalidate_history_caches();
+    Ok(())
+}
+
+async fn delete_opencode_session_from_database(
+    db_path: &Path,
+    session_id: &str,
+) -> Result<(), String> {
+    let mut conn = open_opencode_database_for_mutation(db_path).await?;
+    let mut transaction = conn.begin().await.map_err(|err| err.to_string())?;
+
+    sqlx::query("DELETE FROM part WHERE session_id = ?1")
+        .bind(session_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|err| err.to_string())?;
+    sqlx::query("DELETE FROM message WHERE session_id = ?1")
+        .bind(session_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|err| err.to_string())?;
+    let deleted_session = sqlx::query("DELETE FROM session WHERE id = ?1")
+        .bind(session_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|err| err.to_string())?;
+    if deleted_session.rows_affected() != 1 {
+        transaction
+            .rollback()
+            .await
+            .map_err(|err| err.to_string())?;
+        return Err("session_file_not_indexed".to_string());
+    }
+    transaction.commit().await.map_err(|err| err.to_string())?;
+    Ok(())
 }
 
 async fn opencode_catalog_sessions() -> Result<Option<Vec<OpenCodeParsedSession>>, String> {
@@ -14642,18 +14716,15 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn parse_opencode_database_reads_sqlite_sessions() {
-        let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("opencode.db");
+    async fn open_opencode_test_database(db_path: &Path) -> SqliteConnection {
         let mut conn = SqliteConnection::connect_with(
             &SqliteConnectOptions::new()
-                .filename(&db_path)
+                .filename(db_path)
                 .create_if_missing(true),
         )
         .await
         .unwrap();
-        sqlx::query(
+        for statement in [
             "CREATE TABLE session(
                 id TEXT PRIMARY KEY,
                 directory TEXT,
@@ -14662,11 +14733,6 @@ mod tests {
                 time_created REAL,
                 time_updated REAL
              )",
-        )
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        sqlx::query(
             "CREATE TABLE message(
                 id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
@@ -14674,11 +14740,6 @@ mod tests {
                 time_updated REAL,
                 data TEXT NOT NULL
              )",
-        )
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        sqlx::query(
             "CREATE TABLE part(
                 id TEXT PRIMARY KEY,
                 message_id TEXT NOT NULL,
@@ -14687,10 +14748,17 @@ mod tests {
                 time_updated REAL,
                 data TEXT NOT NULL
              )",
-        )
-        .execute(&mut conn)
-        .await
-        .unwrap();
+        ] {
+            sqlx::query(statement).execute(&mut conn).await.unwrap();
+        }
+        conn
+    }
+
+    #[tokio::test]
+    async fn parse_opencode_database_reads_sqlite_sessions() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("opencode.db");
+        let mut conn = open_opencode_test_database(&db_path).await;
         sqlx::query(
             "INSERT INTO session(id, directory, title, slug, time_created, time_updated)
              VALUES ('ses_1', 'F:\\idea-work\\business-center', 'OpenCode title', 'slug', 1700000000, 1700000010)",
@@ -14762,6 +14830,123 @@ mod tests {
         assert_eq!(parsed.computed.stats.cache_creation_tokens, 2);
         assert_eq!(parsed.tool_events.len(), 1);
         assert_eq!(parsed.tool_events[0].name, "Edit");
+    }
+
+    #[test]
+    fn opencode_session_locator_requires_a_valid_session_id() {
+        let valid = parse_opencode_session_locator(
+            "C:/Users/test/.local/share/opencode/opencode.db#session=ses_abc123",
+        );
+        assert_eq!(
+            valid,
+            Some((
+                PathBuf::from("C:/Users/test/.local/share/opencode/opencode.db"),
+                "ses_abc123".to_string(),
+            )),
+        );
+        assert!(parse_opencode_session_locator("C:/test/opencode.db#session=msg_abc123").is_none());
+        assert!(parse_opencode_session_locator("C:/test/opencode.db#session=ses_bad-id").is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_opencode_session_is_transactional_and_isolated() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("opencode.db");
+        let mut conn = open_opencode_test_database(&db_path).await;
+
+        sqlx::query(
+            "INSERT INTO session(id, directory, title, slug, time_created, time_updated)
+             VALUES
+                ('ses_delete', 'F:/workspace/delete', 'delete', 'delete', 1, 1),
+                ('ses_keep', 'F:/workspace/keep', 'keep', 'keep', 1, 1)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO message(id, session_id, time_created, time_updated, data)
+             VALUES
+                ('msg_delete', 'ses_delete', 1, 1, '{}'),
+                ('msg_keep', 'ses_keep', 1, 1, '{}'),
+                ('msg_missing', 'ses_missing', 1, 1, '{}')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO part(id, message_id, session_id, time_created, time_updated, data)
+             VALUES
+                ('part_delete', 'msg_delete', 'ses_delete', 1, 1, '{}'),
+                ('part_keep', 'msg_keep', 'ses_keep', 1, 1, '{}'),
+                ('part_missing', 'msg_missing', 'ses_missing', 1, 1, '{}')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        conn.close().await.unwrap();
+
+        assert_eq!(
+            delete_opencode_session_from_database(&db_path, "ses_missing")
+                .await
+                .unwrap_err(),
+            "session_file_not_indexed",
+        );
+
+        let mut conn = open_opencode_database(&db_path).await.unwrap();
+        let missing_messages: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM message WHERE session_id = 'ses_missing'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        let missing_parts: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM part WHERE session_id = 'ses_missing'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!((missing_messages, missing_parts), (1, 1));
+        conn.close().await.unwrap();
+
+        delete_opencode_session_from_database(&db_path, "ses_delete")
+            .await
+            .unwrap();
+
+        let mut conn = open_opencode_database(&db_path).await.unwrap();
+        let deleted_session: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM session WHERE id = 'ses_delete'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        let deleted_messages: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM message WHERE session_id = 'ses_delete'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        let deleted_parts: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM part WHERE session_id = 'ses_delete'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        let kept_session: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM session WHERE id = 'ses_keep'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        let kept_messages: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM message WHERE session_id = 'ses_keep'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        let kept_parts: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM part WHERE session_id = 'ses_keep'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+
+        assert_eq!(
+            (deleted_session, deleted_messages, deleted_parts),
+            (0, 0, 0)
+        );
+        assert_eq!((kept_session, kept_messages, kept_parts), (1, 1, 1));
     }
 
     #[test]

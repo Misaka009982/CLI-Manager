@@ -93,6 +93,7 @@ const { HISTORY_SOURCE_DESCRIPTOR_BY_ID } = await import(pathToFileURL(historySo
 
 const OLD_ID = "019f2c9e-ed25-73e1-a883-86d578fc9e08";
 const NEW_ID = "019f5e8b-2d11-76d1-89b4-a0c0ff20d111";
+const OPENCODE_ID = "ses_abc123";
 
 test("extracts an explicit Codex resume session id", () => {
   const cases = [
@@ -311,8 +312,8 @@ test("remote handoff resume preserves each Agent identity and strips conflicting
     `pi --session ${NEW_ID} --model opus`,
   );
   assert.equal(
-    buildRemoteHandoffResumeCommand("opencode", NEW_ID, project("opencode", `--model openai/gpt-5 --session=${OLD_ID}`)),
-    `opencode --session ${NEW_ID} --model openai/gpt-5`,
+    buildRemoteHandoffResumeCommand("opencode", OPENCODE_ID, project("opencode", `--model openai/gpt-5 --session=${OLD_ID} -s ${OLD_ID}`)),
+    `opencode --session ${OPENCODE_ID} --model openai/gpt-5`,
   );
   assert.equal(buildRemoteHandoffResumeCommand("opencode", "bad id"), null);
 });
