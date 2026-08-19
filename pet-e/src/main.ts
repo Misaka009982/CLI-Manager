@@ -196,6 +196,10 @@ function geometryKey(config: DesktopPetEConfigPayload): string {
 function setWindowMouseInteractive(interactive: boolean): void {
   const win = windowRef;
   if (!win || win.isDestroyed()) return;
+  if (latestConfig?.settings.clickThroughEnabled === false) {
+    win.setIgnoreMouseEvents(false);
+    return;
+  }
   if (interactive) win.setIgnoreMouseEvents(false);
   else win.setIgnoreMouseEvents(true, { forward: true });
 }
@@ -216,8 +220,10 @@ function applyConfig(config: DesktopPetEConfigPayload): void {
   win.webContents.setZoomFactor(scale);
   win.setAlwaysOnTop(config.settings.alwaysOnTop, "floating");
   win.setMovable(!config.settings.lockPosition);
-  if (config.visible) win.showInactive();
-  else {
+  if (config.visible) {
+    win.showInactive();
+    setWindowMouseInteractive(false);
+  } else {
     setWindowMouseInteractive(false);
     win.hide();
   }

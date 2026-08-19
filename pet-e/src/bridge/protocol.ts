@@ -33,6 +33,7 @@ export interface DesktopPetESettings {
   size: number;
   position: DesktopPetEPosition | null;
   lockPosition: boolean;
+  clickThroughEnabled: boolean;
   alwaysOnTop: boolean;
   soundEnabled: boolean;
   showStatusLabel: boolean;
@@ -50,6 +51,7 @@ export const DEFAULT_DESKTOP_PET_E_SETTINGS: Readonly<DesktopPetESettings> = Obj
   size: DESKTOP_PET_E_SIZE_DEFAULT_PERCENT,
   position: null,
   lockPosition: false,
+  clickThroughEnabled: false,
   alwaysOnTop: true,
   soundEnabled: true,
   showStatusLabel: false,
@@ -309,6 +311,7 @@ export function normalizeDesktopPetESettings(
     size: normalizeDesktopPetESize(raw.size, fallback.size),
     position: normalizePosition(raw.position),
     lockPosition: normalizeBoolean(raw.lockPosition, fallback.lockPosition),
+    clickThroughEnabled: normalizeBoolean(raw.clickThroughEnabled, fallback.clickThroughEnabled),
     alwaysOnTop: normalizeBoolean(raw.alwaysOnTop, fallback.alwaysOnTop),
     soundEnabled: normalizeBoolean(raw.soundEnabled, fallback.soundEnabled),
     showStatusLabel: normalizeBoolean(raw.showStatusLabel, fallback.showStatusLabel),

@@ -23,6 +23,7 @@ import {
   MessageSquareText,
   MonitorUp,
   MousePointer2,
+  MousePointerClick,
   Palette,
   RefreshCw,
   RotateCcw,
@@ -352,6 +353,13 @@ export function DesktopPetESettingsPage() {
             description={t("desktopPetE.settings.lockPositionDescription")}
             checked={desktopPetE.lockPosition}
             onChange={(checked) => void patch({ lockPosition: checked })}
+          />
+          <ToggleRow
+            icon={<MousePointerClick size={18} />}
+            title={t("desktopPetE.settings.clickThrough")}
+            description={t("desktopPetE.settings.clickThroughDescription")}
+            checked={desktopPetE.clickThroughEnabled}
+            onChange={(checked) => void patch({ clickThroughEnabled: checked })}
           />
           <ToggleRow
             icon={<MonitorUp size={18} />}

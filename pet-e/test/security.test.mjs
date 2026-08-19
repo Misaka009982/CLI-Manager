@@ -17,6 +17,8 @@ test("Electron 窗口保持最小权限配置", () => {
   assert.match(preload, /function subscribe<T>/);
   assert.match(preload, /ipcRenderer\.on\(channel, handler\)/);
   assert.match(preload, /setMouseInteractive: \(interactive: boolean\)/);
+  assert.match(main, /latestConfig\?\.settings\.clickThroughEnabled === false/);
+  assert.match(main, /setIgnoreMouseEvents\(false\)/);
   assert.match(main, /setIgnoreMouseEvents\(true, \{ forward: true \}\)/);
   assert.match(main, /typeof value !== "boolean"/);
 });

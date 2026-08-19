@@ -32,6 +32,7 @@ test("Desktop Pet E settings have local, deterministic defaults", () => {
     size: 100,
     position: null,
     lockPosition: false,
+    clickThroughEnabled: false,
     alwaysOnTop: true,
     soundEnabled: true,
     showStatusLabel: false,
@@ -42,6 +43,14 @@ test("Desktop Pet E settings have local, deterministic defaults", () => {
     notificationsEnabled: true,
     agentInteractionEnabled: true,
   });
+});
+
+test("click-through defaults off so native drag regions receive mouse input", () => {
+  const mainSource = readFileSync(new URL("../pet-e/src/main.ts", import.meta.url), "utf8");
+  assert.match(settingsPageSource, /desktopPetE\.settings\.clickThrough/);
+  assert.match(settingsPageSource, /checked=\{desktopPetE\.clickThroughEnabled\}/);
+  assert.match(mainSource, /latestConfig\?\.settings\.clickThroughEnabled === false/);
+  assert.match(mainSource, /if \(config\.visible\) \{[\s\S]*setWindowMouseInteractive\(false\);/);
 });
 
 test("invalid pet IDs, size, and position values are normalized", () => {
