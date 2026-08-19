@@ -11,6 +11,10 @@
 
 ## [TEMP] - 2026-08-11
 
+### 供应商快捷切换
+
+- 修复终端右侧供应商面板拖拽排序时卡片横向偏移扩大滚动区域、触发底部横向滚动条的问题；拖拽现在仅沿纵轴移动，原有排序与纵向滚动保持不变。
+
 ### 终端 OSC 52 剪贴板
 
 - 内置终端现在拦截远程/全屏 TUI 发出的 OSC 52（含 tmux DCS passthrough），解码后写入 Tauri 本机剪贴板，不再依赖远端 `xclip`/`DISPLAY`。序列会从可见输出中剥离，避免刷出 base64。
@@ -18,6 +22,10 @@
 - 「设置 -> 快捷键」提供独立的 OSC 52 写入与读取本机剪贴板开关；关闭后仍剥离序列，且对应操作不会发生。
 - `Ctrl+Shift+C` 在终端中复制选区（可在「设置 -> 快捷键」改绑），并仅在终端区域阻止 Chromium 检查元素；调试仍用 F12。
 - 恢复 V1.3.2 鼠标策略：普通拖动选择终端文本，按住 Alt 才把点击/拖动发给底层 TUI，避免 Grok 松手重绘清掉选区。
+
+### Git 变更面板
+
+- 修复 Windows 上 libgit2 误判仓库所有者导致 Git 变更列表显示“无文件变更”的问题；仅在所有者校验失败时受锁保护地兼容重试，并在确实失败时显示真实错误。
 
 ### Hook 审批通知
 
@@ -56,10 +64,6 @@
 
 ### 远程托管
 
-- 桌面宠物远程托管新增本地 Claude Code、Pi 和 OpenCode 会话支持，并保留现有本地/SSH Codex 链路；Agent 类型现贯穿资格判断、cc-connect 配置、托管记录、Hook 归属和取消恢复，Grok Build、WSL 及非 Codex SSH 会话继续明确拒绝。
-- 本地托管的预检、cc-connect 配置和 Codex app-server 代理统一使用项目登记的 `cli_tool + cli_args`；绝对路径、Windows 脚本启动器及安全的附加参数不再回退为 PATH 中的默认命令，自由 `startup_cmd` 仍不会交给远程托管执行。
-- 交接记录只对 schema v1 缺失的 Agent 兼容注入 Codex；schema v2 缺失或非法 Agent 会拒绝读取，避免损坏记录静默切换到错误 CLI。
-- Claude Code 托管复用项目/Worktree 登记的 Provider 快照，取消后按原 Session 与 Provider 恢复；Pi、OpenCode 跟随各自配置，Pi 启用 cc-connect RPC，OpenCode 在桌宠候选中提示审批能力边界。Provider 密钥和项目敏感环境变量只注入受管进程环境，不写入 cc-connect TOML。
 - 修复项目 Provider 锁定逻辑把运行时专用的 `--profile` 传给 Codex app-server、导致 cc-connect 启动探针立即失败的问题；app-server 继续使用完整 `-c` 覆盖锁定登记 Provider，普通 Codex 运行命令仍保留生成的 Provider profile。
 - 修复 Provider 密钥只注入 cc-connect 父进程、未传入 Codex Agent 子进程的问题；受管配置仅保存环境变量占位符，不落盘密钥明文。
 

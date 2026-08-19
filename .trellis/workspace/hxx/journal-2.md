@@ -983,3 +983,57 @@ OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 89: 修复 SSH Grok 会话历史打开提示
+
+**Date**: 2026-08-18
+**Task**: 修复 SSH Grok 会话历史打开提示
+**Branch**: `master`
+
+### Summary
+
+SSH Grok 在历史入口改为显示明确的暂不支持提示，避免暴露底层 history_remote_source_required 错误。
+
+### Main Changes
+
+- 将 SSH 会话历史能力限制为远程桥接已支持的 Claude Code 与 Codex CLI。
+- 在侧边栏和终端工具栏统一显示 Grok 暂不支持查看会话历史的中英文提示。
+- 补充能力矩阵测试、V1.3.7 交付记录和历史契约。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `60372d68` | (see git log) |
+
+### Testing
+
+- [OK] node --test scripts/projectCapabilities.test.mjs scripts/sshRemoteFileContext.test.mjs（5/5 通过）
+- [OK] npx tsc --noEmit（通过）
+- [OK] npm run build（通过）
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 90: 历史会话对话消息操作栏
+
+**Date**: 2026-08-18
+**Task**: 历史会话对话消息操作栏
+**Branch**: `master`
+
+### Summary
+
+对话页复用原文消息操作栏；编辑和插入通过既有闸门后切换原文表单，SSH/快照保持只读，并补齐 V1.3.7 记录与历史会话契约。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9f8602bb` | (see git log) |
+
+### Status
+
+[OK] **Completed**

@@ -430,7 +430,7 @@ function isImage(path: string): boolean {
 const TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
 const IMAGE_PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
 const VIDEO_EXTENSIONS = new Set([
-  "3g2", "3gp", "avi", "flv", "m2ts", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "mts", "ogv", "ts", "webm", "wmv",
+  "3g2", "3gp", "avi", "flv", "m2ts", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "mts", "ogv", "webm", "wmv",
 ]);
 
 function previewGuardError(path: string, sizeBytes: number): string | null {
