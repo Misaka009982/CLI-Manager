@@ -11,6 +11,11 @@
 
 ## [TEMP] - 2026-08-19
 
+### Kimi Code 历史会话与实时统计
+
+- 本地与 WSL 的当前 Kimi Code 历史接入列表、搜索、统计、删除和恢复：读取 `$KIMI_CODE_HOME` 或 `~/.kimi-code` 下的 `session_index.jsonl` 与 `sessions/*/agents/main/wire.jsonl`，catalog 未索引时按精确 sessionId 直查磁盘。删除会备份后移除整个会话目录并改写索引。恢复使用 `kimi --session <id>`。旧 `~/.kimi` 不会被扫描或迁移；SSH Kimi 历史仍不支持。
+- 终端实时统计识别 Kimi 来源并严格绑定 Hook `sessionId`，不回退到项目最近会话。历史根优先使用历史来源设置，其次 Hook 配置目录，不会给本地启动注入 `KIMI_CODE_HOME`。
+
 ### Kimi Code CLI 与 Hook 集成
 
 - SSH 主机“CLI 集成”新增 Kimi Code，支持 `$HOME/.kimi-code` 默认根、项目级覆盖、非空有效覆盖根的 `KIMI_CODE_HOME` 安全注入，以及远端 Hook 的检查、事务预览、安装和卸载；空根保留远端原生环境，Kimi 仅作为 CLI/Hook source，远程历史继续只支持 Claude Code 与 Codex CLI。

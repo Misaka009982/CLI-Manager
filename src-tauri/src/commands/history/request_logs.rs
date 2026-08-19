@@ -626,13 +626,15 @@ pub async fn history_sync_request_logs(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
     force: Option<bool>,
 ) -> Result<RequestLogSyncResult, String> {
     let _guard = request_log_sync_lock().lock().await;
     let mut conn = open_cli_manager_db().await?;
     let result = sync_request_logs_with_connection(
         &mut conn,
-        history_roots(claude_config_dir, codex_config_dir, grok_session_root),
+        history_roots(claude_config_dir, codex_config_dir, grok_session_root)
+            .with_kimi_config_dir(kimi_config_dir),
         force.unwrap_or(false),
     )
     .await?;
@@ -995,9 +997,11 @@ pub async fn history_list_request_logs(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
 ) -> Result<RequestLogPage, String> {
     let filters = filters.unwrap_or_default();
-    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root)
+        .with_kimi_config_dir(kimi_config_dir);
     let allowed_paths = resolve_request_log_project_paths(&filters, &roots, false).await?;
     let mut conn = open_cli_manager_db().await?;
     list_request_logs_with_connection(
@@ -1086,6 +1090,7 @@ pub async fn history_get_request_log_stats(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
 ) -> Result<RequestLogStatsResponse, String> {
     let mut filters = filters.unwrap_or_default();
     if normalized_filter(filters.source.as_ref())
@@ -1108,7 +1113,8 @@ pub async fn history_get_request_log_stats(
     } else {
         "day"
     };
-    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root)
+        .with_kimi_config_dir(kimi_config_dir);
     let allowed_paths = resolve_request_log_project_paths(&filters, &roots, false).await?;
     let mut conn = open_cli_manager_db().await?;
     let mut builder = QueryBuilder::<Sqlite>::new(

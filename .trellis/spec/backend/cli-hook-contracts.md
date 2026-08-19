@@ -19,7 +19,7 @@ is_valid_payload(payload: &ClaudeHookRequest) -> bool
 
 ### 3. Contracts
 
-- A Hook source is supported only when the installer, `__hook` client, HTTP receiver, frontend `CliHookSource`, and realtime binding all recognize the same source value. Hook support and history support are independent capabilities; a Hook-only source must remain excluded from history types and RPCs.
+- A Hook source is supported only when the installer, `__hook` client, HTTP receiver, frontend `CliHookSource`, and realtime binding all recognize the same source value. Hook support and history support are independent capabilities. Local Kimi history (list/delete/resume/realtime stats) is supported for `$KIMI_CODE_HOME` / `~/.kimi-code`; SSH Kimi history remains unsupported and must stay excluded from remote history types and RPCs. Legacy `~/.kimi` is never treated as a history source.
 - `normalize_source` preserves `grok`; unknown explicit values normalize to an empty value and are rejected.
 - Grok installer maps approval attention to `PreToolUse` with matcher `Bash|Edit|Write|MultiEdit`, then reports it as `PermissionRequest`; Grok 0.2.111 does not expose a native `PermissionRequest` hook and `Notification` is not an approval event.
 - Grok accepts `SessionStart`, `UserPromptSubmit`, legacy `Notification`, `PermissionRequest`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, `AgentToolStart`, `AgentToolStop`, `ToolStart`, and `ToolStop`. Uninstalling the attention module must remove only its `PreToolUse -> PermissionRequest` command and preserve `ToolStart`/sub-agent hooks sharing the same native event.
@@ -183,7 +183,7 @@ return candidates.length === 1 ? candidates[0] : null;
 - Assert `PermissionRequest -> PermissionResult` and running/attention `-> Interrupt` close the frontend state without completion/failure notifications.
 - Assert current-product doctor capability, candidate validation, atomic-failure preservation, invalid TOML, exact ownership, similar-command isolation, duplicate convergence, and module uninstall.
 - Assert Kimi Subagent events bind and enter Replay without opening a transcript split pane.
-- Assert Kimi remains rejected by every local/remote history entry point.
+- Assert SSH Kimi remains rejected by every remote history entry point. Local/WSL Kimi history list/delete/resume/realtime stats are covered by history-index and history-session contracts.
 - Source-inspecting frontend lifecycle tests must normalize CRLF to LF before applying LF-structured regular expressions. The SSH Agent Kimi TOML planner test uses real canonical paths and must run under Unix path semantics; non-Linux hosts still compile the Agent test target for Linux rather than weakening canonical-root validation.
 
 ## Scenario: Per-Tool Hook Bridge Enablement

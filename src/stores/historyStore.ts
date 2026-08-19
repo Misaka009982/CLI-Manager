@@ -1330,8 +1330,8 @@ function normalizeRequestLogStats(raw: unknown): RequestLogStatsPayload {
 }
 
 function getHistoryPathCacheKey(): string {
-  const { claudeConfigDir, codexConfigDir } = getHistoryPathArgsSync();
-  return `${claudeConfigDir ?? "__default__"}|${codexConfigDir ?? "__default__"}`;
+  const { claudeConfigDir, codexConfigDir, grokSessionRoot, kimiConfigDir } = getHistoryPathArgsSync();
+  return `${claudeConfigDir ?? "__default__"}|${codexConfigDir ?? "__default__"}|${grokSessionRoot ?? "__default__"}|${kimiConfigDir ?? "__default__"}`;
 }
 
 function makeSessionKey(

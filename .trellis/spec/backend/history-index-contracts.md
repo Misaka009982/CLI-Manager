@@ -19,6 +19,7 @@
 - The catalog DB is derived and rebuildable; never store it in `cli-manager.db` or treat it as user-authored data.
 - List requests query cached summaries first and schedule fingerprint-based background refresh.
 - A realtime lookup scoped to `source=grok`, an exact UUID session ID, `limit=1`, and `offset=0` may bypass a catalog miss by checking only `<grok-root>/sessions/<workspace>/<session-id>/updates.jsonl`; it must validate the UUID before joining paths and still honor the optional project path.
+- A realtime lookup scoped to `source=kimi`, a valid Kimi session ID, `limit=1`, and `offset=0` may bypass a catalog miss by checking `session_index.jsonl` and `<kimi-home>/sessions/<workDirKey>/<session-id>/agents/main/wire.jsonl`. The ID must be 1–128 characters of `[A-Za-z0-9_-]` with no `/`, `\`, NUL, or `..`; do not use UUID parsing. Honor the optional project path. Legacy `~/.kimi` is never scanned.
 - Realtime forced refresh uses `history_refresh_index(..., wait=false)`. A large derived catalog rebuild must never hold the panel's single-flight polling request; later polls consume the direct Grok result or refreshed catalog.
 - Opening history must schedule the same TTL-governed refresh even when the frontend reuses its in-memory list.
 - Search requires at least three Unicode characters and uses FTS5 trigram literal matching; user text must be quoted/escaped before `MATCH`.
@@ -39,6 +40,7 @@
 | Catalog refresh fails | Keep previous rows and emit `phase=error`; never delete source JSONL. |
 | Catalog DB is malformed | Recreate only the derived catalog and rebuild. |
 | Exact Grok UUID is absent from catalog but exists on disk | Return that session directly without scanning every transcript or falling back to the project's latest session. |
+| Exact Kimi session ID is absent from catalog but exists on disk | Return that session directly without scanning every transcript or falling back to the project's latest session. |
 
 ### 5. Good/Base/Bad Cases
 

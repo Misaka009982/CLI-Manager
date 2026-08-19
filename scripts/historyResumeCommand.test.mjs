@@ -23,6 +23,11 @@ writeFileSync(
   `export const appendResumeCliArgs = (base) => base;\n`,
   "utf8",
 );
+writeFileSync(
+  join(tempDir, "resumeCliArgs.mjs"),
+  `export const stripKimiResumeCliArgs = (value) => value ?? "";\n`,
+  "utf8",
+);
 const transpiled = ts.transpileModule(source, {
   compilerOptions: {
     module: ts.ModuleKind.ES2022,
@@ -38,7 +43,8 @@ assert.deepEqual(
 );
 const output = transpiled.outputText
   .replace('from "./cliTools"', 'from "./cliTools.mjs"')
-  .replace('from "./projectStartupCommand"', 'from "./projectStartupCommand.mjs"');
+  .replace('from "./projectStartupCommand"', 'from "./projectStartupCommand.mjs"')
+  .replace('from "./resumeCliArgs"', 'from "./resumeCliArgs.mjs"');
 const outputPath = join(tempDir, "historyResumeCommand.mjs");
 writeFileSync(outputPath, output, "utf8");
 
@@ -105,5 +111,9 @@ test("other history sources keep their existing command builders", () => {
   assert.equal(
     buildHistoryResumeCommand({ source: "claude", session_id: "session-claude" }),
     "claude --resume session-claude",
+  );
+  assert.equal(
+    buildHistoryResumeCommand({ source: "kimi", session_id: "01KIMISESSIONID0000000001" }),
+    "kimi --session 01KIMISESSIONID0000000001",
   );
 });

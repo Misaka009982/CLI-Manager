@@ -42,6 +42,7 @@ function isSourceId(value: string): value is HistorySourceId {
     "copilot",
     "antigravity",
     "grok",
+    "kimi",
     "pi",
     "opencode",
     "kiro",

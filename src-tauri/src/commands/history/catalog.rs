@@ -4228,6 +4228,7 @@ mod tests {
                 r"\\wsl.localhost\Ubuntu-22.04\home\dministrator\.codex",
             )),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let wsl_file = r"\\wsl.localhost\Ubuntu-22.04\home\dministrator\.codex\sessions\2026\07\14\rollout.jsonl";
         let native_file = r"\\?\C:\Users\Administrator\.codex\sessions\2026\07\02\rollout.jsonl";
@@ -4247,6 +4248,7 @@ mod tests {
             claude_config_dir: None,
             codex_config_dir: Some(codex_dir),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
 
         assert!(catalog_path_within_roots(
@@ -4947,6 +4949,7 @@ mod tests {
             claude_config_dir: Some(claude_root.clone()),
             codex_config_dir: None,
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let roots_key = roots.cache_key();
         let v2_file = claude_root
@@ -5040,6 +5043,7 @@ mod tests {
             claude_config_dir: Some(claude_root.clone()),
             codex_config_dir: None,
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let roots_key = roots.cache_key();
         let v2_file = claude_root
@@ -5138,6 +5142,7 @@ mod tests {
             claude_config_dir: Some(claude_root.clone()),
             codex_config_dir: None,
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let file = claude_root
             .join("projects")
@@ -5317,6 +5322,7 @@ mod tests {
             claude_config_dir: Some(claude_root.clone()),
             codex_config_dir: None,
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let file = claude_root
             .join("projects")
@@ -5443,6 +5449,7 @@ mod tests {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let roots_key = roots.cache_key();
         let file = resolve_claude_history_root(&roots)
@@ -5614,6 +5621,7 @@ mod tests {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let roots_key = roots.cache_key();
         let file = resolve_codex_history_root(&roots)
@@ -5716,6 +5724,7 @@ mod tests {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let roots_key = roots.cache_key();
         let file = temp_dir.path().join("gemini-session.json");

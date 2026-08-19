@@ -1131,13 +1131,14 @@ function prepareStartupCommandForPty(command: string | undefined, shell: ShellKe
 const CODEX_COMMAND_PATTERN = /(?:^|\s)codex(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
 const CLAUDE_COMMAND_PATTERN = /(?:^|\s)claude(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
 const GROK_COMMAND_PATTERN = /(?:^|\s)grok(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
+const KIMI_COMMAND_PATTERN = /(?:^|\s)kimi(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
 
 // 恢复会话时判定它是否为 codex/claude/grok 这类 TUI CLI 会话。判定依据 = startupCmd 文本 + 项目 cli_tool 配置。
 // 判不出（如普通 pwsh/bash）返回 null，走 shell 分支（静态贴回 scrollback）。
 export function detectCliResumeKind(
   startupCmd: string | undefined,
   project: Project | undefined
-): "claude" | "codex" | "grok" | null {
+): "claude" | "codex" | "grok" | "kimi" | null {
   const cmd = startupCmd?.trim() ?? "";
   const projectKind = project ? getProviderSwitchAppType(project) : null;
   const cliTool = project?.cli_tool?.trim().toLowerCase() ?? "";
@@ -1151,6 +1152,9 @@ export function detectCliResumeKind(
   if (cliTool.includes("grok") || GROK_COMMAND_PATTERN.test(cmd)) {
     return "grok";
   }
+  if (cliTool.includes("kimi") || KIMI_COMMAND_PATTERN.test(cmd)) {
+    return "kimi";
+  }
   return null;
 }
 
@@ -1158,7 +1162,7 @@ export function detectCliResumeKind(
 // 定位整屏重绘，会盖掉我们贴回的历史文本（见 research/tui-startup-clear-sequences.md），因此改由 CLI
 // 自己 resume 重画上次对话。有 cliSessionId 走带 id 的 resume；无 id 兜底续最近一次（用户已拍板）。
 function buildCliResumeStartupCommand(
-  kind: "claude" | "codex" | "grok",
+  kind: "claude" | "codex" | "grok" | "kimi",
   cliSessionId: string | undefined,
   project: Project | undefined,
   options: { includeProviderOverrides?: boolean } = {},
@@ -1173,6 +1177,10 @@ function buildCliResumeStartupCommand(
     // Align with Claude: no --no-alt-screen by default. No id → cwd-scoped continue.
     const base = hasValidId ? `grok --resume ${id}` : "grok --continue";
     return appendResumeCliArgs(base, "grok", project ?? null, options);
+  }
+  if (kind === "kimi") {
+    const base = hasValidId ? `kimi --session ${id}` : "kimi --continue";
+    return appendResumeCliArgs(base, "kimi", project ?? null, options);
   }
   const base = hasValidId ? `claude --resume ${id}` : "claude --continue";
   return appendResumeCliArgs(base, "claude", project ?? null, options);
