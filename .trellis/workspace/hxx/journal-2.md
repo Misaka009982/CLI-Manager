@@ -1037,3 +1037,25 @@ SSH Grok 在历史入口改为显示明确的暂不支持提示，避免暴露�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 91: Fix PR #219 Kimi cross-platform tests
+
+**Date**: 2026-08-19
+**Task**: Fix PR #219 Kimi cross-platform tests
+**Branch**: `agent/kimi-code-cli-hooks`
+
+### Summary
+
+Fixed CRLF-safe Kimi frontend test extraction and Unix-only SSH Agent planner coverage; validated and pushed the PR branch for review.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a9781941` | (see git log) |
+| `2152a22d` | (see git log) |
+
+### Status
+
+[OK] **Completed**
