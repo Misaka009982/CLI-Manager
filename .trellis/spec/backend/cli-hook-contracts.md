@@ -184,6 +184,7 @@ return candidates.length === 1 ? candidates[0] : null;
 - Assert current-product doctor capability, candidate validation, atomic-failure preservation, invalid TOML, exact ownership, similar-command isolation, duplicate convergence, and module uninstall.
 - Assert Kimi Subagent events bind and enter Replay without opening a transcript split pane.
 - Assert Kimi remains rejected by every local/remote history entry point.
+- Source-inspecting frontend lifecycle tests must normalize CRLF to LF before applying LF-structured regular expressions. The SSH Agent Kimi TOML planner test uses real canonical paths and must run under Unix path semantics; non-Linux hosts still compile the Agent test target for Linux rather than weakening canonical-root validation.
 
 ## Scenario: Per-Tool Hook Bridge Enablement
 
