@@ -1144,6 +1144,36 @@ const { suffixParts, leaf: displayNode } = collectCompactDirectoryChain(node);
 
 ## Styling Patterns
 
+### Convention: Project-tree hover actions preserve row geometry
+
+**What**: A project row in `TreeNodeItem` that uses `.ui-tree-item-actions` must keep its action container in the flex layout at all times. Let the existing `.ui-tree-item-actions` opacity, visibility, pointer-events, and transform rules control the hover transition; do not swap the container between Tailwind `hidden` and `group-hover:flex`.
+
+**Why**: Toggling `display` inserts the 22px start-action button only after the pointer enters the row. In a narrow sidebar this reflows the project title and badges, which appears as hover jitter and can make the pointer target feel unstable.
+
+**Correct**:
+
+```tsx
+<span className="ui-tree-item-actions flex shrink-0 items-center gap-0.5">
+  <button className="icon-btn">…</button>
+</span>
+```
+
+**Wrong**:
+
+```tsx
+<span className="ui-tree-item-actions hidden shrink-0 group-hover/item:flex">
+  <button className="icon-btn">…</button>
+</span>
+```
+
+**Contracts**:
+
+- The project title and metadata keep a stable available width before, during, and after hover.
+- The hidden action remains non-interactive until the existing hover/focus CSS exposes it.
+- Do not change project selection, drag activation, double-click launch, or the folder/worktree action contracts as part of this visual fix.
+
+**Tests**: Run `npx tsc --noEmit` and `npm run build`. Manually hover a project with a long name and terminal/provider badges in compact and comfortable sidebar density, then verify the title, badges, row position, hover action, click, double-click, and drag behavior stay stable in one light and one dark theme.
+
 ### Convention: Terminal auxiliary panels share one themed header
 
 **What**: Realtime stats, Git changes, project files in `mode="panel"`, replay, system resources, and the provider quick-switch panel must render their top title through `TerminalPanelHeader`. The shared header uses `TERM_PANEL.bg` as its fallback and mirrors the terminal pane Tab bar gradient in both light and dark terminal themes.
