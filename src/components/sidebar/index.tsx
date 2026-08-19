@@ -30,7 +30,12 @@ import { shouldSidebarBootstrapProjects } from "../../lib/projectLoadPolicy";
 import { getProviderSwitchAppType, parseProjectEnvVars } from "../../lib/providerSwitching";
 import { projectWithWorktreePath, projectWithWorktreeProviderOverrides } from "../../lib/terminalProject";
 import { ALL_TERMINALS_SCOPE, collectProjectIdsForGroup, sessionMatchesTerminalScope } from "../../lib/terminalScope";
-import { projectSupportsCapability, type ProjectCapability } from "../../lib/projectCapabilities";
+import {
+  isSshGrokHistoryUnsupported,
+  isSshHistorySourceUnsupported,
+  projectSupportsCapability,
+  type ProjectCapability,
+} from "../../lib/projectCapabilities";
 import { TreeContext, worktreeListCollapseId, type TreeActions } from "./TreeContext";
 import { Portal } from "../ui/Portal";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "../ui/dialog";
@@ -207,8 +212,16 @@ export function Sidebar({
   const { t } = useI18n();
   const rejectUnsupportedCapability = useCallback((project: Project, capability: ProjectCapability) => {
     if (projectSupportsCapability(project, capability)) return false;
-    toast.info(t("remoteCapabilities.unsupportedTitle"), {
-      description: t("remoteCapabilities.unsupportedDescription"),
+    const sshHistoryUnsupported = capability === "history" && isSshHistorySourceUnsupported(project);
+    const title = sshHistoryUnsupported
+      ? isSshGrokHistoryUnsupported(project)
+        ? t("remoteCapabilities.grokHistoryUnsupportedTitle")
+        : t("remoteCapabilities.sshHistoryUnsupportedTitle")
+      : t("remoteCapabilities.unsupportedTitle");
+    toast.info(title, {
+      description: sshHistoryUnsupported
+        ? t("remoteCapabilities.sshHistoryUnsupportedDescription")
+        : t("remoteCapabilities.unsupportedDescription"),
     });
     return true;
   }, [t]);

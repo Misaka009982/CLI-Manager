@@ -88,6 +88,7 @@ Before implementation:
 - [ ] Identified all layer boundaries
 - [ ] Defined format at each boundary
 - [ ] Decided where validation happens
+- [ ] When file-type eligibility is duplicated across frontend, local backend, and remote agent, did every classifier agree and receive a regression test for ambiguous extensions?
 
 After implementation:
 - [ ] Tested with edge cases (null, empty, invalid)

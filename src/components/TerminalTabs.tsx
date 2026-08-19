@@ -62,7 +62,13 @@ import { WorktreeFinishDialog } from "./worktree/WorktreeFinishDialog";
 import { FileExplorerSidebar } from "./files/FileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
-import { projectSupportsCapability, resolveProjectCapabilities, type ProjectCapability } from "../lib/projectCapabilities";
+import {
+  isSshGrokHistoryUnsupported,
+  isSshHistorySourceUnsupported,
+  projectSupportsCapability,
+  resolveProjectCapabilities,
+  type ProjectCapability,
+} from "../lib/projectCapabilities";
 import { resolveCliToolHistorySourceId, resolveCliToolIconKey, type CliToolIconKey } from "../lib/cliTools";
 import { resolveHistoryProjectPath } from "../lib/historyProjectPaths";
 import { resolveAgentRuntimeKind } from "../lib/agentCapabilities";
@@ -2610,8 +2616,16 @@ export function TerminalTabs({
   const worktreeById = useMemo(() => new Map(worktrees.map((worktree) => [worktree.id, worktree])), [worktrees]);
   const rejectUnsupportedCapability = useCallback((project: Project | null | undefined, capability: ProjectCapability) => {
     if (projectSupportsCapability(project, capability)) return false;
-    toast.info(t("remoteCapabilities.unsupportedTitle"), {
-      description: t("remoteCapabilities.unsupportedDescription"),
+    const sshHistoryUnsupported = capability === "history" && isSshHistorySourceUnsupported(project);
+    const title = sshHistoryUnsupported
+      ? isSshGrokHistoryUnsupported(project)
+        ? t("remoteCapabilities.grokHistoryUnsupportedTitle")
+        : t("remoteCapabilities.sshHistoryUnsupportedTitle")
+      : t("remoteCapabilities.unsupportedTitle");
+    toast.info(title, {
+      description: sshHistoryUnsupported
+        ? t("remoteCapabilities.sshHistoryUnsupportedDescription")
+        : t("remoteCapabilities.unsupportedDescription"),
     });
     return true;
   }, [t]);

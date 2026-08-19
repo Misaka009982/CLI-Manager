@@ -18,6 +18,9 @@ const OOM_SNAPSHOT_FILES_WARN_COUNT: usize = 500;
 const WSL_GIT_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 static WORKTREE_OPERATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+// libgit2 的所有权校验开关是进程级状态。所有仓库打开都经过这把锁，避免
+// 某个仓库的兼容重试暂时关闭校验时影响并发的其它 Git 操作。
+static GIT_OWNER_VALIDATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn acquire_worktree_operation_lock() -> Result<std::sync::MutexGuard<'static, ()>, String> {
     WORKTREE_OPERATION_LOCK
@@ -60,42 +63,53 @@ fn log_worktree_snapshot_oom_diagnostic(
 ///
 /// libgit2 在 Windows 上会校验仓库路径所有权，WSL UNC 路径（`\\wsl.localhost\...`）
 /// 通过 Plan 9 协议暴露，所有权信息无法正确传递，导致 `Repository::open` 失败。
-/// 本函数检测到 WSL UNC 路径时，临时关闭所有权验证后重试。
+/// 本函数检测到 WSL UNC 路径或本地仓库所有权误判时，临时关闭所有权验证后重试。
 pub(super) fn open_git_repo<P: AsRef<Path>>(path: P) -> Result<Repository, String> {
     let path = path.as_ref();
+    let _owner_lock = GIT_OWNER_VALIDATION_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "git_owner_validation_lock_poisoned".to_string())?;
+
     match Repository::open(path) {
         Ok(repo) => return Ok(repo),
         Err(first_err) => {
             let path_str = path.to_string_lossy();
-            if !crate::wsl::is_wsl_config_dir(&path_str) {
+            let is_wsl_path = crate::wsl::is_wsl_config_dir(&path_str);
+            let is_owner_error = first_err.code() == git2::ErrorCode::Owner;
+            if !is_wsl_path && !is_owner_error {
                 return Err(format!("打开 Git 仓库失败: {first_err}"));
             }
             log::debug!(
-                "[git:wsl] 检测到 WSL UNC 路径, 首次打开失败(Owner -36 预期): path={} error={first_err}",
-                path_str
+                "[git] 首次打开失败，临时关闭所有权验证后重试: path={} wsl={} owner_error={} error={first_err}",
+                path_str,
+                is_wsl_path,
+                is_owner_error,
             );
-            log::debug!("[git:wsl] 临时关闭 libgit2 所有权验证后重试");
+            log::debug!("[git] 临时关闭 libgit2 所有权验证后重试");
         }
     }
 
-    // WSL UNC 路径：关闭所有权验证后重试。
-    // SAFETY: WSL 路径是本机文件系统，所有权检查因 Plan 9 协议限制误报，
-    // 关闭检查不引入安全风险。
+    // WSL UNC 或用户明确选择的本地仓库：关闭所有权验证后重试。
+    // SAFETY: 开关是进程级状态，调用方持有 GIT_OWNER_VALIDATION_LOCK，且在返回前恢复。
     let result = unsafe {
         git2::opts::set_verify_owner_validation(false)
             .map_err(|e| format!("设置 git2 选项失败: {e}"))
-            .and_then(|_| Repository::open(path).map_err(|e| format!("打开 WSL Git 仓库失败: {e}")))
+            .and_then(|_| Repository::open(path).map_err(|e| format!("打开 Git 仓库失败: {e}")))
     };
     // 立即恢复所有权验证
-    let _ = unsafe { git2::opts::set_verify_owner_validation(true) };
+    if let Err(e) = unsafe { git2::opts::set_verify_owner_validation(true) } {
+        log::error!("[git] 恢复 libgit2 所有权验证失败: {e}");
+        return Err(format!("恢复 Git 所有权验证失败: {e}"));
+    }
 
     match &result {
         Ok(_) => log::debug!(
-            "[git:wsl] 关闭所有权验证后 Git 仓库打开成功: path={}",
+            "[git] 关闭所有权验证后 Git 仓库打开成功: path={}",
             path.to_string_lossy()
         ),
         Err(e) => log::warn!(
-            "[git:wsl] 关闭所有权验证后仍失败: path={} error={e}",
+            "[git] 关闭所有权验证后仍失败: path={} error={e}",
             path.to_string_lossy()
         ),
     }

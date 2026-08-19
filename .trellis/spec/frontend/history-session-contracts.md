@@ -22,6 +22,9 @@
 - The Conversation tab is the default. It displays only non-empty `text` parts from `user`/`assistant` messages as bubbles; system/developer injections, tool records, reasoning, metadata, and other roles are omitted from this view.
 - The Transcript tab remains the complete audit path for omitted non-text parts. The Conversation view must not fabricate a placeholder or empty bubble when a message has no visible text.
 - The Transcript tab remains independent and complete, including long-message folding and local message edit/delete/insert actions.
+- Every visible Conversation row exposes the same message action toolbar as Transcript. Copy uses the original message's editable text when available (otherwise flat content); edit, insert, and delete are exposed only when the original message satisfies the existing local-editability predicate.
+- When existing batch-selection mode is active, Conversation hides its single-message toolbar just as Transcript does; it must not create a competing mutation path.
+- Conversation edit/insert must first pass the existing edit-warning gate. Only after approval may the view switch to Transcript, where the original message index opens the existing edit/insert form. A rejected gate keeps the Conversation view active. Delete remains on the existing confirmation/mutation path without a forced view switch.
 - Search scans both flat `content` and part `content`. A hit in a collapsed part, or a jump from Timeline/Changes/Tools/Subtasks, switches to Conversation, opens the relevant detail section, and keeps the original message index as the coordinate.
 - When `parts` is absent or empty, the frontend conservatively maps user/assistant to `text`, tool to `tool_result`, system/injected prompts to `system`, and other roles to `unknown`.
 - Prompt injection detection must inspect the whole normalized content, not only its first line. Codex/agent user records can start with ordinary headings such as `SKILLS` and contain `<skills_instructions>`, `<permissions instructions>`, `<environment_context>`, `<collaboration_mode>`, `[workflow-state:...]`, or `### Available skills` later in the same block; these markers classify the part as `system`.
@@ -41,17 +44,23 @@
 | Search matches only hidden reasoning/tool/system text | Mark the original message index, expand the detail section, and center it |
 | Rapidly click two session rows | Select/load the second target; the first response cannot replace it |
 | Click tree toggle/delete/selection checkbox | Perform only that explicit action; do not open the session |
+| Conversation action targets a non-editable, SSH, or snapshot message | Show copy only; never expose a local mutation action |
+| Conversation edit/insert warning is rejected | Keep Conversation selected and do not create an edit/insert form |
+| Conversation edit/insert warning is approved | Switch to Transcript and open the existing form at the original message index |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: one assistant record contains reasoning, visible text, and a tool call; Conversation shows the answer and one expandable details section while Transcript stays byte-for-byte compatible at the message level.
 - Base: an old snapshot has only `role="user"` and `content`; Conversation displays it as ordinary text.
 - Good: consecutive system/tool/reasoning records disappear from Conversation while the same records remain available in Transcript.
+- Good: a visible local assistant row offers four actions; copy uses the original message content, while edit/insert switches to the existing Transcript form only after the warning is approved.
+- Base: a visible SSH or favorite-snapshot row offers copy but no mutation action.
 - Bad: derive Conversation only from role after structured parts exist, because mixed reasoning/tool content would remain merged into the visible answer.
 - Bad: remove or filter messages in the backend, because message-index links from Diff/Tools would shift.
 - Bad: classify only a user block whose first line says `Agents.md instructions for ...`; this leaks injected context that begins with a normal heading into the visible conversation.
 - Bad: render every `user`/`assistant` record as visible text without checking its parts; embedded system/developer context then appears as a user prompt.
 - Bad: measure a virtualized Conversation row without its `data-index`, or render detail-only rows outside the avatar/stack wrapper; expansion then produces stale heights or a layout unlike the Transcript tab.
+- Bad: render a second editing form in Conversation, which duplicates the established Transcript mutation path and risks index/form behavior drift.
 
 ### 6. Tests Required
 
@@ -59,7 +68,7 @@
 - Rust parser tests: embedded Codex context markers and `developer` response messages classify as `system` for both local and SSH parsers.
 - SSH history-core tests: exact kind parity and missing-parts deserialization compatibility.
 - V2 catalog test: write/read `history_message_parts` in order and fall back for rows without parts.
-- Frontend regression: default Conversation plus independent Transcript, adjacent-detail grouping, old snapshot fallback, hidden search/jump expansion, whole-row click, and action propagation.
+- Frontend regression: default Conversation plus independent Transcript, adjacent-detail grouping, old snapshot fallback, hidden search/jump expansion, whole-row click, and action propagation; verify the shared toolbar exposes copy for every visible row, limits mutations to local editable rows, and switches to the original-index Transcript form only after gate approval.
 - Run `npx tsc --noEmit`, focused Node history tests, `cargo test history --lib`, `cargo fmt -- --check`, and `cargo check`.
 - Manual desktop verification: Local/WSL/SSH, main checkout/Worktree, parent/subagent tree, batch selection, rapid row switching, keyboard opening, and `zh-CN`/`zh-TW`/`en-US` copy with 24-hour time.
 
@@ -78,6 +87,15 @@ const conversation = messages.filter((message) => message.role !== "tool");
 // Preserve message coordinates; classify parts only in the render projection.
 const rows = buildConversationRows(messages);
 const targetRow = rows.find((row) => row.messageIndices.includes(messageIndex));
+```
+
+#### Correct conversation-action transition
+
+```typescript
+const started = await startEditMessage(row.messageIndex, row.message);
+if (started) {
+  onDetailViewChange("transcript");
+}
 ```
 
 ## Scenario: Two-stage local smart history titles
@@ -147,6 +165,69 @@ const targetRow = rows.find((row) => row.messageIndices.includes(messageIndex));
 - Manually switch rapidly between two SSH projects and between sessions while list/search/detail requests are in flight; only the latest context may render.
 - Verify exact project resume, multiple same-Host project selection, original remote location, current-client Tab jump, active-elsewhere refusal, missing source/cwd, custom config root, and Hook-not-installed behavior.
 - Disconnect after a successful sync and verify cached summaries remain visible with stale/offline state while uncached detail stays unavailable.
+
+## Scenario: SSH History Capability Aligns With the Remote Bridge
+
+### 1. Scope / Trigger
+
+- Trigger: changing SSH project capabilities, supported remote history CLI sources, or a project/terminal history entry point.
+- Goal: prevent an unsupported SSH CLI from reaching `buildSshAgentHistoryContext()` and exposing its internal `history_remote_source_required` guard to the user.
+
+### 2. Signatures
+
+- SSH source resolver: `resolveSshToolSource(command: string | null | undefined): SshToolSource | null`.
+- Capability gate: `projectSupportsCapability(project, "history"): boolean`.
+- UI reason helpers: `isSshHistorySourceUnsupported(project)` and `isSshGrokHistoryUnsupported(project)`.
+- Defensive bridge guard: `buildSshAgentHistoryContext(project)`.
+
+### 3. Contracts
+
+- SSH `history` is available only when `resolveSshToolSource(project.cli_tool)` resolves to the currently bridge-supported Claude or Codex source.
+- SSH Grok Build, another unsupported SSH CLI, and an SSH project without a configured CLI all have `history=false`; this does not alter `statistics` or unrelated project capabilities.
+- Local and WSL Grok Build keep their native history capability. Do not infer remote support from the local history-source registry.
+- Sidebar and terminal-toolbar history entry points must stop at the capability gate. Grok uses the localized `remoteCapabilities.grokHistoryUnsupportedTitle`; another unsupported SSH CLI uses the generic SSH-history title and description.
+- `history_remote_source_required` remains a defensive bridge error for non-UI callers. Normal UI interactions must not reach it.
+- `HistoryWorkspace` must derive its selectable project list from `projectSupportsCapability(project, "history")`; do not add a second Grok-only filter.
+
+### 4. Validation & Error Matrix
+
+| Condition | Capability / UI result |
+| --- | --- |
+| SSH Claude or Codex command | `history=true`; existing remote bridge opens |
+| SSH Grok Build command | `history=false`; show Grok localized unavailable toast; do not open the bridge |
+| SSH unsupported or empty CLI command | `history=false`; show generic SSH CLI unavailable toast |
+| Local or WSL Grok Build | `history=true`; retain existing native history flow |
+| Direct invalid bridge caller | `history_remote_source_required` remains a defensive error |
+
+### 5. Good / Base / Bad Cases
+
+- Good: the sidebar and terminal toolbar both show the same Grok-specific toast and leave the current workspace unchanged.
+- Base: an unsupported SSH OpenCode project receives the generic message instead of being mislabeled as Grok.
+- Good: SSH Claude/Codex and local/WSL Grok continue to pass the same capability API.
+- Bad: leave `SSH_CAPABILITIES.history=true` for every SSH project and catch `history_remote_source_required` separately in each caller.
+- Bad: disable every Grok history flow, including local/WSL, because the SSH bridge has not implemented Grok.
+
+### 6. Tests Required
+
+- Run `node --test scripts/projectCapabilities.test.mjs` and assert SSH Claude/Codex allow history, SSH Grok/unsupported/empty CLI deny it, local/WSL Grok remain allowed, and SSH Grok statistics remain unchanged.
+- Assert both project history entry components use the shared helper and i18n keys.
+- Run `node --test scripts/sshRemoteFileContext.test.mjs`, `npx tsc --noEmit`, and `npm run build`.
+- Manually verify both sidebar and terminal-toolbar entries in `zh-CN` and `en-US`; no raw internal error may be shown.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+const SSH_CAPABILITIES = { history: true };
+await buildSshAgentHistoryContext(project);
+```
+
+#### Correct
+
+```typescript
+if (capability === "history" && isSshHistorySourceUnsupported(project)) return false;
+```
 
 ## Scenario: Favorite Session Snapshots
 

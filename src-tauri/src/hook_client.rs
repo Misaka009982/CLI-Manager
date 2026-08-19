@@ -107,6 +107,10 @@ fn try_notify(source: &str, event: &str) -> Result<(), HookNotifyError> {
     let reasoning_effort = normalized
         .reasoning_effort
         .or_else(|| non_empty_env("CLAUDE_EFFORT").and_then(|value| non_empty_trimmed(&value)));
+    let transcript_bytes = approval_transcript_bytes(
+        normalized.agent_transcript_path.as_deref(),
+        normalized.transcript_path.as_deref(),
+    );
     let wsl_distro_name = non_empty_env("WSL_DISTRO_NAME");
     let cwd = env::current_dir()
         .ok()
@@ -130,6 +134,7 @@ fn try_notify(source: &str, event: &str) -> Result<(), HookNotifyError> {
         "agentType": normalized.agent_type,
         "agentTranscriptPath": normalized.agent_transcript_path,
         "transcriptPath": normalized.transcript_path,
+        "transcriptBytes": transcript_bytes,
         "reasoningEffort": reasoning_effort,
         "wslDistroName": wsl_distro_name,
         // 同一次 Hook 进程内的重试复用该 ID，daemon 可幂等去重。
@@ -329,6 +334,22 @@ fn non_empty_env(key: &str) -> Option<String> {
     env::var(key).ok().filter(|value| !value.trim().is_empty())
 }
 
+fn approval_transcript_bytes(
+    agent_transcript_path: Option<&str>,
+    transcript_path: Option<&str>,
+) -> Option<u64> {
+    agent_transcript_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            transcript_path
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .and_then(|path| fs::metadata(path).ok())
+        .map(|metadata| metadata.len())
+}
+
 fn should_suppress_codex_permission_request(source: &str, event: &str, hook_input: &Value) -> bool {
     if event != "PermissionRequest" {
         return false;
@@ -393,8 +414,12 @@ fn title_for(source: &str, event: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{failure_diagnostic_line, should_suppress_codex_permission_request};
+    use super::{
+        approval_transcript_bytes, failure_diagnostic_line,
+        should_suppress_codex_permission_request,
+    };
     use serde_json::json;
+    use std::fs;
 
     #[test]
     fn extract_reasoning_effort_reads_claude_hook_effort_level() {
@@ -429,6 +454,20 @@ mod tests {
             Some("exa")
         );
         assert_eq!(cli_manager_hook_schema::extract_mcp_server("Read"), None);
+    }
+
+    #[test]
+    fn transcript_baseline_prefers_child_rollout() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent.jsonl");
+        let child = temp.path().join("child.jsonl");
+        fs::write(&parent, b"parent").unwrap();
+        fs::write(&child, b"child-rollout").unwrap();
+        assert_eq!(
+            approval_transcript_bytes(child.to_str(), parent.to_str()),
+            Some(13)
+        );
+        assert_eq!(approval_transcript_bytes(None, parent.to_str()), Some(6));
     }
 
     #[test]

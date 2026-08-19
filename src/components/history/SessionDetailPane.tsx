@@ -162,6 +162,72 @@ function findConversationRowIndex(rows: ConversationRow[], messageIndex: number)
   return rows.findIndex((row) => conversationRowMessageIndices(row).includes(messageIndex));
 }
 
+function isHistoryMessageEditable(message: HistoryMessage, canEdit: boolean): boolean {
+  return canEdit && message.editable === true && message.line_index !== null && message.line_index !== undefined;
+}
+
+function HistoryMessageActions({
+  messageEditable,
+  onCopyMessage,
+  onStartEdit,
+  onStartInsert,
+  onDeleteMessage,
+}: {
+  messageEditable: boolean;
+  onCopyMessage: () => void;
+  onStartEdit: () => void;
+  onStartInsert: () => void;
+  onDeleteMessage: () => void;
+}) {
+  const { t } = useI18n();
+
+  return (
+    <div className="ui-history-message-actions">
+      <button
+        type="button"
+        className="ui-history-message-action"
+        onClick={onCopyMessage}
+        title={t("history.edit.copyMessage")}
+        aria-label={t("history.edit.copyMessage")}
+      >
+        <Copy size={12} />
+      </button>
+      {messageEditable && (
+        <>
+          <button
+            type="button"
+            className="ui-history-message-action"
+            onClick={onStartEdit}
+            title={t("history.edit.editMessage")}
+            aria-label={t("history.edit.editMessage")}
+          >
+            <Pencil size={12} />
+          </button>
+          <button
+            type="button"
+            className="ui-history-message-action"
+            onClick={onStartInsert}
+            title={t("history.edit.insertAfter")}
+            aria-label={t("history.edit.insertAfter")}
+          >
+            <CornerDownRight size={12} />
+          </button>
+          <button
+            type="button"
+            className="ui-history-message-action"
+            data-danger="true"
+            onClick={onDeleteMessage}
+            title={t("history.edit.deleteMessage")}
+            aria-label={t("history.edit.deleteMessage")}
+          >
+            <Trash2 size={12} />
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ConversationRowCard({
   row,
   virtualIndex,
@@ -170,6 +236,12 @@ function ConversationRowCard({
   query,
   messageRefs,
   measureElement,
+  canEdit,
+  selectionMode,
+  onCopyMessage,
+  onStartEdit,
+  onStartInsert,
+  onDeleteMessage,
 }: {
   row: ConversationRow;
   virtualIndex: number;
@@ -178,12 +250,19 @@ function ConversationRowCard({
   query: string;
   messageRefs: RefObject<Record<number, HTMLDivElement | null>>;
   measureElement: (element: Element) => void;
+  canEdit: boolean;
+  selectionMode: boolean;
+  onCopyMessage: () => void;
+  onStartEdit: () => void;
+  onStartInsert: () => void;
+  onDeleteMessage: () => void;
 }) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const message = row.type === "message" ? row.message : null;
   const roleKind = message ? normalizeHistoryMessageRole(message.role) : "other";
   const avatarUrl = roleKind === "user" ? userAvatarUrl : aiAvatarUrl;
   const messageMeta = message ? formatMessageMeta(message) : null;
+  const messageEditable = message !== null && isHistoryMessageEditable(message, canEdit);
 
   const setCardRef = (element: HTMLDivElement | null) => {
     cardRef.current = element;
@@ -207,7 +286,18 @@ function ConversationRowCard({
         <span className="ui-history-message-avatar" aria-hidden="true"><img src={avatarUrl} alt="" /></span>
       )}
       <div className="ui-history-message-stack">
-        {messageMeta && <div className="ui-history-message-meta" title={messageMeta}>{messageMeta}</div>}
+        <div className="ui-history-message-header">
+          {messageMeta && <div className="ui-history-message-meta" title={messageMeta}>{messageMeta}</div>}
+          {!selectionMode && (
+            <HistoryMessageActions
+              messageEditable={messageEditable}
+              onCopyMessage={onCopyMessage}
+              onStartEdit={onStartEdit}
+              onStartInsert={onStartInsert}
+              onDeleteMessage={onDeleteMessage}
+            />
+          )}
+        </div>
         <div className="ui-history-message-bubble">
           <SessionTranscriptContent content={row.content} query={query} />
         </div>
@@ -386,8 +476,7 @@ function HistoryMessageCard({
   const messageMeta = formatMessageMeta(message);
   const [open, setOpen] = useState(forceOpen);
   const cardRef = useRef<HTMLDivElement | null>(null);
-  const messageEditable =
-    canEdit && message.editable === true && message.line_index !== null && message.line_index !== undefined;
+  const messageEditable = isHistoryMessageEditable(message, canEdit);
   const selectable = selectionMode && messageEditable;
 
   useEffect(() => {
@@ -480,49 +569,13 @@ function HistoryMessageCard({
             </div>
           )}
           {!isEditing && !selectionMode && (
-            <div className="ui-history-message-actions">
-              <button
-                type="button"
-                className="ui-history-message-action"
-                onClick={onCopyMessage}
-                title={t("history.edit.copyMessage")}
-                aria-label={t("history.edit.copyMessage")}
-              >
-                <Copy size={12} />
-              </button>
-              {messageEditable && (
-                <>
-                  <button
-                    type="button"
-                    className="ui-history-message-action"
-                    onClick={onStartEdit}
-                    title={t("history.edit.editMessage")}
-                    aria-label={t("history.edit.editMessage")}
-                  >
-                    <Pencil size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    className="ui-history-message-action"
-                    onClick={onStartInsert}
-                    title={t("history.edit.insertAfter")}
-                    aria-label={t("history.edit.insertAfter")}
-                  >
-                    <CornerDownRight size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    className="ui-history-message-action"
-                    data-danger="true"
-                    onClick={onDeleteMessage}
-                    title={t("history.edit.deleteMessage")}
-                    aria-label={t("history.edit.deleteMessage")}
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </>
-              )}
-            </div>
+            <HistoryMessageActions
+              messageEditable={messageEditable}
+              onCopyMessage={onCopyMessage}
+              onStartEdit={onStartEdit}
+              onStartInsert={onStartInsert}
+              onDeleteMessage={onDeleteMessage}
+            />
           )}
         </div>
         <div className="ui-history-message-bubble">
@@ -794,10 +847,11 @@ export function SessionDetailPane({
   };
 
   const startEditMessage = async (index: number, message: HistoryMessage) => {
-    if (!(await onRequestMessageEdit())) return;
+    if (!(await onRequestMessageEdit())) return false;
     setInsertIndex(null);
     setEditingIndex(index);
     setEditDraft(message.editable_text ?? message.content);
+    return true;
   };
 
   const submitEditMessage = async (message: HistoryMessage) => {
@@ -814,11 +868,12 @@ export function SessionDetailPane({
   };
 
   const startInsertMessage = async (index: number) => {
-    if (!(await onRequestMessageEdit())) return;
+    if (!(await onRequestMessageEdit())) return false;
     setEditingIndex(null);
     setInsertIndex(index);
     setInsertRole("user");
     setInsertDraft("");
+    return true;
   };
 
   const submitInsertMessage = async (message: HistoryMessage) => {
@@ -1185,6 +1240,20 @@ export function SessionDetailPane({
                     query={sessionQuery}
                     messageRefs={messageRefs}
                     measureElement={messageVirtualizer.measureElement}
+                    canEdit={canEditMessages}
+                    selectionMode={messageSelectionMode}
+                    onCopyMessage={() => copyMessageContent(row.message)}
+                    onStartEdit={() => {
+                      void startEditMessage(row.messageIndex, row.message).then((started) => {
+                        if (started) onDetailViewChange("transcript");
+                      });
+                    }}
+                    onStartInsert={() => {
+                      void startInsertMessage(row.messageIndex).then((started) => {
+                        if (started) onDetailViewChange("transcript");
+                      });
+                    }}
+                    onDeleteMessage={() => onDeleteMessage(row.message)}
                   />
                 </div>
               );
