@@ -519,14 +519,20 @@ pub(super) fn apply_kimi_state_metadata(path: &Path, computed: &mut CachedSessio
         computed.session_id = session_id;
     }
 
-    if let Some(title) = kimi_string(&state, &["title", "lastPrompt", "last_prompt"]) {
+    if let Some(title) = kimi_string(&state, &["title"]) {
         let trimmed = title.trim();
-        if !trimmed.is_empty()
-            && (computed.title.is_empty()
-                || computed.title == computed.session_id
-                || computed.title.chars().count() < 4)
-        {
+        if !trimmed.is_empty() {
             computed.title = excerpt_title(trimmed);
+        }
+    } else if computed.title.is_empty()
+        || computed.title == computed.session_id
+        || computed.title.chars().count() < 4
+    {
+        if let Some(prompt) = kimi_string(&state, &["lastPrompt", "last_prompt"]) {
+            let trimmed = prompt.trim();
+            if !trimmed.is_empty() {
+                computed.title = excerpt_title(trimmed);
+            }
         }
     }
 

@@ -17,7 +17,7 @@
 ### 3. Contracts
 
 - The catalog DB is derived and rebuildable; never store it in `cli-manager.db` or treat it as user-authored data.
-- List requests query cached summaries first and schedule fingerprint-based background refresh.
+- List requests query cached summaries first and schedule fingerprint-based background refresh. Catalog collection includes local/WSL Kimi Code `sessions/<workDirKey>/<sessionId>/agents/main/wire.jsonl` using the same `HistoryRoots.kimi_config_dir` / `$KIMI_CODE_HOME` / `~/.kimi-code` resolution as the disk collectors; nested `agents/agent-*` wires stay out of the catalog.
 - A realtime lookup scoped to `source=grok`, an exact UUID session ID, `limit=1`, and `offset=0` may bypass a catalog miss by checking only `<grok-root>/sessions/<workspace>/<session-id>/updates.jsonl`; it must validate the UUID before joining paths and still honor the optional project path.
 - A realtime lookup scoped to `source=kimi`, a valid Kimi session ID, `limit=1`, and `offset=0` may bypass a catalog miss by checking `session_index.jsonl` and `<kimi-home>/sessions/<workDirKey>/<session-id>/agents/main/wire.jsonl`. The ID must be 1–128 characters of `[A-Za-z0-9_-]` with no `/`, `\`, NUL, or `..`; do not use UUID parsing. Honor the optional project path. Legacy `~/.kimi` is never scanned.
 - Realtime forced refresh uses `history_refresh_index(..., wait=false)`. A large derived catalog rebuild must never hold the panel's single-flight polling request; later polls consume the direct Grok result or refreshed catalog.
@@ -48,6 +48,7 @@
 - Good: typing a three-character code fragment queries FTS without reading transcript files.
 - Base: the first install has no legacy cache, so progress and partial results appear until indexing completes.
 - Bad: calling `refresh_history_index()` or `iter_session_messages_filtered()` for every keystroke.
+- Bad: collecting catalog files for Claude/Codex/Grok/Pi but omitting Kimi, so the history workspace list stays empty while realtime exact lookup still works.
 - Bad: storing the FTS cache in the main user database or clearing usable rows after a transient scan error.
 
 ### 6. Tests Required
@@ -55,7 +56,7 @@
 - Rust: FTS schema/triggers support Chinese and ASCII trigram matches; literal quoting handles embedded quotes.
 - Rust: unchanged fingerprints skip parsing; changed and deleted files update only their own rows.
 - Rust: project/source filters and pagination preserve existing command behavior.
-- Rust: exact Grok UUID lookup finds the matching workspace session, rejects a different project path, and rejects non-UUID traversal input.
+- Rust: exact Kimi session lookup finds the matching workspace session, rejects a different project path, and rejects traversal input; catalog file collection includes the main `wire.jsonl` and excludes nested subagent wires.
 - Frontend: stale searches cannot overwrite the newest query; one/two-character input does not invoke search.
 - Run `cargo test history --lib`, `cargo check`, and `npx tsc --noEmit`.
 

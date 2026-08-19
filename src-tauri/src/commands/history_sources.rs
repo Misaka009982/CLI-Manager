@@ -593,7 +593,10 @@ mod tests {
     fn kimi_default_candidate_is_the_config_root() {
         let kimi = SOURCES.iter().find(|spec| spec.id == "kimi").unwrap();
         let candidate = default_candidate_path_from_home(kimi, Path::new(r"C:\Users\tester"));
-        assert_eq!(candidate, PathBuf::from(r"C:\Users\tester\.kimi-code"));
+        assert_eq!(
+            candidate,
+            PathBuf::from(r"C:\Users\tester").join(".kimi-code")
+        );
         assert_eq!(kimi.capabilities.delete, "supported");
         assert_eq!(kimi.capabilities.realtime_stats, "supported");
         assert_eq!(kimi.capabilities.resume, "supported");

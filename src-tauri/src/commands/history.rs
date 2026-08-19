@@ -14631,6 +14631,95 @@ mod tests {
     }
 
     #[test]
+    fn kimi_application_pipeline_lists_details_and_deletes_like_history_workspace() {
+        let temp_dir = TempDir::new().unwrap();
+        let home = temp_dir.path().join(".kimi-code");
+        let session_id = "01KIMIAPPPIPELINE00000001";
+        let cwd = r"/home/ubuntu/CLI-Manager";
+        write_kimi_session_fixture(
+            &home,
+            session_id,
+            cwd,
+            &[
+                json!({
+                    "type": "turn.prompt",
+                    "time": 1_787_097_600,
+                    "input": [{"type": "text", "text": "review the kimi history parser"}]
+                }),
+                json!({
+                    "type": "context.append_message",
+                    "time": 1_787_097_601,
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "looking at wire.jsonl"}]
+                    }
+                }),
+                json!({
+                    "type": "tool.call",
+                    "time": 1_787_097_602,
+                    "id": "call-1",
+                    "name": "Read",
+                    "input": {"path": "src-tauri/src/commands/history/kimi.rs"}
+                }),
+                json!({
+                    "type": "usage.record",
+                    "time": 1_787_097_603_000i64,
+                    "model": "kimi-k2",
+                    "usage": {
+                        "input_tokens": 120,
+                        "output_tokens": 40,
+                        "cache_read_tokens": 8
+                    }
+                }),
+            ],
+        );
+        let roots = history_roots(None, None, None)
+            .with_kimi_config_dir(Some(home.to_string_lossy().into_owned()));
+
+        let files = collect_session_files(Some("kimi"), &roots);
+        assert_eq!(
+            files.len(),
+            1,
+            "history list should index only main wire.jsonl"
+        );
+        assert_eq!(files[0].source, "kimi");
+        assert_eq!(files[0].project_key, normalize_history_path(cwd));
+
+        let detail = build_session_detail(&files[0], true).unwrap();
+        assert_eq!(detail.session_id, session_id);
+        assert_eq!(detail.source, "kimi");
+        assert_eq!(detail.title, "Kimi summary");
+        assert_eq!(detail.cwd.as_deref(), Some(cwd));
+        assert_eq!(detail.messages[0].role, "user");
+        assert_eq!(detail.messages[0].content, "review the kimi history parser");
+        assert_eq!(detail.usage.input_tokens, 120);
+        assert_eq!(detail.usage.output_tokens, 40);
+        assert_eq!(detail.usage.cache_read_tokens, 8);
+        assert_eq!(detail.usage.current_model.as_deref(), Some("kimi-k2"));
+        assert_eq!(detail.usage.tool_call_count, 1);
+
+        let exact = kimi::find_exact_kimi_session_in_root(&home, session_id, Some(cwd)).expect(
+            "realtime stats should hit the bound session without scanning every transcript",
+        );
+        assert_eq!(exact.session_id, session_id);
+        assert_eq!(exact.source, "kimi");
+
+        kimi::delete_kimi_session_tree_with_backup_root(
+            &files[0],
+            &home,
+            &temp_dir.path().join("backups"),
+        )
+        .unwrap();
+        invalidate_history_caches();
+        let files_after = collect_session_files_with_force(Some("kimi"), &roots, true);
+        assert!(files_after.is_empty());
+        assert!(kimi::find_exact_kimi_session_in_root(&home, session_id, None).is_none());
+        let index = std::fs::read_to_string(home.join("session_index.jsonl")).unwrap();
+        assert!(!index.contains(session_id));
+        assert!(index.contains("other-session"));
+    }
+
+    #[test]
     fn pi_session_parser_covers_history_pipeline() {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path().join(".pi").join("agent");

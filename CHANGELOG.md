@@ -13,7 +13,8 @@
 
 ### Kimi Code 历史会话与实时统计
 
-- 本地与 WSL 的当前 Kimi Code 历史接入列表、搜索、统计、删除和恢复：读取 `$KIMI_CODE_HOME` 或 `~/.kimi-code` 下的 `session_index.jsonl` 与 `sessions/*/agents/main/wire.jsonl`，catalog 未索引时按精确 sessionId 直查磁盘。删除会备份后移除整个会话目录并改写索引。恢复使用 `kimi --session <id>`。旧 `~/.kimi` 不会被扫描或迁移；SSH Kimi 历史仍不支持。
+- 本地与 WSL 的当前 Kimi Code 历史接入列表、搜索、统计、删除和恢复：读取 `$KIMI_CODE_HOME` 或 `~/.kimi-code` 下的 `session_index.jsonl` 与 `sessions/*/agents/main/wire.jsonl`。catalog 刷新会索引主会话 `wire.jsonl`（不含子 Agent）；catalog 未就绪时仍可按精确 sessionId 直查磁盘供实时统计。删除会备份后移除整个会话目录并改写索引。恢复使用 `kimi --session <id>`。旧 `~/.kimi` 不会被扫描或迁移；SSH Kimi 历史仍不支持。
+- 历史列表标题优先使用 `state.json` 的 `title`；仅在标题缺失且当前标题过弱时才回退 `lastPrompt`，避免把首条用户消息盖过 Kimi 会话名。
 - 终端实时统计识别 Kimi 来源并严格绑定 Hook `sessionId`，不回退到项目最近会话。历史根优先使用历史来源设置，其次 Hook 配置目录，不会给本地启动注入 `KIMI_CODE_HOME`。
 
 ### Kimi Code CLI 与 Hook 集成
