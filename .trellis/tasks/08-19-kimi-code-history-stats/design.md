@@ -1,6 +1,6 @@
 # Design: Kimi Code local history
 
-## Discovery list (GitNexus unavailable)
+## Discovery list
 
 | 触点 | 处理 |
 |---|---|
@@ -31,15 +31,21 @@ $KIMI_CODE_HOME/
 
 ## Exact lookup
 
-合法 id：1–128，字母数字 `_-`，无 `/` `\` `\0` `..`。不要 `Uuid::parse_str`。先读 index，再扫 `sessions/*/<id>/agents/main/wire.jsonl`。
+合法 id：1–128，字母数字 `_-`，无 `/` `\` `\0` `..`。不要 `Uuid::parse_str`。index 按顺序应用同一 session 的有效记录，最后一条 active record 生效，最后一条 tombstone 表示不存在；缺少字符串 `sessionDir` / `workDir` 的畸形普通行忽略。`sessionDir` 必须为 `sessions/` 内的绝对路径且末级目录等于 session id。index 未命中时再扫 `sessions/*/<id>/agents/main/wire.jsonl`。历史与 Hook session id 在前端构造恢复命令前再次执行同一字符白名单。
+
+## Wire parsing
+
+- `turn.prompt` 只作为缺少对应 `context.append_message` 时的兼容回退，避免同一用户输入重复成两条消息。
+- 助手内容及工具调用/结果从 `context.append_loop_event.event` 的 `content.part`、`tool.call`、`tool.result` 折叠。
+- `step.end.usage` / `usage.record.usage` 将 `inputOther`、`output`、`inputCacheRead`、`inputCacheCreation` 分别映射为 input、output、cache read、cache creation；等值快照只计一次，任一缺失时另一项仍可作为回退。
 
 ## Delete
 
-1. 校验 wire 路径在 kimi home 内并解析 session 目录  
-2. 备份 `state.json` + main `wire.jsonl`（及 index 原文）  
-3. 原子改写 `session_index.jsonl`  
-4. `remove_dir_all`  
-5. 目录删除失败则恢复 index  
+1. 校验 wire 路径在 kimi home 内并解析 session 目录
+2. 备份 `state.json` + main `wire.jsonl`（及 index 原文）
+3. 以一次 append write 追加 deletion tombstone
+4. `remove_dir_all`
+5. 目录删除失败则追加之前的 active record 作补偿；不得从备份覆盖整个 index
 
 ## WSL
 

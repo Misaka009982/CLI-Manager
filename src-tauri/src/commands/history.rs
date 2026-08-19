@@ -3792,7 +3792,7 @@ pub(crate) fn invalidate_history_stats_caches() {
 // 内存索引（HISTORY_SESSION_INDEX）每次 App 启动后为空，首个 history_get_stats 必须
 // 全量解析所有 JSONL（可能上千个），冷启动耗时不可接受。这里把 per-file 解析结果落盘，
 // 重启后载入作为 build_history_index 的 previous，按 fingerprint 仅重解析变更文件。
-const HISTORY_INDEX_CACHE_VERSION: u32 = 12;
+const HISTORY_INDEX_CACHE_VERSION: u32 = 13;
 const HISTORY_INDEX_CACHE_FILE: &str = "history-index-cache.json";
 
 static HISTORY_INDEX_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -14338,10 +14338,9 @@ mod tests {
         write_text(
             &session_dir.join("state.json"),
             &json!({
-                "id": session_id,
                 "title": "Kimi summary",
                 "lastPrompt": "hello kimi",
-                "cwd": cwd,
+                "workDir": cwd,
                 "forkedFrom": "parent-session",
                 "createdAt": "2026-08-19T00:00:00Z",
                 "updatedAt": "2026-08-19T00:00:03Z"
@@ -14394,35 +14393,107 @@ mod tests {
             session_id,
             r"F:\github\CLI-Manager",
             &[
-                json!({"type": "metadata", "protocol_version": 2, "created_at": "2026-08-19T00:00:00Z"}),
+                json!({"type": "metadata", "protocol_version": "1.1", "created_at": 1_787_097_600_000i64}),
+                json!({
+                    "type": "config.update",
+                    "cwd": r"F:\github\CLI-Manager",
+                    "modelAlias": "kimi-k2",
+                    "time": 1_787_097_600_100i64
+                }),
                 json!({
                     "type": "turn.prompt",
-                    "time": 1_787_097_600,
-                    "input": [{"type": "text", "text": "hello kimi"}]
+                    "time": 1_787_097_601_000i64,
+                    "input": [{"type": "text", "text": "hello kimi"}],
+                    "origin": {"kind": "user"}
                 }),
                 json!({
                     "type": "context.append_message",
-                    "time": 1_787_097_601,
+                    "time": 1_787_097_601_001i64,
                     "message": {
-                        "role": "assistant",
-                        "content": [{"type": "text", "text": "hi there"}]
+                        "role": "user",
+                        "content": [{"type": "text", "text": "hello kimi"}],
+                        "toolCalls": []
                     }
                 }),
                 json!({
-                    "type": "tool.call",
-                    "time": 1_787_097_602,
-                    "id": "tc1",
-                    "name": "Read",
-                    "input": {"path": "README.md"}
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_000i64,
+                    "event": {"type": "step.begin", "uuid": "step-1", "turnId": "turn-1", "step": 0}
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_100i64,
+                    "event": {
+                        "type": "content.part",
+                        "uuid": "content-1",
+                        "turnId": "turn-1",
+                        "step": 0,
+                        "stepUuid": "step-1",
+                        "part": {"type": "text", "text": "hi there"}
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_200i64,
+                    "event": {
+                        "type": "tool.call",
+                        "uuid": "tool-event-1",
+                        "turnId": "turn-1",
+                        "step": 0,
+                        "stepUuid": "step-1",
+                        "toolCallId": "tc1",
+                        "name": "Read",
+                        "args": {"path": "README.md"}
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_500i64,
+                    "event": {
+                        "type": "tool.result",
+                        "parentUuid": "tool-event-1",
+                        "toolCallId": "tc1",
+                        "result": {"output": "README contents"}
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_603_000i64,
+                    "event": {
+                        "type": "step.end",
+                        "uuid": "step-1",
+                        "turnId": "turn-1",
+                        "step": 0,
+                        "usage": {"inputOther": 12, "output": 8, "inputCacheRead": 2, "inputCacheCreation": 3},
+                        "finishReason": "tool_calls"
+                    }
                 }),
                 json!({
                     "type": "usage.record",
-                    "time": 1_787_097_603,
+                    "time": 1_787_097_603_002i64,
                     "model": "kimi-k2",
                     "usage": {
-                        "input_tokens": 12,
-                        "output_tokens": 8,
-                        "cache_read_tokens": 2
+                        "inputOther": 12,
+                        "output": 8,
+                        "inputCacheRead": 2,
+                        "inputCacheCreation": 3
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_604_000i64,
+                    "event": {"type": "step.begin", "uuid": "step-2", "turnId": "turn-1", "step": 1}
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_605_000i64,
+                    "event": {
+                        "type": "step.end",
+                        "uuid": "step-2",
+                        "turnId": "turn-1",
+                        "step": 1,
+                        "usage": {"inputOther": 4, "output": 3, "inputCacheRead": 1, "inputCacheCreation": 2},
+                        "finishReason": "end_turn"
                     }
                 }),
             ],
@@ -14436,12 +14507,31 @@ mod tests {
         assert_eq!(messages[0].content, "hello kimi");
         assert_eq!(messages[1].role, "assistant");
         assert_eq!(messages[1].content, "hi there");
-        assert_eq!(stats.input_tokens, 12);
-        assert_eq!(stats.output_tokens, 8);
-        assert_eq!(stats.cache_read_tokens, 2);
+        assert_eq!(stats.input_tokens, 16);
+        assert_eq!(stats.output_tokens, 11);
+        assert_eq!(stats.cache_read_tokens, 3);
+        assert_eq!(stats.cache_creation_tokens, 5);
+        assert_eq!(stats.usage_events.len(), 2);
         assert_eq!(stats.current_model.as_deref(), Some("kimi-k2"));
         assert_eq!(stats.tool_call_count, 1);
         assert_eq!(stats.builtin_calls.get("Read"), Some(&1));
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message.role == "user")
+                .count(),
+            1
+        );
+
+        let tool_events = kimi::scan_kimi_tool_events(&path);
+        assert_eq!(tool_events.len(), 1);
+        assert_eq!(tool_events[0].call_id.as_deref(), Some("tc1"));
+        assert_eq!(tool_events[0].status.as_deref(), Some("completed"));
+        assert_eq!(tool_events[0].duration_ms, Some(300));
+        assert_eq!(
+            tool_events[0].output_summary.as_deref(),
+            Some("README contents")
+        );
 
         let project = scan_session_project(&path);
         assert_eq!(project.cwd.as_deref(), Some(r"F:\github\CLI-Manager"));
@@ -14539,6 +14629,57 @@ mod tests {
     }
 
     #[test]
+    fn kimi_workspace_fallback_uses_latest_active_index_record() {
+        let temp_dir = TempDir::new().unwrap();
+        let home = temp_dir.path().join(".kimi-code");
+        let session_id = "01KIMIWORKDIRLATEST000001";
+        let path = write_kimi_session_fixture(
+            &home,
+            session_id,
+            r"F:\old-workdir",
+            &[json!({
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "hello"}]
+            })],
+        );
+        let session_dir = kimi::kimi_session_dir_from_wire(&path).unwrap();
+        write_text(
+            &session_dir.join("state.json"),
+            &json!({"title": "No embedded workdir"}).to_string(),
+        );
+        let mut index = OpenOptions::new()
+            .append(true)
+            .open(home.join("session_index.jsonl"))
+            .unwrap();
+        writeln!(
+            index,
+            "{}",
+            json!({
+                "sessionId": session_id,
+                "sessionDir": session_dir.to_string_lossy(),
+                "workDir": r"F:\new-workdir"
+            })
+        )
+        .unwrap();
+        assert_eq!(
+            kimi::kimi_workspace_from_path(&path).as_deref(),
+            Some(r"F:\new-workdir")
+        );
+
+        writeln!(
+            index,
+            "{}",
+            json!({"sessionId": session_id, "deleted": true})
+        )
+        .unwrap();
+        drop(index);
+        assert!(kimi::kimi_workspace_from_path(&path).is_none());
+        assert!(path.exists());
+        assert!(kimi::collect_kimi_session_files(&home).is_empty());
+        assert!(kimi::find_exact_kimi_session_in_root(&home, session_id, None).is_none());
+    }
+
+    #[test]
     fn kimi_delete_removes_session_dir_and_index_row() {
         let temp_dir = TempDir::new().unwrap();
         let home = temp_dir.path().join(".kimi-code");
@@ -14574,8 +14715,16 @@ mod tests {
             .unwrap()
             .exists());
         let index = std::fs::read_to_string(home.join("session_index.jsonl")).unwrap();
-        assert!(!index.contains(session_id));
         assert!(index.contains("other-session"));
+        let tombstone: Value = serde_json::from_str(index.lines().last().unwrap()).unwrap();
+        assert_eq!(
+            tombstone.get("sessionId").and_then(Value::as_str),
+            Some(session_id)
+        );
+        assert_eq!(
+            tombstone.get("deleted").and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
@@ -14643,32 +14792,81 @@ mod tests {
             &[
                 json!({
                     "type": "turn.prompt",
-                    "time": 1_787_097_600,
-                    "input": [{"type": "text", "text": "review the kimi history parser"}]
+                    "time": 1_787_097_600_000i64,
+                    "input": [{"type": "text", "text": "review the kimi history parser"}],
+                    "origin": {"kind": "user"}
                 }),
                 json!({
                     "type": "context.append_message",
-                    "time": 1_787_097_601,
+                    "time": 1_787_097_600_001i64,
                     "message": {
-                        "role": "assistant",
-                        "content": [{"type": "text", "text": "looking at wire.jsonl"}]
+                        "role": "user",
+                        "content": [{"type": "text", "text": "review the kimi history parser"}],
+                        "toolCalls": []
                     }
                 }),
                 json!({
-                    "type": "tool.call",
-                    "time": 1_787_097_602,
-                    "id": "call-1",
-                    "name": "Read",
-                    "input": {"path": "src-tauri/src/commands/history/kimi.rs"}
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_601_000i64,
+                    "event": {"type": "step.begin", "uuid": "step-1", "turnId": "turn-1", "step": 0}
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_601_100i64,
+                    "event": {
+                        "type": "content.part",
+                        "uuid": "content-1",
+                        "turnId": "turn-1",
+                        "step": 0,
+                        "stepUuid": "step-1",
+                        "part": {"type": "text", "text": "looking at wire.jsonl"}
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_000i64,
+                    "event": {
+                        "type": "tool.call",
+                        "uuid": "tool-1",
+                        "turnId": "turn-1",
+                        "step": 0,
+                        "stepUuid": "step-1",
+                        "toolCallId": "call-1",
+                        "name": "Read",
+                        "args": {"path": "src-tauri/src/commands/history/kimi.rs"}
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_100i64,
+                    "event": {
+                        "type": "tool.result",
+                        "parentUuid": "tool-1",
+                        "toolCallId": "call-1",
+                        "result": {"output": "source"}
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_200i64,
+                    "event": {
+                        "type": "step.end",
+                        "uuid": "step-1",
+                        "turnId": "turn-1",
+                        "step": 0,
+                        "usage": {"inputOther": 120, "output": 40, "inputCacheRead": 8, "inputCacheCreation": 0},
+                        "finishReason": "tool_calls"
+                    }
                 }),
                 json!({
                     "type": "usage.record",
                     "time": 1_787_097_603_000i64,
                     "model": "kimi-k2",
                     "usage": {
-                        "input_tokens": 120,
-                        "output_tokens": 40,
-                        "cache_read_tokens": 8
+                        "inputOther": 120,
+                        "output": 40,
+                        "inputCacheRead": 8,
+                        "inputCacheCreation": 0
                     }
                 }),
             ],
@@ -14715,8 +14913,16 @@ mod tests {
         assert!(files_after.is_empty());
         assert!(kimi::find_exact_kimi_session_in_root(&home, session_id, None).is_none());
         let index = std::fs::read_to_string(home.join("session_index.jsonl")).unwrap();
-        assert!(!index.contains(session_id));
         assert!(index.contains("other-session"));
+        let tombstone: Value = serde_json::from_str(index.lines().last().unwrap()).unwrap();
+        assert_eq!(
+            tombstone.get("sessionId").and_then(Value::as_str),
+            Some(session_id)
+        );
+        assert_eq!(
+            tombstone.get("deleted").and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]

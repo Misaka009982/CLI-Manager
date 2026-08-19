@@ -271,6 +271,10 @@ const KIMI_RESUME_OPTIONS_WITH_VALUE = new Set([
   "--session",
 ]);
 
+export function isValidKimiSessionId(value: string): boolean {
+  return /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
 function kimiOptionName(token: CliArgToken): string {
   const equalsIndex = token.raw.indexOf("=");
   const name = equalsIndex < 0 ? token.raw : token.raw.slice(0, equalsIndex);

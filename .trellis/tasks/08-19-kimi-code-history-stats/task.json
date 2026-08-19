@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "GitNexus MCP unavailable; discovery used .trellis/spec/*-contracts.md plus rg/fast-context.",
+  "notes": "Reviewed against GitNexus and MoonshotAI/kimi-code fa9865f; final push must be non-force after full checks.",
   "meta": {}
 }

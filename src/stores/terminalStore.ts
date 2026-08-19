@@ -52,6 +52,7 @@ import { getSshClientInstanceId } from "../lib/sshClientIdentity";
 import { translateCurrent } from "../lib/i18n";
 import { findProjectByPath, findWorktreeByPath } from "../lib/terminalProject";
 import { buildRemoteHandoffResumeCommand } from "../lib/historyResumeCommand";
+import { isValidKimiSessionId } from "../lib/resumeCliArgs";
 import {
   terminalProcessManager,
   type TerminalClaudeProviderLaunchConfig,
@@ -1179,7 +1180,9 @@ function buildCliResumeStartupCommand(
     return appendResumeCliArgs(base, "grok", project ?? null, options);
   }
   if (kind === "kimi") {
-    const base = hasValidId ? `kimi --session ${id}` : "kimi --continue";
+    const base = hasValidId && isValidKimiSessionId(id)
+      ? `kimi --session ${id}`
+      : "kimi --continue";
     return appendResumeCliArgs(base, "kimi", project ?? null, options);
   }
   const base = hasValidId ? `claude --resume ${id}` : "claude --continue";

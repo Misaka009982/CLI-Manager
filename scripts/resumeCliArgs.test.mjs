@@ -347,6 +347,8 @@ test("Kimi history resume strips continue/session/resume flags", () => {
     appendResumeCliArgs(`kimi --session ${NEW_ID}`, "kimi", kimiProject),
     `kimi --session ${NEW_ID} --model k2`,
   );
+  assert.equal(buildHistoryResumeCommand({ source: "kimi", session_id: "bad&calc" }), null);
+  assert.equal(buildResumeCliArgs("kimi", "--model k2", "bad;calc"), null);
 });
 
 test("Kimi history source advertises local list delete resume and realtime stats", () => {

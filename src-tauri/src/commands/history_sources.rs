@@ -554,7 +554,7 @@ mod tests {
     #[test]
     fn descriptors_keep_source_registry_size() {
         let descriptors = history_sources_list_descriptors();
-        assert_eq!(descriptors.len(), 11);
+        assert_eq!(descriptors.len(), 12);
         let kiro = descriptors
             .iter()
             .find(|descriptor| descriptor.id == "kiro")

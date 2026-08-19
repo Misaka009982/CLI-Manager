@@ -25,7 +25,8 @@ writeFileSync(
 );
 writeFileSync(
   join(tempDir, "resumeCliArgs.mjs"),
-  `export const stripKimiResumeCliArgs = (value) => value ?? "";\n`,
+  `export const isValidKimiSessionId = (value) => /^[A-Za-z0-9_-]{1,128}$/.test(value);
+export const stripKimiResumeCliArgs = (value) => value ?? "";\n`,
   "utf8",
 );
 const transpiled = ts.transpileModule(source, {
@@ -84,6 +85,11 @@ test("OpenCode locator and invalid IDs are never passed to the CLI", () => {
   );
   assert.equal(buildHistoryResumeCommand({ source: "opencode", session_id: "msg_abc123" }), null);
   assert.equal(buildHistoryResumeCommand({ source: "opencode", session_id: "ses bad" }), null);
+});
+
+test("Kimi shell metacharacters are never passed to the CLI", () => {
+  assert.equal(buildHistoryResumeCommand({ source: "kimi", session_id: "01KIMI&calc" }), null);
+  assert.equal(buildHistoryResumeCommand({ source: "kimi", session_id: "01KIMI;calc" }), null);
 });
 
 test("OpenCode resume argument stripping handles separated, equals and quoted forms", () => {
