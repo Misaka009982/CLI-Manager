@@ -168,7 +168,7 @@ return candidates.length === 1 ? candidates[0] : null;
 - Kimi's schema permits only `event`, `matcher`, `command`, and `timeout`; do not add an ownership field to the table.
 - Managed commands carry an exact `--owner cli-manager-local` or `--owner cli-manager-ssh-agent:<installation-id>` argument. Ownership requires exact parsed executable/`__hook`/source/event/owner tokens with no unknown suffix; substring matches never establish ownership.
 - An exact owner family/source/event/native matcher with an old executable or installation identity is outdated and may converge on explicit install. An exact owner token with inconsistent source/event/matcher is a conflict. Similar user commands are untouched.
-- Local status/install first require the current Kimi Code `doctor` capability. Install writes a candidate in the target directory, runs `kimi doctor config <candidate>`, revalidates the live input, and atomically replaces it. Any parse, doctor, revalidation, or replace failure preserves the original file.
+- Local status/install treat `config.toml` as the Hook state authority and must not discover or execute the Kimi CLI, `kimi doctor --help`, or `kimi doctor config`; this keeps status refresh and installation independent from CLI availability and external-process latency. Install writes a same-directory candidate, revalidates the live input, and atomically replaces it. Any parse, ownership-conflict, revalidation, or replace failure preserves the original file. The SSH Agent remains a separate remote boundary and continues to require current-product doctor capability plus candidate validation.
 - A local custom config root controls Hook management only. CLI-Manager does not inject `KIMI_CODE_HOME` into local terminal launches. New Kimi sessions reload config automatically; an active TUI requires `/reload`.
 - Hidden Hook delivery remains fail-open for the target CLI: bridge failures write only redacted diagnostics and the hidden process exits `0`; this does not claim that delivery succeeded.
 
@@ -181,7 +181,7 @@ return candidates.length === 1 ? candidates[0] : null;
 
 - Assert all nine installed Kimi definitions pass source/event admission; unknown Kimi events fail HTTP admission.
 - Assert `PermissionRequest -> PermissionResult` and running/attention `-> Interrupt` close the frontend state without completion/failure notifications.
-- Assert current-product doctor capability, candidate validation, atomic-failure preservation, invalid TOML, exact ownership, similar-command isolation, duplicate convergence, and module uninstall.
+- Assert local status and first install work without a Kimi executable or doctor subprocess, while atomic-failure preservation, invalid TOML, exact ownership, similar-command isolation, duplicate convergence, and module uninstall remain covered. SSH Agent tests continue to assert current-product doctor capability and candidate validation.
 - Assert Kimi Subagent events bind and enter Replay without opening a transcript split pane.
 - Assert Kimi remains rejected by every local/remote history entry point.
 - Source-inspecting frontend lifecycle tests must normalize CRLF to LF before applying LF-structured regular expressions. The SSH Agent Kimi TOML planner test uses real canonical paths and must run under Unix path semantics; non-Linux hosts still compile the Agent test target for Linux rather than weakening canonical-root validation.
