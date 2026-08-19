@@ -99,7 +99,6 @@ enum HookInstallStatus {
     NotInstalled,
     PartialInstalled,
     Installed,
-    Unsupported,
 }
 
 #[derive(Clone, Copy)]
@@ -2601,150 +2600,6 @@ fn build_pi_status(pi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus, St
     ))
 }
 
-#[derive(Debug, Clone)]
-enum KimiExecutable {
-    Native(PathBuf),
-    Wsl { distro: String, executable: String },
-}
-
-impl KimiExecutable {
-    fn run(&self, args: &[&str]) -> Result<std::process::Output, String> {
-        let command = match self {
-            Self::Native(path) if cfg!(target_os = "windows") && is_windows_command_shim(path) => {
-                let mut command = crate::shell_resolver::silent_command("powershell.exe");
-                command
-                    .arg("-NoProfile")
-                    .arg("-NonInteractive")
-                    .arg("-ExecutionPolicy")
-                    .arg("Bypass")
-                    .arg("-Command")
-                    .arg(build_powershell_kimi_invocation(path, args));
-                command
-            }
-            Self::Native(path) => {
-                let mut command =
-                    crate::shell_resolver::silent_command(path.to_string_lossy().as_ref());
-                command.args(args);
-                command
-            }
-            Self::Wsl { distro, executable } => {
-                let wsl = crate::wsl::find_wsl_exe()
-                    .ok_or_else(|| "kimi_code_unsupported".to_string())?;
-                let mut command =
-                    crate::shell_resolver::silent_command(wsl.to_string_lossy().as_ref());
-                command
-                    .arg("-d")
-                    .arg(distro)
-                    .arg("--exec")
-                    .arg(executable)
-                    .args(args);
-                command
-            }
-        };
-        crate::shell_resolver::output_with_timeout(command, Duration::from_secs(10))
-            .map_err(|_| "hook_config_doctor_failed".to_string())
-    }
-
-    fn validate_candidate(&self, candidate: &Path) -> Result<(), String> {
-        let candidate = match self {
-            Self::Native(_) => path_to_string(candidate),
-            Self::Wsl { distro, .. } => {
-                let (candidate_distro, linux_path) =
-                    crate::wsl::parse_wsl_unc_path(&path_to_string(candidate))
-                        .ok_or_else(|| "kimi_candidate_path_invalid".to_string())?;
-                if !candidate_distro.eq_ignore_ascii_case(distro) {
-                    return Err("kimi_candidate_path_invalid".to_string());
-                }
-                linux_path
-            }
-        };
-        let output = self.run(&["doctor", "config", &candidate])?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err("hook_config_doctor_failed".to_string())
-        }
-    }
-}
-
-fn is_windows_command_shim(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("ps1")
-        })
-}
-
-fn build_powershell_kimi_invocation(path: &Path, args: &[&str]) -> String {
-    let mut invocation = format!(
-        "& '{}'",
-        escape_powershell_single_quoted(&path_to_string(path))
-    );
-    for arg in args {
-        invocation.push_str(" '");
-        invocation.push_str(&escape_powershell_single_quoted(arg));
-        invocation.push('\'');
-    }
-    invocation
-}
-
-fn discover_kimi_executable(kimi_dir: &Path) -> Result<KimiExecutable, String> {
-    if let Some((distro, _)) = crate::wsl::parse_wsl_unc_path(&path_to_string(kimi_dir)) {
-        let wsl = crate::wsl::find_wsl_exe().ok_or_else(|| "kimi_code_unsupported".to_string())?;
-        let mut command = crate::shell_resolver::silent_command(wsl.to_string_lossy().as_ref());
-        command
-            .arg("-d")
-            .arg(&distro)
-            .arg("--exec")
-            .arg("sh")
-            .arg("-lc")
-            .arg("candidate=$(command -v kimi 2>/dev/null || true); if [ -z \"$candidate\" ] && [ -x \"$HOME/.kimi-code/bin/kimi\" ]; then candidate=\"$HOME/.kimi-code/bin/kimi\"; fi; [ -n \"$candidate\" ] && exec readlink -f -- \"$candidate\"");
-        let output = crate::shell_resolver::output_with_timeout(command, Duration::from_secs(5))
-            .map_err(|_| "kimi_code_unsupported".to_string())?;
-        let executable = String::from_utf8(output.stdout)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| {
-                output.status.success()
-                    && value.starts_with('/')
-                    && !value.contains(['\0', '\r', '\n'])
-            })
-            .ok_or_else(|| "kimi_code_unsupported".to_string())?;
-        return kimi_doctor_capability(KimiExecutable::Wsl { distro, executable });
-    }
-
-    let candidate_names: &[&str] = if cfg!(target_os = "windows") {
-        &["kimi.exe", "kimi.cmd", "kimi.ps1"]
-    } else {
-        &["kimi"]
-    };
-    let mut candidates: Vec<PathBuf> = candidate_names.iter().map(PathBuf::from).collect();
-    if let Some(home) = home_dir() {
-        candidates.extend(
-            candidate_names
-                .iter()
-                .map(|name| home.join(".kimi-code").join("bin").join(name)),
-        );
-    }
-    for candidate in candidates {
-        if let Ok(executable) = kimi_doctor_capability(KimiExecutable::Native(candidate)) {
-            return Ok(executable);
-        }
-    }
-    Err("kimi_code_unsupported".to_string())
-}
-
-fn kimi_doctor_capability(executable: KimiExecutable) -> Result<KimiExecutable, String> {
-    let output = executable
-        .run(&["doctor", "--help"])
-        .map_err(|_| "kimi_code_unsupported".to_string())?;
-    if output.status.success() {
-        Ok(executable)
-    } else {
-        Err("kimi_code_unsupported".to_string())
-    }
-}
-
 fn resolve_kimi_dir(selected_dir: Option<String>) -> Result<Option<PathBuf>, String> {
     let explicit = selected_dir.and_then(|value| normalize_selected_dir(&value));
     let default = env::var_os("KIMI_CODE_HOME")
@@ -2790,31 +2645,6 @@ fn build_kimi_status(kimi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus
         return missing_status();
     };
     let config_path = kimi_dir.join(KIMI_CONFIG_FILE_NAME);
-    if discover_kimi_executable(&kimi_dir).is_err() {
-        let mut status = status_from_checks(
-            Some(kimi_dir),
-            None,
-            Some(config_path),
-            None,
-            ToolChecks {
-                attention_script_installed: false,
-                finished_script_installed: false,
-                session_start_hook_installed: false,
-                running_hook_installed: false,
-                attention_hook_installed: false,
-                attention_hook_required: true,
-                stop_hook_installed: false,
-                failure_hook_installed: false,
-                failure_hook_required: true,
-                subagent_start_hook_installed: false,
-                subagent_start_hook_required: true,
-                hooks_feature_installed: false,
-                hooks_trusted: false,
-            },
-        );
-        status.status = HookInstallStatus::Unsupported;
-        return Ok(status);
-    }
     let content = read_text_if_exists(&config_path)?.unwrap_or_default();
     let commands = build_kimi_commands(&kimi_dir)?;
     let plan = kimi::plan(
@@ -2824,9 +2654,10 @@ fn build_kimi_status(kimi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus
         KimiPlanAction::Inspect,
     )?;
     let installed = |event: &str| plan.installed_bridge_events.contains(event);
+    let has_managed_hooks = !plan.installed_bridge_events.is_empty();
     let checks = ToolChecks {
-        attention_script_installed: true,
-        finished_script_installed: true,
+        attention_script_installed: has_managed_hooks,
+        finished_script_installed: has_managed_hooks,
         session_start_hook_installed: installed("SessionStart"),
         running_hook_installed: installed("UserPromptSubmit"),
         attention_hook_installed: installed("PermissionRequest") && installed("PermissionResult"),
@@ -2836,8 +2667,8 @@ fn build_kimi_status(kimi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus
         failure_hook_required: true,
         subagent_start_hook_installed: installed("SubagentStart") && installed("SubagentStop"),
         subagent_start_hook_required: true,
-        hooks_feature_installed: true,
-        hooks_trusted: true,
+        hooks_feature_installed: has_managed_hooks,
+        hooks_trusted: has_managed_hooks,
     };
     let mut status = status_from_checks(Some(kimi_dir), None, Some(config_path), None, checks);
     if plan.outdated || plan.conflict {
@@ -2847,35 +2678,20 @@ fn build_kimi_status(kimi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus
 }
 
 fn install_kimi_hooks(kimi_dir: &Path, modules: &[KimiHookModule]) -> Result<(), String> {
-    let executable = discover_kimi_executable(kimi_dir)?;
-    install_kimi_hooks_with_executable(kimi_dir, modules, &executable)
-}
-
-fn install_kimi_hooks_with_executable(
-    kimi_dir: &Path,
-    modules: &[KimiHookModule],
-    executable: &KimiExecutable,
-) -> Result<(), String> {
     if !live_is_dir(kimi_dir) {
         create_live_dir_all(kimi_dir, "kimi_config_dir_create_failed")?;
     }
-    change_kimi_hooks(
-        kimi_dir,
-        modules,
-        KimiPlanAction::Install,
-        Some(&|candidate| executable.validate_candidate(candidate)),
-    )
+    change_kimi_hooks(kimi_dir, modules, KimiPlanAction::Install)
 }
 
 fn uninstall_kimi_hooks(kimi_dir: &Path, modules: &[KimiHookModule]) -> Result<(), String> {
-    change_kimi_hooks(kimi_dir, modules, KimiPlanAction::Uninstall, None)
+    change_kimi_hooks(kimi_dir, modules, KimiPlanAction::Uninstall)
 }
 
 fn change_kimi_hooks(
     kimi_dir: &Path,
     modules: &[KimiHookModule],
     action: KimiPlanAction,
-    validator: Option<&dyn Fn(&Path) -> Result<(), String>>,
 ) -> Result<(), String> {
     let config_path = kimi_dir.join(KIMI_CONFIG_FILE_NAME);
     reject_kimi_config_symlink(&config_path)?;
@@ -2887,10 +2703,10 @@ fn change_kimi_hooks(
         modules,
         action,
     )?;
-    if plan.content == original.as_deref().unwrap_or_default() && validator.is_none() {
+    if plan.content == original.as_deref().unwrap_or_default() {
         return Ok(());
     }
-    replace_kimi_config(&config_path, original, &plan.content, validator)
+    replace_kimi_config(&config_path, original, &plan.content)
 }
 
 fn reject_kimi_config_symlink(config_path: &Path) -> Result<(), String> {
@@ -2926,7 +2742,15 @@ fn replace_kimi_config(
     config_path: &Path,
     original: Option<String>,
     content: &str,
-    validator: Option<&dyn Fn(&Path) -> Result<(), String>>,
+) -> Result<(), String> {
+    replace_kimi_config_with_stage_hook(config_path, original, content, || Ok(()))
+}
+
+fn replace_kimi_config_with_stage_hook(
+    config_path: &Path,
+    original: Option<String>,
+    content: &str,
+    after_stage: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
     let parent = config_path
         .parent()
@@ -2944,9 +2768,7 @@ fn replace_kimi_config(
     crate::provider::global::write_live(&candidate_text, content.as_bytes())
         .map_err(|_| "kimi_config_candidate_write_failed".to_string())?;
     let operation = (|| {
-        if let Some(validate) = validator {
-            validate(&candidate)?;
-        }
+        after_stage()?;
         let current = read_text_if_exists(config_path)?;
         if current != original {
             return Err("kimi_config_changed".to_string());
@@ -4591,40 +4413,20 @@ yolo = false
     }
 
     #[test]
-    fn kimi_candidate_validation_failure_preserves_live_config() {
-        let tmp = TempDir::new().unwrap();
-        let config_path = tmp.path().join(KIMI_CONFIG_FILE_NAME);
-        let original = "model = \"kimi-k2\"\n";
-        fs::write(&config_path, original).unwrap();
-
-        let error = replace_kimi_config(
-            &config_path,
-            Some(original.to_string()),
-            "model = \"kimi-k2\"\n\n[[hooks]]\nevent = \"Stop\"\ncommand = \"managed\"\n",
-            Some(&|_| Err("hook_config_doctor_failed".to_string())),
-        )
-        .unwrap_err();
-
-        assert_eq!(error, "hook_config_doctor_failed");
-        assert_eq!(fs::read_to_string(config_path).unwrap(), original);
-        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1);
-    }
-
-    #[test]
     fn kimi_write_revalidates_live_config_before_replace() {
         let tmp = TempDir::new().unwrap();
         let config_path = tmp.path().join(KIMI_CONFIG_FILE_NAME);
         fs::write(&config_path, "before\n").unwrap();
         let external_path = config_path.clone();
 
-        let error = replace_kimi_config(
+        let error = replace_kimi_config_with_stage_hook(
             &config_path,
             Some("before\n".to_string()),
             "after\n",
-            Some(&move |_| {
+            move || {
                 fs::write(&external_path, "external\n").unwrap();
                 Ok(())
-            }),
+            },
         )
         .unwrap_err();
 
@@ -4633,66 +4435,20 @@ yolo = false
         assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1);
     }
 
-    #[cfg(unix)]
     #[test]
-    fn kimi_doctor_capability_rejects_legacy_cli_and_accepts_current_cli() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let tmp = TempDir::new().unwrap();
-        let current = tmp.path().join("current-kimi");
-        fs::write(
-            &current,
-            "#!/bin/sh\n[ \"$1\" = doctor ] || exit 2\nexit 0\n",
-        )
-        .unwrap();
-        fs::set_permissions(&current, fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(kimi_doctor_capability(KimiExecutable::Native(current)).is_ok());
-
-        let legacy = tmp.path().join("legacy-kimi");
-        fs::write(&legacy, "#!/bin/sh\nexit 2\n").unwrap();
-        fs::set_permissions(&legacy, fs::Permissions::from_mode(0o700)).unwrap();
-        assert_eq!(
-            kimi_doctor_capability(KimiExecutable::Native(legacy)).unwrap_err(),
-            "kimi_code_unsupported"
-        );
-    }
-
-    #[test]
-    fn powershell_kimi_shim_invocation_quotes_path_and_arguments() {
-        let invocation = build_powershell_kimi_invocation(
-            Path::new(r"C:\Users\O'Neil\kimi.cmd"),
-            &["doctor", "config", r"C:\Config & Data\candidate.toml"],
-        );
-        assert_eq!(
-            invocation,
-            r"& 'C:\Users\O''Neil\kimi.cmd' 'doctor' 'config' 'C:\Config & Data\candidate.toml'"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn kimi_first_install_creates_missing_root_after_capability_check() {
-        use std::os::unix::fs::PermissionsExt;
-
+    fn kimi_status_and_first_install_do_not_require_cli() {
         let tmp = TempDir::new().unwrap();
         let kimi_dir = tmp.path().join("new-kimi-home");
-        let doctor = tmp.path().join("current-kimi");
-        fs::write(
-            &doctor,
-            "#!/bin/sh\n[ \"$1\" = doctor ] && [ \"$2\" = config ] && [ -f \"$3\" ]\n",
-        )
-        .unwrap();
-        fs::set_permissions(&doctor, fs::Permissions::from_mode(0o700)).unwrap();
 
-        install_kimi_hooks_with_executable(
-            &kimi_dir,
-            &ALL_KIMI_HOOK_MODULES,
-            &KimiExecutable::Native(doctor),
-        )
-        .unwrap();
+        let before = build_kimi_status(Some(kimi_dir.clone())).unwrap();
+        assert!(matches!(before.status, HookInstallStatus::NotInstalled));
+
+        install_kimi_hooks(&kimi_dir, &ALL_KIMI_HOOK_MODULES).unwrap();
 
         let config = fs::read_to_string(kimi_dir.join(KIMI_CONFIG_FILE_NAME)).unwrap();
         assert_eq!(config.matches("--source kimi").count(), 9);
+        let after = build_kimi_status(Some(kimi_dir)).unwrap();
+        assert!(matches!(after.status, HookInstallStatus::Installed));
     }
 
     #[cfg(windows)]

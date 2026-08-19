@@ -1,14 +1,5 @@
 # Changelog
 
-## [V1.3.7] - 2026-08-16
-
-### OpenCode 会话兼容
-
-- 修复 OpenCode Hook 将子 Agent 会话 ID 覆盖到主终端标签页的问题：Hook 现在按 OpenCode `sessionID` 识别根会话，跟踪父子关系并忽略子会话生命周期通知，顶部 Session ID、实时状态和后续恢复保持绑定到主会话。
-- 历史会话“继续对话”新增 OpenCode 支持，使用真实 `session_id` 构造 `opencode --session <id>`；SQLite locator、无效 ID 和项目参数中的重复 `--session/-s`、`--continue/-c`、`--fork` 不会污染恢复命令。
-- 历史会话删除新增 OpenCode SQLite 支持：仅接受默认 OpenCode 数据库中的合法 `ses_...` locator，在单个事务内依次删除关联 `part`、`message` 和会话记录；目标不存在、数据库异常或 schema 不兼容时不会留下部分删除，成功后才刷新历史索引缓存。
-- OpenCode TUI 新增隔离的剪贴板快捷键适配：Windows 下选中文本后 `Ctrl+C` 复制、`Ctrl+V` 粘贴、`Ctrl+Shift+V` 多行粘贴可正常使用；无选择时 `Ctrl+C` 仍发送中断，Claude、Codex、Grok、CC/CX 和 Pi 继续使用原有通用终端输入路径。
-
 ## [TEMP] - 2026-08-19
 
 ### Kimi Code 历史会话与实时统计
@@ -17,16 +8,23 @@
 - 历史列表标题优先使用 `state.json` 的 `title`；仅在标题缺失且当前标题过弱时才回退 `lastPrompt`，避免把首条用户消息盖过 Kimi 会话名。
 - 终端实时统计识别 Kimi 来源并严格绑定 Hook `sessionId`，不回退到项目最近会话。历史根优先使用历史来源设置，其次 Hook 配置目录，不会给本地启动注入 `KIMI_CODE_HOME`。
 
+## [V1.3.7] - 2026-08-19
+
+### OpenCode 会话兼容
+
+- 修复 OpenCode Hook 将子 Agent 会话 ID 覆盖到主终端标签页的问题：Hook 现在按 OpenCode `sessionID` 识别根会话，跟踪父子关系并忽略子会话生命周期通知，顶部 Session ID、实时状态和后续恢复保持绑定到主会话。
+- 历史会话“继续对话”新增 OpenCode 支持，使用真实 `session_id` 构造 `opencode --session <id>`；SQLite locator、无效 ID 和项目参数中的重复 `--session/-s`、`--continue/-c`、`--fork` 不会污染恢复命令。
+- 历史会话删除新增 OpenCode SQLite 支持：仅接受默认 OpenCode 数据库中的合法 `ses_...` locator，在单个事务内依次删除关联 `part`、`message` 和会话记录；目标不存在、数据库异常或 schema 不兼容时不会留下部分删除，成功后才刷新历史索引缓存。
+- OpenCode TUI 新增隔离的剪贴板快捷键适配：Windows 下选中文本后 `Ctrl+C` 复制、`Ctrl+V` 粘贴、`Ctrl+Shift+V` 多行粘贴可正常使用；无选择时 `Ctrl+C` 仍发送中断，Claude、Codex、Grok、CC/CX 和 Pi 继续使用原有通用终端输入路径。
+
 ### Kimi Code CLI 与 Hook 集成
 
 - SSH 主机“CLI 集成”新增 Kimi Code，支持 `$HOME/.kimi-code` 默认根、项目级覆盖、非空有效覆盖根的 `KIMI_CODE_HOME` 安全注入，以及远端 Hook 的检查、事务预览、安装和卸载；空根保留远端原生环境，Kimi 仅作为 CLI/Hook source，远程历史继续只支持 Claude Code 与 Codex CLI。
-- 设置“Hook”页新增当前 Kimi Code 的独立 bridge、目录、状态、六个模块和全量安装/删除；通过 `kimi doctor config` 校验结构化 TOML candidate，以精确 owner 管理九个 Hook definition，保留用户/第三方条目与注释，旧 `kimi-cli` 和 `~/.kimi` 不会被修改或迁移。
+- 设置“Hook”页新增当前 Kimi Code 的独立 bridge、目录、状态、六个模块和全量安装/删除；本地状态与安装直接使用结构化 TOML planner，不再启动 Kimi CLI 或 `doctor` 子进程，缺少 Kimi CLI 时仍可快速检查和安装 Hook；以精确 owner 管理九个 Hook definition，并继续保留用户/第三方条目与注释。SSH Agent 远端安装仍保留 current-product doctor candidate 校验。
 - Kimi `PermissionResult` 与 `Interrupt` 补齐审批和取消状态闭环；Subagent 事件进入安全绑定、通知与 Replay，但不会创建缺少稳定 transcript identity 的子 Agent 分屏。
 - SSH Agent 升级到 `0.1.9`、协议保持 `1.11`；Kimi Hook installation record 不生成 history candidate 或历史 metadata，旧 Agent 不支持 Kimi 时显式返回真实错误。
-
-### 供应商快捷切换
-
-- 修复终端右侧供应商面板拖拽排序时卡片横向偏移扩大滚动区域、触发底部横向滚动条的问题；拖拽现在仅沿纵轴移动，原有排序与纵向滚动保持不变。
+- 修复 Kimi Hook 前端生命周期测试仅匹配 LF 换行的问题：Windows CRLF checkout 现在与 Linux/macOS 使用同一份测试提取逻辑；SSH Agent 的 Kimi TOML 规划测试仅在其实际支持的 Unix 路径语义下执行，Windows 主机测试不再误把临时目录当作远端 Linux 配置根。（Refs #219）
+- 清理 Kimi CLI 诊断命令构造中的冗余可变绑定，后端 `cargo check` 不再产生该新增警告。（Refs #219）
 
 ### 终端 OSC 52 剪贴板
 
@@ -49,15 +47,9 @@
 
 - Codex 的 Trellis 执行流默认改由主会话直接处理；只有用户明确要求子任务，或主会话提前询问并获得明确同意后，才会派发研究、实现或检查子任务。
 
-## [V1.3.7] - 2026-08-17
-
-### Kimi Code Hook 验证
-
-- 修复 Kimi Hook 前端生命周期测试仅匹配 LF 换行的问题：Windows CRLF checkout 现在与 Linux/macOS 使用同一份测试提取逻辑；SSH Agent 的 Kimi TOML 规划测试仅在其实际支持的 Unix 路径语义下执行，Windows 主机测试不再误把临时目录当作远端 Linux 配置根。（Refs #219）
-- 清理 Kimi CLI 诊断命令构造中的冗余可变绑定，后端 `cargo check` 不再产生该新增警告。（Refs #219）
-
 ### 供应商快捷切换
 
+- 修复终端右侧供应商面板拖拽排序时卡片横向偏移扩大滚动区域、触发底部横向滚动条的问题；拖拽现在仅沿纵轴移动，原有排序与纵向滚动保持不变。
 - 终端右侧供应商面板的切换确认改为紧跟所选供应商卡片的紧凑内嵌确认条，沿用终端配色并精简为切换目标、生效范围和确认/取消操作，不再显示脱离终端风格的通用大弹框与冗长配置路径。
 - 精简供应商快捷面板的路由开关区域，移除“本地路由”和“自动故障转移”旁的辅助小字，保留开关悬浮说明与无障碍标签。
 - 修复自动故障转移队列未包含原当前供应商时的状态提交：队列首个实际成功的供应商现在也会通过既有安全热切换流程成为当前供应商，使快捷面板与设置页高亮保持一致。

@@ -1059,3 +1059,24 @@ Fixed CRLF-safe Kimi frontend test extraction and Unix-only SSH Agent planner co
 ### Status
 
 [OK] **Completed**
+
+
+## Session 92: 修复 Kimi Hook 本地检测延迟
+
+**Date**: 2026-08-19
+**Task**: 修复 Kimi Hook 本地检测延迟
+**Branch**: `master`
+
+### Summary
+
+移除本地 Kimi Hook 状态与安装中的 CLI/doctor 子进程检测，修正空配置状态，保留 TOML 原子写入保护，并将 TEMP 发布记录整理到 V1.3.7。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `890f59d4` | (see git log) |
+
+### Status
+
+[OK] **Completed**
