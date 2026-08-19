@@ -423,6 +423,74 @@ let deleted = delete_session_tree_with_backup_root(&file_ref, &backups_dir)?;
 let plan = build_file_restore_plan(&file_ref.path, &backups_dir, Some(&file_ref.source));
 ```
 
+## Scenario: OpenCode SQLite history deletion
+
+### 1. Scope / Trigger
+
+- Trigger: extending `history_delete_session(...)` to an OpenCode session, or changing OpenCode locator validation, writable SQLite access, or post-delete catalog invalidation.
+- Goal: delete exactly one selected OpenCode session without treating its database locator as a removable file or allowing a partial dependent-row deletion.
+
+### 2. Signatures
+
+- Tauri command remains `history_delete_session(file_path, claude_config_dir, codex_config_dir, grok_session_root, source, project_key) -> Result<(), String>`.
+- OpenCode internal mutation path remains `delete_opencode_session_from_locator(file_path)` followed by `delete_opencode_session_from_database(db_path, session_id)`.
+- The OpenCode locator format is `<default-opencode-db>#session=<session-id>`.
+
+### 3. Contracts
+
+- `source="opencode"` accepts only the configured default OpenCode database path and a session ID matching `ses_` plus one or more ASCII alphanumeric characters. The locator is an address, never a file targeted for deletion.
+- Preserve `ensure_source_mutation_unlocked("opencode")`: it blocks unresolved manual-recovery locks, but explicit deletion does not use a source-wide running-process check.
+- Open the existing database for write with `create_if_missing(false)`, validate the `session`, `message`, and `part` tables, then use bound parameters in one transaction.
+- Delete rows in dependency order: `part.session_id`, `message.session_id`, then `session.id`. Exactly one target `session` row must be affected; otherwise roll back and return `session_file_not_indexed`.
+- Commit before calling `invalidate_history_caches()`. A failed validation, query, rollback, or commit must leave cache invalidation and the selected session's persisted rows untouched.
+- Claude/Codex retain their file-tree backup/delete behavior; do not route OpenCode through `validate_session_file_ref`, `delete_session_tree`, or file backup snapshots.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Locator lacks `#session=` or has an invalid/non-`ses_` ID | `invalid_session_file`; no database open |
+| Locator database differs from the default OpenCode database | `session_file_outside_history_scope`; no database open |
+| Manual-recovery lock exists for OpenCode | `history_source_manual_recovery_required`; no write |
+| Database is missing | `opencode_database_not_found`; no file creation |
+| Required table is absent | `opencode_schema_unsupported`; no write |
+| Target session does not exist | Roll back dependent deletes and return `session_file_not_indexed` |
+| SQLite remains busy or a delete/commit fails | Return the database error; transaction is not committed |
+| Valid target and schema | Commit target-only deletion, then invalidate history caches |
+
+### 5. Good / Base / Bad Cases
+
+- Good: deleting `ses_delete` removes only its parts, messages, and session row while `ses_keep` remains readable.
+- Good: a stale locator for a missing session has orphan-like dependent test rows; the target-row check rolls back and preserves those rows.
+- Base: Claude/Codex deletion continues through the existing backup-and-file-tree path.
+- Bad: pass the OpenCode locator to `delete_session_tree`; it targets the shared database file and would delete every OpenCode session.
+- Bad: commit child deletes before verifying the selected session row; malformed/stale locators could leave partial data loss.
+
+### 6. Tests Required
+
+- Rust: valid and malformed OpenCode locators accept only `ses_` plus ASCII alphanumeric IDs.
+- Rust: a temporary SQLite fixture proves target `part → message → session` deletion, second-session preservation, and rollback when the session row is missing.
+- Rust: run `cargo test history --lib`, `cargo fmt -- --check`, and `cargo check`.
+- Frontend: run `npx tsc --noEmit` and OpenCode history/remote-handoff command regression tests; deletion uses the existing IPC signature.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let file_ref = validate_session_file_ref(&file_path, "opencode", &project_key, &roots)?;
+delete_session_tree(&file_ref)?;
+```
+
+#### Correct
+
+```rust
+let (db_path, session_id) = parse_opencode_session_locator(file_path)
+    .ok_or_else(|| "invalid_session_file".to_string())?;
+delete_opencode_session_from_database(&db_path, &session_id).await?;
+invalidate_history_caches(); // only after commit
+```
+
 ## Scenario: Local generated history titles
 
 ### 1. Scope / Trigger

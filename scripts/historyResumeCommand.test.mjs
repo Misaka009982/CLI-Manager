@@ -23,18 +23,27 @@ writeFileSync(
   `export const appendResumeCliArgs = (base) => base;\n`,
   "utf8",
 );
-const output = ts.transpileModule(source, {
+const transpiled = ts.transpileModule(source, {
   compilerOptions: {
     module: ts.ModuleKind.ES2022,
     target: ts.ScriptTarget.ES2022,
   },
-}).outputText
+  reportDiagnostics: true,
+});
+assert.deepEqual(
+  (transpiled.diagnostics ?? [])
+    .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)
+    .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
+  [],
+);
+const output = transpiled.outputText
   .replace('from "./cliTools"', 'from "./cliTools.mjs"')
   .replace('from "./projectStartupCommand"', 'from "./projectStartupCommand.mjs"');
 const outputPath = join(tempDir, "historyResumeCommand.mjs");
 writeFileSync(outputPath, output, "utf8");
 
 const {
+  buildRemoteHandoffResumeCommand,
   buildHistoryResumeCommand,
   stripOpenCodeResumeCliArgs,
 } = await import(pathToFileURL(outputPath).href);
@@ -42,7 +51,7 @@ const {
 const openCodeSession = { source: "opencode", session_id: "ses_abc123" };
 const openCodeProject = {
   cli_tool: "opencode",
-  cli_args: "--model provider/model --continue --session=ses_wrong -s 'ses_wrong2' --fork --prompt \"hello world\"",
+  cli_args: "--model provider/model --continue ses_wrong --session=ses_wrong2 -s 'ses_wrong3' --fork ses_wrong4 --prompt \"hello world\"",
   startup_cmd: "",
   provider_overrides: "",
   shell: "powershell",
@@ -74,10 +83,18 @@ test("OpenCode locator and invalid IDs are never passed to the CLI", () => {
 test("OpenCode resume argument stripping handles separated, equals and quoted forms", () => {
   assert.equal(
     stripOpenCodeResumeCliArgs(
-      "--model provider/model --session ses_a -s=ses_b --continue -c --fork positional-value --prompt 'hello world' --temperature=0.2",
+      "--model provider/model --session ses_a -s=ses_b --continue ses_c -c=ses_d --fork ses_e --prompt 'hello world' --temperature=0.2",
     ),
-    "--model provider/model positional-value --prompt 'hello world' --temperature=0.2",
+    "--model provider/model --prompt 'hello world' --temperature=0.2",
   );
+});
+
+test("OpenCode remote handoff uses the same strict ID and argument filtering", () => {
+  assert.equal(
+    buildRemoteHandoffResumeCommand("opencode", "ses_abc123", openCodeProject),
+    'opencode --session ses_abc123 --model provider/model --prompt "hello world"',
+  );
+  assert.equal(buildRemoteHandoffResumeCommand("opencode", "msg_abc123", openCodeProject), null);
 });
 
 test("other history sources keep their existing command builders", () => {

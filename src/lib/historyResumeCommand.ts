@@ -29,6 +29,9 @@ const OPENCODE_RESUME_OPTIONS = new Set([
 const OPENCODE_RESUME_OPTIONS_WITH_VALUE = new Set([
   "-s",
   "--session",
+  "-c",
+  "--continue",
+  "--fork",
 ]);
 
 interface CliArgToken {
@@ -133,7 +136,9 @@ function appendSessionCliArgs(
   ) {
     return base;
   }
-  const cliArgs = stripPiResumeCliArgs(project.cli_args);
+  const cliArgs = source === "opencode"
+    ? stripOpenCodeResumeCliArgs(project.cli_args)
+    : stripPiResumeCliArgs(project.cli_args);
   return cliArgs ? `${base} ${cliArgs}` : base;
 }
 
@@ -142,7 +147,9 @@ export function buildRemoteHandoffResumeCommand(
   sessionId: string,
   project?: ResumeProject | null,
 ): string | null {
-  const normalizedId = normalizeSessionId(sessionId);
+  const normalizedId = agent === "opencode"
+    ? normalizeOpenCodeSessionId(sessionId)
+    : normalizeSessionId(sessionId);
   if (!normalizedId) return null;
 
   if (agent === "codex") {
@@ -163,34 +170,21 @@ export function buildRemoteHandoffResumeCommand(
   }
   return appendSessionCliArgs(`${agent} --session ${normalizedId}`, agent, project);
 }
-}
 
 export function buildHistoryResumeCommand(
   session: Pick<HistorySessionSummary, "session_id" | "source">,
   project?: ResumeProject | null,
 ): string | null {
-  const sessionId = normalizeSessionId(session.session_id);
+  const sessionId = session.source === "opencode"
+    ? normalizeOpenCodeSessionId(session.session_id)
+    : normalizeSessionId(session.session_id);
   if (!sessionId) return null;
 
   if (session.source === "opencode") {
-    const openCodeSessionId = normalizeOpenCodeSessionId(session.session_id);
-    if (!openCodeSessionId) return null;
-    const base = `opencode --session ${openCodeSessionId}`;
-    if (
-      !project
-      || project.startup_cmd.trim()
-      || resolveCliToolHistorySourceId(project.cli_tool) !== "opencode"
-    ) {
-      return base;
-    }
-    const cliArgs = stripOpenCodeResumeCliArgs(project.cli_args);
-    return cliArgs ? `${base} ${cliArgs}` : base;
+    return appendSessionCliArgs(`opencode --session ${sessionId}`, "opencode", project);
   }
   if (session.source === "pi") {
     return appendSessionCliArgs(`pi --session ${sessionId}`, "pi", project);
-  }
-  if (session.source === "opencode") {
-    return appendSessionCliArgs(`opencode --session ${sessionId}`, "opencode", project);
   }
   if (session.source === "claude") {
     return appendResumeCliArgs(`claude --resume ${sessionId}`, "claude", project);
