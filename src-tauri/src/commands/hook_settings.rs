@@ -1,8 +1,12 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use cli_manager_hook_schema::kimi::{
+    self, KimiHookModule, KimiPlanAction, ALL_MODULES as ALL_KIMI_HOOK_MODULES,
+};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -20,6 +24,7 @@ const CODEX_HOOKS_FILE_NAME: &str = "hooks.json";
 const CODEX_CONFIG_FILE_NAME: &str = "config.toml";
 const GROK_HOOKS_FILE_NAME: &str = "cli-manager.json";
 const GROK_CONFIG_FILE_NAME: &str = "config.toml";
+const KIMI_CONFIG_FILE_NAME: &str = "config.toml";
 
 const HOOK_COMMAND_MARKER: &str = "__hook";
 const CODEX_COMMON_CONFIG_HOOKS_MARKER: &str = "# CLI-Manager hook protection";
@@ -62,6 +67,7 @@ const CODEX_QUESTION_TOOL_NAME: &str = "request_user_input";
 pub struct HookSettingsStatus {
     claude: ToolHookSettingsStatus,
     codex: ToolHookSettingsStatus,
+    kimi: ToolHookSettingsStatus,
     pi: ToolHookSettingsStatus,
     grok: ToolHookSettingsStatus,
     claude_auto_repaired: bool,
@@ -93,6 +99,7 @@ enum HookInstallStatus {
     NotInstalled,
     PartialInstalled,
     Installed,
+    Unsupported,
 }
 
 #[derive(Clone, Copy)]
@@ -139,6 +146,7 @@ pub async fn hook_settings_get_status(
     _app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
+    kimi_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
     cc_switch_db_path: Option<String>,
@@ -146,6 +154,7 @@ pub async fn hook_settings_get_status(
 ) -> Result<HookSettingsStatus, String> {
     let claude_dir = resolve_claude_dir(selected_dir, false)?;
     let codex_dir = resolve_codex_dir(codex_selected_dir, false)?;
+    let kimi_dir = resolve_kimi_dir(kimi_selected_dir)?;
     let pi_dir = resolve_pi_dir(pi_selected_dir, false)?;
     let grok_dir = resolve_grok_dir(grok_selected_dir, false)?;
     let mut claude_auto_repaired = false;
@@ -169,12 +178,14 @@ pub async fn hook_settings_get_status(
 
     let claude = build_claude_status(claude_dir.clone())?;
     let codex = build_codex_status_with_trust_repair(codex_dir.clone())?;
+    let kimi = build_kimi_status(kimi_dir.clone())?;
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(grok_dir.clone())?;
 
     Ok(HookSettingsStatus {
         claude,
         codex,
+        kimi,
         pi,
         grok,
         claude_auto_repaired,
@@ -186,6 +197,7 @@ pub async fn hook_settings_install(
     _app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
+    kimi_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
     cc_switch_db_path: Option<String>,
@@ -194,6 +206,7 @@ pub async fn hook_settings_install(
     let claude_dir = resolve_claude_dir(selected_dir, true)?
         .ok_or_else(|| "请先选择 Claude 配置目录".to_string())?;
     let codex_dir = resolve_codex_dir(codex_selected_dir, false)?;
+    let kimi_dir = resolve_kimi_dir(kimi_selected_dir)?;
     let pi_dir = resolve_pi_dir(pi_selected_dir, false)?;
     let grok_dir = resolve_grok_dir(grok_selected_dir, false)?;
     let requested_module = parse_claude_hook_module(module)?;
@@ -212,11 +225,13 @@ pub async fn hook_settings_install(
     )
     .await;
     let codex = build_codex_status(codex_dir.clone())?;
+    let kimi = build_kimi_status(kimi_dir.clone())?;
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(grok_dir.clone())?;
     Ok(HookSettingsStatus {
         claude,
         codex,
+        kimi,
         pi,
         grok,
         claude_auto_repaired: false,
@@ -228,6 +243,7 @@ pub async fn hook_settings_uninstall(
     _app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
+    kimi_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
     cc_switch_db_path: Option<String>,
@@ -236,6 +252,7 @@ pub async fn hook_settings_uninstall(
     let claude_dir = resolve_claude_dir(selected_dir, true)?
         .ok_or_else(|| "请先选择 Claude 配置目录".to_string())?;
     let codex_dir = resolve_codex_dir(codex_selected_dir, false)?;
+    let kimi_dir = resolve_kimi_dir(kimi_selected_dir)?;
     let pi_dir = resolve_pi_dir(pi_selected_dir, false)?;
     let grok_dir = resolve_grok_dir(grok_selected_dir, false)?;
     let requested_module = parse_claude_hook_module(module)?;
@@ -254,11 +271,13 @@ pub async fn hook_settings_uninstall(
     )
     .await;
     let codex = build_codex_status(codex_dir.clone())?;
+    let kimi = build_kimi_status(kimi_dir.clone())?;
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(grok_dir.clone())?;
     Ok(HookSettingsStatus {
         claude,
         codex,
+        kimi,
         pi,
         grok,
         claude_auto_repaired: false,
@@ -270,6 +289,7 @@ pub async fn hook_settings_install_codex(
     _app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
+    kimi_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
     cc_switch_db_path: Option<String>,
@@ -278,6 +298,7 @@ pub async fn hook_settings_install_codex(
     let codex_dir = resolve_codex_dir(codex_selected_dir, false)?
         .ok_or_else(|| "请先选择 Codex 配置目录".to_string())?;
     let claude_dir = resolve_claude_dir(selected_dir, false)?;
+    let kimi_dir = resolve_kimi_dir(kimi_selected_dir)?;
     let pi_dir = resolve_pi_dir(pi_selected_dir, false)?;
     let grok_dir = resolve_grok_dir(grok_selected_dir, false)?;
     let requested_module = parse_codex_hook_module(module)?;
@@ -296,11 +317,13 @@ pub async fn hook_settings_install_codex(
     )
     .await;
     let claude = build_claude_status(claude_dir.clone())?;
+    let kimi = build_kimi_status(kimi_dir.clone())?;
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(grok_dir.clone())?;
     Ok(HookSettingsStatus {
         claude,
         codex,
+        kimi,
         pi,
         grok,
         claude_auto_repaired: false,
@@ -312,6 +335,7 @@ pub async fn hook_settings_uninstall_codex(
     _app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
+    kimi_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
     cc_switch_db_path: Option<String>,
@@ -320,6 +344,7 @@ pub async fn hook_settings_uninstall_codex(
     let codex_dir = resolve_codex_dir(codex_selected_dir, false)?
         .ok_or_else(|| "未找到 Codex 配置目录".to_string())?;
     let claude_dir = resolve_claude_dir(selected_dir, false)?;
+    let kimi_dir = resolve_kimi_dir(kimi_selected_dir)?;
     let pi_dir = resolve_pi_dir(pi_selected_dir, false)?;
     let grok_dir = resolve_grok_dir(grok_selected_dir, false)?;
     let requested_module = parse_codex_hook_module(module)?;
@@ -330,6 +355,7 @@ pub async fn hook_settings_uninstall_codex(
     }
     let claude = build_claude_status(claude_dir.clone())?;
     let codex = build_codex_status(Some(codex_dir.clone()))?;
+    let kimi = build_kimi_status(kimi_dir.clone())?;
     sync_ccswitch_for_tool_status(
         cc_switch_db_path,
         &codex_dir,
@@ -343,8 +369,65 @@ pub async fn hook_settings_uninstall_codex(
     Ok(HookSettingsStatus {
         claude,
         codex,
+        kimi,
         pi,
         grok,
+        claude_auto_repaired: false,
+    })
+}
+
+#[tauri::command]
+pub async fn hook_settings_install_kimi(
+    selected_dir: Option<String>,
+    codex_selected_dir: Option<String>,
+    kimi_selected_dir: Option<String>,
+    pi_selected_dir: Option<String>,
+    grok_selected_dir: Option<String>,
+    _cc_switch_db_path: Option<String>,
+    module: Option<String>,
+) -> Result<HookSettingsStatus, String> {
+    let kimi_dir = resolve_kimi_dir(kimi_selected_dir)?
+        .ok_or_else(|| "kimi_config_dir_required".to_string())?;
+    let claude_dir = resolve_claude_dir(selected_dir, false)?;
+    let codex_dir = resolve_codex_dir(codex_selected_dir, false)?;
+    let pi_dir = resolve_pi_dir(pi_selected_dir, false)?;
+    let grok_dir = resolve_grok_dir(grok_selected_dir, false)?;
+    let modules = selected_kimi_modules(module)?;
+    install_kimi_hooks(&kimi_dir, &modules)?;
+    Ok(HookSettingsStatus {
+        claude: build_claude_status(claude_dir)?,
+        codex: build_codex_status(codex_dir)?,
+        kimi: build_kimi_status(Some(kimi_dir))?,
+        pi: build_pi_status(pi_dir)?,
+        grok: build_grok_status(grok_dir)?,
+        claude_auto_repaired: false,
+    })
+}
+
+#[tauri::command]
+pub async fn hook_settings_uninstall_kimi(
+    selected_dir: Option<String>,
+    codex_selected_dir: Option<String>,
+    kimi_selected_dir: Option<String>,
+    pi_selected_dir: Option<String>,
+    grok_selected_dir: Option<String>,
+    _cc_switch_db_path: Option<String>,
+    module: Option<String>,
+) -> Result<HookSettingsStatus, String> {
+    let kimi_dir = resolve_kimi_dir(kimi_selected_dir)?
+        .ok_or_else(|| "kimi_config_dir_missing".to_string())?;
+    let claude_dir = resolve_claude_dir(selected_dir, false)?;
+    let codex_dir = resolve_codex_dir(codex_selected_dir, false)?;
+    let pi_dir = resolve_pi_dir(pi_selected_dir, false)?;
+    let grok_dir = resolve_grok_dir(grok_selected_dir, false)?;
+    let modules = selected_kimi_modules(module)?;
+    uninstall_kimi_hooks(&kimi_dir, &modules)?;
+    Ok(HookSettingsStatus {
+        claude: build_claude_status(claude_dir)?,
+        codex: build_codex_status(codex_dir)?,
+        kimi: build_kimi_status(Some(kimi_dir))?,
+        pi: build_pi_status(pi_dir)?,
+        grok: build_grok_status(grok_dir)?,
         claude_auto_repaired: false,
     })
 }
@@ -353,6 +436,7 @@ pub async fn hook_settings_uninstall_codex(
 pub async fn hook_settings_install_pi(
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
+    kimi_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
     module: Option<String>,
@@ -361,6 +445,7 @@ pub async fn hook_settings_install_pi(
         resolve_pi_dir(pi_selected_dir, true)?.ok_or_else(|| "请先选择 Pi 配置目录".to_string())?;
     let claude_dir = resolve_claude_dir(selected_dir, false)?;
     let codex_dir = resolve_codex_dir(codex_selected_dir, false)?;
+    let kimi_dir = resolve_kimi_dir(kimi_selected_dir)?;
     let grok_dir = resolve_grok_dir(grok_selected_dir, false)?;
     let requested_module = parse_pi_hook_module(module)?;
     if let Some(module) = requested_module {
@@ -370,11 +455,13 @@ pub async fn hook_settings_install_pi(
     }
     let claude = build_claude_status(claude_dir.clone())?;
     let codex = build_codex_status(codex_dir.clone())?;
+    let kimi = build_kimi_status(kimi_dir.clone())?;
     let pi = build_pi_status(Some(pi_dir.clone()))?;
     let grok = build_grok_status(grok_dir.clone())?;
     Ok(HookSettingsStatus {
         claude,
         codex,
+        kimi,
         pi,
         grok,
         claude_auto_repaired: false,
@@ -385,6 +472,7 @@ pub async fn hook_settings_install_pi(
 pub async fn hook_settings_uninstall_pi(
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
+    kimi_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
     module: Option<String>,
@@ -393,6 +481,7 @@ pub async fn hook_settings_uninstall_pi(
         resolve_pi_dir(pi_selected_dir, false)?.ok_or_else(|| "未找到 Pi 配置目录".to_string())?;
     let claude_dir = resolve_claude_dir(selected_dir, false)?;
     let codex_dir = resolve_codex_dir(codex_selected_dir, false)?;
+    let kimi_dir = resolve_kimi_dir(kimi_selected_dir)?;
     let grok_dir = resolve_grok_dir(grok_selected_dir, false)?;
     let requested_module = parse_pi_hook_module(module)?;
     if let Some(module) = requested_module {
@@ -402,11 +491,13 @@ pub async fn hook_settings_uninstall_pi(
     }
     let claude = build_claude_status(claude_dir.clone())?;
     let codex = build_codex_status(codex_dir.clone())?;
+    let kimi = build_kimi_status(kimi_dir.clone())?;
     let pi = build_pi_status(Some(pi_dir.clone()))?;
     let grok = build_grok_status(grok_dir.clone())?;
     Ok(HookSettingsStatus {
         claude,
         codex,
+        kimi,
         pi,
         grok,
         claude_auto_repaired: false,
@@ -417,6 +508,7 @@ pub async fn hook_settings_uninstall_pi(
 pub async fn hook_settings_install_grok(
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
+    kimi_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
     module: Option<String>,
@@ -425,6 +517,7 @@ pub async fn hook_settings_install_grok(
         .ok_or_else(|| "请先选择 Grok 配置目录".to_string())?;
     let claude_dir = resolve_claude_dir(selected_dir, false)?;
     let codex_dir = resolve_codex_dir(codex_selected_dir, false)?;
+    let kimi_dir = resolve_kimi_dir(kimi_selected_dir)?;
     let pi_dir = resolve_pi_dir(pi_selected_dir, false)?;
     let requested_module = parse_claude_hook_module(module)?;
     if let Some(module) = requested_module {
@@ -436,11 +529,13 @@ pub async fn hook_settings_install_grok(
     disable_grok_cross_vendor_hooks(&grok_dir)?;
     let claude = build_claude_status(claude_dir.clone())?;
     let codex = build_codex_status(codex_dir.clone())?;
+    let kimi = build_kimi_status(kimi_dir.clone())?;
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(Some(grok_dir.clone()))?;
     Ok(HookSettingsStatus {
         claude,
         codex,
+        kimi,
         pi,
         grok,
         claude_auto_repaired: false,
@@ -451,6 +546,7 @@ pub async fn hook_settings_install_grok(
 pub async fn hook_settings_uninstall_grok(
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
+    kimi_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
     grok_selected_dir: Option<String>,
     module: Option<String>,
@@ -459,6 +555,7 @@ pub async fn hook_settings_uninstall_grok(
         .ok_or_else(|| "未找到 Grok 配置目录".to_string())?;
     let claude_dir = resolve_claude_dir(selected_dir, false)?;
     let codex_dir = resolve_codex_dir(codex_selected_dir, false)?;
+    let kimi_dir = resolve_kimi_dir(kimi_selected_dir)?;
     let pi_dir = resolve_pi_dir(pi_selected_dir, false)?;
     let requested_module = parse_claude_hook_module(module)?;
     if let Some(module) = requested_module {
@@ -469,11 +566,13 @@ pub async fn hook_settings_uninstall_grok(
     // Do not re-enable compat.*.hooks on uninstall (product decision).
     let claude = build_claude_status(claude_dir.clone())?;
     let codex = build_codex_status(codex_dir.clone())?;
+    let kimi = build_kimi_status(kimi_dir.clone())?;
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(Some(grok_dir.clone()))?;
     Ok(HookSettingsStatus {
         claude,
         codex,
+        kimi,
         pi,
         grok,
         claude_auto_repaired: false,
@@ -942,6 +1041,25 @@ fn parse_pi_hook_module(module: Option<String>) -> Result<Option<PiHookModule>, 
             other => Err(format!("未知的 Pi Hook 模块: {other}")),
         })
         .transpose()
+}
+
+fn parse_kimi_hook_module(value: &str) -> Result<KimiHookModule, String> {
+    match value {
+        "sessionStart" => Ok(KimiHookModule::SessionStart),
+        "running" => Ok(KimiHookModule::Running),
+        "attention" => Ok(KimiHookModule::Attention),
+        "stop" => Ok(KimiHookModule::Stop),
+        "failure" => Ok(KimiHookModule::Failure),
+        "subagent" => Ok(KimiHookModule::Subagent),
+        "hooksFeature" => Err("Kimi Code 不支持 hooksFeature 模块".to_string()),
+        other => Err(format!("未知的 Kimi Code Hook 模块: {other}")),
+    }
+}
+
+fn selected_kimi_modules(module: Option<String>) -> Result<Vec<KimiHookModule>, String> {
+    module
+        .map(|value| parse_kimi_hook_module(&value).map(|module| vec![module]))
+        .unwrap_or_else(|| Ok(ALL_KIMI_HOOK_MODULES.to_vec()))
 }
 
 fn apply_claude_hook_module(settings: &mut Value, exe: &str, module: ClaudeHookModule) {
@@ -2483,6 +2601,372 @@ fn build_pi_status(pi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus, St
     ))
 }
 
+#[derive(Debug, Clone)]
+enum KimiExecutable {
+    Native(PathBuf),
+    Wsl { distro: String, executable: String },
+}
+
+impl KimiExecutable {
+    fn run(&self, args: &[&str]) -> Result<std::process::Output, String> {
+        let command = match self {
+            Self::Native(path) if cfg!(target_os = "windows") && is_windows_command_shim(path) => {
+                let mut command = crate::shell_resolver::silent_command("powershell.exe");
+                command
+                    .arg("-NoProfile")
+                    .arg("-NonInteractive")
+                    .arg("-ExecutionPolicy")
+                    .arg("Bypass")
+                    .arg("-Command")
+                    .arg(build_powershell_kimi_invocation(path, args));
+                command
+            }
+            Self::Native(path) => {
+                let mut command =
+                    crate::shell_resolver::silent_command(path.to_string_lossy().as_ref());
+                command.args(args);
+                command
+            }
+            Self::Wsl { distro, executable } => {
+                let wsl = crate::wsl::find_wsl_exe()
+                    .ok_or_else(|| "kimi_code_unsupported".to_string())?;
+                let mut command =
+                    crate::shell_resolver::silent_command(wsl.to_string_lossy().as_ref());
+                command
+                    .arg("-d")
+                    .arg(distro)
+                    .arg("--exec")
+                    .arg(executable)
+                    .args(args);
+                command
+            }
+        };
+        crate::shell_resolver::output_with_timeout(command, Duration::from_secs(10))
+            .map_err(|_| "hook_config_doctor_failed".to_string())
+    }
+
+    fn validate_candidate(&self, candidate: &Path) -> Result<(), String> {
+        let candidate = match self {
+            Self::Native(_) => path_to_string(candidate),
+            Self::Wsl { distro, .. } => {
+                let (candidate_distro, linux_path) =
+                    crate::wsl::parse_wsl_unc_path(&path_to_string(candidate))
+                        .ok_or_else(|| "kimi_candidate_path_invalid".to_string())?;
+                if !candidate_distro.eq_ignore_ascii_case(distro) {
+                    return Err("kimi_candidate_path_invalid".to_string());
+                }
+                linux_path
+            }
+        };
+        let output = self.run(&["doctor", "config", &candidate])?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err("hook_config_doctor_failed".to_string())
+        }
+    }
+}
+
+fn is_windows_command_shim(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("ps1")
+        })
+}
+
+fn build_powershell_kimi_invocation(path: &Path, args: &[&str]) -> String {
+    let mut invocation = format!(
+        "& '{}'",
+        escape_powershell_single_quoted(&path_to_string(path))
+    );
+    for arg in args {
+        invocation.push_str(" '");
+        invocation.push_str(&escape_powershell_single_quoted(arg));
+        invocation.push('\'');
+    }
+    invocation
+}
+
+fn discover_kimi_executable(kimi_dir: &Path) -> Result<KimiExecutable, String> {
+    if let Some((distro, _)) = crate::wsl::parse_wsl_unc_path(&path_to_string(kimi_dir)) {
+        let wsl = crate::wsl::find_wsl_exe().ok_or_else(|| "kimi_code_unsupported".to_string())?;
+        let mut command = crate::shell_resolver::silent_command(wsl.to_string_lossy().as_ref());
+        command
+            .arg("-d")
+            .arg(&distro)
+            .arg("--exec")
+            .arg("sh")
+            .arg("-lc")
+            .arg("candidate=$(command -v kimi 2>/dev/null || true); if [ -z \"$candidate\" ] && [ -x \"$HOME/.kimi-code/bin/kimi\" ]; then candidate=\"$HOME/.kimi-code/bin/kimi\"; fi; [ -n \"$candidate\" ] && exec readlink -f -- \"$candidate\"");
+        let output = crate::shell_resolver::output_with_timeout(command, Duration::from_secs(5))
+            .map_err(|_| "kimi_code_unsupported".to_string())?;
+        let executable = String::from_utf8(output.stdout)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| {
+                output.status.success()
+                    && value.starts_with('/')
+                    && !value.contains(['\0', '\r', '\n'])
+            })
+            .ok_or_else(|| "kimi_code_unsupported".to_string())?;
+        return kimi_doctor_capability(KimiExecutable::Wsl { distro, executable });
+    }
+
+    let candidate_names: &[&str] = if cfg!(target_os = "windows") {
+        &["kimi.exe", "kimi.cmd", "kimi.ps1"]
+    } else {
+        &["kimi"]
+    };
+    let mut candidates: Vec<PathBuf> = candidate_names.iter().map(PathBuf::from).collect();
+    if let Some(home) = home_dir() {
+        candidates.extend(
+            candidate_names
+                .iter()
+                .map(|name| home.join(".kimi-code").join("bin").join(name)),
+        );
+    }
+    for candidate in candidates {
+        if let Ok(executable) = kimi_doctor_capability(KimiExecutable::Native(candidate)) {
+            return Ok(executable);
+        }
+    }
+    Err("kimi_code_unsupported".to_string())
+}
+
+fn kimi_doctor_capability(executable: KimiExecutable) -> Result<KimiExecutable, String> {
+    let output = executable
+        .run(&["doctor", "--help"])
+        .map_err(|_| "kimi_code_unsupported".to_string())?;
+    if output.status.success() {
+        Ok(executable)
+    } else {
+        Err("kimi_code_unsupported".to_string())
+    }
+}
+
+fn resolve_kimi_dir(selected_dir: Option<String>) -> Result<Option<PathBuf>, String> {
+    let explicit = selected_dir.and_then(|value| normalize_selected_dir(&value));
+    let default = env::var_os("KIMI_CODE_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|home| home.join(".kimi-code")));
+    let Some(dir) = explicit.or(default) else {
+        return Ok(None);
+    };
+    Ok(Some(dir))
+}
+
+fn build_kimi_commands(kimi_dir: &Path) -> Result<BTreeMap<String, String>, String> {
+    let executable = hook_exe_for_dir(kimi_dir)?;
+    Ok(kimi::DEFINITIONS
+        .iter()
+        .map(|definition| {
+            (
+                definition.bridge_event.to_string(),
+                build_kimi_command(&executable, definition.bridge_event),
+            )
+        })
+        .collect())
+}
+
+fn build_kimi_command(executable: &str, event: &str) -> String {
+    if is_windows_native_exe_path(executable) {
+        let executable = escape_powershell_single_quoted(executable);
+        return format!(
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '{executable}' {HOOK_COMMAND_MARKER} --source kimi --event {event} --owner {}\"",
+            kimi::LOCAL_OWNER
+        );
+    }
+    format!(
+        "{} {HOOK_COMMAND_MARKER} --source kimi --event {event} --owner {}",
+        escape_posix_single_quoted(executable),
+        kimi::LOCAL_OWNER
+    )
+}
+
+fn build_kimi_status(kimi_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus, String> {
+    let Some(kimi_dir) = kimi_dir else {
+        return missing_status();
+    };
+    let config_path = kimi_dir.join(KIMI_CONFIG_FILE_NAME);
+    if discover_kimi_executable(&kimi_dir).is_err() {
+        let mut status = status_from_checks(
+            Some(kimi_dir),
+            None,
+            Some(config_path),
+            None,
+            ToolChecks {
+                attention_script_installed: false,
+                finished_script_installed: false,
+                session_start_hook_installed: false,
+                running_hook_installed: false,
+                attention_hook_installed: false,
+                attention_hook_required: true,
+                stop_hook_installed: false,
+                failure_hook_installed: false,
+                failure_hook_required: true,
+                subagent_start_hook_installed: false,
+                subagent_start_hook_required: true,
+                hooks_feature_installed: false,
+                hooks_trusted: false,
+            },
+        );
+        status.status = HookInstallStatus::Unsupported;
+        return Ok(status);
+    }
+    let content = read_text_if_exists(&config_path)?.unwrap_or_default();
+    let commands = build_kimi_commands(&kimi_dir)?;
+    let plan = kimi::plan(
+        &content,
+        &commands,
+        &ALL_KIMI_HOOK_MODULES,
+        KimiPlanAction::Inspect,
+    )?;
+    let installed = |event: &str| plan.installed_bridge_events.contains(event);
+    let checks = ToolChecks {
+        attention_script_installed: true,
+        finished_script_installed: true,
+        session_start_hook_installed: installed("SessionStart"),
+        running_hook_installed: installed("UserPromptSubmit"),
+        attention_hook_installed: installed("PermissionRequest") && installed("PermissionResult"),
+        attention_hook_required: true,
+        stop_hook_installed: installed("Stop") && installed("Interrupt"),
+        failure_hook_installed: installed("StopFailure"),
+        failure_hook_required: true,
+        subagent_start_hook_installed: installed("SubagentStart") && installed("SubagentStop"),
+        subagent_start_hook_required: true,
+        hooks_feature_installed: true,
+        hooks_trusted: true,
+    };
+    let mut status = status_from_checks(Some(kimi_dir), None, Some(config_path), None, checks);
+    if plan.outdated || plan.conflict {
+        status.status = HookInstallStatus::PartialInstalled;
+    }
+    Ok(status)
+}
+
+fn install_kimi_hooks(kimi_dir: &Path, modules: &[KimiHookModule]) -> Result<(), String> {
+    let executable = discover_kimi_executable(kimi_dir)?;
+    install_kimi_hooks_with_executable(kimi_dir, modules, &executable)
+}
+
+fn install_kimi_hooks_with_executable(
+    kimi_dir: &Path,
+    modules: &[KimiHookModule],
+    executable: &KimiExecutable,
+) -> Result<(), String> {
+    if !live_is_dir(kimi_dir) {
+        create_live_dir_all(kimi_dir, "kimi_config_dir_create_failed")?;
+    }
+    change_kimi_hooks(
+        kimi_dir,
+        modules,
+        KimiPlanAction::Install,
+        Some(&|candidate| executable.validate_candidate(candidate)),
+    )
+}
+
+fn uninstall_kimi_hooks(kimi_dir: &Path, modules: &[KimiHookModule]) -> Result<(), String> {
+    change_kimi_hooks(kimi_dir, modules, KimiPlanAction::Uninstall, None)
+}
+
+fn change_kimi_hooks(
+    kimi_dir: &Path,
+    modules: &[KimiHookModule],
+    action: KimiPlanAction,
+    validator: Option<&dyn Fn(&Path) -> Result<(), String>>,
+) -> Result<(), String> {
+    let config_path = kimi_dir.join(KIMI_CONFIG_FILE_NAME);
+    reject_kimi_config_symlink(&config_path)?;
+    let original = read_text_if_exists(&config_path)?;
+    let commands = build_kimi_commands(kimi_dir)?;
+    let plan = kimi::plan(
+        original.as_deref().unwrap_or_default(),
+        &commands,
+        modules,
+        action,
+    )?;
+    if plan.content == original.as_deref().unwrap_or_default() && validator.is_none() {
+        return Ok(());
+    }
+    replace_kimi_config(&config_path, original, &plan.content, validator)
+}
+
+fn reject_kimi_config_symlink(config_path: &Path) -> Result<(), String> {
+    if let Some((distro, linux_path)) = crate::wsl::parse_wsl_unc_path(&path_to_string(config_path))
+    {
+        let wsl = crate::wsl::find_wsl_exe().ok_or_else(|| "kimi_code_unsupported".to_string())?;
+        let mut command = crate::shell_resolver::silent_command(wsl.to_string_lossy().as_ref());
+        command
+            .arg("-d")
+            .arg(distro)
+            .arg("--exec")
+            .arg("test")
+            .arg("-L")
+            .arg(linux_path);
+        let output = crate::shell_resolver::output_with_timeout(command, Duration::from_secs(5))
+            .map_err(|_| "kimi_config_metadata_failed".to_string())?;
+        if output.status.success() {
+            return Err("kimi_config_symlink_unsupported".to_string());
+        }
+        return Ok(());
+    }
+    match fs::symlink_metadata(config_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err("kimi_config_symlink_unsupported".to_string())
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("kimi_config_metadata_failed".to_string()),
+    }
+}
+
+fn replace_kimi_config(
+    config_path: &Path,
+    original: Option<String>,
+    content: &str,
+    validator: Option<&dyn Fn(&Path) -> Result<(), String>>,
+) -> Result<(), String> {
+    let parent = config_path
+        .parent()
+        .ok_or_else(|| "kimi_config_path_invalid".to_string())?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let candidate = parent.join(format!(
+        ".{KIMI_CONFIG_FILE_NAME}.{}.{}.tmp",
+        std::process::id(),
+        stamp
+    ));
+    let candidate_text = path_to_string(&candidate);
+    crate::provider::global::write_live(&candidate_text, content.as_bytes())
+        .map_err(|_| "kimi_config_candidate_write_failed".to_string())?;
+    let operation = (|| {
+        if let Some(validate) = validator {
+            validate(&candidate)?;
+        }
+        let current = read_text_if_exists(config_path)?;
+        if current != original {
+            return Err("kimi_config_changed".to_string());
+        }
+        if current.as_deref() == Some(content) {
+            return Ok(false);
+        }
+        crate::provider::global::replace_live_from_stage(
+            &path_to_string(config_path),
+            &candidate_text,
+        )
+        .map_err(|_| "kimi_config_replace_failed".to_string())?;
+        Ok(true)
+    })();
+    if !matches!(&operation, Ok(true)) {
+        let _ = crate::provider::global::remove_live(&candidate_text);
+    }
+    operation.map(|_| ())
+}
+
 fn resolve_claude_dir(
     selected_dir: Option<String>,
     require_existing: bool,
@@ -3295,10 +3779,11 @@ mod tests {
     }
 
     #[test]
-    fn optional_config_resolution_ignores_missing_selected_dirs() {
+    fn optional_config_resolution_does_not_create_missing_selected_dirs() {
         let tmp = TempDir::new().unwrap();
         let missing_claude_dir = tmp.path().join("missing-claude");
         let missing_codex_dir = tmp.path().join("missing-codex");
+        let missing_kimi_dir = tmp.path().join("missing-kimi");
         let missing_pi_dir = tmp.path().join("missing-pi");
         let missing_grok_dir = tmp.path().join("missing-grok");
 
@@ -3311,6 +3796,10 @@ mod tests {
             None
         );
         assert_eq!(
+            resolve_kimi_dir(Some(path_to_string(&missing_kimi_dir))).unwrap(),
+            Some(missing_kimi_dir.clone())
+        );
+        assert_eq!(
             resolve_pi_dir(Some(path_to_string(&missing_pi_dir)), false).unwrap(),
             None
         );
@@ -3321,6 +3810,7 @@ mod tests {
 
         assert!(!missing_claude_dir.exists());
         assert!(!missing_codex_dir.exists());
+        assert!(!missing_kimi_dir.exists());
         assert!(!missing_pi_dir.exists());
         assert!(!missing_grok_dir.exists());
     }
@@ -4098,6 +4588,111 @@ yolo = false
 
         assert_eq!(error, PI_EXTENSION_CONFLICT_ERROR);
         assert_eq!(fs::read_to_string(extension_path).unwrap(), user_content);
+    }
+
+    #[test]
+    fn kimi_candidate_validation_failure_preserves_live_config() {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join(KIMI_CONFIG_FILE_NAME);
+        let original = "model = \"kimi-k2\"\n";
+        fs::write(&config_path, original).unwrap();
+
+        let error = replace_kimi_config(
+            &config_path,
+            Some(original.to_string()),
+            "model = \"kimi-k2\"\n\n[[hooks]]\nevent = \"Stop\"\ncommand = \"managed\"\n",
+            Some(&|_| Err("hook_config_doctor_failed".to_string())),
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "hook_config_doctor_failed");
+        assert_eq!(fs::read_to_string(config_path).unwrap(), original);
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn kimi_write_revalidates_live_config_before_replace() {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join(KIMI_CONFIG_FILE_NAME);
+        fs::write(&config_path, "before\n").unwrap();
+        let external_path = config_path.clone();
+
+        let error = replace_kimi_config(
+            &config_path,
+            Some("before\n".to_string()),
+            "after\n",
+            Some(&move |_| {
+                fs::write(&external_path, "external\n").unwrap();
+                Ok(())
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "kimi_config_changed");
+        assert_eq!(fs::read_to_string(config_path).unwrap(), "external\n");
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kimi_doctor_capability_rejects_legacy_cli_and_accepts_current_cli() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let current = tmp.path().join("current-kimi");
+        fs::write(
+            &current,
+            "#!/bin/sh\n[ \"$1\" = doctor ] || exit 2\nexit 0\n",
+        )
+        .unwrap();
+        fs::set_permissions(&current, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(kimi_doctor_capability(KimiExecutable::Native(current)).is_ok());
+
+        let legacy = tmp.path().join("legacy-kimi");
+        fs::write(&legacy, "#!/bin/sh\nexit 2\n").unwrap();
+        fs::set_permissions(&legacy, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            kimi_doctor_capability(KimiExecutable::Native(legacy)).unwrap_err(),
+            "kimi_code_unsupported"
+        );
+    }
+
+    #[test]
+    fn powershell_kimi_shim_invocation_quotes_path_and_arguments() {
+        let invocation = build_powershell_kimi_invocation(
+            Path::new(r"C:\Users\O'Neil\kimi.cmd"),
+            &["doctor", "config", r"C:\Config & Data\candidate.toml"],
+        );
+        assert_eq!(
+            invocation,
+            r"& 'C:\Users\O''Neil\kimi.cmd' 'doctor' 'config' 'C:\Config & Data\candidate.toml'"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kimi_first_install_creates_missing_root_after_capability_check() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let kimi_dir = tmp.path().join("new-kimi-home");
+        let doctor = tmp.path().join("current-kimi");
+        fs::write(
+            &doctor,
+            "#!/bin/sh\n[ \"$1\" = doctor ] && [ \"$2\" = config ] && [ -f \"$3\" ]\n",
+        )
+        .unwrap();
+        fs::set_permissions(&doctor, fs::Permissions::from_mode(0o700)).unwrap();
+
+        install_kimi_hooks_with_executable(
+            &kimi_dir,
+            &ALL_KIMI_HOOK_MODULES,
+            &KimiExecutable::Native(doctor),
+        )
+        .unwrap();
+
+        let config = fs::read_to_string(kimi_dir.join(KIMI_CONFIG_FILE_NAME)).unwrap();
+        assert_eq!(config.matches("--source kimi").count(), 9);
     }
 
     #[cfg(windows)]

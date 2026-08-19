@@ -99,7 +99,7 @@ import {
 } from "./terminalWorkspan";
 
 export type SessionStatus = "running" | "exited" | "error";
-export type CliHookSource = "claude" | "codex" | "pi" | "grok" | "opencode";
+export type CliHookSource = "claude" | "codex" | "kimi" | "pi" | "grok" | "opencode";
 export type CliHookEventName =
   | "SessionStart"
   | "UserPromptSubmit"
@@ -107,6 +107,8 @@ export type CliHookEventName =
   | "Stop"
   | "StopFailure"
   | "PermissionRequest"
+  | "PermissionResult"
+  | "Interrupt"
   | "SubagentStart"
   | "SubagentStop"
   | "AgentToolStart"
@@ -248,12 +250,13 @@ export interface SplitTerminalOptions {
 }
 
 interface HookToolStatus {
-  status: "directoryMissing" | "notInstalled" | "partialInstalled" | "installed";
+  status: "directoryMissing" | "notInstalled" | "partialInstalled" | "installed" | "unsupported";
 }
 
 interface HookSettingsStatusPayload {
   claude: HookToolStatus;
   codex: HookToolStatus;
+  kimi: HookToolStatus;
   pi: HookToolStatus;
   grok: HookToolStatus;
   claudeAutoRepaired?: boolean;
@@ -991,6 +994,8 @@ function mapCliHookEvent(event: CliHookEventName): TabNotificationState | null {
   // idle_prompt（需要用户介入）会送达
   if (event === "Notification") return "attention";
   if (event === "PermissionRequest") return "attention";
+  if (event === "PermissionResult") return "running";
+  if (event === "Interrupt") return "none";
   if (event === "StopFailure") return "failed";
   if (event === "Stop") return "done";
   return null;
@@ -1255,7 +1260,7 @@ interface SshLaunchPayload extends SshConnectionSpecPayload {
   agentPath: string;
   agentInstallationId: string;
   agentRemoteMachineId: string;
-  toolSource: "" | "claude" | "codex";
+  toolSource: "" | "claude" | "codex" | "kimi";
   environmentOverrides: Record<string, string>;
   initializationCommand: string | null;
   startupCommand: string | null;
@@ -1320,6 +1325,7 @@ async function shouldEnableHookEnv(): Promise<boolean> {
   if (
     !settings.claudeHookBridgeEnabled &&
     !settings.codexHookBridgeEnabled &&
+    !settings.kimiHookBridgeEnabled &&
     !settings.piHookBridgeEnabled &&
     !settings.grokHookBridgeEnabled
   ) {
@@ -1329,6 +1335,7 @@ async function shouldEnableHookEnv(): Promise<boolean> {
     const status = await invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
       selectedDir: settings.claudeHookConfigDir?.trim() || null,
       codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
+      kimiSelectedDir: settings.kimiHookConfigDir?.trim() || null,
       piSelectedDir: settings.piHookConfigDir?.trim() || null,
       grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
       ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
@@ -1337,6 +1344,7 @@ async function shouldEnableHookEnv(): Promise<boolean> {
     return openCodeInstalled || (
       (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
       (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
+      (settings.kimiHookBridgeEnabled && status.kimi.status === "installed") ||
       (settings.piHookBridgeEnabled && status.pi.status === "installed") ||
       (settings.grokHookBridgeEnabled && status.grok.status === "installed")
     );
@@ -1519,7 +1527,11 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
       )?.configured_root.trim();
       const effectiveConfigRoot = project?.cli_config_root.trim() || hostConfiguredRoot || "";
       if (effectiveConfigRoot) {
-        const environmentKey = toolSource === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
+        const environmentKey = {
+          claude: "CLAUDE_CONFIG_DIR",
+          codex: "CODEX_HOME",
+          kimi: "KIMI_CODE_HOME",
+        }[toolSource];
         resolvedEnvironmentOverrides[environmentKey] = effectiveConfigRoot;
       }
       const hookIntegration = integrationState.integrations.find((candidate) => (
@@ -2476,6 +2488,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       boundNewCliSessionId ||
       payload.event === "Stop" ||
       payload.event === "StopFailure" ||
+      payload.event === "Interrupt" ||
       payload.event === "UserPromptSubmit"
     ) {
       set((state) => ({ statsPanelRefreshSeq: state.statsPanelRefreshSeq + 1 }));

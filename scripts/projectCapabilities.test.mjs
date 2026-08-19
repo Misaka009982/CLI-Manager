@@ -16,7 +16,7 @@ function writeModule(name, source) {
 }
 
 writeModule("sshToolIntegration.mjs", `
-export const resolveSshToolSource = (value) => {
+export const resolveSshHistorySource = (value) => {
   const command = value?.trim().split(/\\s+/, 1)[0]?.toLowerCase();
   return command === "claude" || command === "codex" ? command : null;
 };
@@ -47,6 +47,7 @@ function project(environment_type, cli_tool) {
 test("SSH 历史能力只放行 Claude 和 Codex", () => {
   assert.equal(projectSupportsCapability(project("ssh", "claude --model opus"), "history"), true);
   assert.equal(projectSupportsCapability(project("ssh", "codex resume"), "history"), true);
+  assert.equal(projectSupportsCapability(project("ssh", "kimi"), "history"), false);
   assert.equal(projectSupportsCapability(project("ssh", "grok build"), "history"), false);
   assert.equal(projectSupportsCapability(project("ssh", "opencode"), "history"), false);
   assert.equal(projectSupportsCapability(project("ssh", ""), "history"), false);

@@ -1001,6 +1001,7 @@ fn validate_hook_source(source: &str) -> Result<&str, String> {
     match source.trim() {
         "claude" => Ok("claude"),
         "codex" => Ok("codex"),
+        "kimi" => Ok("kimi"),
         _ => Err("hook_source_invalid".to_string()),
     }
 }
@@ -1125,10 +1126,11 @@ fn validate_agent_hook_report(
     if required == 0 || required > MAX_AGENT_HOOK_ENTRIES || report.managed_entries > required {
         return Err("ssh_agent_hook_count_invalid".to_string());
     }
-    let expected_roles: HashSet<&str> = if expected_source == "claude" {
-        HashSet::from(["claudeSettings"])
-    } else {
-        HashSet::from(["codexHooks", "codexFeature"])
+    let expected_roles: HashSet<&str> = match expected_source {
+        "claude" => HashSet::from(["claudeSettings"]),
+        "codex" => HashSet::from(["codexHooks", "codexFeature"]),
+        "kimi" => HashSet::from(["kimiConfig"]),
+        _ => return Err("ssh_agent_hook_source_invalid".to_string()),
     };
     let mut files = HashSet::new();
     for file in &report.config_files {
@@ -1140,7 +1142,8 @@ fn validate_agent_hook_report(
             return Err("ssh_agent_hook_file_invalid".to_string());
         }
     }
-    if report.config_files.len() != if expected_source == "claude" { 1 } else { 2 } {
+    let expected_file_count = if expected_source == "codex" { 2 } else { 1 };
+    if report.config_files.len() != expected_file_count {
         return Err("ssh_agent_hook_file_invalid".to_string());
     }
     for change in &report.changes {
@@ -1174,15 +1177,25 @@ fn validate_agent_hook_report(
         return Err("ssh_agent_hook_change_invalid".to_string());
     }
     if let Some(record) = &report.installation {
+        let history_candidate_valid = match (
+            report.source.as_str(),
+            record.history_source_candidate.as_ref(),
+        ) {
+            ("kimi", None) => true,
+            ("claude" | "codex", Some(candidate)) => {
+                candidate.source == report.source
+                    && candidate.canonical_config_root == report.canonical_config_root
+                    && candidate.config_root_hash == report.config_root_hash
+            }
+            _ => false,
+        };
         if expected_action != "installed"
             || record.source != report.source
             || record.installation_id != report.installation_id
             || record.owner_id != format!("cli-manager-ssh-agent:{}", report.installation_id)
             || record.configured_config_root != report.configured_config_root
             || record.canonical_config_root != report.canonical_config_root
-            || record.history_source_candidate.source != report.source
-            || record.history_source_candidate.canonical_config_root != report.canonical_config_root
-            || record.history_source_candidate.config_root_hash != report.config_root_hash
+            || !history_candidate_valid
             || record.adapter_version == 0
             || record.managed_entries != required
             || record.config_files.len() != report.config_files.len()
@@ -1765,10 +1778,11 @@ fn hook_request(
             Ok(value.to_string())
         })
         .transpose()?;
-    let allowed_roles: HashSet<&str> = if source == "claude" {
-        HashSet::from(["claudeSettings"])
-    } else {
-        HashSet::from(["codexHooks", "codexFeature"])
+    let allowed_roles: HashSet<&str> = match source.as_str() {
+        "claude" => HashSet::from(["claudeSettings"]),
+        "codex" => HashSet::from(["codexHooks", "codexFeature"]),
+        "kimi" => HashSet::from(["kimiConfig"]),
+        _ => return Err("hook_source_invalid".to_string()),
     };
     let mut seen = HashSet::new();
     for file in &expected_files {
@@ -2396,6 +2410,91 @@ mod tests {
     }
 
     #[test]
+    fn kimi_hook_report_accepts_optional_history_candidate_as_absent() {
+        let installation_id = "00000000-0000-4000-8000-000000000001";
+        let config_path = "/home/dev/.kimi-code/config.toml";
+        let fingerprint = "a".repeat(64);
+        let report = HookConfigReport {
+            action: "installed".to_string(),
+            status: "installed".to_string(),
+            source: "kimi".to_string(),
+            installation_id: installation_id.to_string(),
+            remote_machine_id: "machine".to_string(),
+            configured_config_root: "~/.kimi-code".to_string(),
+            canonical_config_root: "/home/dev/.kimi-code".to_string(),
+            config_root_hash: "b".repeat(64),
+            config_root_exists: true,
+            will_create_config_root: false,
+            config_files: vec![HookConfigFile {
+                role: "kimiConfig".to_string(),
+                canonical_path: config_path.to_string(),
+                fingerprint: fingerprint.clone(),
+                exists: true,
+            }],
+            managed_entries: 9,
+            required_entries: 9,
+            changes: vec![HookConfigChange {
+                role: "kimiConfig".to_string(),
+                canonical_path: config_path.to_string(),
+                before_fingerprint: "missing".to_string(),
+                after_fingerprint: fingerprint.clone(),
+                action: "create".to_string(),
+            }],
+            installation: Some(HookInstallationRecord {
+                source: "kimi".to_string(),
+                installation_id: installation_id.to_string(),
+                owner_id: format!("cli-manager-ssh-agent:{installation_id}"),
+                configured_config_root: "~/.kimi-code".to_string(),
+                canonical_config_root: "/home/dev/.kimi-code".to_string(),
+                config_files: vec![HookInstallationFile {
+                    role: "kimiConfig".to_string(),
+                    canonical_path: config_path.to_string(),
+                    before_fingerprint: "missing".to_string(),
+                    after_fingerprint: fingerprint,
+                }],
+                managed_entries: 9,
+                adapter_version: 1,
+                installed_at: 1,
+                history_source_candidate: None,
+            }),
+        };
+        assert!(validate_agent_hook_report(
+            &report,
+            "installed",
+            "kimi",
+            installation_id,
+            "machine",
+            "~/.kimi-code",
+            Some("/home/dev/.kimi-code"),
+        )
+        .is_ok());
+
+        let mut invalid = report;
+        invalid
+            .installation
+            .as_mut()
+            .unwrap()
+            .history_source_candidate = Some(HookHistorySourceCandidate {
+            source: "kimi".to_string(),
+            canonical_config_root: "/home/dev/.kimi-code".to_string(),
+            config_root_hash: "b".repeat(64),
+        });
+        assert_eq!(
+            validate_agent_hook_report(
+                &invalid,
+                "installed",
+                "kimi",
+                installation_id,
+                "machine",
+                "~/.kimi-code",
+                None,
+            )
+            .unwrap_err(),
+            "ssh_agent_hook_record_invalid"
+        );
+    }
+
+    #[test]
     fn hook_installation_record_requires_each_config_file_once() {
         let hooks_path = "/home/dev/.codex/hooks.json";
         let feature_path = "/home/dev/.codex/config.toml";
@@ -2460,11 +2559,11 @@ mod tests {
                 managed_entries: 7,
                 adapter_version: 1,
                 installed_at: 1,
-                history_source_candidate: HookHistorySourceCandidate {
+                history_source_candidate: Some(HookHistorySourceCandidate {
                     source: "codex".to_string(),
                     canonical_config_root: "/home/dev/.codex".to_string(),
                     config_root_hash: "c".repeat(64),
-                },
+                }),
             }),
         };
         assert_eq!(

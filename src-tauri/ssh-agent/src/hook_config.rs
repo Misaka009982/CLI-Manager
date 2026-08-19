@@ -1,16 +1,18 @@
 use crate::installer::{read_installation_record, InstallationRecord};
 use crate::layout::{resolve_layout, AgentLayout};
 use cli_manager_hook_schema::{
+    kimi::{self, KimiPlanAction, ALL_MODULES as ALL_KIMI_HOOK_MODULES},
     HookConfigChange, HookConfigFile, HookConfigReport, HookConfigRequest,
     HookHistorySourceCandidate, HookInstallationFile, HookInstallationRecord,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use toml_edit::{value, DocumentMut, Item};
@@ -55,6 +57,7 @@ const CODEX_HOOKS: &[(&str, &str, &str)] = &[
 enum Source {
     Claude,
     Codex,
+    Kimi,
 }
 
 impl Source {
@@ -62,6 +65,7 @@ impl Source {
         match value {
             "claude" => Ok(Self::Claude),
             "codex" => Ok(Self::Codex),
+            "kimi" => Ok(Self::Kimi),
             _ => Err("hook_source_invalid".to_string()),
         }
     }
@@ -70,6 +74,7 @@ impl Source {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Kimi => "kimi",
         }
     }
 
@@ -77,6 +82,7 @@ impl Source {
         match self {
             Self::Claude => ".claude",
             Self::Codex => ".codex",
+            Self::Kimi => ".kimi-code",
         }
     }
 
@@ -84,6 +90,14 @@ impl Source {
         match self {
             Self::Claude => CLAUDE_HOOKS,
             Self::Codex => CODEX_HOOKS,
+            Self::Kimi => &[],
+        }
+    }
+
+    fn required_entries(self) -> u32 {
+        match self {
+            Self::Kimi => kimi::DEFINITIONS.len() as u32,
+            _ => self.hooks().len() as u32,
         }
     }
 }
@@ -375,12 +389,17 @@ fn resolve_recorded_uninstall_root(
         }
         let canonical = PathBuf::from(&record.canonical_config_root);
         validate_canonical_path(&canonical)?;
-        if record.history_source_candidate.source != source.as_str()
-            || record.history_source_candidate.canonical_config_root != record.canonical_config_root
-            || record.history_source_candidate.config_root_hash != config_root_hash(&canonical)
-        {
-            return Err("hook_config_record_invalid".to_string());
-        }
+        let record_hash = match (source, record.history_source_candidate.as_ref()) {
+            (Source::Kimi, None) => config_root_hash(&canonical),
+            (Source::Claude | Source::Codex, Some(candidate))
+                if candidate.source == source.as_str()
+                    && candidate.canonical_config_root == record.canonical_config_root
+                    && candidate.config_root_hash == config_root_hash(&canonical) =>
+            {
+                candidate.config_root_hash.clone()
+            }
+            _ => return Err("hook_config_record_invalid".to_string()),
+        };
         let existed = canonical.exists();
         if existed {
             if !canonical.is_dir() {
@@ -397,7 +416,7 @@ fn resolve_recorded_uninstall_root(
         matches.push(ResolvedRoot {
             configured: configured.to_string(),
             requested: canonical.clone(),
-            hash: record.history_source_candidate.config_root_hash,
+            hash: record_hash,
             canonical,
             existed,
         });
@@ -523,18 +542,121 @@ fn installation(layout: &AgentLayout) -> Result<InstallationRecord, String> {
     Ok(record)
 }
 
+fn run_kimi_command(executable: &Path, args: &[&str]) -> Result<bool, String> {
+    let mut child = Command::new(executable)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "hook_config_doctor_failed".to_string())?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status.success()),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("hook_config_doctor_failed".to_string());
+            }
+            Err(_) => return Err("hook_config_doctor_failed".to_string()),
+        }
+    }
+}
+
+fn discover_kimi_executable(layout: &AgentLayout) -> Result<PathBuf, String> {
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|path| path.join("kimi")));
+    }
+    candidates.push(layout.home.join(".kimi-code/bin/kimi"));
+    for candidate in candidates {
+        if supports_current_kimi(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err("kimi_code_unsupported".to_string())
+}
+
+fn supports_current_kimi(executable: &Path) -> bool {
+    executable.is_file() && run_kimi_command(executable, &["doctor", "--help"]).unwrap_or(false)
+}
+
+fn ensure_kimi_capability(source: Source, layout: &AgentLayout) -> Result<Option<PathBuf>, String> {
+    if source == Source::Kimi {
+        discover_kimi_executable(layout).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn validate_kimi_candidate(
+    executable: &Path,
+    config_path: &Path,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let parent = config_path
+        .parent()
+        .ok_or_else(|| "hook_config_path_invalid".to_string())?;
+    let candidate = parent.join(format!(
+        ".config.toml.cli-manager-{}.tmp",
+        Uuid::new_v4().simple()
+    ));
+    let result = (|| {
+        let mut file =
+            File::create(&candidate).map_err(|_| "kimi_candidate_write_failed".to_string())?;
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "kimi_candidate_write_failed".to_string())?;
+        set_mode(&candidate, Some(0o600))?;
+        let candidate_text = candidate
+            .to_str()
+            .ok_or_else(|| "kimi_candidate_path_invalid".to_string())?;
+        if run_kimi_command(executable, &["doctor", "config", candidate_text])? {
+            Ok(())
+        } else {
+            Err("hook_config_doctor_failed".to_string())
+        }
+    })();
+    let _ = fs::remove_file(candidate);
+    result
+}
+
 fn posix_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn hook_command(installation: &InstallationRecord, source: Source, event: &str) -> String {
+    let owner = (source == Source::Kimi).then(|| {
+        format!(
+            " --owner {}{}",
+            kimi::SSH_OWNER_PREFIX,
+            installation.installation_id
+        )
+    });
     format!(
-        "{} hook --source {} --event {} --managed-by cli-manager-ssh-agent --installation-id {}",
+        "{} hook --source {} --event {}{} --managed-by cli-manager-ssh-agent --installation-id {}",
         posix_quote(&path_text(&installation.install_path)),
         source.as_str(),
         event,
+        owner.as_deref().unwrap_or_default(),
         installation.installation_id
     )
+}
+
+fn kimi_commands(installation: &InstallationRecord) -> BTreeMap<String, String> {
+    kimi::DEFINITIONS
+        .iter()
+        .map(|definition| {
+            (
+                definition.bridge_event.to_string(),
+                hook_command(installation, Source::Kimi, definition.bridge_event),
+            )
+        })
+        .collect()
 }
 
 fn read_json(state: &FileState) -> Result<Value, String> {
@@ -925,6 +1047,36 @@ fn plan_files(
     installation: &InstallationRecord,
     operation: Option<bool>,
 ) -> Result<(Vec<PlannedFile>, u32, bool), String> {
+    if source == Source::Kimi {
+        let state = resolve_config_file(root, "kimiConfig", "config.toml")?;
+        let original = std::str::from_utf8(&state.bytes)
+            .map_err(|_| "hook_config_toml_utf8_invalid".to_string())?;
+        let action = match operation {
+            Some(true) => KimiPlanAction::Install,
+            Some(false) => KimiPlanAction::Uninstall,
+            None => KimiPlanAction::Inspect,
+        };
+        let plan = kimi::plan(
+            original,
+            &kimi_commands(installation),
+            &ALL_KIMI_HOOK_MODULES,
+            action,
+        )?;
+        let after_exists = state.exists || operation == Some(true);
+        return Ok((
+            vec![PlannedFile {
+                before: state,
+                after: if after_exists {
+                    plan.content.into_bytes()
+                } else {
+                    Vec::new()
+                },
+                after_exists,
+            }],
+            plan.managed_entries,
+            plan.conflict || plan.outdated,
+        ));
+    }
     let json_state = resolve_config_file(
         root,
         if source == Source::Claude {
@@ -997,6 +1149,28 @@ fn current_status(
     source: Source,
     installation: &InstallationRecord,
 ) -> Result<(String, u32), String> {
+    if source == Source::Kimi {
+        let original = std::str::from_utf8(&plans[0].before.bytes)
+            .map_err(|_| "hook_config_toml_utf8_invalid".to_string())?;
+        let plan = kimi::plan(
+            original,
+            &kimi_commands(installation),
+            &ALL_KIMI_HOOK_MODULES,
+            KimiPlanAction::Inspect,
+        )?;
+        let status = if plan.conflict {
+            "conflict"
+        } else if plan.outdated {
+            "outdated"
+        } else if plan.managed_entries == 0 {
+            "notInstalled"
+        } else if plan.managed_entries == source.required_entries() {
+            "installed"
+        } else {
+            "partialInstalled"
+        };
+        return Ok((status.to_string(), plan.managed_entries));
+    }
     let json = read_json(&plans[0].before)?;
     let expected = exact_commands(installation, source);
     let (managed, conflict, outdated) = inspect_json(&json, source, &expected)?;
@@ -1007,7 +1181,7 @@ fn current_status(
         let document = parse_toml(&plans[1].before)?;
         codex_feature_enabled(&document)
     };
-    let required = source.hooks().len() as u32;
+    let required = source.required_entries();
     let status = if managed == 0 {
         "notInstalled"
     } else if outdated {
@@ -1391,7 +1565,7 @@ fn report(
             })
             .collect(),
         managed_entries,
-        required_entries: source.hooks().len() as u32,
+        required_entries: source.required_entries(),
         changes: plans.iter().map(PlannedFile::change).collect(),
         installation: record,
     }
@@ -1418,14 +1592,14 @@ fn installation_record(
                 after_fingerprint: plan.after_fingerprint(),
             })
             .collect(),
-        managed_entries: source.hooks().len() as u32,
+        managed_entries: source.required_entries(),
         adapter_version: ADAPTER_VERSION,
         installed_at: now_ms(),
-        history_source_candidate: HookHistorySourceCandidate {
+        history_source_candidate: (source != Source::Kimi).then(|| HookHistorySourceCandidate {
             source: source.as_str().to_string(),
             canonical_config_root: path_text(&root.canonical),
             config_root_hash: root.hash.clone(),
-        },
+        }),
     }
 }
 
@@ -1438,6 +1612,7 @@ fn record_path(layout: &AgentLayout, source: Source, root_hash: &str) -> PathBuf
 pub fn inspect(request: HookConfigRequest) -> Result<HookConfigReport, String> {
     let source = Source::parse(&request.source)?;
     let layout = resolve_layout().map_err(str::to_string)?;
+    ensure_kimi_capability(source, &layout)?;
     let installation = installation(&layout)?;
     let root = resolve_root(&request.configured_config_root, source, &layout, false)?;
     let (plans, _, _) = plan_files(&root, source, &installation, None)?;
@@ -1459,6 +1634,9 @@ pub fn preview(request: HookConfigRequest, install: bool) -> Result<HookConfigRe
     }
     let source = Source::parse(&request.source)?;
     let layout = resolve_layout().map_err(str::to_string)?;
+    if install {
+        ensure_kimi_capability(source, &layout)?;
+    }
     let installation = installation(&layout)?;
     let root = if install {
         resolve_root(&request.configured_config_root, source, &layout, false)?
@@ -1496,6 +1674,11 @@ pub fn apply(request: HookConfigRequest, install: bool) -> Result<HookConfigRepo
     }
     let source = Source::parse(&request.source)?;
     let layout = resolve_layout().map_err(str::to_string)?;
+    let kimi_executable = if install {
+        ensure_kimi_capability(source, &layout)?
+    } else {
+        None
+    };
     let installation = installation(&layout)?;
     let root = if install {
         resolve_root(&request.configured_config_root, source, &layout, true)?
@@ -1511,6 +1694,11 @@ pub fn apply(request: HookConfigRequest, install: bool) -> Result<HookConfigRepo
     recover_transaction(&layout, &root.hash)?;
     let (plans, _, _) = plan_files(&root, source, &installation, Some(install))?;
     expected_files_match(&plans, &request)?;
+    if install {
+        if let Some(executable) = kimi_executable.as_deref() {
+            validate_kimi_candidate(executable, &plans[0].before.canonical_path, &plans[0].after)?;
+        }
+    }
     let record = install.then(|| installation_record(source, &root, &installation, &plans));
     let hook_record_path = record_path(&layout, source, &root.hash);
     let previous_record = fs::read(&hook_record_path).ok();
@@ -1541,7 +1729,7 @@ pub fn apply(request: HookConfigRequest, install: bool) -> Result<HookConfigRepo
         &installation,
         &plans,
         if install {
-            source.hooks().len() as u32
+            source.required_entries()
         } else {
             0
         },
@@ -1551,18 +1739,131 @@ pub fn apply(request: HookConfigRequest, install: bool) -> Result<HookConfigRepo
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use super::config_target_unchanged;
     use super::{
-        add_exact_hooks, apply_transaction, feature_marker, fingerprint, inspect_json,
-        install_codex_feature, parse_owned_marker, recover_transaction, remove_exact_hooks,
-        transaction_dir, uninstall_codex_feature, FileState, PlannedFile, Source, TransactionFile,
-        TransactionJournal,
+        add_exact_hooks, apply_transaction, feature_marker, fingerprint, hook_command,
+        inspect_json, install_codex_feature, parse_owned_marker, recover_transaction,
+        remove_exact_hooks, transaction_dir, uninstall_codex_feature, FileState, PlannedFile,
+        Source, TransactionFile, TransactionJournal,
     };
+    #[cfg(unix)]
+    use super::{
+        config_target_unchanged, installation_record, plan_files, supports_current_kimi,
+        validate_kimi_candidate, ResolvedRoot,
+    };
+    use crate::installer::InstallationRecord;
     use crate::layout::AgentLayout;
     use serde_json::json;
     use std::collections::HashMap;
     use std::fs;
+
+    fn installation_record_for_test(path: &std::path::Path) -> InstallationRecord {
+        InstallationRecord {
+            schema_version: 1,
+            installation_id: "00000000-0000-4000-8000-000000000001".to_string(),
+            remote_machine_id: "machine".to_string(),
+            agent_version: "0.1.9".to_string(),
+            protocol_version: "1.11".to_string(),
+            target: "linux-x86_64".to_string(),
+            install_root: path.parent().unwrap().to_path_buf(),
+            install_path: path.to_path_buf(),
+            source: "test".to_string(),
+            manifest_url: String::new(),
+            artifact_sha256: "a".repeat(64),
+            installed_at: 1,
+            previous_version: String::new(),
+        }
+    }
+
+    #[test]
+    fn kimi_source_uses_native_root_and_exact_owner_token() {
+        let installation = installation_record_for_test(std::path::Path::new(
+            "/opt/cli-manager/cli-manager-ssh-agent",
+        ));
+        assert_eq!(Source::Kimi.default_dir(), ".kimi-code");
+        assert_eq!(Source::Kimi.required_entries(), 9);
+        assert_eq!(
+            hook_command(&installation, Source::Kimi, "PermissionResult"),
+            "'/opt/cli-manager/cli-manager-ssh-agent' hook --source kimi --event PermissionResult --owner cli-manager-ssh-agent:00000000-0000-4000-8000-000000000001 --managed-by cli-manager-ssh-agent --installation-id 00000000-0000-4000-8000-000000000001"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kimi_plan_uses_single_config_role_and_omits_history_candidate() {
+        let temp = tempfile::tempdir().unwrap();
+        let root_path = temp.path().join(".kimi-code");
+        fs::create_dir_all(&root_path).unwrap();
+        fs::write(
+            root_path.join("config.toml"),
+            "# keep\nmodel = \"kimi-k2\"\n\n[[hooks]]\nevent = \"Stop\"\ncommand = \"third-party\"\n",
+        )
+        .unwrap();
+        let canonical = fs::canonicalize(&root_path).unwrap();
+        let root = ResolvedRoot {
+            configured: "~/.kimi-code".to_string(),
+            requested: root_path,
+            canonical,
+            hash: "a".repeat(64),
+            existed: true,
+        };
+        let installation = installation_record_for_test(std::path::Path::new(
+            "/opt/cli-manager/cli-manager-ssh-agent",
+        ));
+
+        let (plans, managed, conflict) =
+            plan_files(&root, Source::Kimi, &installation, Some(true)).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].before.role, "kimiConfig");
+        assert_eq!(managed, 9);
+        assert!(!conflict);
+        let content = String::from_utf8(plans[0].after.clone()).unwrap();
+        assert!(content.contains("# keep"));
+        assert!(content.contains("third-party"));
+        assert_eq!(content.matches("--source kimi").count(), 9);
+
+        let record = installation_record(Source::Kimi, &root, &installation, &plans);
+        assert!(record.history_source_candidate.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kimi_candidate_failure_leaves_live_config_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config.toml");
+        fs::write(&config, "model = \"kimi-k2\"\n").unwrap();
+        let doctor = temp.path().join("kimi");
+        fs::write(&doctor, "#!/bin/sh\nexit 2\n").unwrap();
+        fs::set_permissions(&doctor, fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_eq!(
+            validate_kimi_candidate(&doctor, &config, b"model = \"other\"\n").unwrap_err(),
+            "hook_config_doctor_failed"
+        );
+        assert_eq!(
+            fs::read_to_string(&config).unwrap(),
+            "model = \"kimi-k2\"\n"
+        );
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kimi_capability_rejects_legacy_cli_and_accepts_current_cli() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let current = temp.path().join("current-kimi");
+        fs::write(&current, "#!/bin/sh\n[ \"$1\" = doctor ]\n").unwrap();
+        fs::set_permissions(&current, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(supports_current_kimi(&current));
+
+        let legacy = temp.path().join("legacy-kimi");
+        fs::write(&legacy, "#!/bin/sh\nexit 2\n").unwrap();
+        fs::set_permissions(&legacy, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!supports_current_kimi(&legacy));
+    }
 
     #[test]
     fn exact_owner_merge_preserves_third_party_entries() {
@@ -1683,14 +1984,14 @@ mod tests {
                 "configuredConfigRoot": configured.to_string_lossy(),
                 "canonicalConfigRoot": canonical.to_string_lossy(),
                 "configFiles": [],
-                "managedEntries": source.hooks().len(),
+                "managedEntries": source.required_entries(),
                 "adapterVersion": 1,
                 "installedAt": 1,
-                "historySourceCandidate": {
+                "historySourceCandidate": (source != Source::Kimi).then(|| json!({
                     "source": source.as_str(),
                     "canonicalConfigRoot": canonical.to_string_lossy(),
                     "configRootHash": hash,
-                }
+                }))
             }))
             .unwrap(),
         )

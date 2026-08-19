@@ -767,6 +767,18 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
                 | "SubagentStart"
                 | "SubagentStop"
         ),
+        "kimi" => matches!(
+            payload.event.as_str(),
+            "SessionStart"
+                | "UserPromptSubmit"
+                | "PermissionRequest"
+                | "PermissionResult"
+                | "Stop"
+                | "Interrupt"
+                | "StopFailure"
+                | "SubagentStart"
+                | "SubagentStop"
+        ),
         "pi" => matches!(
             payload.event.as_str(),
             "SessionStart" | "UserPromptSubmit" | "Stop"
@@ -833,6 +845,7 @@ fn normalize_source(source: Option<&str>) -> &str {
         Some("codex") => "codex",
         Some("pi") => "pi",
         Some("grok") => "grok",
+        Some("kimi") => "kimi",
         Some("opencode") => "opencode",
         Some("claude") | None => "claude",
         _ => "",
@@ -896,6 +909,40 @@ mod validation_tests {
         }))
         .expect("test payload should deserialize");
 
+        assert!(!is_valid_payload(&request));
+    }
+
+    #[test]
+    fn normalizes_and_accepts_only_kimi_bridge_events() {
+        assert_eq!(normalize_source(Some("kimi")), "kimi");
+        for event in [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PermissionRequest",
+            "PermissionResult",
+            "Stop",
+            "Interrupt",
+            "StopFailure",
+            "SubagentStart",
+            "SubagentStop",
+        ] {
+            let request: ClaudeHookRequest = serde_json::from_value(json!({
+                "tabId": "external:kimi:session",
+                "source": "kimi",
+                "event": event,
+            }))
+            .unwrap();
+            assert!(
+                is_valid_payload(&request),
+                "Kimi event should be valid: {event}"
+            );
+        }
+        let request: ClaudeHookRequest = serde_json::from_value(json!({
+            "tabId": "external:kimi:session",
+            "source": "kimi",
+            "event": "SessionEnd",
+        }))
+        .unwrap();
         assert!(!is_valid_payload(&request));
     }
 

@@ -3337,6 +3337,7 @@ export function TerminalTabs({
         invoke<{
         claude: { status: string };
         codex: { status: string };
+        kimi: { status: string };
         pi: { status: string };
         grok: { status: string };
         }>(
@@ -3344,6 +3345,7 @@ export function TerminalTabs({
         {
           selectedDir: settings.claudeHookConfigDir?.trim() || null,
           codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
+          kimiSelectedDir: settings.kimiHookConfigDir?.trim() || null,
           piSelectedDir: settings.piHookConfigDir?.trim() || null,
           grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
           ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
@@ -3356,6 +3358,7 @@ export function TerminalTabs({
         openCodeStatus.status === "installed" ||
         (settings.claudeHookBridgeEnabled && hookStatus.claude.status === "installed") ||
         (settings.codexHookBridgeEnabled && hookStatus.codex.status === "installed") ||
+        (settings.kimiHookBridgeEnabled && hookStatus.kimi.status === "installed") ||
         (settings.piHookBridgeEnabled && hookStatus.pi.status === "installed") ||
         (settings.grokHookBridgeEnabled && hookStatus.grok.status === "installed");
       if (!hasEnabledInstalledHook) {
