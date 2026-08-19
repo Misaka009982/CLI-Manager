@@ -58,7 +58,6 @@ import {
   type TerminalSidePanelTab,
 } from "./terminal/TerminalSidePanel";
 import { RemoteHandoffOverlay } from "./terminal/RemoteHandoffOverlay";
-import { DesktopPetESessionActionPanel } from "./terminal/DesktopPetESessionActionPanel";
 import { ProviderQuickSwitchPanel } from "./terminal/ProviderQuickSwitchPanel";
 import { WorktreeFinishDialog } from "./worktree/WorktreeFinishDialog";
 import { FileExplorerSidebar } from "./files/FileExplorerSidebar";
@@ -1984,9 +1983,6 @@ function PaneLeafView({
                 onSplitRight={(point) => onOpenSplitPicker(session.id, "horizontal", point)}
                 onSplitDown={(point) => onOpenSplitPicker(session.id, "vertical", point)}
               />
-            )}
-            {(session.kind ?? "pty") === "pty" && (
-              <DesktopPetESessionActionPanel sessionId={session.id} />
             )}
           </div>
         ))}

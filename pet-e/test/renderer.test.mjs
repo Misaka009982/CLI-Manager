@@ -47,3 +47,20 @@ test("renderer uses the strict CSP-compatible sprite class contract", () => {
   assert.match(html, /style-src pet-e-app:/);
   assert.doesNotMatch(html, /unsafe-inline/);
 });
+
+test("renderer keeps question scroll position and auto-hides the task bubble", () => {
+  const source = read("../src/renderer/app.ts");
+  const css = read("../src/renderer/styles.css");
+  // 选项变更只做局部同步，重建 DOM 会让问题组滚动位置跳回顶部。
+  assert.doesNotMatch(source, /\} else \{\s*render\(\);\s*\}/);
+  assert.match(source, /const SCROLL_CONTAINERS = \[\"\.questions\", \"\.approval-options\", \"\.task-list\"\]/);
+  assert.match(source, /const scrollOffsets = captureScrollOffsets\(\);/);
+  assert.match(source, /restoreScrollOffsets\(scrollOffsets\);/);
+  assert.match(source, /const TASK_PANEL_AUTO_HIDE_MS = 5000;/);
+  assert.match(source, /function syncTaskPanelAutoHide/);
+  assert.match(source, /setAutoHidePaused\(Boolean\(target\?\.closest\(\"\.task-panel\"\)\)\)/);
+  assert.match(source, /config\?\.settings\.showStatusLabel !== true/);
+  // 精灵主体必须显式声明为拖动区，否则窗口无法拖动。
+  assert.match(css, /\.sprite-viewport \{[^}]*-webkit-app-region: drag;/);
+  assert.match(css, /\.sprite-sheet \{[^}]*-webkit-app-region: drag;/);
+});

@@ -26,6 +26,64 @@ const drafts = new Map<string, ActionDraft>();
 // 以稳定的 pendingAction.id 关联当前传输层 actionId。
 const submitting = new Map<string, string>();
 const submissionErrors = new Map<string, string>();
+// 任务气泡展开后自动收起；指针停留在气泡上时暂停计时，避免正要点击任务时气泡消失。
+const TASK_PANEL_AUTO_HIDE_MS = 5000;
+let taskPanelTimer: number | null = null;
+let autoHideColor: DesktopPetEColor | null = null;
+let autoHidePaused = false;
+// 重建 DOM 会重置滚动位置，问题组和任务列表的滚动偏移需要跨重建保留。
+const SCROLL_CONTAINERS = [".questions", ".approval-options", ".task-list"] as const;
+
+function clearTaskPanelTimer(): void {
+  if (taskPanelTimer === null) return;
+  window.clearTimeout(taskPanelTimer);
+  taskPanelTimer = null;
+}
+
+function restartTaskPanelTimer(): void {
+  clearTaskPanelTimer();
+  taskPanelTimer = window.setTimeout(() => {
+    taskPanelTimer = null;
+    if (!expandedColor || activeTaskId) return;
+    expandedColor = null;
+    render();
+  }, TASK_PANEL_AUTO_HIDE_MS);
+}
+
+// 只在展开目标变化时重新计时，快照刷新不会无限延长气泡停留时间。
+function syncTaskPanelAutoHide(): void {
+  if (!expandedColor || activeTaskId) {
+    autoHideColor = null;
+    clearTaskPanelTimer();
+    return;
+  }
+  if (autoHideColor === expandedColor) return;
+  autoHideColor = expandedColor;
+  if (!autoHidePaused) restartTaskPanelTimer();
+}
+
+function setAutoHidePaused(paused: boolean): void {
+  if (autoHidePaused === paused) return;
+  autoHidePaused = paused;
+  if (paused) clearTaskPanelTimer();
+  else if (expandedColor && !activeTaskId) restartTaskPanelTimer();
+}
+
+function captureScrollOffsets(): Map<string, number> {
+  const offsets = new Map<string, number>();
+  for (const selector of SCROLL_CONTAINERS) {
+    const element = app.querySelector<HTMLElement>(selector);
+    if (element && element.scrollTop > 0) offsets.set(selector, element.scrollTop);
+  }
+  return offsets;
+}
+
+function restoreScrollOffsets(offsets: Map<string, number>): void {
+  for (const [selector, top] of offsets) {
+    const element = app.querySelector<HTMLElement>(selector);
+    if (element) element.scrollTop = top;
+  }
+}
 
 function label(key: string): string {
   return config?.labels[key] ?? key;
@@ -59,6 +117,7 @@ function refreshMouseInteraction(): void {
   if (!lastMousePosition) return;
   const target = document.elementFromPoint(lastMousePosition.x, lastMousePosition.y);
   setMouseInteractive(isInteractiveSurface(target));
+  setAutoHidePaused(Boolean(target?.closest(".task-panel")));
 }
 
 function actionId(): string {
@@ -141,7 +200,7 @@ function lightsMarkup(): string {
 }
 
 function statusMarkup(): string {
-  if (!snapshot || config?.settings.showStatus === false) return "";
+  if (!snapshot || config?.settings.showStatusLabel !== true) return "";
   return `<div class="status-label ${snapshot.mood}">${escapeText(label(moodLabelKey(snapshot.mood)))}</div>`;
 }
 
@@ -226,13 +285,18 @@ function questionsMarkup(action: NonNullable<DesktopPetETask["pendingAction"]>, 
 
 function render(): void {
   if (!config) {
+    autoHideColor = null;
+    clearTaskPanelTimer();
     app.replaceChildren();
     setMouseInteractive(false);
     return;
   }
   const notification = notificationMarkup();
   const notificationClass = notification ? " notification-active" : "";
+  const scrollOffsets = captureScrollOffsets();
   app.innerHTML = `${notification}<div class="pet-shell${notificationClass}">${petMarkup()}${toolbarMarkup()}${lightsMarkup()}${statusMarkup()}${cliLabelMarkup()}</div>${taskListMarkup()}${actionPanelMarkup()}`;
+  restoreScrollOffsets(scrollOffsets);
+  syncTaskPanelAutoHide();
   queueMicrotask(refreshMouseInteraction);
 }
 
@@ -261,17 +325,20 @@ function updateDraftFromInput(target: HTMLInputElement | HTMLTextAreaElement): v
       const selected = [...fieldset.querySelectorAll<HTMLInputElement>("input:checked")].map((input) => input.value);
       draft.answers[questionId] = selected;
       const question = action.questions?.find((candidate) => candidate.id === questionId);
-      if (question?.mode === "single" && selected.length > 0) draft.customValues[questionId] = "";
+      if (question?.mode === "single" && selected.length > 0) {
+        draft.customValues[questionId] = "";
+        const custom = fieldset.querySelector<HTMLTextAreaElement>("textarea[data-custom]");
+        if (custom) custom.value = "";
+      }
     }
   }
   drafts.set(action.id, draft);
-  if (target instanceof HTMLTextAreaElement) {
-    const submit = app.querySelector<HTMLButtonElement>('button[data-command="submit"]');
-    if (submit) submit.disabled = !isDraftComplete(action, draft)
+  // 选项与文本变更只做局部同步：重建 DOM 会让问题组滚动位置跳回顶部，导致无法继续选择。
+  const submit = app.querySelector<HTMLButtonElement>('button[data-command="submit"]');
+  if (submit) {
+    submit.disabled = !isDraftComplete(action, draft)
       || action.submitting
       || submitting.has(action.id);
-  } else {
-    render();
   }
 }
 
@@ -286,10 +353,12 @@ document.addEventListener("mousemove", (event) => {
   lastMousePosition = { x: event.clientX, y: event.clientY };
   const target = event.target instanceof Element ? event.target : null;
   setMouseInteractive(isInteractiveSurface(target));
+  setAutoHidePaused(Boolean(target?.closest(".task-panel")));
 });
 document.documentElement.addEventListener("mouseleave", () => {
   lastMousePosition = null;
   setMouseInteractive(false);
+  setAutoHidePaused(false);
 });
 app.addEventListener("pointerover", (event) => {
   if (

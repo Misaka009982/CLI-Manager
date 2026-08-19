@@ -152,7 +152,6 @@ test("cross-layer sources expose one authoritative snapshot and one shared actio
   const coordinator = read("src/hooks/useDesktopPetECoordinator.ts");
   const sessionCoordinator = read("src/hooks/useDesktopPetEAgentCoordinator.ts");
   const sharedStore = read("src/stores/desktopPetEAgentStore.ts");
-  const sessionPanel = read("src/components/terminal/DesktopPetESessionActionPanel.tsx");
   const terminalTabs = read("src/components/TerminalTabs.tsx");
   const broker = read("src-tauri/src/desktop_pet_e_agent.rs");
   const codexE2e = read("scripts/codexAppServerProxy.e2e.test.mjs");
@@ -179,8 +178,9 @@ test("cross-layer sources expose one authoritative snapshot and one shared actio
   assert.match(sharedStore, /state\.brokerEpoch === event\.brokerEpoch/);
   assert.match(sharedStore, /desktop_pet_e_agent_already_submitting/);
   assert.match(sharedStore, /currentState\.submissions\.get\(event\.pendingAction\.id\) === transportActionId/);
-  assert.match(sessionPanel, /await submit\(\{/);
-  assert.match(terminalTabs, /DesktopPetESessionActionPanel sessionId=\{session\.id\}/);
+  // 提交入口只在宠物侧，会话侧不再叠加弹窗表单。
+  assert.match(coordinator, /useDesktopPetEAgentStore\.getState\(\)\.submit/);
+  assert.doesNotMatch(terminalTabs, /DesktopPetESessionActionPanel/);
   assert.match(broker, /remember_completed/);
   assert.match(broker, /desktop_pet_e_agent_transport_mismatch/);
   assert.match(codexE2e, /buildProxy\(\)/);
@@ -190,11 +190,9 @@ test("cross-layer sources expose one authoritative snapshot and one shared actio
 test("pet failure cannot remove the owning-session action surface", () => {
   const petCoordinator = read("src/hooks/useDesktopPetECoordinator.ts");
   const sessionCoordinator = read("src/hooks/useDesktopPetEAgentCoordinator.ts");
-  const sessionPanel = read("src/components/terminal/DesktopPetESessionActionPanel.tsx");
 
   assert.doesNotMatch(petCoordinator, /desktop_pet_e_agent_cancel/);
   assert.doesNotMatch(petCoordinator, /pet-closed|pet-interaction-unavailable|terminal-fallback/);
   assert.match(sessionCoordinator, /sessionInteractionAvailable/);
   assert.match(sessionCoordinator, /hasInteractivePendingActions/);
-  assert.match(sessionPanel, /desktopPetE\.renderer\.retry/);
 });

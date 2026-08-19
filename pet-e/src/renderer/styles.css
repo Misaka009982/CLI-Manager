@@ -61,6 +61,7 @@ button { color: inherit; }
   -webkit-app-region: no-drag;
 }
 
+/* -webkit-app-region 不继承，宠物主体和精灵图必须显式声明为可拖动区，否则会挡住窗口拖动。 */
 .sprite-viewport {
   position: absolute;
   left: 20px;
@@ -69,6 +70,7 @@ button { color: inherit; }
   height: 208px;
   overflow: hidden;
   filter: drop-shadow(0 8px 8px rgba(0, 0, 0, 0.28));
+  -webkit-app-region: drag;
 }
 
 /* CSP 不放行内联 style，因此行、帧数和精灵表行数都使用静态 class。 */
@@ -79,6 +81,7 @@ button { color: inherit; }
   max-width: none;
   image-rendering: pixelated;
   pointer-events: none;
+  -webkit-app-region: drag;
 }
 
 .sprite-rows-9 { height: 1872px; }

@@ -35,7 +35,7 @@ export interface DesktopPetESettings {
   lockPosition: boolean;
   alwaysOnTop: boolean;
   soundEnabled: boolean;
-  showStatus: boolean;
+  showStatusLabel: boolean;
   showCliLabel: boolean;
   showTaskArea: boolean;
   openOnHover: boolean;
@@ -52,7 +52,7 @@ export const DEFAULT_DESKTOP_PET_E_SETTINGS: Readonly<DesktopPetESettings> = Obj
   lockPosition: false,
   alwaysOnTop: true,
   soundEnabled: true,
-  showStatus: true,
+  showStatusLabel: false,
   showCliLabel: true,
   showTaskArea: true,
   openOnHover: true,
@@ -311,7 +311,7 @@ export function normalizeDesktopPetESettings(
     lockPosition: normalizeBoolean(raw.lockPosition, fallback.lockPosition),
     alwaysOnTop: normalizeBoolean(raw.alwaysOnTop, fallback.alwaysOnTop),
     soundEnabled: normalizeBoolean(raw.soundEnabled, fallback.soundEnabled),
-    showStatus: normalizeBoolean(raw.showStatus, fallback.showStatus),
+    showStatusLabel: normalizeBoolean(raw.showStatusLabel, fallback.showStatusLabel),
     showCliLabel: normalizeBoolean(raw.showCliLabel, fallback.showCliLabel),
     showTaskArea: normalizeBoolean(raw.showTaskArea, fallback.showTaskArea),
     openOnHover: normalizeBoolean(raw.openOnHover, fallback.openOnHover),

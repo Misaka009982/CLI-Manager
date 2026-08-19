@@ -385,8 +385,8 @@ export function DesktopPetESettingsPage() {
             icon={<CircleGauge size={18} />}
             title={t("desktopPetE.settings.showStatus")}
             description={t("desktopPetE.settings.showStatusDescription")}
-            checked={desktopPetE.showStatus}
-            onChange={(checked) => void patch({ showStatus: checked })}
+            checked={desktopPetE.showStatusLabel}
+            onChange={(checked) => void patch({ showStatusLabel: checked })}
           />
           <ToggleRow
             icon={<MessageSquareText size={18} />}

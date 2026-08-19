@@ -34,7 +34,7 @@ test("Desktop Pet E settings have local, deterministic defaults", () => {
     lockPosition: false,
     alwaysOnTop: true,
     soundEnabled: true,
-    showStatus: true,
+    showStatusLabel: false,
     showCliLabel: true,
     showTaskArea: true,
     openOnHover: true,

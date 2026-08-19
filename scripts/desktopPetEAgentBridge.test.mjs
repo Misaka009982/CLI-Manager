@@ -11,7 +11,6 @@ const coordinator = readFileSync(new URL("../src/hooks/useDesktopPetECoordinator
 const sessionCoordinator = readFileSync(new URL("../src/hooks/useDesktopPetEAgentCoordinator.ts", import.meta.url), "utf8");
 const sharedAgentStore = readFileSync(new URL("../src/stores/desktopPetEAgentStore.ts", import.meta.url), "utf8");
 const agentProtocol = readFileSync(new URL("../pet-e/src/bridge/protocol.ts", import.meta.url), "utf8");
-const sessionPanel = readFileSync(new URL("../src/components/terminal/DesktopPetESessionActionPanel.tsx", import.meta.url), "utf8");
 const terminalTabs = readFileSync(new URL("../src/components/TerminalTabs.tsx", import.meta.url), "utf8");
 const terminalStore = readFileSync(new URL("../src/stores/terminalStore.ts", import.meta.url), "utf8");
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
@@ -85,16 +84,8 @@ test("pet and owning session share pending actions without lifecycle cancellatio
   assert.match(sessionCoordinator, /cli-manager-pty-daemon-restarted/);
   assert.match(coordinator, /state\) => state\.pendingActions/);
   assert.match(sharedAgentStore, /cursor\.closed && cursor\.pendingActionId/);
-  assert.match(sessionPanel, /state\) => state\.submit/);
-  assert.match(sessionPanel, /desktopPetE\.agentInteractionEnabled/);
-  assert.match(sessionPanel, /reason="desktopPetE\.agent\.adapterUnavailable"/);
-  assert.match(sessionPanel, /serializeAnswers\(action, draft\)/);
-  assert.match(sessionPanel, /type="radio"/);
-  assert.match(sessionPanel, /type="checkbox"/);
-  assert.match(sessionPanel, /<textarea/);
-  assert.match(sessionPanel, /setCollapsed/);
-  assert.match(sessionPanel, /aria-expanded=\{!collapsed\}/);
-  assert.match(terminalTabs, /DesktopPetESessionActionPanel sessionId=\{session\.id\}/);
+  // 会话侧不再叠加问题组弹窗：终端内由 CLI 自身的交互界面回答，只保留 tab 级提醒。
+  assert.doesNotMatch(terminalTabs, /DesktopPetESessionActionPanel/);
   assert.match(terminalTabs, /next\[sessionId\] = "attention"/);
   assert.match(terminalTabs, /for \(const sessionId of pendingActions\.keys\(\)\)[\s\S]*next\.add\(sessionId\)/);
   assert.doesNotMatch(coordinator, /desktop_pet_e_agent_cancel/);
