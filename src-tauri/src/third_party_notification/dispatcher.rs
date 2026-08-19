@@ -325,6 +325,7 @@ fn normalize_source(value: &str) -> String {
     match value {
         "codex" => "Codex".to_string(),
         "claude" => "Claude Code".to_string(),
+        "kimi" => "Kimi Code".to_string(),
         other if !other.trim().is_empty() => other.trim().to_string(),
         _ => "CLI".to_string(),
     }

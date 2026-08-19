@@ -338,6 +338,7 @@ function buildPromptSessionTitle(message: string | null | undefined): string | n
 function buildSourceSessionTitle(source: string | null | undefined): string {
   if (source === "codex") return translateCurrent("aiReplay.source.codex");
   if (source === "claude") return translateCurrent("aiReplay.source.claude");
+  if (source === "kimi") return translateCurrent("aiReplay.source.kimi");
   if (source === "pi") return translateCurrent("aiReplay.source.pi");
   return translateCurrent("aiReplay.source.default");
 }
@@ -412,6 +413,20 @@ function classifyPayload(payload: CliHookPayload): Pick<ReplayEvent, "kind" | "t
       title: titleFromPayload ?? "PermissionRequest",
       detail: message ?? "Permission requested",
       status: "attention",
+      durationMs: null,
+    },
+    PermissionResult: {
+      kind: "permission",
+      title: titleFromPayload ?? "PermissionResult",
+      detail: message ?? "Permission resolved",
+      status: "running",
+      durationMs: null,
+    },
+    Interrupt: {
+      kind: "session",
+      title: titleFromPayload ?? "Interrupt",
+      detail: message ?? "Turn interrupted",
+      status: "recorded",
       durationMs: null,
     },
     SubagentStart: {
@@ -715,7 +730,8 @@ function shouldCaptureSnapshot(event: CliHookEventName, sessionKey?: string): bo
     event === "AgentToolStop" ||
     event === "SubagentStop" ||
     event === "Stop" ||
-    event === "StopFailure";
+    event === "StopFailure" ||
+    event === "Interrupt";
 }
 
 async function getLastSnapshotPayload(sessionKey: string): Promise<Record<string, unknown> | null> {

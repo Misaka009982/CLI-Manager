@@ -35,7 +35,12 @@ interface Props {
   onOpenChange: (open: boolean) => void;
 }
 
-const SOURCES: SshToolSource[] = ["claude", "codex"];
+const SOURCES: SshToolSource[] = ["claude", "codex", "kimi"];
+const SOURCE_METADATA = {
+  claude: { label: "Claude", icon: "claude-code" },
+  codex: { label: "Codex", icon: "codex" },
+  kimi: { label: "Kimi Code", icon: "kimi" },
+} as const;
 const OFFICIAL_AGENT_MANIFEST_PATH = /^\/dark-hxx\/CLI-Manager\/releases\/(?:latest\/download|download\/[^/]+)\/ssh-agent-release-manifest\.json$/;
 const R2_AGENT_MANIFEST_PATH = "/CLI-Manager/releases/ssh-agent/latest/ssh-agent-release-manifest.json";
 const DEFAULT_R2_PUBLIC_BASE_URL = "https://github.bwm.de5.net";
@@ -118,6 +123,8 @@ const AGENT_CODE_KEYS: Record<string, TranslationKey> = {
   hook_config_toml_features_invalid: "settings.sshHosts.cliIntegration.hook.code.tomlInvalid",
   hook_config_toml_hooks_invalid: "settings.sshHosts.cliIntegration.hook.code.tomlInvalid",
   hook_config_owner_conflict: "settings.sshHosts.cliIntegration.hook.code.ownerConflict",
+  kimi_code_unsupported: "settings.sshHosts.cliIntegration.hook.code.kimiUnsupported",
+  hook_config_doctor_failed: "settings.sshHosts.cliIntegration.hook.code.doctorFailed",
   hook_config_changed: "settings.sshHosts.cliIntegration.hook.code.changed",
   hook_config_locked: "settings.sshHosts.cliIntegration.hook.code.locked",
   hook_config_recovery_conflict: "settings.sshHosts.cliIntegration.hook.code.recoveryConflict",
@@ -142,6 +149,7 @@ const HOOK_FILE_ROLE_KEYS: Record<string, TranslationKey> = {
   claudeSettings: "settings.sshHosts.cliIntegration.hook.file.claudeSettings",
   codexHooks: "settings.sshHosts.cliIntegration.hook.file.codexHooks",
   codexFeature: "settings.sshHosts.cliIntegration.hook.file.codexFeature",
+  kimiConfig: "settings.sshHosts.cliIntegration.hook.file.kimiConfig",
   unknown: "settings.sshHosts.cliIntegration.hook.file.unknown",
 };
 
@@ -162,7 +170,7 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
   const recordHookReport = useSshAgentIntegrationStore((state) => state.recordHookReport);
   const projects = useProjectStore((state) => state.projects);
   const fetchProjects = useProjectStore((state) => state.fetchProjects);
-  const [roots, setRoots] = useState<Record<SshToolSource, string>>({ claude: "", codex: "" });
+  const [roots, setRoots] = useState<Record<SshToolSource, string>>({ claude: "", codex: "", kimi: "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [pickerSource, setPickerSource] = useState<SshToolSource | null>(null);
@@ -241,6 +249,7 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
     setRoots({
       claude: hostPreferences.get("claude") ?? "",
       codex: hostPreferences.get("codex") ?? "",
+      kimi: hostPreferences.get("kimi") ?? "",
     });
     setError("");
   }, [host, hostPreferences, open]);
@@ -718,6 +727,7 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
               )}
             </section>
             {SOURCES.map((source) => {
+              const metadata = SOURCE_METADATA[source];
               const report = currentHookReport(source);
               const hookStatus = report?.status ?? "notChecked";
               const hookBusy = hookOperation?.source === source;
@@ -741,8 +751,8 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
               return (
               <section key={source} className="space-y-3 border-b border-border pb-5 last:border-b-0 last:pb-0">
                 <div className="flex items-center gap-2">
-                  <CliToolIcon icon={source === "claude" ? "claude-code" : "codex"} size={18} />
-                  <h3 className="text-sm font-semibold text-text-primary">{source === "claude" ? "Claude" : "Codex"}</h3>
+                  <CliToolIcon icon={metadata.icon} size={18} />
+                  <h3 className="text-sm font-semibold text-text-primary">{metadata.label}</h3>
                 </div>
                 <label className="ui-config-form-label" htmlFor={`ssh-${source}-config-root`}>
                   {t("settings.sshHosts.cliIntegration.configRoot")}

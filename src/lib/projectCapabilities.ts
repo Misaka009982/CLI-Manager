@@ -1,5 +1,5 @@
 import { resolveCliToolHistorySourceId } from "./cliTools";
-import { resolveSshToolSource } from "./sshToolIntegration";
+import { resolveSshHistorySource } from "./sshToolIntegration";
 import type { Project } from "./types";
 
 export type ProjectCapability =
@@ -63,7 +63,7 @@ export function isSshProject(project: Project | null | undefined): boolean {
 }
 
 export function isSshHistorySourceUnsupported(project: Project | null | undefined): boolean {
-  return isSshProject(project) && !resolveSshToolSource(project?.cli_tool);
+  return isSshProject(project) && !resolveSshHistorySource(project?.cli_tool);
 }
 
 export function isSshGrokHistoryUnsupported(project: Project | null | undefined): boolean {

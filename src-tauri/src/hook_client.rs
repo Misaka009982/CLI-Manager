@@ -291,6 +291,7 @@ fn diagnostic_source(value: &str) -> &'static str {
         "codex" => "codex",
         "pi" => "pi",
         "grok" => "grok",
+        "kimi" => "kimi",
         "opencode" => "opencode",
         _ => "unknown",
     }
@@ -302,8 +303,10 @@ fn diagnostic_event(value: &str) -> &'static str {
         "UserPromptSubmit" => "UserPromptSubmit",
         "Notification" => "Notification",
         "PermissionRequest" => "PermissionRequest",
+        "PermissionResult" => "PermissionResult",
         "Stop" => "Stop",
         "StopFailure" => "StopFailure",
+        "Interrupt" => "Interrupt",
         "SubagentStart" => "SubagentStart",
         "SubagentStop" => "SubagentStop",
         "AgentToolStart" => "AgentToolStart",
@@ -369,9 +372,12 @@ fn should_suppress_codex_permission_request(source: &str, event: &str, hook_inpu
         _ => false,
     }
 }
-/// 与旧 PowerShell 脚本保持一致的标题文案；前端在缺省时会自行兜底（App.tsx）。
-fn title_for(source: &str, event: &str) -> &'static str {
-    match (source, event) {
+/// 与旧 PowerShell 脚本保持一致的标题文案；新增 source 由前端按当前语言生成标题。
+fn title_for(source: &str, event: &str) -> Option<&'static str> {
+    if source == "kimi" {
+        return None;
+    }
+    Some(match (source, event) {
         ("codex", "SessionStart") => "Codex CLI session started",
         ("codex", "UserPromptSubmit") => "Codex CLI running",
         ("codex", "Stop") => "Codex CLI done",
@@ -409,17 +415,23 @@ fn title_for(source: &str, event: &str) -> &'static str {
         (_, "ToolStart") => "Claude Code tool started",
         (_, "ToolStop") => "Claude Code tool done",
         (_, _) => "Claude Code needs attention", // Notification
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         approval_transcript_bytes, failure_diagnostic_line,
-        should_suppress_codex_permission_request,
+        should_suppress_codex_permission_request, title_for,
     };
     use serde_json::json;
     use std::fs;
+
+    #[test]
+    fn kimi_titles_defer_to_localized_frontend() {
+        assert_eq!(title_for("kimi", "PermissionResult"), None);
+        assert_eq!(title_for("kimi", "Interrupt"), None);
+    }
 
     #[test]
     fn extract_reasoning_effort_reads_claude_hook_effort_level() {

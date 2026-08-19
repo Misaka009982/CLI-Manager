@@ -9,7 +9,14 @@
 - 历史会话删除新增 OpenCode SQLite 支持：仅接受默认 OpenCode 数据库中的合法 `ses_...` locator，在单个事务内依次删除关联 `part`、`message` 和会话记录；目标不存在、数据库异常或 schema 不兼容时不会留下部分删除，成功后才刷新历史索引缓存。
 - OpenCode TUI 新增隔离的剪贴板快捷键适配：Windows 下选中文本后 `Ctrl+C` 复制、`Ctrl+V` 粘贴、`Ctrl+Shift+V` 多行粘贴可正常使用；无选择时 `Ctrl+C` 仍发送中断，Claude、Codex、Grok、CC/CX 和 Pi 继续使用原有通用终端输入路径。
 
-## [TEMP] - 2026-08-11
+## [TEMP] - 2026-08-19
+
+### Kimi Code CLI 与 Hook 集成
+
+- SSH 主机“CLI 集成”新增 Kimi Code，支持 `$HOME/.kimi-code` 默认根、项目级覆盖、非空有效覆盖根的 `KIMI_CODE_HOME` 安全注入，以及远端 Hook 的检查、事务预览、安装和卸载；空根保留远端原生环境，Kimi 仅作为 CLI/Hook source，远程历史继续只支持 Claude Code 与 Codex CLI。
+- 设置“Hook”页新增当前 Kimi Code 的独立 bridge、目录、状态、六个模块和全量安装/删除；通过 `kimi doctor config` 校验结构化 TOML candidate，以精确 owner 管理九个 Hook definition，保留用户/第三方条目与注释，旧 `kimi-cli` 和 `~/.kimi` 不会被修改或迁移。
+- Kimi `PermissionResult` 与 `Interrupt` 补齐审批和取消状态闭环；Subagent 事件进入安全绑定、通知与 Replay，但不会创建缺少稳定 transcript identity 的子 Agent 分屏。
+- SSH Agent 升级到 `0.1.9`、协议保持 `1.11`；Kimi Hook installation record 不生成 history candidate 或历史 metadata，旧 Agent 不支持 Kimi 时显式返回真实错误。
 
 ### 供应商快捷切换
 

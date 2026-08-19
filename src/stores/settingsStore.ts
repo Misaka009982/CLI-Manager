@@ -122,7 +122,7 @@ export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "fil
 export type TerminalPanelWidthSettings = Record<TerminalPanelWidthKey, number>;
 export type TerminalSettingsSectionKey = "behavior" | "paneMarker" | "shells" | "themes" | "background";
 export type TerminalSettingsSectionsExpanded = Record<TerminalSettingsSectionKey, boolean>;
-export type HookSettingsSectionKey = "toast" | "notifications" | "claude" | "codex" | "pi" | "grok";
+export type HookSettingsSectionKey = "toast" | "notifications" | "claude" | "codex" | "kimi" | "pi" | "grok";
 export type HookSettingsSectionsExpanded = Record<HookSettingsSectionKey, boolean>;
 export const UI_FONT_SIZE_MIN = 11;
 export const UI_FONT_SIZE_MAX = 18;
@@ -162,6 +162,7 @@ export const HOOK_SETTINGS_SECTION_KEYS: readonly HookSettingsSectionKey[] = [
   "notifications",
   "claude",
   "codex",
+  "kimi",
   "pi",
   "grok",
 ];
@@ -170,6 +171,7 @@ export const HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT: HookSettingsSectionsExpand
   notifications: false,
   claude: false,
   codex: false,
+  kimi: false,
   pi: false,
   grok: false,
 };
@@ -429,6 +431,7 @@ export interface Settings {
   hookSubagentSplitViewEnabled: boolean;
   claudeHookBridgeEnabled: boolean;
   codexHookBridgeEnabled: boolean;
+  kimiHookBridgeEnabled: boolean;
   piHookBridgeEnabled: boolean;
   grokHookBridgeEnabled: boolean;
   systemNotificationsEnabled: boolean;
@@ -450,6 +453,7 @@ export interface Settings {
   claudeHookAutoRepairKnownInstalled: boolean;
   claudeHookAutoRepairNoticeShown: boolean;
   codexHookConfigDir: string | null;
+  kimiHookConfigDir: string | null;
   piHookConfigDir: string | null;
   grokHookConfigDir: string | null;
   /** cc-switch 数据库路径；null 表示使用默认路径 ~/.cc-switch/cc-switch.db */
@@ -623,6 +627,7 @@ const DEFAULTS: Settings = {
   hookSubagentSplitViewEnabled: true,
   claudeHookBridgeEnabled: true,
   codexHookBridgeEnabled: true,
+  kimiHookBridgeEnabled: true,
   piHookBridgeEnabled: true,
   grokHookBridgeEnabled: true,
   systemNotificationsEnabled: true,
@@ -650,6 +655,7 @@ const DEFAULTS: Settings = {
   claudeHookAutoRepairKnownInstalled: false,
   claudeHookAutoRepairNoticeShown: false,
   codexHookConfigDir: null,
+  kimiHookConfigDir: null,
   piHookConfigDir: null,
   grokHookConfigDir: null,
   ccSwitchDbPath: null,
@@ -1528,6 +1534,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.codexHookBridgeEnabled === "boolean"
         ? entries.codexHookBridgeEnabled
         : DEFAULTS.codexHookBridgeEnabled;
+    entries.kimiHookBridgeEnabled =
+      typeof entries.kimiHookBridgeEnabled === "boolean"
+        ? entries.kimiHookBridgeEnabled
+        : DEFAULTS.kimiHookBridgeEnabled;
     entries.piHookBridgeEnabled =
       typeof entries.piHookBridgeEnabled === "boolean"
         ? entries.piHookBridgeEnabled
@@ -1593,6 +1603,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.codexHookConfigDir =
       typeof entries.codexHookConfigDir === "string" && entries.codexHookConfigDir.trim()
         ? entries.codexHookConfigDir
+        : null;
+    entries.kimiHookConfigDir =
+      typeof entries.kimiHookConfigDir === "string" && entries.kimiHookConfigDir.trim()
+        ? entries.kimiHookConfigDir
         : null;
     entries.piHookConfigDir =
       typeof entries.piHookConfigDir === "string" && entries.piHookConfigDir.trim()

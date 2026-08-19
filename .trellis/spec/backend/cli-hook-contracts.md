@@ -1,6 +1,6 @@
 # CLI Hook Contracts
 
-Concrete contracts for Claude/Codex/Pi/Grok/OpenCode hook integration.
+Concrete contracts for Claude/Codex/Kimi/Pi/Grok/OpenCode hook integration.
 
 ## Scenario: Local Hook Source Admission
 
@@ -12,14 +12,14 @@ Concrete contracts for Claude/Codex/Pi/Grok/OpenCode hook integration.
 ### 2. Signatures
 
 ```text
-<cli-manager-exe> __hook --source <claude|codex|pi|grok|opencode> --event <event>
+<cli-manager-exe> __hook --source <claude|codex|kimi|pi|grok|opencode> --event <event> [--owner <owner-id>]
 normalize_source(source: Option<&str>) -> &str
 is_valid_payload(payload: &ClaudeHookRequest) -> bool
 ```
 
 ### 3. Contracts
 
-- A source is supported only when the installer, `__hook` client, HTTP receiver, frontend `CliHookSource`, and history binding all recognize the same source value.
+- A Hook source is supported only when the installer, `__hook` client, HTTP receiver, frontend `CliHookSource`, and realtime binding all recognize the same source value. Hook support and history support are independent capabilities; a Hook-only source must remain excluded from history types and RPCs.
 - `normalize_source` preserves `grok`; unknown explicit values normalize to an empty value and are rejected.
 - Grok installer maps approval attention to `PreToolUse` with matcher `Bash|Edit|Write|MultiEdit`, then reports it as `PermissionRequest`; Grok 0.2.111 does not expose a native `PermissionRequest` hook and `Notification` is not an approval event.
 - Grok accepts `SessionStart`, `UserPromptSubmit`, legacy `Notification`, `PermissionRequest`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, `AgentToolStart`, `AgentToolStop`, `ToolStart`, and `ToolStop`. Uninstalling the attention module must remove only its `PreToolUse -> PermissionRequest` command and preserve `ToolStart`/sub-agent hooks sharing the same native event.
@@ -137,6 +137,54 @@ return candidates[0];
 return candidates.length === 1 ? candidates[0] : null;
 ```
 
+## Scenario: Current Kimi Code TOML Hook Adapter
+
+### 1. Scope / Trigger
+
+- Trigger: managing Kimi Code Hooks locally, in WSL, or through the SSH Agent.
+- Applies only to the current Kimi Code product using `$KIMI_CODE_HOME/config.toml` (default `~/.kimi-code/config.toml`). Legacy `kimi-cli` and `~/.kimi` are unsupported and never migrated.
+
+### 2. Event and module contract
+
+| UI module | Native event | Bridge event | State/notification |
+|---|---|---|---|
+| sessionStart | `SessionStart` | `SessionStart` | bind only |
+| running | `TurnStarted` | `UserPromptSubmit` | running |
+| attention | `PermissionRequest` | `PermissionRequest` | attention + configured notification |
+| attention | `PermissionResult` | `PermissionResult` | running; no toast/taskbar/system notification |
+| stop | `Stop` | `Stop` | done + configured notification |
+| stop | `Interrupt` | `Interrupt` | clear to none; no success/failure notification |
+| failure | `StopFailure` | `StopFailure` | failed + configured notification |
+| subagent | `SubagentStart` | `SubagentStart` | generic binding/notification/Replay only |
+| subagent | `SubagentStop` | `SubagentStop` | generic binding/notification/Replay only |
+
+- Attention installs/removes both permission definitions atomically; Stop installs/removes both completion/interruption definitions atomically; Subagent installs/removes both definitions atomically.
+- Kimi Subagent payloads have no stable transcript identity. `agent_name` is display metadata only; Kimi events must not enter `openSubagentTranscript` or create/merge transcript split panes.
+- `SessionEnd`, heartbeat, task, tool, and compact events are not installed or admitted for Kimi in this stage.
+
+### 3. Config ownership and writes
+
+- Parse and mutate `[[hooks]]` with `toml_edit`; preserve comments, ordering, unknown fields, user Hooks, and third-party Hooks.
+- Kimi's schema permits only `event`, `matcher`, `command`, and `timeout`; do not add an ownership field to the table.
+- Managed commands carry an exact `--owner cli-manager-local` or `--owner cli-manager-ssh-agent:<installation-id>` argument. Ownership requires exact parsed executable/`__hook`/source/event/owner tokens with no unknown suffix; substring matches never establish ownership.
+- An exact owner family/source/event/native matcher with an old executable or installation identity is outdated and may converge on explicit install. An exact owner token with inconsistent source/event/matcher is a conflict. Similar user commands are untouched.
+- Local status/install first require the current Kimi Code `doctor` capability. Install writes a candidate in the target directory, runs `kimi doctor config <candidate>`, revalidates the live input, and atomically replaces it. Any parse, doctor, revalidation, or replace failure preserves the original file.
+- A local custom config root controls Hook management only. CLI-Manager does not inject `KIMI_CODE_HOME` into local terminal launches. New Kimi sessions reload config automatically; an active TUI requires `/reload`.
+- Hidden Hook delivery remains fail-open for the target CLI: bridge failures write only redacted diagnostics and the hidden process exits `0`; this does not claim that delivery succeeded.
+
+### 4. History boundary
+
+- Kimi is a Hook source but not a `SshHistorySource`. It must not start history sync/preflight/resume, write `history_source_instance_id`, or select a Claude/Codex parser.
+- A Kimi SSH Hook installation record has no `historySourceCandidate`; Claude/Codex records still require one with the same source/root/hash.
+
+### 5. Tests Required
+
+- Assert all nine installed Kimi definitions pass source/event admission; unknown Kimi events fail HTTP admission.
+- Assert `PermissionRequest -> PermissionResult` and running/attention `-> Interrupt` close the frontend state without completion/failure notifications.
+- Assert current-product doctor capability, candidate validation, atomic-failure preservation, invalid TOML, exact ownership, similar-command isolation, duplicate convergence, and module uninstall.
+- Assert Kimi Subagent events bind and enter Replay without opening a transcript split pane.
+- Assert Kimi remains rejected by every local/remote history entry point.
+
 ## Scenario: Per-Tool Hook Bridge Enablement
 
 ### 1. Scope / Trigger
@@ -150,10 +198,11 @@ return candidates.length === 1 ? candidates[0] : null;
 interface Settings {
   claudeHookBridgeEnabled: boolean;
   codexHookBridgeEnabled: boolean;
+  kimiHookBridgeEnabled: boolean;
 }
 ```
 
-- Both settings default to `true` for backward compatibility.
+- Per-tool bridge settings, including Kimi, default to `true`; their config roots remain local-only settings.
 - Backend `hook_settings_get_status` keeps its existing signature; frontend callers gate `autoRepair` and interpret the returned per-tool status through the enable settings.
 
 ### 3. Contracts
@@ -173,7 +222,7 @@ interface Settings {
 | Stored enable value is missing/invalid | Use default `true` |
 | Claude disabled, Codex installed/enabled | Health is green; no Claude auto-repair |
 | Codex disabled, Claude installed/enabled | Health is green; Claude auto-repair may run when previously installed |
-| Both disabled | Neutral light; no reinstall; no Hook env injection |
+| All bridges disabled | Neutral light; no reinstall; no Hook env injection |
 | Enabled tool status request fails | Preserve existing caller error handling; do not assume installed |
 | A saved config directory is missing during status inspection or another tool's action | Report that tool as missing; do not fail the shared status request or block the target tool's action |
 
@@ -234,7 +283,7 @@ taskbarAttentionFlashCount: integer 1..20 = 5
 - `finite` flashes only the taskbar button for the requested count. `untilFocused` continues until the main window is focused. A focused-window event sends the stop mode even after a finite request, so early focus always clears attention.
 - The command validates mode and finite count at the Rust boundary. Non-Windows targets safely validate and perform no platform action.
 - Taskbar failures are diagnostic-only and cannot block application Toast, system Toast, Tab state, replay, or third-party delivery.
-- Hook status inspection remains unconditional for Claude, Codex, Pi, and Grok. A disabled bridge still shows its status pill and participates in explicit refresh, but remains excluded from health aggregation, reinstall, environment injection, stats availability, and Claude auto-repair.
+- Hook status inspection remains unconditional for Claude, Codex, Kimi, Pi, and Grok. A disabled bridge still shows its status pill and participates in explicit refresh, but remains excluded from health aggregation, reinstall, environment injection, stats availability, and Claude auto-repair.
 - Disabling a bridge hides module cards, paths, and install/uninstall actions. Refresh never enables a bridge or installs a Hook.
 
 ### 4. Validation & Error Matrix
@@ -311,6 +360,7 @@ The taskbar sink is independent and consumes only its own master switch plus the
 - Claude Agent tool fallback events are normalized as `AgentToolStart` from `PreToolUse` and `AgentToolStop` from `PostToolUse`; hook installer must use a matcher limited to `Agent`/`Task`.
 - Claude sub-agent fields: `agentId`, `toolUseId`, `agentType`, `agentTranscriptPath`.
 - Codex sub-agent fields: `agentId`, `agentType`, `transcriptPath`.
+- Kimi `SubagentStart`/`SubagentStop` are explicitly outside this transcript contract: `agent_name` is not a stable identity, so these events continue through generic binding/notification/Replay and never call transcript open/finish actions.
 - Frontend transcript source resolution:
   - Use `agentTranscriptPath` only when it is present and differs from `transcriptPath`; this is `child-jsonl` mode.
   - Do not silently render the full parent `transcriptPath` as child output when `agentTranscriptPath` is missing or equals `transcriptPath`; degrade to `parent-jsonl` filtered mode or `lifecycle-only` mode.
