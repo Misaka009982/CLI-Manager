@@ -11,6 +11,7 @@ import {
   isDesktopPetEEnvelope,
   type DesktopPetEChildAction,
   type DesktopPetEChildMessage,
+  type DesktopPetEBubbleDirection,
   type DesktopPetEConfigPayload,
   type DesktopPetEEnvelope,
   type DesktopPetEHostMessage,
@@ -133,9 +134,20 @@ function failCompanion(code: string, detail: string): void {
   );
 }
 
+function bubbleDirectionForBounds(bounds: Electron.Rectangle): DesktopPetEBubbleDirection {
+  const area = screen.getDisplayMatching(bounds).workArea;
+  const windowCenterY = bounds.y + bounds.height / 2;
+  const workAreaCenterY = area.y + area.height / 2;
+  return windowCenterY <= workAreaCenterY ? "down" : "up";
+}
+
 function rendererConfig(config: DesktopPetEConfigPayload): DesktopPetEConfigPayload {
+  const win = windowRef;
   return {
     ...config,
+    bubbleDirection: win && !win.isDestroyed()
+      ? bubbleDirectionForBounds(win.getBounds())
+      : config.bubbleDirection ?? "up",
     pet: config.pet
       ? { ...config.pet, spritePath: `${ASSET_SCHEME}://sprite/current?v=${spriteRevision}` }
       : null,
@@ -446,6 +458,7 @@ function createWindow(): void {
         win.setBounds({ x: nextX, y: nextY, width, height }, false);
         win.webContents.setZoomFactor(scale);
       }
+      win.webContents.send("pet-e:config", rendererConfig(latestConfig));
       sendAction({
         actionId: crypto.randomUUID(),
         kind: "window-state",

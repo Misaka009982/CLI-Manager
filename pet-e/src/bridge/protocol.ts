@@ -21,6 +21,7 @@ export type DesktopPetEAgentSource = "claude" | "codex" | "pi" | "grok" | "other
 export type DesktopPetEAdapterMode = "interactive" | "jump-only" | "unavailable";
 export type DesktopPetEActionKind = "question" | "questionnaire" | "approval";
 export type DesktopPetEQuestionMode = "single" | "multiple" | "text";
+export type DesktopPetEBubbleDirection = "up" | "down";
 
 export interface DesktopPetEPosition {
   x: number;
@@ -169,6 +170,7 @@ export interface DesktopPetEPetAsset {
 export interface DesktopPetEConfigPayload {
   language: "zh-CN" | "zh-TW" | "en-US";
   visible: boolean;
+  bubbleDirection?: DesktopPetEBubbleDirection;
   settings: DesktopPetESettings;
   pet: DesktopPetEPetAsset | null;
   labels: Record<string, string>;

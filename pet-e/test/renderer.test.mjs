@@ -65,6 +65,19 @@ test("renderer keeps question scroll position and auto-hides the task bubble", (
   assert.match(css, /\.sprite-sheet \{[^}]*-webkit-app-region: drag;/);
 });
 
+test("renderer opens task bubbles away from the nearest screen edge", () => {
+  const source = read("../src/renderer/app.ts");
+  const main = read("../src/main.ts");
+  const css = read("../src/renderer/styles.css");
+  assert.match(main, /function bubbleDirectionForBounds/);
+  assert.match(main, /windowCenterY <= workAreaCenterY \? "down" : "up"/);
+  assert.match(main, /win\.webContents\.send\("pet-e:config", rendererConfig\(latestConfig\)\)/);
+  assert.match(source, /app\.classList\.toggle\("bubble-down", next\.bubbleDirection === "down"\)/);
+  assert.match(css, /#app\.bubble-down \.pet-shell \{ top: 8px; bottom: auto; \}/);
+  assert.match(css, /#app\.bubble-down \.task-panel,[\s\S]*#app\.bubble-down \.notification \{ top: 276px; \}/);
+  assert.match(css, /#app\.bubble-down \.notification \{ max-height: 256px; overflow-y: auto; \}/);
+});
+
 test("question options are numbered like Pi's question tool", () => {
   const source = read("../src/renderer/app.ts");
   // 与 Pi 的 question 工具一致：选项按 1. 2. 3. 编号，自由输入仍为常驻输入框。

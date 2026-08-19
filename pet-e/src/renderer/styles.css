@@ -36,6 +36,8 @@ button { color: inherit; }
   -webkit-app-region: drag;
 }
 
+#app.bubble-down .pet-shell { top: 8px; bottom: auto; }
+
 .pet {
   position: absolute;
   right: 0;
@@ -250,6 +252,10 @@ button { color: inherit; }
 }
 .task-panel { top: 8px; max-height: 256px; width: 364px; }
 .action-panel { top: 8px; bottom: 8px; width: 364px; display: flex; flex-direction: column; background: var(--panel-strong); }
+/* 上半屏时宠物贴顶，气泡从宠物下方展开：8 + 260 + 8。 */
+#app.bubble-down .task-panel,
+#app.bubble-down .notification { top: 276px; }
+#app.bubble-down .notification { max-height: 256px; overflow-y: auto; }
 .action-panel > header { flex: 0 0 34px; }
 .action-panel > p:not(.action-error) { margin: 8px 10px 0; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; line-height: 15px; }
 .task-panel > header, .action-panel > header {

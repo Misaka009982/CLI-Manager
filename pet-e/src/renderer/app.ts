@@ -424,6 +424,7 @@ app.addEventListener("click", (event) => {
 window.desktopPetE.onConfig((next) => {
   config = next;
   document.documentElement.lang = next.language;
+  app.classList.toggle("bubble-down", next.bubbleDirection === "down");
   if (!next.visible) setMouseInteractive(false);
   if (!next.settings.agentInteractionEnabled) activeTaskId = null;
   if (!next.settings.showTaskArea) {
