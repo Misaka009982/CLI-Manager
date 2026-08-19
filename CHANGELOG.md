@@ -48,6 +48,7 @@
 ### Kimi Code Hook 验证
 
 - 修复 Kimi Hook 前端生命周期测试仅匹配 LF 换行的问题：Windows CRLF checkout 现在与 Linux/macOS 使用同一份测试提取逻辑；SSH Agent 的 Kimi TOML 规划测试仅在其实际支持的 Unix 路径语义下执行，Windows 主机测试不再误把临时目录当作远端 Linux 配置根。（Refs #219）
+- 清理 Kimi CLI 诊断命令构造中的冗余可变绑定，后端 `cargo check` 不再产生该新增警告。（Refs #219）
 
 ### 供应商快捷切换
 

@@ -2609,7 +2609,7 @@ enum KimiExecutable {
 
 impl KimiExecutable {
     fn run(&self, args: &[&str]) -> Result<std::process::Output, String> {
-        let mut command = match self {
+        let command = match self {
             Self::Native(path) if cfg!(target_os = "windows") && is_windows_command_shim(path) => {
                 let mut command = crate::shell_resolver::silent_command("powershell.exe");
                 command
