@@ -394,6 +394,12 @@ form must not hide URL, key or model in a generic configuration textarea.
   first, ordered by `sortIndex`, followed by non-queued providers ordered by
   `sortIndex`. Manual mode renders the ungrouped catalog order. This grouping is
   display-only and must not become a second persisted failover-order array.
+- The quick panel is a vertical sortable surface. `SortableProviderRow` must
+  apply the dnd-kit transform with `x: 0` while preserving `y`, scale, and the
+  shared sortable transition. Pointer drift must not expand the panel's
+  vertical scroll container into a horizontal scrolling range. Do not treat
+  `overflow-x: hidden` as the primary fix because that leaves the card moving
+  off-axis and only masks the resulting scrollbar.
 - The Settings Catalog surface is also a failover consumer while automatic
   failover is enabled. It polls `routing_get_failover_queue`, renders queued
   providers first with `#N`, and exposes queue toggle plus priority up/down
@@ -440,6 +446,9 @@ setSnapshot((current) => ({
 
 - Side panel automatic mode has no up/down buttons, while drag/keyboard
   ordering remains available.
+- Pointer dragging a quick-panel provider sideways keeps the card on the
+  vertical axis and does not create a bottom scrollbar; vertical auto-scroll
+  and keyboard ordering remain available in merged and independent panels.
 - A queue/order mutation made in either side panel or Settings is visible in
   the other consumer after the next snapshot publication or poll.
 - Toggling automatic failover off and on preserves an existing queue and its

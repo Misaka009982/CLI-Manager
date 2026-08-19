@@ -114,10 +114,14 @@ function SortableProviderRow({
     isDragging,
   } = useSortable({ id, disabled: !canReorder, transition: DND_SORTABLE_TRANSITION });
 
+  // This is a vertical list: carrying pointer X movement into the card expands
+  // the panel scroll container and creates a horizontal scrollbar while dragging.
+  const verticalTransform = transform ? { ...transform, x: 0 } : transform;
+
   // 独立卡片：每行自带边框 + 12px 圆角。选中态不用 3px 左竖条（那是 Material/VS Code
   // 的语言），改成淡绿底 + 描边提亮 + 柔光投影，靠"整块抬起"表达选中。
   const style: CSSProperties = {
-    transform: CSS.Transform.toString(transform),
+    transform: CSS.Transform.toString(verticalTransform),
     transition: isDragging ? undefined : transition,
     position: "relative",
     zIndex: isDragging ? 1 : undefined,
