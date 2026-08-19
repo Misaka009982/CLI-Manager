@@ -9,7 +9,10 @@ import ts from "typescript";
 const tempDir = mkdtempSync(join(tmpdir(), "cli-manager-kimi-hook-frontend-"));
 process.on("exit", () => rmSync(tempDir, { recursive: true, force: true }));
 
-const terminalStoreSource = readFileSync(new URL("../src/stores/terminalStore.ts", import.meta.url), "utf8");
+const terminalStoreSource = readFileSync(
+  new URL("../src/stores/terminalStore.ts", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
 const functionMatch = terminalStoreSource.match(/function mapCliHookEvent[\s\S]*?\n}\n\nfunction mapShellRuntimeEvent/);
 assert.ok(functionMatch, "mapCliHookEvent should remain discoverable for focused lifecycle tests");
 const functionSource = functionMatch[0].replace(/\n\nfunction mapShellRuntimeEvent$/, "");

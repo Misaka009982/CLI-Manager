@@ -1739,14 +1739,16 @@ pub fn apply(request: HookConfigRequest, install: bool) -> Result<HookConfigRepo
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use super::config_target_unchanged;
     use super::{
         add_exact_hooks, apply_transaction, feature_marker, fingerprint, hook_command,
-        inspect_json, install_codex_feature, installation_record, parse_owned_marker, plan_files,
-        recover_transaction, remove_exact_hooks, supports_current_kimi, transaction_dir,
-        uninstall_codex_feature, validate_kimi_candidate, FileState, PlannedFile, ResolvedRoot,
+        inspect_json, install_codex_feature, parse_owned_marker, recover_transaction,
+        remove_exact_hooks, transaction_dir, uninstall_codex_feature, FileState, PlannedFile,
         Source, TransactionFile, TransactionJournal,
+    };
+    #[cfg(unix)]
+    use super::{
+        config_target_unchanged, installation_record, plan_files, supports_current_kimi,
+        validate_kimi_candidate, ResolvedRoot,
     };
     use crate::installer::InstallationRecord;
     use crate::layout::AgentLayout;
@@ -1785,6 +1787,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn kimi_plan_uses_single_config_role_and_omits_history_candidate() {
         let temp = tempfile::tempdir().unwrap();
