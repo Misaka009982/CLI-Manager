@@ -33,6 +33,7 @@ let autoHideColor: DesktopPetEColor | null = null;
 let autoHidePaused = false;
 // 重建 DOM 会重置滚动位置，问题组和任务列表的滚动偏移需要跨重建保留。
 const SCROLL_CONTAINERS = [".questions", ".approval-options", ".task-list"] as const;
+const INTERACTIVE_SURFACE_SELECTOR = ".task-panel, .action-panel, .lights, .pet-toolbar, .pet.missing";
 
 function clearTaskPanelTimer(): void {
   if (taskPanelTimer === null) return;
@@ -110,7 +111,7 @@ function setMouseInteractive(interactive: boolean): void {
 }
 
 function isInteractiveSurface(target: Element | null): boolean {
-  return Boolean(target?.closest(".pet-shell, .task-panel, .action-panel"));
+  return Boolean(target?.closest(INTERACTIVE_SURFACE_SELECTOR));
 }
 
 function refreshMouseInteraction(): void {
@@ -351,7 +352,7 @@ app.addEventListener("input", (event) => {
 });
 document.addEventListener("mousemove", (event) => {
   lastMousePosition = { x: event.clientX, y: event.clientY };
-  const target = event.target instanceof Element ? event.target : null;
+  const target = document.elementFromPoint(event.clientX, event.clientY);
   setMouseInteractive(isInteractiveSurface(target));
   setAutoHidePaused(Boolean(target?.closest(".task-panel")));
 });
@@ -424,6 +425,8 @@ app.addEventListener("click", (event) => {
 window.desktopPetE.onConfig((next) => {
   config = next;
   document.documentElement.lang = next.language;
+  mouseInteractive = false;
+  app.classList.toggle("click-through", next.settings.clickThroughEnabled);
   app.classList.toggle("bubble-down", next.bubbleDirection === "down");
   if (!next.visible) setMouseInteractive(false);
   if (!next.settings.agentInteractionEnabled) activeTaskId = null;

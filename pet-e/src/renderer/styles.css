@@ -86,6 +86,12 @@ button { color: inherit; }
   -webkit-app-region: drag;
 }
 
+/* 穿透只作用于宠物主体；移除 drag 命中后，forwarded mousemove 才能识别并恢复气泡交互。 */
+#app.click-through .pet-shell,
+#app.click-through .pet,
+#app.click-through .sprite-viewport,
+#app.click-through .sprite-sheet { -webkit-app-region: no-drag; }
+
 .sprite-rows-9 { height: 1872px; }
 .sprite-rows-11 { height: 2288px; }
 

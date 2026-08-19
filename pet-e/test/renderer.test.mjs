@@ -65,6 +65,16 @@ test("renderer keeps question scroll position and auto-hides the task bubble", (
   assert.match(css, /\.sprite-sheet \{[^}]*-webkit-app-region: drag;/);
 });
 
+test("click-through excludes every actionable pet surface", () => {
+  const source = read("../src/renderer/app.ts");
+  const css = read("../src/renderer/styles.css");
+  assert.match(source, /INTERACTIVE_SURFACE_SELECTOR = "\.task-panel, \.action-panel, \.lights, \.pet-toolbar, \.pet\.missing"/);
+  assert.match(source, /document\.elementFromPoint\(event\.clientX, event\.clientY\)/);
+  assert.match(source, /app\.classList\.toggle\("click-through", next\.settings\.clickThroughEnabled\)/);
+  assert.match(source, /mouseInteractive = false;\s*app\.classList\.toggle\("click-through"/);
+  assert.match(css, /#app\.click-through \.pet-shell,[\s\S]*#app\.click-through \.sprite-sheet \{ -webkit-app-region: no-drag; \}/);
+});
+
 test("renderer opens task bubbles away from the nearest screen edge", () => {
   const source = read("../src/renderer/app.ts");
   const main = read("../src/main.ts");
