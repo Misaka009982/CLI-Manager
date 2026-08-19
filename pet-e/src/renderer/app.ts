@@ -277,7 +277,7 @@ function questionsMarkup(action: NonNullable<DesktopPetETask["pendingAction"]>, 
     const optionType = question.mode === "multiple" ? "checkbox" : "radio";
     const optional = question.required === false ? `<small class="question-optional">${escapeText(label("desktopPetE.renderer.optional"))}</small>` : "";
     return `<fieldset data-question="${escapeText(question.id)}"><legend><span>${index + 1}</span>${escapeText(question.label || question.prompt)}${optional}</legend>${question.label ? `<p>${escapeText(question.prompt)}</p>` : ""}
-      ${question.mode === "text" ? "" : question.options.map((option) => `<label class="choice"><input type="${optionType}" name="question-${escapeText(question.id)}" value="${escapeText(option.value)}" ${values.includes(option.value) ? "checked" : ""}/><span><strong>${escapeText(option.label)}</strong>${option.description ? `<small>${escapeText(option.description)}</small>` : ""}</span></label>`).join("")}
+      ${question.mode === "text" ? "" : question.options.map((option, optionIndex) => `<label class="choice"><input type="${optionType}" name="question-${escapeText(question.id)}" value="${escapeText(option.value)}" ${values.includes(option.value) ? "checked" : ""}/><span><strong>${optionIndex + 1}. ${escapeText(option.label)}</strong>${option.description ? `<small>${escapeText(option.description)}</small>` : ""}</span></label>`).join("")}
       ${question.mode === "text" || question.allowOther ? `<textarea data-custom="${escapeText(question.id)}" maxlength="16384" placeholder="${escapeText(label("desktopPetE.renderer.typeAnswer"))}">${escapeText(draft.customValues[question.id] ?? "")}</textarea>` : ""}
     </fieldset>`;
   }).join("")}</div>`;

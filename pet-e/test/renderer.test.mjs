@@ -64,3 +64,11 @@ test("renderer keeps question scroll position and auto-hides the task bubble", (
   assert.match(css, /\.sprite-viewport \{[^}]*-webkit-app-region: drag;/);
   assert.match(css, /\.sprite-sheet \{[^}]*-webkit-app-region: drag;/);
 });
+
+test("question options are numbered like Pi's question tool", () => {
+  const source = read("../src/renderer/app.ts");
+  // 与 Pi 的 question 工具一致：选项按 1. 2. 3. 编号，自由输入仍为常驻输入框。
+  assert.match(source, /options\.map\(\(option, optionIndex\)/);
+  assert.match(source, /\$\{optionIndex \+ 1\}\. \$\{escapeText\(option\.label\)\}/);
+  assert.match(source, /textarea data-custom=/);
+});
