@@ -125,6 +125,7 @@ export const SETTING_BACKUP_POLICY = {
   workspanEnabled: "excluded",
   desktopPet: "excluded",
   desktopPetE: "excluded",
+  desktopPetESettingsSectionsExpanded: "preferences",
 } as const satisfies Record<keyof Settings, BackupSettingDomain>;
 
 function keysForDomain<D extends BackupSettingDomain>(domain: D) {

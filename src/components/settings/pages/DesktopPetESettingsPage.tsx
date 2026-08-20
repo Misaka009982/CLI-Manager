@@ -16,6 +16,7 @@ import {
 import {
   Bell,
   Check,
+  ChevronDown,
   CircleGauge,
   Eye,
   ImageOff,
@@ -140,10 +141,56 @@ function PetSelectionButton({ pet, name, selected, disabled, onSelect }: PetSele
   );
 }
 
+const PET_PICKER_PANEL_ID = "desktop-pet-e-pet-picker-panel";
+
+function SelectedPetSummary({ pet, name }: { pet: InstalledPet | null; name: string | null }) {
+  const { t } = useI18n();
+  const [previewFailed, setPreviewFailed] = useState(false);
+
+  useEffect(() => {
+    setPreviewFailed(false);
+  }, [pet]);
+
+  if (!name) {
+    return (
+      <Text size="xs" c="var(--on-surface-variant)" className="min-w-0 truncate">
+        {t("desktopPetE.settings.selectPet")}
+      </Text>
+    );
+  }
+
+  return (
+    <Group gap={6} wrap="nowrap" className="min-w-0">
+      {pet && !previewFailed ? (
+        <Box
+          aria-hidden="true"
+          className="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded bg-surface-low"
+        >
+          <PetArtwork
+            pet={pet}
+            alt=""
+            width={22}
+            height={22}
+            mood="idle"
+            animated={false}
+            onError={() => setPreviewFailed(true)}
+          />
+        </Box>
+      ) : null}
+      <Text size="xs" c="var(--on-surface-variant)" className="min-w-0 truncate">
+        {name}
+      </Text>
+    </Group>
+  );
+}
+
 export function DesktopPetESettingsPage() {
   const { language, t } = useI18n();
   const desktopPet = useSettingsStore((state) => state.desktopPet);
   const desktopPetE = useSettingsStore((state) => state.desktopPetE);
+  const petPickerExpanded = useSettingsStore(
+    (state) => state.desktopPetESettingsSectionsExpanded.petPicker,
+  );
   const runtimeError = useDesktopPetERuntimeStore((state) => state.lastError);
   const updateSetting = useSettingsStore((state) => state.update);
   const [sizeDraft, setSizeDraft] = useState(desktopPetE.size);
@@ -154,6 +201,8 @@ export function DesktopPetESettingsPage() {
   const enableBlockedByExistingPet = desktopPet.enabled && !desktopPetE.enabled;
   const enableBlockedByMissingPet = codexPets.length === 0 && !desktopPetE.enabled;
   const enableBlocked = enableBlockedByExistingPet || enableBlockedByMissingPet;
+  const selectedPet = codexPets.find((pet) => pet.manifest.id === desktopPetE.petId) ?? null;
+  const selectedPetName = selectedPet ? localizedPetText(selectedPet.manifest.name, language) : null;
 
   const loadCodexPets = useCallback(async () => {
     setPetsLoading(true);
@@ -175,6 +224,16 @@ export function DesktopPetESettingsPage() {
   }, [loadCodexPets]);
 
   useEffect(() => setSizeDraft(desktopPetE.size), [desktopPetE.size]);
+
+  const togglePetPicker = useCallback(() => {
+    const current = useSettingsStore.getState().desktopPetESettingsSectionsExpanded;
+    void updateSetting("desktopPetESettingsSectionsExpanded", {
+      ...current,
+      petPicker: !current.petPicker,
+    }).catch((error) => {
+      toast.error(t("desktopPetE.settings.updateFailed"), { description: String(error) });
+    });
+  }, [t, updateSetting]);
 
   const patch = useCallback(async (delta: Partial<DesktopPetESettings>): Promise<boolean> => {
     const current = useSettingsStore.getState().desktopPetE;
@@ -282,8 +341,30 @@ export function DesktopPetESettingsPage() {
             </Box>
           </Group>
           <Box>
-            <Group mb={6} justify="space-between" align="center" gap="sm">
-              <Text size="xs" fw={500} c="var(--on-surface)">{t("desktopPetE.settings.pet")}</Text>
+            <Group mb={6} justify="space-between" align="center" gap="sm" wrap="nowrap">
+              <UnstyledButton
+                type="button"
+                className="ui-focus-ring flex min-w-0 flex-1 items-center gap-2 rounded text-left"
+                aria-expanded={petPickerExpanded}
+                aria-controls={PET_PICKER_PANEL_ID}
+                title={t(petPickerExpanded
+                  ? "desktopPetE.settings.petPickerCollapse"
+                  : "desktopPetE.settings.petPickerExpand")}
+                onClick={togglePetPicker}
+              >
+                <ChevronDown
+                  size={16}
+                  strokeWidth={1.8}
+                  aria-hidden="true"
+                  className={`shrink-0 text-text-muted transition-transform ${petPickerExpanded ? "rotate-180" : ""}`}
+                />
+                <Text size="xs" fw={500} c="var(--on-surface)" className="shrink-0">
+                  {t("desktopPetE.settings.pet")}
+                </Text>
+                {!petPickerExpanded && !petsLoading ? (
+                  <SelectedPetSummary pet={selectedPet} name={selectedPetName} />
+                ) : null}
+              </UnstyledButton>
               <Button
                 size="compact-xs"
                 variant="subtle"
@@ -295,39 +376,43 @@ export function DesktopPetESettingsPage() {
                 {t("desktopPetE.settings.rescanPets")}
               </Button>
             </Group>
-            {petsLoading ? (
-              <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm" aria-hidden="true">
-                {[0, 1, 2].map((index) => (
-                  <Skeleton key={index} height={132} radius="md" />
-                ))}
-              </SimpleGrid>
-            ) : codexPets.length > 0 ? (
-              <SimpleGrid
-                cols={{ base: 2, sm: 3 }}
-                spacing="sm"
-                role="group"
-                aria-label={t("desktopPetE.settings.pet")}
-                aria-busy={selectingPetId !== null}
-              >
-                {codexPets.map((pet) => (
-                  <PetSelectionButton
-                    key={pet.manifest.id}
-                    pet={pet}
-                    name={localizedPetText(pet.manifest.name, language)}
-                    selected={desktopPetE.petId === pet.manifest.id}
-                    disabled={selectingPetId !== null}
-                    onSelect={() => selectPet(pet.manifest.id)}
-                  />
-                ))}
-              </SimpleGrid>
-            ) : (
-              <Text size="xs" c="var(--on-surface-variant)">
-                {t("desktopPetE.settings.noCodexPets")}
-              </Text>
-            )}
-            <Text mt={6} size="xs" c="var(--on-surface-variant)">
-              {t("desktopPetE.settings.petDescription")}
-            </Text>
+            {petPickerExpanded ? (
+              <Box id={PET_PICKER_PANEL_ID}>
+                {petsLoading ? (
+                  <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm" aria-hidden="true">
+                    {[0, 1, 2].map((index) => (
+                      <Skeleton key={index} height={132} radius="md" />
+                    ))}
+                  </SimpleGrid>
+                ) : codexPets.length > 0 ? (
+                  <SimpleGrid
+                    cols={{ base: 2, sm: 3 }}
+                    spacing="sm"
+                    role="group"
+                    aria-label={t("desktopPetE.settings.pet")}
+                    aria-busy={selectingPetId !== null}
+                  >
+                    {codexPets.map((pet) => (
+                      <PetSelectionButton
+                        key={pet.manifest.id}
+                        pet={pet}
+                        name={localizedPetText(pet.manifest.name, language)}
+                        selected={desktopPetE.petId === pet.manifest.id}
+                        disabled={selectingPetId !== null}
+                        onSelect={() => selectPet(pet.manifest.id)}
+                      />
+                    ))}
+                  </SimpleGrid>
+                ) : (
+                  <Text size="xs" c="var(--on-surface-variant)">
+                    {t("desktopPetE.settings.noCodexPets")}
+                  </Text>
+                )}
+                <Text mt={6} size="xs" c="var(--on-surface-variant)">
+                  {t("desktopPetE.settings.petDescription")}
+                </Text>
+              </Box>
+            ) : null}
           </Box>
           <Box>
             <Group justify="space-between" align="center" gap="md">

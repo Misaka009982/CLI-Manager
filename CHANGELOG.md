@@ -2,6 +2,10 @@
 
 ## [V1.3.7] - 2026-08-19
 
+### 桌面宠物E
+
+- 宠物E设置页的「Codex 宠物包」选择网格可折叠：默认收起，标题行直接显示当前宠物的小预览图与名称，展开状态持久化并跨重启保留，宠物包较多时不再铺满设置页。
+
 ### Kimi Code 历史会话与实时统计
 
 - 本地与 WSL 的当前 Kimi Code 历史接入列表、搜索、统计、删除和恢复：读取 `$KIMI_CODE_HOME` 或 `~/.kimi-code` 下的 `session_index.jsonl` 与 `sessions/*/agents/main/wire.jsonl`。catalog 刷新会索引主会话 `wire.jsonl`（不含子 Agent）；catalog 未就绪时仍可按精确 sessionId 直查磁盘供实时统计。索引按 latest-wins 读取并忽略畸形普通记录，最终 tombstone 不会被残留目录重新“复活”；删除会备份后移除整个会话目录，并向 append-only 索引追加带换行边界的 deletion tombstone，不会整文件重写或覆盖并发追加。恢复使用 `kimi --session <id>`，会话 ID 在进入 shell 命令前执行白名单校验。旧 `~/.kimi` 不会被扫描或迁移；SSH Kimi 历史仍不支持。

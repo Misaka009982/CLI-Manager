@@ -132,6 +132,8 @@ export type TerminalSettingsSectionKey = "behavior" | "paneMarker" | "shells" | 
 export type TerminalSettingsSectionsExpanded = Record<TerminalSettingsSectionKey, boolean>;
 export type HookSettingsSectionKey = "toast" | "notifications" | "claude" | "codex" | "kimi" | "pi" | "grok";
 export type HookSettingsSectionsExpanded = Record<HookSettingsSectionKey, boolean>;
+export type DesktopPetESettingsSectionKey = "petPicker";
+export type DesktopPetESettingsSectionsExpanded = Record<DesktopPetESettingsSectionKey, boolean>;
 export const UI_FONT_SIZE_MIN = 11;
 export const UI_FONT_SIZE_MAX = 18;
 export const UI_FONT_SIZE_DEFAULT = 13;
@@ -182,6 +184,13 @@ export const HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT: HookSettingsSectionsExpand
   kimi: false,
   pi: false,
   grok: false,
+};
+export const DESKTOP_PET_E_SETTINGS_SECTION_KEYS: readonly DesktopPetESettingsSectionKey[] = [
+  "petPicker",
+];
+/** 宠物包选择网格默认折叠：宠物较多时网格会铺满设置页，选定后极少改动。 */
+export const DESKTOP_PET_E_SETTINGS_SECTIONS_EXPANDED_DEFAULT: DesktopPetESettingsSectionsExpanded = {
+  petPicker: false,
 };
 export type ShortcutAction =
   | "newTerminal"
@@ -489,6 +498,8 @@ export interface Settings {
   workspanEnabled: boolean;
   desktopPet: DesktopPetSettings;
   desktopPetE: DesktopPetESettings;
+  /** 宠物E设置页各折叠区的展开状态（当前仅「Codex 宠物包」选择网格）。 */
+  desktopPetESettingsSectionsExpanded: DesktopPetESettingsSectionsExpanded;
 }
 
 interface SettingsStore extends Settings {
@@ -698,6 +709,7 @@ const DEFAULTS: Settings = {
     position: null,
   },
   desktopPetE: { ...DEFAULT_DESKTOP_PET_E_SETTINGS },
+  desktopPetESettingsSectionsExpanded: { ...DESKTOP_PET_E_SETTINGS_SECTIONS_EXPANDED_DEFAULT },
 };
 
 const LEGACY_LIGHT_PALETTE_MAP: Partial<Record<string, LightThemePalette>> = {
@@ -942,6 +954,20 @@ export function migrateHookSettingsSectionsExpanded(value: unknown): HookSetting
   }
   const raw = value as Partial<Record<HookSettingsSectionKey, unknown>>;
   return HOOK_SETTINGS_SECTION_KEYS.reduce<HookSettingsSectionsExpanded>((next, key) => {
+    next[key] = typeof raw[key] === "boolean" ? raw[key] : defaults[key];
+    return next;
+  }, { ...defaults });
+}
+
+export function migrateDesktopPetESettingsSectionsExpanded(
+  value: unknown,
+): DesktopPetESettingsSectionsExpanded {
+  const defaults = DESKTOP_PET_E_SETTINGS_SECTIONS_EXPANDED_DEFAULT;
+  if (typeof value !== "object" || value === null) {
+    return { ...defaults };
+  }
+  const raw = value as Partial<Record<DesktopPetESettingsSectionKey, unknown>>;
+  return DESKTOP_PET_E_SETTINGS_SECTION_KEYS.reduce<DesktopPetESettingsSectionsExpanded>((next, key) => {
     next[key] = typeof raw[key] === "boolean" ? raw[key] : defaults[key];
     return next;
   }, { ...defaults });
@@ -1393,6 +1419,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
     entries.desktopPet = migrateDesktopPetSettings(entries.desktopPet);
     entries.desktopPetE = migrateDesktopPetESettings(entries.desktopPetE);
+    entries.desktopPetESettingsSectionsExpanded = migrateDesktopPetESettingsSectionsExpanded(
+      entries.desktopPetESettingsSectionsExpanded,
+    );
     if (entries.desktopPet.enabled && entries.desktopPetE.enabled) {
       entries.desktopPetE = { ...entries.desktopPetE, enabled: false };
       persistSetting("desktopPetE", entries.desktopPetE);
