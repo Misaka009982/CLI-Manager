@@ -235,6 +235,20 @@ const SOURCES: &[SourceSpec] = &[
         default_leaf: ".grok",
     },
     SourceSpec {
+        id: "kimi",
+        default_label: "Kimi Code",
+        aliases: &["kimi-code"],
+        location: CONFIG_ROOT,
+        capabilities: CapabilitySpec {
+            usage: "supported",
+            resume: "supported",
+            delete: "supported",
+            realtime_stats: "supported",
+            ..NATIVE_READONLY_FILE
+        },
+        default_leaf: ".kimi-code",
+    },
+    SourceSpec {
         id: "pi",
         default_label: "Pi",
         aliases: &[],
@@ -462,6 +476,12 @@ fn validate_source_shape(spec: &SourceSpec, path: &Path, warnings: &mut Vec<Stri
         {
             warnings.push("codex_sessions_not_found".to_string());
         }
+        "kimi"
+            if !candidate_exists(&path.join("sessions"), "directory")
+                && !candidate_exists(&path.join("session_index.jsonl"), "file") =>
+        {
+            warnings.push("kimi_sessions_not_found".to_string());
+        }
         _ => {}
     }
 }
@@ -534,7 +554,7 @@ mod tests {
     #[test]
     fn descriptors_keep_source_registry_size() {
         let descriptors = history_sources_list_descriptors();
-        assert_eq!(descriptors.len(), 11);
+        assert_eq!(descriptors.len(), 12);
         let kiro = descriptors
             .iter()
             .find(|descriptor| descriptor.id == "kiro")
@@ -567,5 +587,18 @@ mod tests {
         let grok = SOURCES.iter().find(|spec| spec.id == "grok").unwrap();
         let candidate = default_candidate_path_from_home(grok, Path::new(r"C:\Users\tester"));
         assert_eq!(candidate, PathBuf::from(r"C:\Users\tester\.grok\sessions"));
+    }
+
+    #[test]
+    fn kimi_default_candidate_is_the_config_root() {
+        let kimi = SOURCES.iter().find(|spec| spec.id == "kimi").unwrap();
+        let candidate = default_candidate_path_from_home(kimi, Path::new(r"C:\Users\tester"));
+        assert_eq!(
+            candidate,
+            PathBuf::from(r"C:\Users\tester").join(".kimi-code")
+        );
+        assert_eq!(kimi.capabilities.delete, "supported");
+        assert_eq!(kimi.capabilities.realtime_stats, "supported");
+        assert_eq!(kimi.capabilities.resume, "supported");
     }
 }

@@ -2,6 +2,13 @@
 
 ## [V1.3.7] - 2026-08-19
 
+### Kimi Code 历史会话与实时统计
+
+- 本地与 WSL 的当前 Kimi Code 历史接入列表、搜索、统计、删除和恢复：读取 `$KIMI_CODE_HOME` 或 `~/.kimi-code` 下的 `session_index.jsonl` 与 `sessions/*/agents/main/wire.jsonl`。catalog 刷新会索引主会话 `wire.jsonl`（不含子 Agent）；catalog 未就绪时仍可按精确 sessionId 直查磁盘供实时统计。索引按 latest-wins 读取并忽略畸形普通记录，最终 tombstone 不会被残留目录重新“复活”；删除会备份后移除整个会话目录，并向 append-only 索引追加带换行边界的 deletion tombstone，不会整文件重写或覆盖并发追加。恢复使用 `kimi --session <id>`，会话 ID 在进入 shell 命令前执行白名单校验。旧 `~/.kimi` 不会被扫描或迁移；SSH Kimi 历史仍不支持。
+- Kimi 历史解析对齐当前 wire protocol：从 `context.append_loop_event.event` 折叠助手内容、工具调用和工具结果，避免 `turn.prompt` 与 `context.append_message` 重复计入用户消息；Token 使用 `inputOther`、`output`、`inputCacheRead`、`inputCacheCreation` 映射，并对等值的 `step.end.usage` / `usage.record` 去重及相互回退，实时统计和历史看板不再漏计或重复计算 Token。
+- 历史列表标题优先使用 `state.json` 的 `title`；仅在标题缺失且当前标题过弱时才回退 `lastPrompt`，避免把首条用户消息盖过 Kimi 会话名。
+- 终端实时统计识别 Kimi 来源并严格绑定 Hook `sessionId`，不回退到项目最近会话。历史根优先使用历史来源设置，其次 Hook 配置目录，不会给本地启动注入 `KIMI_CODE_HOME`。
+
 ### OpenCode 会话兼容
 
 - 修复 OpenCode Hook 将子 Agent 会话 ID 覆盖到主终端标签页的问题：Hook 现在按 OpenCode `sessionID` 识别根会话，跟踪父子关系并忽略子会话生命周期通知，顶部 Session ID、实时状态和后续恢复保持绑定到主会话。

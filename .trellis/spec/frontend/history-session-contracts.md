@@ -184,6 +184,7 @@ if (started) {
 
 - SSH `history` is available only when `resolveSshToolSource(project.cli_tool)` resolves to the currently bridge-supported Claude or Codex source.
 - SSH Grok Build, another unsupported SSH CLI, and an SSH project without a configured CLI all have `history=false`; this does not alter `statistics` or unrelated project capabilities.
+- Local and WSL Kimi Code keep native history (list/delete/resume/realtime stats under `$KIMI_CODE_HOME` / `~/.kimi-code`). SSH Kimi uses the generic unsupported SSH-history prompt.
 - Local and WSL Grok Build keep their native history capability. Do not infer remote support from the local history-source registry.
 - Sidebar and terminal-toolbar history entry points must stop at the capability gate. Grok uses the localized `remoteCapabilities.grokHistoryUnsupportedTitle`; another unsupported SSH CLI uses the generic SSH-history title and description.
 - `history_remote_source_required` remains a defensive bridge error for non-UI callers. Normal UI interactions must not reach it.

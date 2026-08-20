@@ -1,5 +1,6 @@
 import { resolveCliToolHistorySourceId } from "./cliTools";
 import { appendResumeCliArgs } from "./projectStartupCommand";
+import { isValidKimiSessionId, stripKimiResumeCliArgs } from "./resumeCliArgs";
 import type { RemoteHandoffAgent } from "./remoteHandoff";
 import type { HistorySessionSummary, Project } from "./types";
 
@@ -114,6 +115,8 @@ export function stripPiResumeCliArgs(cliArgs: string | null | undefined): string
   return kept.join(" ").trim();
 }
 
+export { stripKimiResumeCliArgs };
+
 function normalizeSessionId(sessionId: string): string | null {
   const trimmed = sessionId.trim();
   return trimmed && !/[\s\0\r\n]/.test(trimmed) ? trimmed : null;
@@ -179,6 +182,7 @@ export function buildHistoryResumeCommand(
     ? normalizeOpenCodeSessionId(session.session_id)
     : normalizeSessionId(session.session_id);
   if (!sessionId) return null;
+  if (session.source === "kimi" && !isValidKimiSessionId(sessionId)) return null;
 
   if (session.source === "opencode") {
     return appendSessionCliArgs(`opencode --session ${sessionId}`, "opencode", project);
@@ -194,6 +198,9 @@ export function buildHistoryResumeCommand(
   }
   if (session.source === "grok") {
     return appendResumeCliArgs(`grok --resume ${sessionId}`, "grok", project);
+  }
+  if (session.source === "kimi") {
+    return appendResumeCliArgs(`kimi --session ${sessionId}`, "kimi", project);
   }
   return null;
 }

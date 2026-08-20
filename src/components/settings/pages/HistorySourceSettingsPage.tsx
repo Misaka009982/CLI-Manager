@@ -133,6 +133,7 @@ function validationMessage(code: string, text: (zh: string, en: string) => strin
   if (code.startsWith("location_not_file:")) return text("读取位置必须是文件", "Read location must be a file");
   if (code === "claude_projects_dir_not_found") return text("未发现 Claude projects 目录，后续可能无法解析历史", "Claude projects directory was not found; history parsing may fail later");
   if (code === "codex_sessions_not_found") return text("未发现 Codex sessions/history.jsonl，后续可能无法解析历史", "Codex sessions/history.jsonl was not found; history parsing may fail later");
+  if (code === "kimi_sessions_not_found") return text("未发现 Kimi Code sessions 或 session_index.jsonl，后续可能无法解析历史", "Kimi Code sessions or session_index.jsonl was not found; history parsing may fail later");
   return code;
 }
 

@@ -24,6 +24,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 mod catalog;
+mod kimi;
 pub(crate) mod request_logs;
 
 use super::history_backup::{
@@ -179,12 +180,13 @@ pub(crate) struct HistoryRoots {
     claude_config_dir: Option<PathBuf>,
     codex_config_dir: Option<PathBuf>,
     grok_session_root: Option<PathBuf>,
+    kimi_config_dir: Option<PathBuf>,
 }
 
 impl HistoryRoots {
     fn cache_key(&self) -> String {
         format!(
-            "claude={}|codex={}|grok={}",
+            "claude={}|codex={}|grok={}|kimi={}",
             self.claude_config_dir
                 .as_deref()
                 .map(path_to_key)
@@ -196,8 +198,17 @@ impl HistoryRoots {
             self.grok_session_root
                 .as_deref()
                 .map(path_to_key)
+                .unwrap_or_else(|| "__default__".to_string()),
+            self.kimi_config_dir
+                .as_deref()
+                .map(path_to_key)
                 .unwrap_or_else(|| "__default__".to_string())
         )
+    }
+
+    pub(crate) fn with_kimi_config_dir(mut self, kimi_config_dir: Option<String>) -> Self {
+        self.kimi_config_dir = normalize_config_dir(kimi_config_dir);
+        self
     }
 }
 
@@ -985,6 +996,7 @@ pub async fn history_list_sessions(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
     project_path: Option<String>,
     query: Option<String>,
     limit: Option<usize>,
@@ -994,7 +1006,8 @@ pub async fn history_list_sessions(
         claude_config_dir.clone(),
         codex_config_dir.clone(),
         grok_session_root.clone(),
-    );
+    )
+    .with_kimi_config_dir(kimi_config_dir.clone());
     match catalog::list_sessions(
         &roots,
         source.clone(),
@@ -1040,6 +1053,40 @@ pub async fn history_list_sessions(
                     sessions.push(session);
                 }
             }
+            if sessions.is_empty()
+                && source
+                    .as_deref()
+                    .is_some_and(|value| value.trim().eq_ignore_ascii_case("kimi"))
+                && query
+                    .as_deref()
+                    .is_some_and(|value| kimi::is_valid_kimi_session_id(value))
+                && limit == Some(1)
+                && offset.unwrap_or(0) == 0
+            {
+                let session_id = query
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .to_string();
+                let target_project_path = project_path.clone();
+                let kimi_history_root = kimi::resolve_kimi_history_root(&roots);
+                let direct = tokio::task::spawn_blocking(move || {
+                    kimi::find_exact_kimi_session_in_root(
+                        &kimi_history_root,
+                        &session_id,
+                        target_project_path.as_deref(),
+                    )
+                })
+                .await
+                .map_err(|err| err.to_string())?;
+                if let Some(session) = direct {
+                    debug!(
+                        "history_list_sessions direct Kimi hit: session_id={} path={}",
+                        session.session_id, session.file_path
+                    );
+                    sessions.push(session);
+                }
+            }
             let targeted_lookup = query
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty())
@@ -1066,6 +1113,7 @@ pub async fn history_list_sessions(
                 claude_config_dir,
                 codex_config_dir,
                 grok_session_root,
+                kimi_config_dir,
                 project_path,
                 query,
                 limit,
@@ -1081,13 +1129,14 @@ async fn history_list_sessions_legacy(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
     project_path: Option<String>,
     query: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<HistorySessionSummary>, String> {
     tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root).with_kimi_config_dir(kimi_config_dir);
         let source_filter = source.map(|v| v.to_lowercase());
         let target_project_path = project_path
             .map(|v| normalize_history_path(&v))
@@ -1316,6 +1365,7 @@ pub async fn history_get_session(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
     source: String,
     project_key: String,
     aggregate_subtasks: Option<bool>,
@@ -1330,7 +1380,8 @@ pub async fn history_get_session(
             claude_config_dir.clone(),
             codex_config_dir.clone(),
             grok_session_root.clone(),
-        );
+        )
+        .with_kimi_config_dir(kimi_config_dir.clone());
         match catalog::get_session_detail_from_v2(
             &roots,
             &file_path,
@@ -1357,7 +1408,8 @@ pub async fn history_get_session(
             claude_config_dir,
             codex_config_dir,
             grok_session_root.clone(),
-        );
+        )
+        .with_kimi_config_dir(kimi_config_dir.clone());
         let summary =
             catalog::get_session_by_file_path(&roots, &file_path, "opencode", &project_key)
                 .await?
@@ -1372,7 +1424,7 @@ pub async fn history_get_session(
     }
     tokio::task::spawn_blocking(move || {
         let started_at = Instant::now();
-        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root).with_kimi_config_dir(kimi_config_dir);
         debug!(
             "history_get_session request: source={}, project_key={}, file_path={}, claude_root={}, codex_root={}",
             source,
@@ -1463,12 +1515,14 @@ pub async fn history_convert_session(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
     source: String,
     project_key: String,
     target_source: String,
 ) -> Result<HistoryConversionResult, String> {
     let (result, codex_registration) = tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root)
+            .with_kimi_config_dir(kimi_config_dir);
         let file_ref =
             validate_session_file_ref_for_conversion(&file_path, &source, &project_key, &roots)?;
         ensure_source_mutation_unlocked(&target_source)?;
@@ -1556,6 +1610,7 @@ fn history_source_base(source: &str, roots: &HistoryRoots) -> Result<PathBuf, St
         "copilot" => Ok(resolve_copilot_history_root()),
         "antigravity" => Ok(resolve_antigravity_history_root()),
         "grok" => Ok(resolve_grok_history_root(roots)),
+        "kimi" => Ok(kimi::resolve_kimi_history_root(roots)),
         "pi" => Ok(resolve_pi_history_root()),
         "kiro" => Ok(resolve_kiro_history_root()),
         "cursor" => Ok(resolve_cursor_history_root()),
@@ -1752,6 +1807,7 @@ pub async fn history_delete_session(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
     source: String,
     project_key: String,
 ) -> Result<(), String> {
@@ -1760,13 +1816,18 @@ pub async fn history_delete_session(
         return delete_opencode_session_from_locator(&file_path).await;
     }
     tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
-        if !matches!(source.as_str(), "claude" | "codex") {
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root)
+            .with_kimi_config_dir(kimi_config_dir);
+        if !matches!(source.as_str(), "claude" | "codex" | "kimi") {
             return Err("unsupported_history_mutation_source".to_string());
         }
         let file_ref = validate_session_file_ref(&file_path, &source, &project_key, &roots)?;
         ensure_source_mutation_unlocked(&source)?;
-        delete_session_tree(&file_ref)?;
+        if source == "kimi" {
+            kimi::delete_kimi_session_tree(&file_ref, &kimi::resolve_kimi_history_root(&roots))?;
+        } else {
+            delete_session_tree(&file_ref)?;
+        }
         invalidate_history_caches();
         Ok(())
     })
@@ -1782,13 +1843,15 @@ pub async fn history_search(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
     project_path: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<HistorySearchResult>, String> {
     if query.trim().chars().count() < 3 {
         return Ok(Vec::new());
     }
-    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root)
+        .with_kimi_config_dir(kimi_config_dir);
     let hits = catalog::search_sessions(&roots, &query, source, project_path, limit).await?;
     let _ = catalog::ensure_refresh(app, roots, false, false).await;
     Ok(hits)
@@ -1800,8 +1863,10 @@ pub async fn history_get_index_status(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
 ) -> Result<HistoryIndexStatus, String> {
-    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root)
+        .with_kimi_config_dir(kimi_config_dir);
     catalog::ensure_refresh(app, roots, false, false).await
 }
 
@@ -1815,12 +1880,14 @@ pub async fn history_index_v2_preview_adapter_sessions(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
     source: Option<String>,
     project_key: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<HistoryIndexV2AdapterSession>, String> {
     tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root)
+            .with_kimi_config_dir(kimi_config_dir);
         let source_filter = source
             .map(|value| value.trim().to_lowercase())
             .filter(|value| !value.is_empty());
@@ -2419,13 +2486,14 @@ fn remote_detail_value(detail: RemoteHistorySessionDetail) -> Value {
 
 #[tauri::command]
 pub async fn history_get_conversion_matrix() -> Result<Vec<HistoryConversionMatrixItem>, String> {
-    const SOURCES: [&str; 11] = [
+    const SOURCES: [&str; 12] = [
         "claude",
         "codex",
         "gemini",
         "copilot",
         "antigravity",
         "grok",
+        "kimi",
         "pi",
         "opencode",
         "kiro",
@@ -2476,9 +2544,11 @@ pub async fn history_refresh_index(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
     wait: Option<bool>,
 ) -> Result<HistoryIndexStatus, String> {
-    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root)
+        .with_kimi_config_dir(kimi_config_dir);
     catalog::ensure_refresh(app, roots, true, wait.unwrap_or(true)).await
 }
 
@@ -2489,6 +2559,7 @@ pub async fn history_list_prompts(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
     project_key: Option<String>,
     file_path: Option<String>,
     query: Option<String>,
@@ -2501,7 +2572,8 @@ pub async fn history_list_prompts(
     let query_for_opencode = query.clone();
     let max_items = limit.unwrap_or(200).clamp(1, 2000);
     let mut prompts: Vec<HistoryPromptItem> = tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root)
+            .with_kimi_config_dir(kimi_config_dir);
         let scope = scope
             .as_deref()
             .map(|v| v.trim().to_lowercase())
@@ -2635,10 +2707,12 @@ pub async fn history_list_stats_projects(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
 ) -> Result<Vec<String>, String> {
     let source_for_opencode = source.clone();
     let mut projects: Vec<String> = tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+        let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root)
+            .with_kimi_config_dir(kimi_config_dir);
         let source_filter = source.map(|v| v.to_lowercase());
         let mut projects = BTreeSet::new();
 
@@ -2677,6 +2751,7 @@ pub async fn history_get_stats(
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
     grok_session_root: Option<String>,
+    kimi_config_dir: Option<String>,
     project_key: Option<String>,
     project_path: Option<String>,
     project_paths: Option<Vec<String>>,
@@ -2687,7 +2762,8 @@ pub async fn history_get_stats(
     force: Option<bool>,
 ) -> Result<HistoryStatsResponse, String> {
     let started_at = Instant::now();
-    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root);
+    let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root)
+        .with_kimi_config_dir(kimi_config_dir);
     let source_filter = source.map(|v| v.to_lowercase());
     let target_project = project_key
         .map(|v| v.trim().to_string())
@@ -3716,7 +3792,7 @@ pub(crate) fn invalidate_history_stats_caches() {
 // 内存索引（HISTORY_SESSION_INDEX）每次 App 启动后为空，首个 history_get_stats 必须
 // 全量解析所有 JSONL（可能上千个），冷启动耗时不可接受。这里把 per-file 解析结果落盘，
 // 重启后载入作为 build_history_index 的 previous，按 fingerprint 仅重解析变更文件。
-const HISTORY_INDEX_CACHE_VERSION: u32 = 12;
+const HISTORY_INDEX_CACHE_VERSION: u32 = 13;
 const HISTORY_INDEX_CACHE_FILE: &str = "history-index-cache.json";
 
 static HISTORY_INDEX_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -4123,6 +4199,7 @@ fn build_session_computation(
         || looks_like_copilot_events_file(path)
         || looks_like_antigravity_transcript_file(path)
         || looks_like_grok_updates_file(path)
+        || kimi::looks_like_kimi_main_wire(path)
         || looks_like_pi_session_file(path)
         || is_cursor_transcript
         || !is_jsonl(path)
@@ -4156,6 +4233,9 @@ fn build_session_computation(
     }
     if looks_like_grok_updates_file(path) {
         apply_grok_summary_metadata(path, &mut computed);
+    }
+    if kimi::looks_like_kimi_main_wire(path) {
+        kimi::apply_kimi_state_metadata(path, &mut computed);
     }
     computed
 }
@@ -5480,6 +5560,7 @@ pub(crate) fn history_roots(
         claude_config_dir: normalize_config_dir(claude_config_dir),
         codex_config_dir: normalize_config_dir(codex_config_dir),
         grok_session_root: normalize_config_dir(grok_session_root),
+        kimi_config_dir: None,
     }
 }
 
@@ -6443,6 +6524,11 @@ fn scan_session_files(source_filter: Option<&str>, roots: &HistoryRoots) -> Vec<
         files.extend(collect_grok_session_files(&resolve_grok_history_root(
             roots,
         )));
+    }
+    if source_filter.as_ref().map(|v| v == "kimi").unwrap_or(true) {
+        files.extend(kimi::collect_kimi_session_files(
+            &kimi::resolve_kimi_history_root(roots),
+        ));
     }
     if source_filter.as_ref().map(|v| v == "pi").unwrap_or(true) {
         files.extend(collect_pi_session_files(&resolve_pi_history_root()));
@@ -8061,6 +8147,9 @@ fn scan_session_project(path: &Path) -> SessionProjectScan {
             cwd: grok_workspace_from_path(path),
         };
     }
+    if kimi::looks_like_kimi_main_wire(path) {
+        return kimi::scan_kimi_project(path);
+    }
     if looks_like_pi_session_file(path) {
         return SessionProjectScan {
             cwd: pi_workspace_from_path(path),
@@ -8512,6 +8601,9 @@ fn scan_session_inner(
     }
     if looks_like_grok_updates_file(path) {
         return scan_grok_jsonl_session(path, collect_messages);
+    }
+    if kimi::looks_like_kimi_main_wire(path) {
+        return kimi::scan_kimi_jsonl_session(path, collect_messages);
     }
     if looks_like_pi_session_file(path) {
         return scan_pi_jsonl_session(path, collect_messages);
@@ -10405,6 +10497,9 @@ fn scan_tool_events(path: &Path) -> Vec<HistoryToolEvent> {
     if looks_like_grok_updates_file(path) {
         return scan_grok_tool_events(path);
     }
+    if kimi::looks_like_kimi_main_wire(path) {
+        return kimi::scan_kimi_tool_events(path);
+    }
     if looks_like_pi_session_file(path) {
         return scan_pi_tool_events(path);
     }
@@ -11304,6 +11399,15 @@ where
     }
     if looks_like_grok_updates_file(path) {
         let (_, _, messages) = scan_grok_jsonl_session(path, true);
+        for (index, message) in messages.into_iter().enumerate() {
+            if !callback(index, message) {
+                break;
+            }
+        }
+        return Ok(());
+    }
+    if kimi::looks_like_kimi_main_wire(path) {
+        let (_, _, messages) = kimi::scan_kimi_jsonl_session(path, true);
         for (index, message) in messages.into_iter().enumerate() {
             if !callback(index, message) {
                 break;
@@ -14223,6 +14327,604 @@ mod tests {
         assert!(find_exact_grok_session_in_root(&root, "../session", None).is_none());
     }
 
+    fn write_kimi_session_fixture(
+        home: &Path,
+        session_id: &str,
+        cwd: &str,
+        wire_lines: &[Value],
+    ) -> PathBuf {
+        let session_dir = home.join("sessions").join("wd__fixture").join(session_id);
+        let wire = session_dir.join("agents").join("main").join("wire.jsonl");
+        write_text(
+            &session_dir.join("state.json"),
+            &json!({
+                "title": "Kimi summary",
+                "lastPrompt": "hello kimi",
+                "workDir": cwd,
+                "forkedFrom": "parent-session",
+                "createdAt": "2026-08-19T00:00:00Z",
+                "updatedAt": "2026-08-19T00:00:03Z"
+            })
+            .to_string(),
+        );
+        let body = wire_lines
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        write_text(&wire, &format!("{body}\n"));
+        write_text(
+            &home.join("session_index.jsonl"),
+            &format!(
+                "{}\n{}\n",
+                json!({
+                    "sessionId": session_id,
+                    "sessionDir": session_dir.to_string_lossy(),
+                    "workDir": cwd
+                }),
+                json!({
+                    "sessionId": "other-session",
+                    "sessionDir": home.join("sessions").join("wd__fixture").join("other-session").to_string_lossy(),
+                    "workDir": cwd
+                })
+            ),
+        );
+        write_text(
+            &session_dir
+                .join("agents")
+                .join("agent-0")
+                .join("wire.jsonl"),
+            &json!({
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "subagent should not be listed"}]
+            })
+            .to_string(),
+        );
+        wire
+    }
+
+    #[test]
+    fn kimi_wire_parser_covers_history_pipeline() {
+        let temp_dir = TempDir::new().unwrap();
+        let home = temp_dir.path().join(".kimi-code");
+        let session_id = "01KIMISESSIONID0000000001";
+        let path = write_kimi_session_fixture(
+            &home,
+            session_id,
+            r"F:\github\CLI-Manager",
+            &[
+                json!({"type": "metadata", "protocol_version": "1.1", "created_at": 1_787_097_600_000i64}),
+                json!({
+                    "type": "config.update",
+                    "cwd": r"F:\github\CLI-Manager",
+                    "modelAlias": "kimi-k2",
+                    "time": 1_787_097_600_100i64
+                }),
+                json!({
+                    "type": "turn.prompt",
+                    "time": 1_787_097_601_000i64,
+                    "input": [{"type": "text", "text": "hello kimi"}],
+                    "origin": {"kind": "user"}
+                }),
+                json!({
+                    "type": "context.append_message",
+                    "time": 1_787_097_601_001i64,
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "hello kimi"}],
+                        "toolCalls": []
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_000i64,
+                    "event": {"type": "step.begin", "uuid": "step-1", "turnId": "turn-1", "step": 0}
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_100i64,
+                    "event": {
+                        "type": "content.part",
+                        "uuid": "content-1",
+                        "turnId": "turn-1",
+                        "step": 0,
+                        "stepUuid": "step-1",
+                        "part": {"type": "text", "text": "hi there"}
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_200i64,
+                    "event": {
+                        "type": "tool.call",
+                        "uuid": "tool-event-1",
+                        "turnId": "turn-1",
+                        "step": 0,
+                        "stepUuid": "step-1",
+                        "toolCallId": "tc1",
+                        "name": "Read",
+                        "args": {"path": "README.md"}
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_500i64,
+                    "event": {
+                        "type": "tool.result",
+                        "parentUuid": "tool-event-1",
+                        "toolCallId": "tc1",
+                        "result": {"output": "README contents"}
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_603_000i64,
+                    "event": {
+                        "type": "step.end",
+                        "uuid": "step-1",
+                        "turnId": "turn-1",
+                        "step": 0,
+                        "usage": {"inputOther": 12, "output": 8, "inputCacheRead": 2, "inputCacheCreation": 3},
+                        "finishReason": "tool_calls"
+                    }
+                }),
+                json!({
+                    "type": "usage.record",
+                    "time": 1_787_097_603_002i64,
+                    "model": "kimi-k2",
+                    "usage": {
+                        "inputOther": 12,
+                        "output": 8,
+                        "inputCacheRead": 2,
+                        "inputCacheCreation": 3
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_604_000i64,
+                    "event": {"type": "step.begin", "uuid": "step-2", "turnId": "turn-1", "step": 1}
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_605_000i64,
+                    "event": {
+                        "type": "step.end",
+                        "uuid": "step-2",
+                        "turnId": "turn-1",
+                        "step": 1,
+                        "usage": {"inputOther": 4, "output": 3, "inputCacheRead": 1, "inputCacheCreation": 2},
+                        "finishReason": "end_turn"
+                    }
+                }),
+            ],
+        );
+
+        let (summary, stats, messages) = kimi::scan_kimi_jsonl_session(&path, true);
+        assert_eq!(summary.session_id.as_deref(), Some(session_id));
+        assert_eq!(summary.parent_session_id.as_deref(), Some("parent-session"));
+        assert_eq!(summary.first_user_message.as_deref(), Some("hello kimi"));
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].content, "hello kimi");
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].content, "hi there");
+        assert_eq!(stats.input_tokens, 16);
+        assert_eq!(stats.output_tokens, 11);
+        assert_eq!(stats.cache_read_tokens, 3);
+        assert_eq!(stats.cache_creation_tokens, 5);
+        assert_eq!(stats.usage_events.len(), 2);
+        assert_eq!(stats.current_model.as_deref(), Some("kimi-k2"));
+        assert_eq!(stats.tool_call_count, 1);
+        assert_eq!(stats.builtin_calls.get("Read"), Some(&1));
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message.role == "user")
+                .count(),
+            1
+        );
+
+        let tool_events = kimi::scan_kimi_tool_events(&path);
+        assert_eq!(tool_events.len(), 1);
+        assert_eq!(tool_events[0].call_id.as_deref(), Some("tc1"));
+        assert_eq!(tool_events[0].status.as_deref(), Some("completed"));
+        assert_eq!(tool_events[0].duration_ms, Some(300));
+        assert_eq!(
+            tool_events[0].output_summary.as_deref(),
+            Some("README contents")
+        );
+
+        let project = scan_session_project(&path);
+        assert_eq!(project.cwd.as_deref(), Some(r"F:\github\CLI-Manager"));
+        let computed = build_session_computation(&path, 1, 2, summary, stats);
+        assert_eq!(computed.session_id, session_id);
+        assert_eq!(computed.title, "Kimi summary");
+
+        let files = kimi::collect_kimi_session_files(&home);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].source, "kimi");
+        assert_eq!(files[0].path, path);
+
+        let mut iterated = Vec::new();
+        iter_session_messages(&path, |_, message| {
+            iterated.push(message.content);
+            true
+        })
+        .unwrap();
+        assert_eq!(iterated[0], "hello kimi");
+        assert_eq!(iterated[1], "hi there");
+    }
+
+    #[test]
+    fn exact_kimi_session_lookup_bypasses_catalog_miss() {
+        let temp_dir = TempDir::new().unwrap();
+        let home = temp_dir.path().join(".kimi-code");
+        let session_id = "01KIMIEXACTLOOKUP00000001";
+        let path = write_kimi_session_fixture(
+            &home,
+            session_id,
+            r"F:\github\CLI-Manager",
+            &[json!({
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "hello"}]
+            })],
+        );
+
+        let summary = kimi::find_exact_kimi_session_in_root(
+            &home,
+            session_id,
+            Some(r"F:\github\CLI-Manager"),
+        )
+        .expect("exact Kimi session should be found directly from disk");
+        assert_eq!(summary.session_id, session_id);
+        assert_eq!(summary.source, "kimi");
+        assert_eq!(
+            PathBuf::from(&summary.file_path).canonicalize().unwrap(),
+            path.canonicalize().unwrap()
+        );
+
+        assert!(kimi::find_exact_kimi_session_in_root(
+            &home,
+            session_id,
+            Some(r"F:\other-project"),
+        )
+        .is_none());
+        assert!(kimi::find_exact_kimi_session_in_root(&home, "../session", None).is_none());
+        assert!(kimi::find_exact_kimi_session_in_root(&home, "bad/id", None).is_none());
+    }
+
+    #[test]
+    fn exact_kimi_lookup_rejects_index_session_dir_escape() {
+        let temp_dir = TempDir::new().unwrap();
+        let home = temp_dir.path().join(".kimi-code");
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        let session_id = "01KIMIESCAPE0000000000001";
+        let outsider_wire = write_kimi_session_fixture(
+            &temp_dir.path().join("outside"),
+            session_id,
+            r"F:\github\CLI-Manager",
+            &[json!({
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "hello"}]
+            })],
+        );
+        let escaped_dir = home
+            .join("sessions")
+            .join("..")
+            .join("..")
+            .join("outside")
+            .join("sessions")
+            .join("wd__fixture")
+            .join(session_id);
+        write_text(
+            &home.join("session_index.jsonl"),
+            &json!({
+                "sessionId": session_id,
+                "sessionDir": escaped_dir.to_string_lossy(),
+                "workDir": r"F:\github\CLI-Manager"
+            })
+            .to_string(),
+        );
+        assert!(outsider_wire.exists());
+        assert!(kimi::find_exact_kimi_session_in_root(&home, session_id, None).is_none());
+    }
+
+    #[test]
+    fn kimi_workspace_fallback_uses_latest_active_index_record() {
+        let temp_dir = TempDir::new().unwrap();
+        let home = temp_dir.path().join(".kimi-code");
+        let session_id = "01KIMIWORKDIRLATEST000001";
+        let path = write_kimi_session_fixture(
+            &home,
+            session_id,
+            r"F:\old-workdir",
+            &[json!({
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "hello"}]
+            })],
+        );
+        let session_dir = kimi::kimi_session_dir_from_wire(&path).unwrap();
+        write_text(
+            &session_dir.join("state.json"),
+            &json!({"title": "No embedded workdir"}).to_string(),
+        );
+        let mut index = OpenOptions::new()
+            .append(true)
+            .open(home.join("session_index.jsonl"))
+            .unwrap();
+        writeln!(
+            index,
+            "{}",
+            json!({
+                "sessionId": session_id,
+                "sessionDir": session_dir.to_string_lossy(),
+                "workDir": r"F:\new-workdir"
+            })
+        )
+        .unwrap();
+        assert_eq!(
+            kimi::kimi_workspace_from_path(&path).as_deref(),
+            Some(r"F:\new-workdir")
+        );
+
+        writeln!(
+            index,
+            "{}",
+            json!({"sessionId": session_id, "deleted": true})
+        )
+        .unwrap();
+        drop(index);
+        assert!(kimi::kimi_workspace_from_path(&path).is_none());
+        assert!(path.exists());
+        assert!(kimi::collect_kimi_session_files(&home).is_empty());
+        assert!(kimi::find_exact_kimi_session_in_root(&home, session_id, None).is_none());
+    }
+
+    #[test]
+    fn kimi_delete_removes_session_dir_and_index_row() {
+        let temp_dir = TempDir::new().unwrap();
+        let home = temp_dir.path().join(".kimi-code");
+        let session_id = "01KIMIDELETESESSION000001";
+        let path = write_kimi_session_fixture(
+            &home,
+            session_id,
+            r"F:\github\CLI-Manager",
+            &[json!({
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "hello"}]
+            })],
+        );
+        let file_ref = SessionFileRef {
+            source: "kimi".to_string(),
+            project_key: normalize_history_path(r"F:\github\CLI-Manager"),
+            path: path.clone(),
+        };
+
+        kimi::delete_kimi_session_tree_with_backup_root(
+            &file_ref,
+            &home,
+            &temp_dir.path().join("backups"),
+        )
+        .unwrap();
+        assert!(!path.exists());
+        assert!(!path
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .exists());
+        let index = std::fs::read_to_string(home.join("session_index.jsonl")).unwrap();
+        assert!(index.contains("other-session"));
+        let tombstone: Value = serde_json::from_str(index.lines().last().unwrap()).unwrap();
+        assert_eq!(
+            tombstone.get("sessionId").and_then(Value::as_str),
+            Some(session_id)
+        );
+        assert_eq!(
+            tombstone.get("deleted").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn kimi_delete_rejects_session_outside_history_home() {
+        let temp_dir = TempDir::new().unwrap();
+        let home = temp_dir.path().join(".kimi-code");
+        std::fs::create_dir_all(&home).unwrap();
+        let outsider = temp_dir.path().join("outside");
+        let path = write_kimi_session_fixture(
+            &outsider,
+            "01KIMIOUTSIDEHOME000000001",
+            r"F:\github\CLI-Manager",
+            &[json!({
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "hello"}]
+            })],
+        );
+        let file_ref = SessionFileRef {
+            source: "kimi".to_string(),
+            project_key: normalize_history_path(r"F:\github\CLI-Manager"),
+            path,
+        };
+        let err = kimi::delete_kimi_session_tree_with_backup_root(
+            &file_ref,
+            &home,
+            &temp_dir.path().join("backups"),
+        )
+        .unwrap_err();
+        assert_eq!(err, "session_file_outside_history_scope");
+    }
+
+    #[test]
+    fn kimi_history_root_uses_explicit_config_dir_and_ignores_legacy_home() {
+        let temp_dir = TempDir::new().unwrap();
+        let custom = temp_dir.path().join("custom-kimi");
+        let legacy = temp_dir.path().join(".kimi");
+        write_kimi_session_fixture(
+            &custom,
+            "01KIMICUSTOMROOT000000001",
+            r"F:\github\CLI-Manager",
+            &[json!({"type": "turn.prompt", "input": [{"type": "text", "text": "custom"}]})],
+        );
+        write_text(
+            &legacy.join("sessions").join("old").join("wire.jsonl"),
+            "{}\n",
+        );
+        let roots = history_roots(None, None, None)
+            .with_kimi_config_dir(Some(custom.to_string_lossy().into_owned()));
+        let files = kimi::collect_kimi_session_files(&kimi::resolve_kimi_history_root(&roots));
+        assert_eq!(files.len(), 1);
+        assert!(files[0].path.starts_with(&custom.join("sessions")));
+        assert!(kimi::collect_kimi_session_files(&legacy).is_empty());
+    }
+
+    #[test]
+    fn kimi_application_pipeline_lists_details_and_deletes_like_history_workspace() {
+        let temp_dir = TempDir::new().unwrap();
+        let home = temp_dir.path().join(".kimi-code");
+        let session_id = "01KIMIAPPPIPELINE00000001";
+        let cwd = r"/home/ubuntu/CLI-Manager";
+        write_kimi_session_fixture(
+            &home,
+            session_id,
+            cwd,
+            &[
+                json!({
+                    "type": "turn.prompt",
+                    "time": 1_787_097_600_000i64,
+                    "input": [{"type": "text", "text": "review the kimi history parser"}],
+                    "origin": {"kind": "user"}
+                }),
+                json!({
+                    "type": "context.append_message",
+                    "time": 1_787_097_600_001i64,
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "review the kimi history parser"}],
+                        "toolCalls": []
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_601_000i64,
+                    "event": {"type": "step.begin", "uuid": "step-1", "turnId": "turn-1", "step": 0}
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_601_100i64,
+                    "event": {
+                        "type": "content.part",
+                        "uuid": "content-1",
+                        "turnId": "turn-1",
+                        "step": 0,
+                        "stepUuid": "step-1",
+                        "part": {"type": "text", "text": "looking at wire.jsonl"}
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_000i64,
+                    "event": {
+                        "type": "tool.call",
+                        "uuid": "tool-1",
+                        "turnId": "turn-1",
+                        "step": 0,
+                        "stepUuid": "step-1",
+                        "toolCallId": "call-1",
+                        "name": "Read",
+                        "args": {"path": "src-tauri/src/commands/history/kimi.rs"}
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_100i64,
+                    "event": {
+                        "type": "tool.result",
+                        "parentUuid": "tool-1",
+                        "toolCallId": "call-1",
+                        "result": {"output": "source"}
+                    }
+                }),
+                json!({
+                    "type": "context.append_loop_event",
+                    "time": 1_787_097_602_200i64,
+                    "event": {
+                        "type": "step.end",
+                        "uuid": "step-1",
+                        "turnId": "turn-1",
+                        "step": 0,
+                        "usage": {"inputOther": 120, "output": 40, "inputCacheRead": 8, "inputCacheCreation": 0},
+                        "finishReason": "tool_calls"
+                    }
+                }),
+                json!({
+                    "type": "usage.record",
+                    "time": 1_787_097_603_000i64,
+                    "model": "kimi-k2",
+                    "usage": {
+                        "inputOther": 120,
+                        "output": 40,
+                        "inputCacheRead": 8,
+                        "inputCacheCreation": 0
+                    }
+                }),
+            ],
+        );
+        let roots = history_roots(None, None, None)
+            .with_kimi_config_dir(Some(home.to_string_lossy().into_owned()));
+
+        let files = collect_session_files(Some("kimi"), &roots);
+        assert_eq!(
+            files.len(),
+            1,
+            "history list should index only main wire.jsonl"
+        );
+        assert_eq!(files[0].source, "kimi");
+        assert_eq!(files[0].project_key, normalize_history_path(cwd));
+
+        let detail = build_session_detail(&files[0], true).unwrap();
+        assert_eq!(detail.session_id, session_id);
+        assert_eq!(detail.source, "kimi");
+        assert_eq!(detail.title, "Kimi summary");
+        assert_eq!(detail.cwd.as_deref(), Some(cwd));
+        assert_eq!(detail.messages[0].role, "user");
+        assert_eq!(detail.messages[0].content, "review the kimi history parser");
+        assert_eq!(detail.usage.input_tokens, 120);
+        assert_eq!(detail.usage.output_tokens, 40);
+        assert_eq!(detail.usage.cache_read_tokens, 8);
+        assert_eq!(detail.usage.current_model.as_deref(), Some("kimi-k2"));
+        assert_eq!(detail.usage.tool_call_count, 1);
+
+        let exact = kimi::find_exact_kimi_session_in_root(&home, session_id, Some(cwd)).expect(
+            "realtime stats should hit the bound session without scanning every transcript",
+        );
+        assert_eq!(exact.session_id, session_id);
+        assert_eq!(exact.source, "kimi");
+
+        kimi::delete_kimi_session_tree_with_backup_root(
+            &files[0],
+            &home,
+            &temp_dir.path().join("backups"),
+        )
+        .unwrap();
+        invalidate_history_caches();
+        let files_after = collect_session_files_with_force(Some("kimi"), &roots, true);
+        assert!(files_after.is_empty());
+        assert!(kimi::find_exact_kimi_session_in_root(&home, session_id, None).is_none());
+        let index = std::fs::read_to_string(home.join("session_index.jsonl")).unwrap();
+        assert!(index.contains("other-session"));
+        let tombstone: Value = serde_json::from_str(index.lines().last().unwrap()).unwrap();
+        assert_eq!(
+            tombstone.get("sessionId").and_then(Value::as_str),
+            Some(session_id)
+        );
+        assert_eq!(
+            tombstone.get("deleted").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
     #[test]
     fn pi_session_parser_covers_history_pipeline() {
         let temp_dir = TempDir::new().unwrap();
@@ -15025,6 +15727,7 @@ mod tests {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         if cfg!(target_os = "windows") {
             std::fs::create_dir_all(
@@ -15084,6 +15787,7 @@ mod tests {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         write_text(
             &resolve_codex_config_root(&roots).join("config.toml"),
@@ -15231,6 +15935,7 @@ mod tests {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let file = resolve_claude_history_root(&roots)
             .join("proj")
@@ -15272,6 +15977,7 @@ mod tests {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         write_text(
             &resolve_codex_config_root(&roots).join("config.toml"),

@@ -40,7 +40,7 @@ writeFileSync(
   join(tempDir, "cliTools.mjs"),
   `export const resolveCliToolHistorySourceId = (tool) => {
     const value = tool?.trim().toLowerCase();
-    return ["claude", "codex", "grok", "pi", "opencode"].includes(value) ? value : null;
+    return ["claude", "codex", "grok", "kimi", "pi", "opencode"].includes(value) ? value : null;
   };\n`,
   "utf8",
 );
@@ -70,6 +70,7 @@ const historyResumeCommandPath = transpile(
   {
     "./cliTools": "./cliTools.mjs",
     "./projectStartupCommand": "./projectStartupCommand.mjs",
+    "./resumeCliArgs": "./resumeCliArgs.mjs",
   },
 );
 
@@ -82,7 +83,7 @@ const {
 );
 const { appendResumeCliArgs, withCodexConfigOverrides, withGrokModelOverride } = await import(pathToFileURL(projectStartupPath).href);
 const { buildResumeCliArgs } = await import(pathToFileURL(saveSessionPath).href);
-const { buildHistoryResumeCommand, buildRemoteHandoffResumeCommand, stripPiResumeCliArgs } = await import(
+const { buildHistoryResumeCommand, buildRemoteHandoffResumeCommand, stripPiResumeCliArgs, stripKimiResumeCliArgs } = await import(
   pathToFileURL(historyResumeCommandPath).href
 );
 const historySourcesPath = transpile(
@@ -269,6 +270,10 @@ test("saved-session CLI arguments reuse the same resume stripping rules", () => 
     buildResumeCliArgs("claude", "--continue --model sonnet", NEW_ID),
     `--model sonnet --resume ${NEW_ID}`,
   );
+  assert.equal(
+    buildResumeCliArgs("kimi", `--model k2 --session ${OLD_ID} -S ${OLD_ID} --continue`, NEW_ID),
+    `--model k2 --session ${NEW_ID}`,
+  );
 });
 
 test("Pi history resume uses --session and strips every conflicting selector", () => {
@@ -322,7 +327,36 @@ test("existing Claude Codex and Grok history resume commands stay unchanged", ()
   assert.equal(buildHistoryResumeCommand({ source: "claude", session_id: NEW_ID }), `claude --resume ${NEW_ID}`);
   assert.equal(buildHistoryResumeCommand({ source: "codex", session_id: NEW_ID }), `codex resume ${NEW_ID}`);
   assert.equal(buildHistoryResumeCommand({ source: "grok", session_id: NEW_ID }), `grok --resume ${NEW_ID}`);
+  assert.equal(buildHistoryResumeCommand({ source: "kimi", session_id: NEW_ID }), `kimi --session ${NEW_ID}`);
   assert.equal(buildHistoryResumeCommand({ source: "pi", session_id: "bad id" }), null);
+});
+
+test("Kimi history resume strips continue/session/resume flags", () => {
+  assert.equal(
+    stripKimiResumeCliArgs(`--model k2 --session ${OLD_ID} -S ${OLD_ID} --resume ${OLD_ID} -r=${OLD_ID} --continue -c -C --prompt hi`),
+    "--model k2 --prompt hi",
+  );
+  const kimiProject = {
+    cli_tool: "kimi",
+    cli_args: `--session ${OLD_ID} --model k2`,
+    startup_cmd: "",
+    provider_overrides: "",
+    shell: "powershell",
+  };
+  assert.equal(
+    appendResumeCliArgs(`kimi --session ${NEW_ID}`, "kimi", kimiProject),
+    `kimi --session ${NEW_ID} --model k2`,
+  );
+  assert.equal(buildHistoryResumeCommand({ source: "kimi", session_id: "bad&calc" }), null);
+  assert.equal(buildResumeCliArgs("kimi", "--model k2", "bad;calc"), null);
+});
+
+test("Kimi history source advertises local list delete resume and realtime stats", () => {
+  const kimi = HISTORY_SOURCE_DESCRIPTOR_BY_ID.get("kimi");
+  assert.equal(kimi?.capabilities.list, "supported");
+  assert.equal(kimi?.capabilities.delete, "supported");
+  assert.equal(kimi?.capabilities.resume, "supported");
+  assert.equal(kimi?.capabilities.realtimeStats, "supported");
 });
 
 test("Pi history source advertises local resume support", () => {
