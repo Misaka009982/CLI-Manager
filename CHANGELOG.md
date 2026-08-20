@@ -1,6 +1,79 @@
 # Changelog
 
-## [TEMP] - 2026-08-11
+## [V1.3.7] - 2026-08-19
+
+### Kimi Code 历史会话与实时统计
+
+- 本地与 WSL 的当前 Kimi Code 历史接入列表、搜索、统计、删除和恢复：读取 `$KIMI_CODE_HOME` 或 `~/.kimi-code` 下的 `session_index.jsonl` 与 `sessions/*/agents/main/wire.jsonl`。catalog 刷新会索引主会话 `wire.jsonl`（不含子 Agent）；catalog 未就绪时仍可按精确 sessionId 直查磁盘供实时统计。索引按 latest-wins 读取并忽略畸形普通记录，最终 tombstone 不会被残留目录重新“复活”；删除会备份后移除整个会话目录，并向 append-only 索引追加带换行边界的 deletion tombstone，不会整文件重写或覆盖并发追加。恢复使用 `kimi --session <id>`，会话 ID 在进入 shell 命令前执行白名单校验。旧 `~/.kimi` 不会被扫描或迁移；SSH Kimi 历史仍不支持。
+- Kimi 历史解析对齐当前 wire protocol：从 `context.append_loop_event.event` 折叠助手内容、工具调用和工具结果，避免 `turn.prompt` 与 `context.append_message` 重复计入用户消息；Token 使用 `inputOther`、`output`、`inputCacheRead`、`inputCacheCreation` 映射，并对等值的 `step.end.usage` / `usage.record` 去重及相互回退，实时统计和历史看板不再漏计或重复计算 Token。
+- 历史列表标题优先使用 `state.json` 的 `title`；仅在标题缺失且当前标题过弱时才回退 `lastPrompt`，避免把首条用户消息盖过 Kimi 会话名。
+- 终端实时统计识别 Kimi 来源并严格绑定 Hook `sessionId`，不回退到项目最近会话。历史根优先使用历史来源设置，其次 Hook 配置目录，不会给本地启动注入 `KIMI_CODE_HOME`。
+
+### OpenCode 会话兼容
+
+- 修复 OpenCode Hook 将子 Agent 会话 ID 覆盖到主终端标签页的问题：Hook 现在按 OpenCode `sessionID` 识别根会话，跟踪父子关系并忽略子会话生命周期通知，顶部 Session ID、实时状态和后续恢复保持绑定到主会话。
+- 历史会话“继续对话”新增 OpenCode 支持，使用真实 `session_id` 构造 `opencode --session <id>`；SQLite locator、无效 ID 和项目参数中的重复 `--session/-s`、`--continue/-c`、`--fork` 不会污染恢复命令。
+- 历史会话删除新增 OpenCode SQLite 支持：仅接受默认 OpenCode 数据库中的合法 `ses_...` locator，在单个事务内依次删除关联 `part`、`message` 和会话记录；目标不存在、数据库异常或 schema 不兼容时不会留下部分删除，成功后才刷新历史索引缓存。
+- OpenCode TUI 新增隔离的剪贴板快捷键适配：Windows 下选中文本后 `Ctrl+C` 复制、`Ctrl+V` 粘贴、`Ctrl+Shift+V` 多行粘贴可正常使用；无选择时 `Ctrl+C` 仍发送中断，Claude、Codex、Grok、CC/CX 和 Pi 继续使用原有通用终端输入路径。
+
+### Kimi Code CLI 与 Hook 集成
+
+- SSH 主机“CLI 集成”新增 Kimi Code，支持 `$HOME/.kimi-code` 默认根、项目级覆盖、非空有效覆盖根的 `KIMI_CODE_HOME` 安全注入，以及远端 Hook 的检查、事务预览、安装和卸载；空根保留远端原生环境，Kimi 仅作为 CLI/Hook source，远程历史继续只支持 Claude Code 与 Codex CLI。
+- 设置“Hook”页新增当前 Kimi Code 的独立 bridge、目录、状态、六个模块和全量安装/删除；本地状态与安装直接使用结构化 TOML planner，不再启动 Kimi CLI 或 `doctor` 子进程，缺少 Kimi CLI 时仍可快速检查和安装 Hook；以精确 owner 管理九个 Hook definition，并继续保留用户/第三方条目与注释。SSH Agent 远端安装仍保留 current-product doctor candidate 校验。
+- Kimi `PermissionResult` 与 `Interrupt` 补齐审批和取消状态闭环；Subagent 事件进入安全绑定、通知与 Replay，但不会创建缺少稳定 transcript identity 的子 Agent 分屏。
+- SSH Agent 升级到 `0.1.9`、协议保持 `1.11`；Kimi Hook installation record 不生成 history candidate 或历史 metadata，旧 Agent 不支持 Kimi 时显式返回真实错误。
+- 修复 Kimi Hook 前端生命周期测试仅匹配 LF 换行的问题：Windows CRLF checkout 现在与 Linux/macOS 使用同一份测试提取逻辑；SSH Agent 的 Kimi TOML 规划测试仅在其实际支持的 Unix 路径语义下执行，Windows 主机测试不再误把临时目录当作远端 Linux 配置根。（Refs #219）
+- 清理 Kimi CLI 诊断命令构造中的冗余可变绑定，后端 `cargo check` 不再产生该新增警告。（Refs #219）
+
+### 终端 OSC 52 剪贴板
+
+- 内置终端现在拦截远程/全屏 TUI 发出的 OSC 52（含 tmux DCS passthrough），解码后写入 Tauri 本机剪贴板，不再依赖远端 `xclip`/`DISPLAY`。序列会从可见输出中剥离，避免刷出 base64。
+- 仅实时 PTY 输出会写剪贴板；daemon replay、reset 和会话回放不会用历史 OSC 52 覆盖当前剪贴板。查询仅在用户显式开启默认关闭的读取权限后回应当前剪贴板内容，清空和非法 payload 不改剪贴板。（Refs #211）
+- 「设置 -> 快捷键」提供独立的 OSC 52 写入与读取本机剪贴板开关；关闭后仍剥离序列，且对应操作不会发生。
+- `Ctrl+Shift+C` 在终端中复制选区（可在「设置 -> 快捷键」改绑），并仅在终端区域阻止 Chromium 检查元素；调试仍用 F12。
+- 恢复 V1.3.2 鼠标策略：普通拖动选择终端文本，按住 Alt 才把点击/拖动发给底层 TUI，避免 Grok 松手重绘清掉选区。
+
+### Git 变更面板
+
+- 修复 Windows 上 libgit2 误判仓库所有者导致 Git 变更列表显示“无文件变更”的问题；仅在所有者校验失败时受锁保护地兼容重试，并在确实失败时显示真实错误。
+
+### Hook 审批通知
+
+- 修复 Codex 子 Agent 的非交互工具 Hook 被直接当成父会话待审批、导致桌面宠物和通知渠道误报的问题；共享 Hook 入口现在暂存缺少显式审批证据的子 Agent `PermissionRequest`，通过 Hook 时记录的 rollout 字节基线、同一子 Agent 工具进展或会话结束确认任务已继续，无法确认时在 15 秒后保守提醒。主 Agent、携带明确说明的真实子 Agent 审批、后台 daemon、SSH 与远程托管通知保持原有即时/保守行为。
+- 收紧共享审批仲裁边界：SSH spool 的 Codex 权限请求立即进入既有全局通知链路；本地/WSL 暂缓记录必须同 source、环境、tab、session 与子 Agent 才能被消解。转录路径复用允许根校验，越界路径不再被 daemon 轮询，WSL UNC 仅保留事件相关性和超时兜底。
+
+### Trellis Codex 工作流
+
+- Codex 的 Trellis 执行流默认改由主会话直接处理；只有用户明确要求子任务，或主会话提前询问并获得明确同意后，才会派发研究、实现或检查子任务。
+
+### 供应商快捷切换
+
+- 修复终端右侧供应商面板拖拽排序时卡片横向偏移扩大滚动区域、触发底部横向滚动条的问题；拖拽现在仅沿纵轴移动，原有排序与纵向滚动保持不变。
+- 终端右侧供应商面板的切换确认改为紧跟所选供应商卡片的紧凑内嵌确认条，沿用终端配色并精简为切换目标、生效范围和确认/取消操作，不再显示脱离终端风格的通用大弹框与冗长配置路径。
+- 精简供应商快捷面板的路由开关区域，移除“本地路由”和“自动故障转移”旁的辅助小字，保留开关悬浮说明与无障碍标签。
+- 修复自动故障转移队列未包含原当前供应商时的状态提交：队列首个实际成功的供应商现在也会通过既有安全热切换流程成为当前供应商，使快捷面板与设置页高亮保持一致。
+- 修复应用重启后仅保留本地路由开启配置、daemon listener 未恢复的问题；daemon 连接完成后会自动协调持久化路由意图，并恢复本地与 WSL 接管所需的 listener 地址和实际端口。
+
+### 供应商生命周期与项目级配置
+
+- 修复停用、删除供应商时误把外部导入追踪或旧版 CCS 覆盖当作项目引用的问题：现在只检查项目及活跃 Worktree 的有效 schema-v2 `provider_overrides`，未被使用的已导入供应商可以正常操作；真实引用仍会被阻止，并在删除时显示准确原因。
+- 供应商三点菜单的删除、上移、下移失败会显示具体可处理原因（引用、列表变更或数据暂不可用），不再统一提示“请稍后重试”。
+- 项目/Worktree 切换供应商重新只写入自身覆盖，不再改写全局 CLI Home：Claude 在启动时使用独立 settings 加 `--settings`，Codex 使用真实 Home 下的独立 profile 加 `--profile`，密钥继续仅注入新进程环境。
+- Grok Build 项目/Worktree 切换入口现在直接提示暂不支持，不展示可切换供应商，也不会写入覆盖或改动全局配置。
+
+### 终端 Tab 与 Markdown 预览
+
+- 终端会话 Tab 与 Workspan Tab 支持鼠标中键关闭，沿用原有关闭确认和焦点处理，不影响拖拽、重命名或右键菜单。
+- 已配置 CLI 工具的终端始终保留右上角 Markdown 预览入口；Pi 等已登记历史来源会使用自身来源加载已绑定会话，尚未绑定会话或无可用历史时明确显示不可用状态。
+
+### 侧边栏项目树
+
+- 修复项目行悬停时的布局抽搐：启动操作位现在始终保留宽度，仅通过既有透明度与可见性过渡显示，不再在 `display: none` 与 `flex` 间切换并挤压项目标题或徽标。
+
+### Pi Hook 与 Agent 能力
+
+- 修复 Pi Agent 启动消息时被 CLI-Manager Hook 上报阻塞的问题：生命周期通知改为非阻塞发送，并为本地 bridge 请求加入 1 秒超时；SessionStart、运行中和停止状态映射保持不变。
+- Agent 能力卡片现在识别 Pi MCP Adapter 的共享全局、Pi 全局及项目级配置，显示已激活和禁用的 MCP；静态配置仍按“健康状态未知”处理，但不再错误显示 `pi_mcp_extension_observability_unknown`。本机、WSL 与 SSH Agent 均复用同一发现语义，且不会启动 MCP Server 或暴露配置敏感内容。
 
 ### 远程托管
 
@@ -147,7 +220,6 @@
 
 ### 终端、历史、统计与文件面板
 
-- 文件预览的源码编辑器与 Markdown 渲染现在跟随“设置 -> 通用”的应用字体和字号；在文本或 Markdown 预览内按住 Ctrl 滚动鼠标滚轮可按 1px 临时缩放，范围为 8px～32px，不修改全局设置，普通滚轮、图片预览和 Git Diff 保持原有行为。
 - 修复新建普通 Shell 终端初始化时误执行快照恢复光标定位，避免初始提示符被推到终端底部；保留已有历史快照恢复后的光标重锚定。
 - 修复终端恢复历史画面后尺寸重排导致 PTY 从过期光标位置写入、覆盖已恢复内容的问题；恢复时重新同步终端尺寸与快照光标坐标，兼容 PowerShell、CMD、Git Bash 和 WSL。
 - 修复多个终端持续输出时各自调度 xterm 写入集中占用浏览器帧主线程的问题：daemon live 输出改为 64 KiB 有界聚合，前端按可见优先且隐藏不饥饿的全局队列每帧只启动一个写入批次，并保持 Replay、Reset 与 write callback 后 ACK 时序。

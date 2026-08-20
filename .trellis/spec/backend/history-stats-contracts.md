@@ -114,6 +114,7 @@ interface TerminalSession {
 ### 3. Contracts
 
 - Token fields are non-negative counts. Missing usage data must normalize to `0`.
+- Current Kimi Code history folds assistant text and tools from `context.append_loop_event.event` (`content.part`, `tool.call`, `tool.result`). A matching `turn.prompt` plus user `context.append_message` is one user message, not two. `step.end.usage` and `usage.record.usage` fields `inputOther`, `output`, `inputCacheRead`, and `inputCacheCreation` map respectively to normalized input, output, cache-read, and cache-creation fields. Equivalent step/record snapshots count once, while either form remains a valid fallback when its counterpart is absent.
 - Claude Code JSONL streams one assistant message as multiple lines sharing the same `message.id` + `requestId`, each carrying identical usage. Usage must be counted **once** per `(message.id, requestId)` — both in aggregate stats (`scan_session_combined`) and per-message detail (`iter_session_messages` blanks token fields on duplicate lines). Without dedup, totals inflate ~3x on real data.
 - Codex rollout token usage comes from `event_msg.payload.info.total_token_usage`, which is a cumulative session counter. Per-turn usage uses high-water adjacent diffs: a smaller cumulative snapshot is stale/interleaved data, contributes zero, and must not lower the previous high-water mark. This makes the session sum converge to ccusage's final cumulative total without multiplying temporary rollbacks.
 - For `history_get_session` message details, Codex `response_item` messages must inherit an outer wrapper timestamp when the inner payload has none, and normalized Codex `token_count` deltas should backfill the latest assistant message that has no token fields. This keeps transcript bubbles able to show `MM/DD HH:mm  in N / out N / cache N` without changing aggregate totals.
@@ -254,6 +255,7 @@ interface TerminalSession {
   - Token trend points preserve model attribution for same-session model switches and aggregate-subtask merged trends.
   - History stats bucket cross-day usage by event timestamp, so a continued Codex session remains visible and contributes tokens on every day where usage occurs, while counting the session once per queried range.
   - Parser semantic changes that affect persisted scan output bump `HISTORY_INDEX_CACHE_VERSION`.
+  - A real Kimi wire fixture proves prompt de-duplication, nested assistant/tool folding, tool result diagnostics, and all four Kimi usage fields without double-counting `step.end.usage`.
   - History stats single/multi-path filtering reuses `session_matches_project_path`, canonicalizes cache keys, and counts overlapping matches once.
   - V2 stats facts accept an optional source-instance filter and exclude all sibling local/remote instances when it is present.
   - Remote source-instance stats do not refresh the local history index, can hit the aggregation cache, and cache invalidation happens after a successful `history_remote_sync` apply.

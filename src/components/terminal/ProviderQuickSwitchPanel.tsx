@@ -5,9 +5,8 @@ import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, v
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowLeftRight, Boxes, CircleAlert, GripVertical, RefreshCw, Settings } from "../icons";
 import { useI18n } from "../../lib/i18n";
-import type { NativeProviderAppType, NativeProviderFailoverProvider } from "../settings/providers/nativeProviderTypes";
+import type { NativeProviderAppType, NativeProviderFailoverProvider, NativeProviderGlobalPreview } from "../settings/providers/nativeProviderTypes";
 import { orderFailoverProviders } from "../settings/providers/providerFailoverOrder";
-import { useAppConfirm } from "../ui/useAppConfirm";
 import { useProviderQuickSwitch } from "./useProviderQuickSwitch";
 import { TerminalPanelHeader } from "./TerminalPanelHeader";
 import { TERM_PANEL, panelColorTint } from "../stats/termStatsUi";
@@ -26,6 +25,11 @@ interface ProviderRow extends NativeProviderFailoverProvider {
   model: string | null;
   baseUrl: string | null;
   settingsValid: boolean;
+}
+
+interface PendingProviderSwitch {
+  provider: ProviderRow;
+  preview: NativeProviderGlobalPreview;
 }
 
 function appTypeLabelKey(appType: NativeProviderAppType): "providerCatalog.appType.claude" | "providerCatalog.appType.codex" | "providerCatalog.appType.grokbuild" {
@@ -51,10 +55,7 @@ function RoutingToggleRow({
   const trackColor = checked ? panelColorTint(TERM_PANEL.green, 55) : TERM_PANEL.track;
   return (
     <div className="flex items-center justify-between gap-3" style={{ opacity: disabled ? 0.55 : 1 }}>
-      <div className="flex min-w-0 flex-1 items-baseline gap-2">
-        <span className="shrink-0 text-[11px] font-semibold" style={{ color: TERM_PANEL.fg }}>{label}</span>
-        <span className="min-w-0 flex-1 truncate text-[10px]" style={{ color: TERM_PANEL.dim }} title={hint}>{hint}</span>
-      </div>
+      <span className="min-w-0 flex-1 truncate text-[11px] font-semibold" style={{ color: TERM_PANEL.fg }}>{label}</span>
       <button
         type="button"
         role="switch"
@@ -113,10 +114,14 @@ function SortableProviderRow({
     isDragging,
   } = useSortable({ id, disabled: !canReorder, transition: DND_SORTABLE_TRANSITION });
 
+  // This is a vertical list: carrying pointer X movement into the card expands
+  // the panel scroll container and creates a horizontal scrollbar while dragging.
+  const verticalTransform = transform ? { ...transform, x: 0 } : transform;
+
   // 独立卡片：每行自带边框 + 12px 圆角。选中态不用 3px 左竖条（那是 Material/VS Code
   // 的语言），改成淡绿底 + 描边提亮 + 柔光投影，靠"整块抬起"表达选中。
   const style: CSSProperties = {
-    transform: CSS.Transform.toString(transform),
+    transform: CSS.Transform.toString(verticalTransform),
     transition: isDragging ? undefined : transition,
     position: "relative",
     zIndex: isDragging ? 1 : undefined,
@@ -160,9 +165,10 @@ function SortableProviderRow({
 
 export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings }: ProviderQuickSwitchPanelProps) {
   const { t } = useI18n();
-  const { confirm, confirmDialog } = useAppConfirm();
   const [appType, setAppType] = useState<NativeProviderAppType>(defaultAppType);
+  const [pendingSwitch, setPendingSwitch] = useState<PendingProviderSwitch | null>(null);
   useEffect(() => setAppType(defaultAppType), [defaultAppType]);
+  useEffect(() => setPendingSwitch(null), [appType, open]);
   const reorderSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: DND_ACTIVATION_CONSTRAINT }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -271,18 +277,29 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
 
     try {
       const preview = await quickSwitch.previewGlobal(provider.id);
-      const target = preview.targets.find((item) => item.changed)?.path ?? preview.home.homePath;
-      const confirmed = await confirm({
-        title: t("providerCatalog.global.confirmTitle"),
-        message: t("providerCatalog.global.confirmMessage", { provider: provider.name, home: target }),
-        confirmText: t("providerCatalog.global.apply"),
-      });
-      if (!confirmed) return;
-      await quickSwitch.applyGlobal(preview);
-      toast.success(t("providerQuickSwitch.switchSuccess", { name: provider.name }));
+      setPendingSwitch({ provider, preview });
     } catch {
       toast.error(t("providerQuickSwitch.switchFailed"));
     }
+  };
+
+  const handleConfirmGlobalSwitch = async () => {
+    if (!pendingSwitch || quickSwitch.action) return;
+    const { provider, preview } = pendingSwitch;
+    try {
+      await quickSwitch.applyGlobal(preview);
+      setPendingSwitch(null);
+      toast.success(t("providerQuickSwitch.switchSuccess", { name: provider.name }));
+      rowRefs.current[provider.id]?.focus();
+    } catch {
+      toast.error(t("providerQuickSwitch.switchFailed"));
+    }
+  };
+
+  const handleCancelGlobalSwitch = () => {
+    const providerId = pendingSwitch?.provider.id;
+    setPendingSwitch(null);
+    if (providerId) requestAnimationFrame(() => rowRefs.current[providerId]?.focus());
   };
 
   const handleLocalRoutingToggle = async (next: boolean) => {
@@ -477,6 +494,7 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                 dragLabel={t("providerQuickSwitch.dragHandle")}
               >
                 {(dragHandle) => (
+                <>
                 <div className="flex items-center gap-1.5">
                   <button
                     ref={(node) => { rowRefs.current[provider.id] = node; }}
@@ -532,6 +550,51 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
                     </>
                   )}
                 </div>
+                {pendingSwitch?.provider.id === provider.id && (
+                  <div
+                    role="group"
+                    aria-live="polite"
+                    aria-labelledby="provider-switch-confirm-title"
+                    aria-describedby="provider-switch-confirm-hint"
+                    className="border-t px-2.5 py-2"
+                    style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") handleCancelGlobalSwitch();
+                    }}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="min-w-0 flex-1">
+                        <div id="provider-switch-confirm-title" className="truncate text-[11px] font-semibold" style={{ color: TERM_PANEL.fg }}>
+                          {t("providerQuickSwitch.confirmSwitchTitle", { name: pendingSwitch.provider.name })}
+                        </div>
+                        <div id="provider-switch-confirm-hint" className="truncate text-[10px]" style={{ color: TERM_PANEL.dim }}>
+                          {t("providerQuickSwitch.confirmSwitchHint")}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <button
+                          type="button"
+                          className="ui-focus-ring rounded-md border px-2 py-1 text-[10px] transition-colors"
+                          style={{ color: TERM_PANEL.dim, borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.bg }}
+                          onClick={handleCancelGlobalSwitch}
+                        >
+                          {t("common.cancel")}
+                        </button>
+                        <button
+                          type="button"
+                          autoFocus
+                          disabled={Boolean(quickSwitch.action)}
+                          className="ui-focus-ring rounded-md border px-2 py-1 text-[10px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                          style={{ color: TERM_PANEL.bg, borderColor: TERM_PANEL.green, backgroundColor: TERM_PANEL.green }}
+                          onClick={() => void handleConfirmGlobalSwitch()}
+                        >
+                          {t("providerQuickSwitch.confirmSwitch")}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                </>
                 )}
               </SortableProviderRow>
             );
@@ -546,7 +609,6 @@ export function ProviderQuickSwitchPanel({ open, defaultAppType, onOpenSettings 
           <Settings size={13} style={{ color: TERM_PANEL.green }} />{t("providerQuickSwitch.openSettings")}
         </button>
       </div>
-      {confirmDialog}
     </div>
   );
 }

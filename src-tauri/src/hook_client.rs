@@ -411,6 +411,10 @@ fn try_notify_input(source: &str, event: &str, hook_input: Value) -> Result<(), 
     let reasoning_effort = normalized
         .reasoning_effort
         .or_else(|| non_empty_env("CLAUDE_EFFORT").and_then(|value| non_empty_trimmed(&value)));
+    let transcript_bytes = approval_transcript_bytes(
+        normalized.agent_transcript_path.as_deref(),
+        normalized.transcript_path.as_deref(),
+    );
     let wsl_distro_name = non_empty_env("WSL_DISTRO_NAME");
     let cwd = env::current_dir()
         .ok()
@@ -434,6 +438,7 @@ fn try_notify_input(source: &str, event: &str, hook_input: Value) -> Result<(), 
         "agentType": normalized.agent_type,
         "agentTranscriptPath": normalized.agent_transcript_path,
         "transcriptPath": normalized.transcript_path,
+        "transcriptBytes": transcript_bytes,
         "reasoningEffort": reasoning_effort,
         "wslDistroName": wsl_distro_name,
         // 同一次 Hook 进程内的重试复用该 ID，daemon 可幂等去重。
@@ -656,6 +661,7 @@ fn diagnostic_source(value: &str) -> &'static str {
         "codex" => "codex",
         "pi" => "pi",
         "grok" => "grok",
+        "kimi" => "kimi",
         "opencode" => "opencode",
         _ => "unknown",
     }
@@ -668,8 +674,10 @@ fn diagnostic_event(value: &str) -> &'static str {
         "Notification" => "Notification",
         "PreToolUse" => "PreToolUse",
         "PermissionRequest" => "PermissionRequest",
+        "PermissionResult" => "PermissionResult",
         "Stop" => "Stop",
         "StopFailure" => "StopFailure",
+        "Interrupt" => "Interrupt",
         "SubagentStart" => "SubagentStart",
         "SubagentStop" => "SubagentStop",
         "AgentToolStart" => "AgentToolStart",
@@ -700,6 +708,22 @@ fn non_empty_env(key: &str) -> Option<String> {
     env::var(key).ok().filter(|value| !value.trim().is_empty())
 }
 
+fn approval_transcript_bytes(
+    agent_transcript_path: Option<&str>,
+    transcript_path: Option<&str>,
+) -> Option<u64> {
+    agent_transcript_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            transcript_path
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .and_then(|path| fs::metadata(path).ok())
+        .map(|metadata| metadata.len())
+}
+
 fn should_suppress_codex_permission_request(source: &str, event: &str, hook_input: &Value) -> bool {
     if event != "PermissionRequest" {
         return false;
@@ -719,9 +743,12 @@ fn should_suppress_codex_permission_request(source: &str, event: &str, hook_inpu
         _ => false,
     }
 }
-/// 与旧 PowerShell 脚本保持一致的标题文案；前端在缺省时会自行兜底（App.tsx）。
-fn title_for(source: &str, event: &str) -> &'static str {
-    match (source, event) {
+/// 与旧 PowerShell 脚本保持一致的标题文案；新增 source 由前端按当前语言生成标题。
+fn title_for(source: &str, event: &str) -> Option<&'static str> {
+    if source == "kimi" {
+        return None;
+    }
+    Some(match (source, event) {
         ("codex", "SessionStart") => "Codex CLI session started",
         ("codex", "UserPromptSubmit") => "Codex CLI running",
         ("codex", "Stop") => "Codex CLI done",
@@ -759,17 +786,23 @@ fn title_for(source: &str, event: &str) -> &'static str {
         (_, "ToolStart") => "Claude Code tool started",
         (_, "ToolStop") => "Claude Code tool done",
         (_, _) => "Claude Code needs attention", // Notification
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_desktop_pet_e_request_id,
-        failure_diagnostic_line,
-        should_suppress_codex_permission_request,
+        approval_transcript_bytes, ensure_desktop_pet_e_request_id, failure_diagnostic_line,
+        should_suppress_codex_permission_request, title_for,
     };
     use serde_json::{json, Value};
+    use std::fs;
+
+    #[test]
+    fn kimi_titles_defer_to_localized_frontend() {
+        assert_eq!(title_for("kimi", "PermissionResult"), None);
+        assert_eq!(title_for("kimi", "Interrupt"), None);
+    }
 
     #[test]
     fn extract_reasoning_effort_reads_claude_hook_effort_level() {
@@ -817,6 +850,20 @@ mod tests {
         let preserved = request_id.to_string();
         ensure_desktop_pet_e_request_id(&mut input);
         assert_eq!(input.get("request_id").and_then(Value::as_str), Some(preserved.as_str()));
+    }
+
+    #[test]
+    fn transcript_baseline_prefers_child_rollout() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent.jsonl");
+        let child = temp.path().join("child.jsonl");
+        fs::write(&parent, b"parent").unwrap();
+        fs::write(&child, b"child-rollout").unwrap();
+        assert_eq!(
+            approval_transcript_bytes(child.to_str(), parent.to_str()),
+            Some(13)
+        );
+        assert_eq!(approval_transcript_bytes(None, parent.to_str()), Some(6));
     }
 
     #[test]

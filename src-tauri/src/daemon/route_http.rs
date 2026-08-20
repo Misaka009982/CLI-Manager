@@ -60,6 +60,7 @@ struct ProviderSnapshot {
     app_type: &'static str,
     provider_id: String,
     provider_name: String,
+    is_current: bool,
     base_url: String,
     claude_api_key_field: Option<String>,
     claude_api_format: Option<String>,
@@ -900,6 +901,7 @@ async fn forward_request(
                     provider_index,
                     snapshot.provider_id,
                     snapshot.provider_name,
+                    snapshot.is_current,
                     outbound_model,
                 ));
             }
@@ -947,6 +949,7 @@ async fn forward_request(
         selected_provider_index,
         selected_provider_id,
         selected_provider_name,
+        selected_provider_is_current,
         selected_outbound_model,
     )) = selected
     else {
@@ -963,6 +966,11 @@ async fn forward_request(
         )));
     };
     let status = response.status();
+    let should_hot_switch = should_hot_switch_provider(
+        failover_config.auto_failover_enabled,
+        selected_provider_is_current,
+        status,
+    );
     log::info!(
         "routing provider final response: app_type={} provider={} provider_id={} status={} index={}",
         route_app_type(route),
@@ -1004,9 +1012,7 @@ async fn forward_request(
                 return Err((StatusCode::GATEWAY_TIMEOUT, "routing_upstream_timeout"));
             }
         };
-        if selected_provider_index > 0
-            && classify_upstream_status(status) == UpstreamErrorClass::Success
-        {
+        if should_hot_switch {
             if let Err(error) = crate::provider::routing::apply_hot_switch_for_active_homes(
                 route_app_type(route),
                 &selected_provider_id,
@@ -1085,12 +1091,10 @@ async fn forward_request(
             app_type: route_app_type(route),
             provider_id: selected_provider_id.clone(),
             provider_name: selected_provider_name.clone(),
-            hot_switch: (selected_provider_index > 0
-                && classify_upstream_status(status) == UpstreamErrorClass::Success)
-                .then(|| HotSwitchCommit {
-                    app_type: route_app_type(route),
-                    provider_id: selected_provider_id.clone(),
-                }),
+            hot_switch: should_hot_switch.then(|| HotSwitchCommit {
+                app_type: route_app_type(route),
+                provider_id: selected_provider_id.clone(),
+            }),
         }),
         usage_logging_enabled.then(|| SseUsageCollector::default()),
         usage_logging_enabled.then(|| UsageCommit {
@@ -1259,6 +1263,7 @@ async fn load_provider_snapshot_for_provider(
         app_type,
         provider_id: detail.card.id,
         provider_name: detail.card.name,
+        is_current: detail.card.is_current,
         base_url,
         claude_api_key_field: detail
             .claude_config
@@ -1272,6 +1277,16 @@ async fn load_provider_snapshot_for_provider(
         bedrock_enabled: app_type == "claude"
             && effective_bedrock_enabled(&detail.effective_settings_config),
     })
+}
+
+fn should_hot_switch_provider(
+    auto_failover_enabled: bool,
+    selected_provider_is_current: bool,
+    status: StatusCode,
+) -> bool {
+    auto_failover_enabled
+        && !selected_provider_is_current
+        && classify_upstream_status(status) == UpstreamErrorClass::Success
 }
 
 async fn load_provider_snapshots(
@@ -2299,6 +2314,60 @@ mod tests {
             assert_eq!(
                 tracker.observe(&Bytes::from_static(event)),
                 StreamCommitOutcome::Success
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_failover_hot_switch_uses_provider_identity_not_candidate_index() {
+        let cases = [
+            (
+                "non-current first candidate",
+                0usize,
+                true,
+                false,
+                StatusCode::OK,
+                true,
+            ),
+            (
+                "current first candidate",
+                0usize,
+                true,
+                true,
+                StatusCode::OK,
+                false,
+            ),
+            (
+                "non-current later candidate",
+                1usize,
+                true,
+                false,
+                StatusCode::OK,
+                true,
+            ),
+            (
+                "automatic failover disabled",
+                0usize,
+                false,
+                false,
+                StatusCode::OK,
+                false,
+            ),
+            (
+                "non-current provider returned failure",
+                0usize,
+                true,
+                false,
+                StatusCode::BAD_GATEWAY,
+                false,
+            ),
+        ];
+
+        for (case, candidate_index, auto_failover_enabled, is_current, status, expected) in cases {
+            assert_eq!(
+                should_hot_switch_provider(auto_failover_enabled, is_current, status),
+                expected,
+                "{case} at candidate index {candidate_index}"
             );
         }
     }

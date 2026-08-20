@@ -145,7 +145,7 @@ When developing across multiple projects, you may run into these problems:
 | Antigravity | 👁️ | 👁️ | 👁️ | 👁️ | — | — | — | — | — |
 | Grok Build | 👁️ | 👁️ | 👁️ | 👁️ | — | — | — | — | — |
 | Pi | 👁️ | 👁️ | 👁️ | 👁️ | — | — | — | — | — |
-| OpenCode | 👁️ | 👁️ | 👁️ | DB | — | — | — | — | — |
+| OpenCode | 👁️ | 👁️ | 👁️ | DB | — | ✅ | — | — | — |
 | Kiro | 👁️ | 👁️ | 👁️ | 👁️ | — | — | — | — | — |
 | Cursor | 👁️ | 👁️ | 👁️ | 👁️ | — | — | — | — | — |
 | Cline | 👁️ | 👁️ | 👁️ | 👁️ | — | — | — | — | — |

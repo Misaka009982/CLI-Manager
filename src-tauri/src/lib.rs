@@ -1169,6 +1169,14 @@ pub fn run() {
                                     "pty daemon connected: 127.0.0.1:{}",
                                     client.info().port
                                 );
+                                if let Err(error) =
+                                    commands::routing::reconcile_persisted_service(client.clone())
+                                {
+                                    log::warn!(
+                                        "persisted local routing recovery skipped: {}",
+                                        error.code
+                                    );
+                                }
                                 handle.state::<daemon::client::DaemonBridge>().set(client);
                             }
                             Err(err) => log::warn!(
@@ -1463,6 +1471,8 @@ pub fn run() {
             commands::hook_settings::hook_settings_uninstall,
             commands::hook_settings::hook_settings_install_codex,
             commands::hook_settings::hook_settings_uninstall_codex,
+            commands::hook_settings::hook_settings_install_kimi,
+            commands::hook_settings::hook_settings_uninstall_kimi,
             commands::hook_settings::hook_settings_install_pi,
             commands::hook_settings::hook_settings_uninstall_pi,
             commands::hook_settings::hook_settings_install_grok,

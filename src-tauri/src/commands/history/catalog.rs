@@ -2414,6 +2414,9 @@ fn collect_catalog_files(roots: &HistoryRoots) -> Vec<CatalogFile> {
     files.extend(collect_grok_session_files(&resolve_grok_history_root(
         roots,
     )));
+    files.extend(super::kimi::collect_kimi_session_files(
+        &super::kimi::resolve_kimi_history_root(roots),
+    ));
     files.extend(collect_pi_session_files(&resolve_pi_history_root()));
     files.extend(collect_kiro_session_files(&resolve_kiro_history_root()));
     for root in resolve_cline_history_roots() {
@@ -4228,12 +4231,60 @@ mod tests {
                 r"\\wsl.localhost\Ubuntu-22.04\home\dministrator\.codex",
             )),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let wsl_file = r"\\wsl.localhost\Ubuntu-22.04\home\dministrator\.codex\sessions\2026\07\14\rollout.jsonl";
         let native_file = r"\\?\C:\Users\Administrator\.codex\sessions\2026\07\02\rollout.jsonl";
 
         assert!(catalog_path_within_roots("codex", wsl_file, &roots));
         assert!(!catalog_path_within_roots("codex", native_file, &roots));
+    }
+
+    #[test]
+    fn collect_catalog_files_includes_kimi_main_wire_and_skips_subagents() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let home = temp_dir.path().join(".kimi-code");
+        let session_id = "01KIMICATALOGFILE000000001";
+        let session_dir = home.join("sessions").join("wd__fixture").join(session_id);
+        let wire = session_dir.join("agents").join("main").join("wire.jsonl");
+        std::fs::create_dir_all(wire.parent().unwrap()).unwrap();
+        std::fs::write(
+            &wire,
+            "{\"type\":\"turn.prompt\",\"input\":[{\"type\":\"text\",\"text\":\"hello\"}]}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            session_dir.join("state.json"),
+            r#"{"id":"01KIMICATALOGFILE000000001","title":"Kimi summary","cwd":"/tmp/cli-manager"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(session_dir.join("agents").join("agent-0")).unwrap();
+        std::fs::write(
+            session_dir
+                .join("agents")
+                .join("agent-0")
+                .join("wire.jsonl"),
+            "{\"type\":\"turn.prompt\",\"input\":[{\"type\":\"text\",\"text\":\"subagent\"}]}\n",
+        )
+        .unwrap();
+
+        let roots = HistoryRoots {
+            claude_config_dir: Some(temp_dir.path().join("missing-claude")),
+            codex_config_dir: Some(temp_dir.path().join("missing-codex")),
+            grok_session_root: Some(temp_dir.path().join("missing-grok")),
+            kimi_config_dir: Some(home),
+        };
+        let kimi_files: Vec<_> = collect_catalog_files(&roots)
+            .into_iter()
+            .filter(|file| file.file_ref.source == "kimi")
+            .collect();
+        assert_eq!(kimi_files.len(), 1);
+        assert_eq!(kimi_files[0].file_ref.path, wire);
+        assert!(catalog_path_within_roots(
+            "kimi",
+            &wire.to_string_lossy(),
+            &roots,
+        ));
     }
 
     #[test]
@@ -4247,6 +4298,7 @@ mod tests {
             claude_config_dir: None,
             codex_config_dir: Some(codex_dir),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
 
         assert!(catalog_path_within_roots(
@@ -4947,6 +4999,7 @@ mod tests {
             claude_config_dir: Some(claude_root.clone()),
             codex_config_dir: None,
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let roots_key = roots.cache_key();
         let v2_file = claude_root
@@ -5040,6 +5093,7 @@ mod tests {
             claude_config_dir: Some(claude_root.clone()),
             codex_config_dir: None,
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let roots_key = roots.cache_key();
         let v2_file = claude_root
@@ -5138,6 +5192,7 @@ mod tests {
             claude_config_dir: Some(claude_root.clone()),
             codex_config_dir: None,
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let file = claude_root
             .join("projects")
@@ -5317,6 +5372,7 @@ mod tests {
             claude_config_dir: Some(claude_root.clone()),
             codex_config_dir: None,
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let file = claude_root
             .join("projects")
@@ -5443,6 +5499,7 @@ mod tests {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let roots_key = roots.cache_key();
         let file = resolve_claude_history_root(&roots)
@@ -5614,6 +5671,7 @@ mod tests {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let roots_key = roots.cache_key();
         let file = resolve_codex_history_root(&roots)
@@ -5716,6 +5774,7 @@ mod tests {
             claude_config_dir: Some(temp_dir.path().join(".claude")),
             codex_config_dir: Some(temp_dir.path().join(".codex")),
             grok_session_root: None,
+            kimi_config_dir: None,
         };
         let roots_key = roots.cache_key();
         let file = temp_dir.path().join("gemini-session.json");

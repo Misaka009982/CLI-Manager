@@ -130,7 +130,7 @@ export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "fil
 export type TerminalPanelWidthSettings = Record<TerminalPanelWidthKey, number>;
 export type TerminalSettingsSectionKey = "behavior" | "paneMarker" | "shells" | "themes" | "background";
 export type TerminalSettingsSectionsExpanded = Record<TerminalSettingsSectionKey, boolean>;
-export type HookSettingsSectionKey = "toast" | "notifications" | "claude" | "codex" | "pi" | "grok";
+export type HookSettingsSectionKey = "toast" | "notifications" | "claude" | "codex" | "kimi" | "pi" | "grok";
 export type HookSettingsSectionsExpanded = Record<HookSettingsSectionKey, boolean>;
 export const UI_FONT_SIZE_MIN = 11;
 export const UI_FONT_SIZE_MAX = 18;
@@ -170,6 +170,7 @@ export const HOOK_SETTINGS_SECTION_KEYS: readonly HookSettingsSectionKey[] = [
   "notifications",
   "claude",
   "codex",
+  "kimi",
   "pi",
   "grok",
 ];
@@ -178,6 +179,7 @@ export const HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT: HookSettingsSectionsExpand
   notifications: false,
   claude: false,
   codex: false,
+  kimi: false,
   pi: false,
   grok: false,
 };
@@ -189,6 +191,7 @@ export type ShortcutAction =
   | "commandPalette"
   | "sessionHistory"
   | "copyAi"
+  | "copyTerminalSelection"
   | "toggleSidebar"
   | "toggleTerminalFullscreen";
 export type TabSwitchShortcutModifier = "Alt" | "Ctrl" | "Shift";
@@ -244,6 +247,7 @@ const SHORTCUT_ACTIONS: readonly ShortcutAction[] = [
   "commandPalette",
   "sessionHistory",
   "copyAi",
+  "copyTerminalSelection",
   "toggleSidebar",
   "toggleTerminalFullscreen",
 ];
@@ -301,6 +305,7 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutMap = {
   commandPalette: "Ctrl+P",
   sessionHistory: "Ctrl+K",
   copyAi: "Alt+P",
+  copyTerminalSelection: "Ctrl+Shift+C",
   toggleSidebar: "Ctrl+B",
   toggleTerminalFullscreen: "F11",
 };
@@ -382,6 +387,8 @@ export interface Settings {
   backgroundIncludeFinishedTasks: boolean;
   keyboardShortcuts: KeyboardShortcutMap;
   terminalNewlineShortcut: TerminalNewlineShortcut;
+  osc52ClipboardEnabled: boolean;
+  osc52ClipboardQueryEnabled: boolean;
   unsplitBehavior: UnsplitBehavior;
   terminalToolbarVisibility: TerminalToolbarVisibilitySettings;
   sidebarToolbarVisibility: SidebarToolbarVisibilitySettings;
@@ -432,6 +439,7 @@ export interface Settings {
   hookSubagentSplitViewEnabled: boolean;
   claudeHookBridgeEnabled: boolean;
   codexHookBridgeEnabled: boolean;
+  kimiHookBridgeEnabled: boolean;
   piHookBridgeEnabled: boolean;
   grokHookBridgeEnabled: boolean;
   systemNotificationsEnabled: boolean;
@@ -453,6 +461,7 @@ export interface Settings {
   claudeHookAutoRepairKnownInstalled: boolean;
   claudeHookAutoRepairNoticeShown: boolean;
   codexHookConfigDir: string | null;
+  kimiHookConfigDir: string | null;
   piHookConfigDir: string | null;
   grokHookConfigDir: string | null;
   /** cc-switch 数据库路径；null 表示使用默认路径 ~/.cc-switch/cc-switch.db */
@@ -538,6 +547,8 @@ const DEFAULTS: Settings = {
   backgroundIncludeFinishedTasks: false,
   keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
   terminalNewlineShortcut: "Shift+Enter",
+  osc52ClipboardEnabled: true,
+  osc52ClipboardQueryEnabled: false,
   unsplitBehavior: "merge",
   terminalToolbarVisibility: {
     templates: true,
@@ -625,6 +636,7 @@ const DEFAULTS: Settings = {
   hookSubagentSplitViewEnabled: true,
   claudeHookBridgeEnabled: true,
   codexHookBridgeEnabled: true,
+  kimiHookBridgeEnabled: true,
   piHookBridgeEnabled: true,
   grokHookBridgeEnabled: true,
   systemNotificationsEnabled: true,
@@ -652,6 +664,7 @@ const DEFAULTS: Settings = {
   claudeHookAutoRepairKnownInstalled: false,
   claudeHookAutoRepairNoticeShown: false,
   codexHookConfigDir: null,
+  kimiHookConfigDir: null,
   piHookConfigDir: null,
   grokHookConfigDir: null,
   ccSwitchDbPath: null,
@@ -1541,6 +1554,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.codexHookBridgeEnabled === "boolean"
         ? entries.codexHookBridgeEnabled
         : DEFAULTS.codexHookBridgeEnabled;
+    entries.kimiHookBridgeEnabled =
+      typeof entries.kimiHookBridgeEnabled === "boolean"
+        ? entries.kimiHookBridgeEnabled
+        : DEFAULTS.kimiHookBridgeEnabled;
     entries.piHookBridgeEnabled =
       typeof entries.piHookBridgeEnabled === "boolean"
         ? entries.piHookBridgeEnabled
@@ -1607,6 +1624,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.codexHookConfigDir === "string" && entries.codexHookConfigDir.trim()
         ? entries.codexHookConfigDir
         : null;
+    entries.kimiHookConfigDir =
+      typeof entries.kimiHookConfigDir === "string" && entries.kimiHookConfigDir.trim()
+        ? entries.kimiHookConfigDir
+        : null;
     entries.piHookConfigDir =
       typeof entries.piHookConfigDir === "string" && entries.piHookConfigDir.trim()
         ? entries.piHookConfigDir
@@ -1670,6 +1691,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       entries.terminalNewlineShortcut === "Alt+Enter"
         ? entries.terminalNewlineShortcut
         : DEFAULTS.terminalNewlineShortcut;
+    entries.osc52ClipboardEnabled =
+      typeof entries.osc52ClipboardEnabled === "boolean"
+        ? entries.osc52ClipboardEnabled
+        : DEFAULTS.osc52ClipboardEnabled;
+    entries.osc52ClipboardQueryEnabled =
+      typeof entries.osc52ClipboardQueryEnabled === "boolean"
+        ? entries.osc52ClipboardQueryEnabled
+        : DEFAULTS.osc52ClipboardQueryEnabled;
     entries.projectScopedTerminalViewEnabled =
       typeof entries.projectScopedTerminalViewEnabled === "boolean"
         ? entries.projectScopedTerminalViewEnabled

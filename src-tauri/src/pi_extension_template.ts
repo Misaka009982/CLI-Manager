@@ -1,5 +1,5 @@
 // __PI_MARKER__
-// CLI_MANAGER_PI_EXTENSION_VERSION:2
+// CLI_MANAGER_PI_EXTENSION_VERSION:3
 // 由 CLI-Manager 管理，请勿手动修改；如需恢复，请在 Hook 设置中重新安装。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -627,14 +627,14 @@ export default function cliManagerHook(pi: ExtensionAPI) {
     await cancelPendingDecisions();
     loadDecisionBridges(pi, loadedDecisionBridges);
     activeSessionId = sessionId(ctx);
-    if (ENABLED.sessionStart) await postHook("SessionStart");
+    if (ENABLED.sessionStart) void postHook("SessionStart");
   });
 
   pi.on("agent_start", async (_event, ctx) => {
     activeSessionId = sessionId(ctx);
     failureMessage = null;
     if (ENABLED.running) {
-      await postHook("UserPromptSubmit");
+      void postHook("UserPromptSubmit");
       startHeartbeat();
     } else {
       stopHeartbeat();
@@ -652,7 +652,7 @@ export default function cliManagerHook(pi: ExtensionAPI) {
   pi.on("agent_settled", async () => {
     stopHeartbeat();
     if (ENABLED.stop) {
-      await postHook(failureMessage ? "StopFailure" : "Stop", failureMessage);
+      void postHook(failureMessage ? "StopFailure" : "Stop", failureMessage);
     }
     failureMessage = null;
   });

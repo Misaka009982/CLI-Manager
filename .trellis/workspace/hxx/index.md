@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 87
-- **Last Active**: 2026-08-13
+- **Total Sessions**: 93
+- **Last Active**: 2026-08-20
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~964 | Active |
+| `journal-2.md` | ~1103 | Active |
 | `journal-1.md` | ~2014 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,12 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 93 | 2026-08-20 | Review and harden PR 220 Kimi history | `c52a9b7f` | `pr220` |
+| 92 | 2026-08-19 | 修复 Kimi Hook 本地检测延迟 | `890f59d4` | `master` |
+| 91 | 2026-08-19 | Fix PR #219 Kimi cross-platform tests | `a9781941`, `2152a22d` | `agent/kimi-code-cli-hooks` |
+| 90 | 2026-08-18 | 历史会话对话消息操作栏 | `9f8602bb` | `master` |
+| 89 | 2026-08-18 | 修复 SSH Grok 会话历史打开提示 | `60372d68` | `master` |
+| 88 | 2026-08-17 | 修复供应商作用域与 Pi 终端诊断 | `3207bc68` | `master` |
 | 87 | 2026-08-13 | 修复 Diff 回退确认与折叠项目交互 | `47661dcc` | `master` |
 | 86 | 2026-08-07 | 修复 Grok 会话历史路径并提交任务 | `0fc7f495` | `feat/native-provider-management` |
 | 85 | 2026-08-06 | 修复 Grok Home 隔离并恢复旧会话 | `f38bd412`, `f4ae4c5e` | `feat/native-provider-management` |

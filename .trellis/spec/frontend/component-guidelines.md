@@ -882,6 +882,10 @@ type PaneDropTarget =
 **Intent boundary**:
 
 - A Workspan dragged inside the top tab bar remains a sortable tab operation.
+- Middle-clicking either a session Tab or a Workspan Tab calls the existing
+  close path after preventing the browser's auxiliary-click default. Ignore it
+  while the Tab is being renamed or dragged; do not introduce a second close
+  or confirmation path.
 - Once the pointer enters a pane content rectangle, its outer directional regions become split targets. Resolve left/right/top/bottom from the pointer position relative to the pane center, while keeping a neutral center region so entering a pane does not immediately force a split.
 - Session tabs inside a multi-view pane keep the existing center-move and explicit edge-split behavior.
 - Collision detection identifies the pane only. Resolve the Workspan split direction in `onDragOver` and `onDragEnd` from `activatorEvent + delta` and `over.rect`; do not synthesize a pane-edge collision inside the collision detector.
@@ -1139,6 +1143,36 @@ const { suffixParts, leaf: displayNode } = collectCompactDirectoryChain(node);
 ---
 
 ## Styling Patterns
+
+### Convention: Project-tree hover actions preserve row geometry
+
+**What**: A project row in `TreeNodeItem` that uses `.ui-tree-item-actions` must keep its action container in the flex layout at all times. Let the existing `.ui-tree-item-actions` opacity, visibility, pointer-events, and transform rules control the hover transition; do not swap the container between Tailwind `hidden` and `group-hover:flex`.
+
+**Why**: Toggling `display` inserts the 22px start-action button only after the pointer enters the row. In a narrow sidebar this reflows the project title and badges, which appears as hover jitter and can make the pointer target feel unstable.
+
+**Correct**:
+
+```tsx
+<span className="ui-tree-item-actions flex shrink-0 items-center gap-0.5">
+  <button className="icon-btn">…</button>
+</span>
+```
+
+**Wrong**:
+
+```tsx
+<span className="ui-tree-item-actions hidden shrink-0 group-hover/item:flex">
+  <button className="icon-btn">…</button>
+</span>
+```
+
+**Contracts**:
+
+- The project title and metadata keep a stable available width before, during, and after hover.
+- The hidden action remains non-interactive until the existing hover/focus CSS exposes it.
+- Do not change project selection, drag activation, double-click launch, or the folder/worktree action contracts as part of this visual fix.
+
+**Tests**: Run `npx tsc --noEmit` and `npm run build`. Manually hover a project with a long name and terminal/provider badges in compact and comfortable sidebar density, then verify the title, badges, row position, hover action, click, double-click, and drag behavior stay stable in one light and one dark theme.
 
 ### Convention: Terminal auxiliary panels share one themed header
 
@@ -1982,7 +2016,14 @@ if (!isEdit && !isClone && trimmedCliArgs) {
 
 **What**: The terminal Markdown preview uses the existing Radix Select primitive for historical answer selection. Its portal content must receive the terminal theme variables explicitly, and its viewport must use `ui-thin-scroll` with `--ui-scrollbar-thumb` / `--ui-scrollbar-track` from the terminal theme. Do not use a native `<select>` when the popup scrollbar or surface needs terminal styling.
 
-The preview can open when the session is a supported Claude/Codex session with a bound `cliSessionId`; a current-turn Hook status is not a prerequisite because restored sessions may have no new Hook event. `Ctrl`/`Cmd` plus wheel changes the preview Markdown scale only within the preview content, clamped to `0.8`–`1.6`; an unmodified wheel must keep normal scrolling.
+Every configured Agent CLI terminal keeps the right-top preview control visible.
+It can open when its `cliTool` or project tool resolves to a registered
+`HistorySource` and the session has a bound `cliSessionId`; this includes Pi's
+native `pi` history source. A missing source or session ID disables the control
+instead of hiding it. A current-turn Hook status is not a prerequisite because
+restored sessions may have no new Hook event. `Ctrl`/`Cmd` plus wheel changes
+the preview Markdown scale only within the preview content, clamped to
+`0.8`–`1.6`; an unmodified wheel must keep normal scrolling.
 
 KaTeX's package stylesheet owns the `.katex` base font size. Shared Markdown CSS may set its color, but must not force `.katex` to `font-size: 1em`, which makes terminal formulas smaller and visually soft. Preview zoom should scale the Markdown container instead of using transforms that introduce raster blur.
 
@@ -2004,7 +2045,7 @@ KaTeX's package stylesheet owns the `.katex` base font size. Shared Markdown CSS
 <style>.ui-markdown .katex { font-size: 1em; }</style>
 ```
 
-**Tests**: Run `node --test scripts/terminalMarkdownPreview.test.mjs scripts/markdownRendering.test.mjs` and `npx tsc --noEmit`; manually verify long answer lists, keyboard selection, restored sessions without a new conversation, normal scrolling, `Ctrl`/`Cmd` wheel zoom limits, light/dark terminal themes, background images, and clear KaTeX formulas.
+**Tests**: Run `node --test scripts/terminalMarkdownPreview.test.mjs scripts/markdownRendering.test.mjs` and `npx tsc --noEmit`; manually verify long answer lists, keyboard selection, Pi and restored sessions without a new conversation, a configured CLI without a bound session ID, normal scrolling, `Ctrl`/`Cmd` wheel zoom limits, light/dark terminal themes, background images, and clear KaTeX formulas.
 
 ### Convention: Settings pages fill the available content width and wrap controls
 

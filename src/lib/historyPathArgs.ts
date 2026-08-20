@@ -5,11 +5,12 @@ export type HistoryPathArgs = {
   claudeConfigDir: string | null;
   codexConfigDir: string | null;
   grokSessionRoot: string | null;
+  kimiConfigDir: string | null;
 };
 
 let historySourceSettingsLoadPromise: Promise<void> | null = null;
 
-function activeHistoryConfigRoot(sourceId: "claude" | "codex"): string | null {
+function activeHistoryConfigRoot(sourceId: "claude" | "codex" | "kimi"): string | null {
   const source = useHistorySourceSettingsStore.getState().settings[sourceId];
   const configRoot = source?.enabled ? source.activeInstance?.locations.configRoot?.trim() : "";
   return configRoot || null;
@@ -38,6 +39,7 @@ export function getHistoryPathArgsSync(): HistoryPathArgs {
     claudeConfigDir: (activeHistoryConfigRoot("claude") ?? settings.claudeHookConfigDir?.trim()) || null,
     codexConfigDir: (activeHistoryConfigRoot("codex") ?? settings.codexHookConfigDir?.trim()) || null,
     grokSessionRoot: activeHistorySessionRoot("grok"),
+    kimiConfigDir: (activeHistoryConfigRoot("kimi") ?? settings.kimiHookConfigDir?.trim()) || null,
   };
 }
 

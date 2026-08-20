@@ -12,7 +12,7 @@ use crate::provider::routing::{
     self, RoutingFailoverConfig, RoutingFailoverState, RoutingGlobalProxyInput,
     RoutingGlobalProxyState, RoutingGlobalProxyTestInput, RoutingGlobalProxyTestResult,
     RoutingOptimizerConfig, RoutingPersistedState, RoutingProxyScanCandidate,
-    RoutingRectifierConfig, TakeoverKey,
+    RoutingRectifierConfig, RoutingServiceConfig, TakeoverKey,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -274,6 +274,129 @@ fn state(client: Option<Arc<DaemonClient>>) -> Result<RoutingState, RoutingError
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoutingServiceRuntimeAction {
+    None,
+    Start,
+    Stop,
+}
+
+fn routing_service_runtime_action(
+    service_enabled: bool,
+    daemon_status: &str,
+) -> RoutingServiceRuntimeAction {
+    match (service_enabled, daemon_status == "running") {
+        (true, false) => RoutingServiceRuntimeAction::Start,
+        (false, true) => RoutingServiceRuntimeAction::Stop,
+        _ => RoutingServiceRuntimeAction::None,
+    }
+}
+
+fn routing_service_needs_update(
+    persisted_enabled: bool,
+    requested_enabled: bool,
+    daemon_status: &str,
+) -> bool {
+    persisted_enabled != requested_enabled
+        || routing_service_runtime_action(requested_enabled, daemon_status)
+            != RoutingServiceRuntimeAction::None
+}
+
+fn routing_service_control_frame(
+    id: u64,
+    enabled: bool,
+    service: &RoutingServiceConfig,
+    listener_addresses: Vec<String>,
+) -> ClientFrame {
+    if enabled {
+        ClientFrame::RoutingStart {
+            id,
+            listen_address: Some(service.listen_address.clone()),
+            preferred_port: Some(service.preferred_port),
+            last_actual_port: service.actual_port,
+            listener_addresses,
+        }
+    } else {
+        ClientFrame::RoutingStop { id }
+    }
+}
+
+fn set_service_enabled_with_client(
+    client: Option<Arc<DaemonClient>>,
+    mut persisted: RoutingPersistedState,
+    enabled: bool,
+) -> Result<RoutingState, RoutingError> {
+    let current_daemon = daemon_state(client.clone());
+    let runtime_action = routing_service_runtime_action(enabled, &current_daemon.status);
+    if !routing_service_needs_update(
+        persisted.service.service_enabled,
+        enabled,
+        &current_daemon.status,
+    ) {
+        return Ok(RoutingState {
+            persisted,
+            daemon: current_daemon,
+        });
+    }
+
+    if runtime_action == RoutingServiceRuntimeAction::None {
+        persisted.service.service_enabled = enabled;
+        block_on(routing::save_service_config(&persisted.service))?;
+        return Ok(RoutingState {
+            persisted,
+            daemon: current_daemon,
+        });
+    }
+
+    let client_ref = client
+        .as_ref()
+        .ok_or_else(RoutingError::service_unavailable)?;
+    let listener_addresses = if enabled {
+        persisted_listener_addresses(&persisted)?
+    } else if current_daemon.listener_addresses.is_empty() {
+        vec![persisted.service.listen_address.clone()]
+    } else {
+        current_daemon.listener_addresses.clone()
+    };
+    let event = request_control(
+        client.clone(),
+        routing_service_control_frame(
+            client_ref.next_request_id(),
+            enabled,
+            &persisted.service,
+            listener_addresses.clone(),
+        ),
+    )?;
+    let previous_service = persisted.service.clone();
+    if enabled {
+        let status = routing_status(event)?;
+        persisted.service.actual_port = status.actual_port;
+    }
+    persisted.service.service_enabled = enabled;
+    if let Err(error) = block_on(routing::save_service_config(&persisted.service)) {
+        let rollback_frame = routing_service_control_frame(
+            client_ref.next_request_id(),
+            !enabled,
+            &previous_service,
+            listener_addresses,
+        );
+        let _ = request_control(client, rollback_frame);
+        return Err(error);
+    }
+    Ok(RoutingState {
+        persisted,
+        daemon: daemon_state(client),
+    })
+}
+
+pub(crate) fn reconcile_persisted_service(
+    client: Arc<DaemonClient>,
+) -> Result<RoutingState, RoutingError> {
+    let persisted = block_on(routing::load_persisted_state())?;
+    let service_enabled = persisted.service.service_enabled;
+    set_service_enabled_with_client(Some(client), persisted, service_enabled)
+}
+
 fn request_control(
     client: Option<Arc<DaemonClient>>,
     frame: ClientFrame,
@@ -498,60 +621,8 @@ pub fn routing_set_service_enabled(
     enabled: bool,
 ) -> Result<RoutingState, RoutingError> {
     let client = daemon_bridge.get();
-    let mut persisted = block_on(routing::load_persisted_state())?;
-    let daemon_running = client
-        .as_ref()
-        .map(|client| daemon_state(Some(client.clone())).status == "running")
-        .unwrap_or(false);
-    if persisted.service.service_enabled == enabled && daemon_running == enabled {
-        return Ok(RoutingState {
-            persisted,
-            daemon: daemon_state(client),
-        });
-    }
-
-    let client_ref = client
-        .as_ref()
-        .ok_or_else(RoutingError::service_unavailable)?;
-    let id = client_ref.next_request_id();
-    let frame = if enabled {
-        ClientFrame::RoutingStart {
-            id,
-            listen_address: Some(persisted.service.listen_address.clone()),
-            preferred_port: Some(persisted.service.preferred_port),
-            last_actual_port: persisted.service.actual_port,
-            listener_addresses: Vec::new(),
-        }
-    } else {
-        ClientFrame::RoutingStop { id }
-    };
-    let event = request_control(client.clone(), frame)?;
-    let previous_service = persisted.service.clone();
-    if enabled {
-        let status = routing_status(event)?;
-        persisted.service.actual_port = status.actual_port;
-    }
-    persisted.service.service_enabled = enabled;
-    if let Err(error) = block_on(routing::save_service_config(&persisted.service)) {
-        let rollback_id = client_ref.next_request_id();
-        let rollback_frame = if enabled {
-            ClientFrame::RoutingStop { id: rollback_id }
-        } else {
-            ClientFrame::RoutingStart {
-                id: rollback_id,
-                listen_address: Some(previous_service.listen_address),
-                preferred_port: Some(previous_service.preferred_port),
-                last_actual_port: previous_service.actual_port,
-                listener_addresses: Vec::new(),
-            }
-        };
-        let _ = request_control(client, rollback_frame);
-        return Err(error);
-    }
-    Ok(RoutingState {
-        persisted,
-        daemon: daemon_state(client),
-    })
+    let persisted = block_on(routing::load_persisted_state())?;
+    set_service_enabled_with_client(client, persisted, enabled)
 }
 
 #[tauri::command]
@@ -885,4 +956,68 @@ pub fn routing_set_takeover(
         return Err(error);
     }
     state(Some(client))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        routing_service_control_frame, routing_service_needs_update,
+        routing_service_runtime_action, RoutingServiceRuntimeAction,
+    };
+    use crate::daemon::protocol::ClientFrame;
+    use crate::provider::routing::RoutingServiceConfig;
+
+    fn service_config() -> RoutingServiceConfig {
+        RoutingServiceConfig {
+            schema_version: 1,
+            service_enabled: true,
+            listen_address: "127.0.0.1".to_string(),
+            preferred_port: 15_721,
+            actual_port: Some(15_722),
+            show_local_quick_control: true,
+            show_failover_quick_control: true,
+            usage_logging_enabled: true,
+        }
+    }
+
+    #[test]
+    fn persisted_service_intent_drives_runtime_reconciliation() {
+        assert_eq!(
+            routing_service_runtime_action(true, "stopped"),
+            RoutingServiceRuntimeAction::Start
+        );
+        assert_eq!(
+            routing_service_runtime_action(true, "running"),
+            RoutingServiceRuntimeAction::None
+        );
+        assert_eq!(
+            routing_service_runtime_action(false, "running"),
+            RoutingServiceRuntimeAction::Stop
+        );
+        assert_eq!(
+            routing_service_runtime_action(false, "stopped"),
+            RoutingServiceRuntimeAction::None
+        );
+
+        assert!(routing_service_needs_update(false, true, "running"));
+        assert!(routing_service_needs_update(true, false, "stopped"));
+        assert!(!routing_service_needs_update(true, true, "running"));
+        assert!(!routing_service_needs_update(false, false, "stopped"));
+    }
+
+    #[test]
+    fn routing_start_frame_preserves_listener_and_port_state() {
+        let listeners = vec!["127.0.0.1".to_string(), "172.20.0.1".to_string()];
+        let frame = routing_service_control_frame(7, true, &service_config(), listeners.clone());
+        assert_eq!(
+            frame,
+            ClientFrame::RoutingStart {
+                id: 7,
+                listen_address: Some("127.0.0.1".to_string()),
+                preferred_port: Some(15_721),
+                last_actual_port: Some(15_722),
+                listener_addresses: listeners,
+            }
+        );
+    }
 }

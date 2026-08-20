@@ -122,7 +122,7 @@ const CLAUDE_HOOK_TOAST_PREFIX = "claude-hook-notification";
 const SYSTEM_NOTIFICATION_ACTION_EVENT = "system-notification-action";
 const MAX_SYSTEM_NOTIFICATION_DETAIL_LENGTH = 72;
 let claudeHookToastSequence = 0;
-type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled" | "installed";
+type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled" | "installed" | "unsupported";
 type StartupStage = "settings" | "stores" | "projects";
 
 function isLikelyMacOs() {
@@ -141,6 +141,7 @@ function preloadSettingsModal(): void {
 interface HookSettingsStatusPayload {
   claude: { status: HookInstallStatus };
   codex: { status: HookInstallStatus };
+  kimi: { status: HookInstallStatus };
   pi: { status: HookInstallStatus };
   grok: { status: HookInstallStatus };
   claudeAutoRepaired?: boolean;
@@ -162,6 +163,7 @@ async function hasInstalledCliHook(): Promise<boolean> {
     invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
       selectedDir: settings.claudeHookConfigDir?.trim() || null,
       codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
+      kimiSelectedDir: settings.kimiHookConfigDir?.trim() || null,
       piSelectedDir: settings.piHookConfigDir?.trim() || null,
       grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
       ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
@@ -181,6 +183,7 @@ async function hasInstalledCliHook(): Promise<boolean> {
     Boolean(status && (
       (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
       (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
+      (settings.kimiHookBridgeEnabled && status.kimi.status === "installed") ||
       (settings.piHookBridgeEnabled && status.pi.status === "installed") ||
       (settings.grokHookBridgeEnabled && status.grok.status === "installed")
     ));
@@ -246,6 +249,7 @@ function getClaudeHookToastStyle(payload: CliHookPayload): ClaudeHookToastStyle 
 
 function getCliHookSourceName(payload: CliHookPayload): string {
   if (payload.source === "codex") return "Codex CLI";
+  if (payload.source === "kimi") return "Kimi Code";
   if (payload.source === "pi") return "Pi Agent";
   if (payload.source === "grok") return "Grok Build";
   if (payload.source === "opencode") return "OpenCode";
@@ -656,8 +660,19 @@ function App() {
       if (!debugMode) return;
       void invoke("app_open_devtools").catch((err) => logWarn("Failed to open devtools", err));
     };
+    const blockChromiumInspect = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "c" || !event.shiftKey || event.altKey) return;
+      if (!event.ctrlKey && !event.metaKey) return;
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest(".xterm")) return;
+      event.preventDefault();
+    };
     window.addEventListener("keydown", handleF12, true);
-    return () => window.removeEventListener("keydown", handleF12, true);
+    window.addEventListener("keydown", blockChromiumInspect, true);
+    return () => {
+      window.removeEventListener("keydown", handleF12, true);
+      window.removeEventListener("keydown", blockChromiumInspect, true);
+    };
   }, [debugMode]);
 
   useEffect(() => {
@@ -833,7 +848,7 @@ function App() {
         event.payload.source === "claude" &&
         (event.payload.event === "ToolStart" || event.payload.event === "ToolStop") &&
         Boolean(event.payload.agentId?.trim());
-      const supportsLocalSubagentTranscript = event.payload.environmentType !== "ssh";
+      const supportsLocalSubagentTranscript = event.payload.environmentType !== "ssh" && event.payload.source !== "kimi";
 
       // SubagentStart / AgentToolStart：开/更新子 Agent 转录分屏，独立于 Tab 状态机与 toast。
       if (supportsLocalSubagentTranscript && (event.payload.event === "SubagentStart" || event.payload.event === "AgentToolStart" || isClaudeToolSubagentEvent)) {
@@ -869,6 +884,8 @@ function App() {
         tabId &&
         event.payload.event !== "UserPromptSubmit" &&
         event.payload.event !== "SessionStart" &&
+        event.payload.event !== "PermissionResult" &&
+        event.payload.event !== "Interrupt" &&
         event.payload.event !== "ToolStart" &&
         event.payload.event !== "ToolStop"
       ) {

@@ -63,7 +63,13 @@ import { WorktreeFinishDialog } from "./worktree/WorktreeFinishDialog";
 import { FileExplorerSidebar } from "./files/FileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
-import { projectSupportsCapability, resolveProjectCapabilities, type ProjectCapability } from "../lib/projectCapabilities";
+import {
+  isSshGrokHistoryUnsupported,
+  isSshHistorySourceUnsupported,
+  projectSupportsCapability,
+  resolveProjectCapabilities,
+  type ProjectCapability,
+} from "../lib/projectCapabilities";
 import { resolveCliToolHistorySourceId, resolveCliToolIconKey, type CliToolIconKey } from "../lib/cliTools";
 import { resolveHistoryProjectPath } from "../lib/historyProjectPaths";
 import { resolveAgentRuntimeKind } from "../lib/agentCapabilities";
@@ -670,6 +676,13 @@ function SortableTab({
             hideHoverCard();
             onActivate();
           }}
+          onAuxClick={(event) => {
+            if (event.button !== 1 || isEditing || isDragging) return;
+            event.preventDefault();
+            event.stopPropagation();
+            hideHoverCard();
+            onClose(event.currentTarget.getBoundingClientRect());
+          }}
           onPointerEnter={scheduleHoverCard}
           onPointerLeave={scheduleHideHoverCard}
           onContextMenu={(event) => {
@@ -1011,6 +1024,13 @@ function SortableWorkspanTab({
             onClick={() => {
               hideHoverCard();
               onActivate();
+            }}
+            onAuxClick={(event) => {
+              if (event.button !== 1 || editing || isDragging) return;
+              event.preventDefault();
+              event.stopPropagation();
+              hideHoverCard();
+              onClose(event.currentTarget.getBoundingClientRect());
             }}
             onPointerEnter={scheduleHoverCard}
             onPointerLeave={scheduleHideHoverCard}
@@ -2605,8 +2625,16 @@ export function TerminalTabs({
   const worktreeById = useMemo(() => new Map(worktrees.map((worktree) => [worktree.id, worktree])), [worktrees]);
   const rejectUnsupportedCapability = useCallback((project: Project | null | undefined, capability: ProjectCapability) => {
     if (projectSupportsCapability(project, capability)) return false;
-    toast.info(t("remoteCapabilities.unsupportedTitle"), {
-      description: t("remoteCapabilities.unsupportedDescription"),
+    const sshHistoryUnsupported = capability === "history" && isSshHistorySourceUnsupported(project);
+    const title = sshHistoryUnsupported
+      ? isSshGrokHistoryUnsupported(project)
+        ? t("remoteCapabilities.grokHistoryUnsupportedTitle")
+        : t("remoteCapabilities.sshHistoryUnsupportedTitle")
+      : t("remoteCapabilities.unsupportedTitle");
+    toast.info(title, {
+      description: sshHistoryUnsupported
+        ? t("remoteCapabilities.sshHistoryUnsupportedDescription")
+        : t("remoteCapabilities.unsupportedDescription"),
     });
     return true;
   }, [t]);
@@ -3321,6 +3349,7 @@ export function TerminalTabs({
         invoke<{
         claude: { status: string };
         codex: { status: string };
+        kimi: { status: string };
         pi: { status: string };
         grok: { status: string };
         }>(
@@ -3328,6 +3357,7 @@ export function TerminalTabs({
         {
           selectedDir: settings.claudeHookConfigDir?.trim() || null,
           codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
+          kimiSelectedDir: settings.kimiHookConfigDir?.trim() || null,
           piSelectedDir: settings.piHookConfigDir?.trim() || null,
           grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
           ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
@@ -3340,6 +3370,7 @@ export function TerminalTabs({
         openCodeStatus.status === "installed" ||
         (settings.claudeHookBridgeEnabled && hookStatus.claude.status === "installed") ||
         (settings.codexHookBridgeEnabled && hookStatus.codex.status === "installed") ||
+        (settings.kimiHookBridgeEnabled && hookStatus.kimi.status === "installed") ||
         (settings.piHookBridgeEnabled && hookStatus.pi.status === "installed") ||
         (settings.grokHookBridgeEnabled && hookStatus.grok.status === "installed");
       if (!hasEnabledInstalledHook) {

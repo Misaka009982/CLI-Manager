@@ -962,3 +962,142 @@ OpenCode/Pi/Amp/Aider/Crush/Cline/Goose 等无厂商归属的 CLI 工具在 Tab 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 88: 修复供应商作用域与 Pi 终端诊断
+
+**Date**: 2026-08-17
+**Task**: 修复供应商作用域与 Pi 终端诊断
+**Branch**: `master`
+
+### Summary
+
+修复供应商生命周期引用扫描、项目作用域切换、Grok 项目级提示、Tab 中键关闭、Pi 预览、Pi Hook 非阻塞上报与 MCP Adapter 能力发现。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3207bc68` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 89: 修复 SSH Grok 会话历史打开提示
+
+**Date**: 2026-08-18
+**Task**: 修复 SSH Grok 会话历史打开提示
+**Branch**: `master`
+
+### Summary
+
+SSH Grok 在历史入口改为显示明确的暂不支持提示，避免暴露底层 history_remote_source_required 错误。
+
+### Main Changes
+
+- 将 SSH 会话历史能力限制为远程桥接已支持的 Claude Code 与 Codex CLI。
+- 在侧边栏和终端工具栏统一显示 Grok 暂不支持查看会话历史的中英文提示。
+- 补充能力矩阵测试、V1.3.7 交付记录和历史契约。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `60372d68` | (see git log) |
+
+### Testing
+
+- [OK] node --test scripts/projectCapabilities.test.mjs scripts/sshRemoteFileContext.test.mjs（5/5 通过）
+- [OK] npx tsc --noEmit（通过）
+- [OK] npm run build（通过）
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 90: 历史会话对话消息操作栏
+
+**Date**: 2026-08-18
+**Task**: 历史会话对话消息操作栏
+**Branch**: `master`
+
+### Summary
+
+对话页复用原文消息操作栏；编辑和插入通过既有闸门后切换原文表单，SSH/快照保持只读，并补齐 V1.3.7 记录与历史会话契约。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9f8602bb` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 91: Fix PR #219 Kimi cross-platform tests
+
+**Date**: 2026-08-19
+**Task**: Fix PR #219 Kimi cross-platform tests
+**Branch**: `agent/kimi-code-cli-hooks`
+
+### Summary
+
+Fixed CRLF-safe Kimi frontend test extraction and Unix-only SSH Agent planner coverage; validated and pushed the PR branch for review.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a9781941` | (see git log) |
+| `2152a22d` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 92: 修复 Kimi Hook 本地检测延迟
+
+**Date**: 2026-08-19
+**Task**: 修复 Kimi Hook 本地检测延迟
+**Branch**: `master`
+
+### Summary
+
+移除本地 Kimi Hook 状态与安装中的 CLI/doctor 子进程检测，修正空配置状态，保留 TOML 原子写入保护，并将 TEMP 发布记录整理到 V1.3.7。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `890f59d4` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 93: Review and harden PR 220 Kimi history
+
+**Date**: 2026-08-20
+**Task**: Review and harden PR 220 Kimi history
+**Branch**: `pr220`
+
+### Summary
+
+Reviewed PR #220 against current Kimi Code, fixed wire usage parsing, append-only index and tombstone behavior, session-id command validation, added regression coverage, ran full checks, and updated V1.3.7 documentation.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c52a9b7f` | (see git log) |
+
+### Status
+
+[OK] **Completed**

@@ -25,7 +25,8 @@ export type SshAuthMode =
 export type SshJumpMode = "none" | "host" | "proxy_jump";
 
 export type SshProxyType = "none" | "http" | "socks5" | "proxy_command";
-export type SshToolSource = "claude" | "codex";
+export type SshToolSource = "claude" | "codex" | "kimi";
+export type SshHistorySource = Extract<SshToolSource, "claude" | "codex">;
 export type SshToolIntegrationScopeKind = "hostPrimary" | "projectOverride" | "retainedRoot";
 export type SshToolIntegrationValidationState =
   | "unvalidated"
@@ -200,11 +201,11 @@ export interface SshRemoteHookInstallationRecord {
   managedEntries: number;
   adapterVersion: number;
   installedAt: number;
-  historySourceCandidate: {
-    source: SshToolSource;
+  historySourceCandidate?: {
+    source: SshHistorySource;
     canonicalConfigRoot: string;
     configRootHash: string;
-  };
+  } | null;
 }
 
 export interface SshRemoteHookConfigReport {
@@ -407,6 +408,7 @@ export type RemoteHandoffPhase = "pending" | "active" | "cancelling" | "recovery
 
 export interface RemoteHandoffSessionState {
   phase: RemoteHandoffPhase;
+  agent?: import("./remoteHandoff").RemoteHandoffAgent;
   cliSessionId: string;
   projectName: string;
   workDir: string;
@@ -751,7 +753,7 @@ export interface HistorySearchHit {
 
 export interface SshRemoteHistorySyncResult {
   sourceInstanceId: string;
-  source: SshToolSource;
+  source: SshHistorySource;
   installationId: string;
   remoteMachineId: string;
   sshUser: string;
@@ -773,7 +775,7 @@ export interface SshRemoteHistorySyncResult {
 }
 
 export interface SshRemoteResumePreflight {
-  source: SshToolSource;
+  source: SshHistorySource;
   sourceSessionId: string;
   sourceInstanceId: string;
   installationId: string;

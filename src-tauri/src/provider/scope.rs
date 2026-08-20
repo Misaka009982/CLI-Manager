@@ -248,7 +248,10 @@ async fn read_scope_override(
         .map_err(|_| "provider_scope_database_error".to_string())
 }
 
-fn parse_provider_reference(raw: Option<&str>, app_type: &str) -> Result<Option<String>, String> {
+pub(crate) fn parse_provider_reference(
+    raw: Option<&str>,
+    app_type: &str,
+) -> Result<Option<String>, String> {
     let Some(raw) = raw.filter(|value| !value.trim().is_empty()) else {
         return Ok(None);
     };
@@ -812,6 +815,24 @@ pub(crate) async fn release_snapshot(snapshot_id: String) -> Result<(), String> 
         fs::remove_dir_all(root).map_err(|_| "provider_snapshot_release_failed".to_string())?;
     }
     Ok(())
+}
+
+pub(crate) fn resolve_claude_settings_path(
+    snapshot_id: &str,
+    provider_id: &str,
+) -> Result<PathBuf, String> {
+    let (root, manifest) = read_manifest("claude", snapshot_id)?;
+    if manifest.app_type != "claude"
+        || manifest.provider_id != provider_id.trim()
+        || manifest.snapshot_id != snapshot_id
+    {
+        return Err("provider_snapshot_mismatch".to_string());
+    }
+    let path = root.join("claude").join("settings.json");
+    if !path.is_file() {
+        return Err("provider_snapshot_missing".to_string());
+    }
+    Ok(path)
 }
 
 pub(crate) async fn garbage_collect_snapshots(
