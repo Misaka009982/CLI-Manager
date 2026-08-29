@@ -22,6 +22,10 @@ import {
 
 export type DesktopPetERawStatus = "none" | "running" | "attention" | "done" | "failed";
 
+// 会话关闭后终态（完成/失败）在四色灯里保留多久：留一眼查看的时间，超时自动消失，
+// 避免已关掉的会话长期占着宠物端任务列表（仍可在超时前手动「清除」）。
+export const DESKTOP_PET_E_ENDED_SESSION_TTL_MS = 30_000;
+
 export interface DesktopPetETaskCandidate {
   sessionId: string;
   source?: DesktopPetEAgentSource | null;
@@ -32,6 +36,8 @@ export interface DesktopPetETaskCandidate {
   paneId?: string | null;
   daemonOnly?: boolean;
   sessionAlive?: boolean;
+  // 会话首次被观测为已关闭的时间戳，用于超时自动清除；会话恢复后重置为 null。
+  endedAt?: number | null;
   status: DesktopPetERawStatus;
   updatedAt: number;
   active?: boolean;
@@ -218,6 +224,7 @@ export function mergeDesktopPetECandidatesWithHistory(
   previousTerminalStates: readonly DesktopPetETaskCandidate[],
   current: readonly DesktopPetETaskCandidate[],
   liveSessionIds: ReadonlySet<string>,
+  now: number = Date.now(),
 ): DesktopPetETaskCandidate[] {
   const previousBySession = new Map(
     previousTerminalStates.map((candidate) => [candidate.sessionId, candidate]),
@@ -236,9 +243,15 @@ export function mergeDesktopPetECandidatesWithHistory(
   const retained = new Map<string, DesktopPetETaskCandidate>();
   for (const candidate of previousTerminalStates) {
     if (candidate.pendingAction || (candidate.status !== "done" && candidate.status !== "failed")) continue;
+    const alive = liveSessionIds.has(candidate.sessionId);
+    // 会话关闭后只再保留 TTL 时长：首次观测到关闭时记下 endedAt，超时就不再展示。
+    // 会话被恢复（又变回 alive）时清掉 endedAt，下次关闭重新计时。
+    const endedAt = alive ? null : candidate.endedAt ?? now;
+    if (endedAt !== null && now - endedAt >= DESKTOP_PET_E_ENDED_SESSION_TTL_MS) continue;
     retained.set(candidate.sessionId, {
       ...candidate,
-      sessionAlive: liveSessionIds.has(candidate.sessionId),
+      sessionAlive: alive,
+      endedAt,
     });
   }
 

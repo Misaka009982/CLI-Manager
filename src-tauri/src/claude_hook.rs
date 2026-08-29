@@ -857,7 +857,9 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
         ),
         "pi" => matches!(
             payload.event.as_str(),
-            "SessionStart" | "UserPromptSubmit" | "Stop" | "StopFailure"
+            // Notification：Pi 扩展把第三方扩展的 ctx.ui 对话框镜像成一条提醒，
+            // 让宠物端知道「终端里有对话框在等你」，回答仍在终端内完成。
+            "SessionStart" | "UserPromptSubmit" | "Notification" | "Stop" | "StopFailure"
         ),
         "opencode" => matches!(
             payload.event.as_str(),

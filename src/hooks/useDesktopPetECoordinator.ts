@@ -19,6 +19,7 @@ import {
   type DesktopPetESnapshot,
 } from "../lib/desktopPetE";
 import {
+  DESKTOP_PET_E_ENDED_SESSION_TTL_MS,
   deriveDesktopPetECandidates,
   deriveDesktopPetESnapshot,
   mergeDesktopPetECandidatesWithHistory,
@@ -166,6 +167,7 @@ export function useDesktopPetECoordinator({
   const [installedCodexPets, setInstalledCodexPets] = useState<InstalledPet[]>([]);
   const [notification, setNotification] = useState<DesktopPetENotification | null>(null);
   const [activityExpiryRevision, setActivityExpiryRevision] = useState(0);
+  const [endedExpiryRevision, setEndedExpiryRevision] = useState(0);
   const [runtimeState, setRuntimeState] = useState<DesktopPetERuntimeState>(EMPTY_RUNTIME_STATE);
   const [viewedTerminalTaskIds, setViewedTerminalTaskIds] = useState<ReadonlySet<string>>(() => new Set());
   const [clearedTaskIds, setClearedTaskIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -264,11 +266,30 @@ export function useDesktopPetECoordinator({
     terminalHistoryRef.current,
     currentCandidates,
     liveSessionIds,
-  ), [currentCandidates, liveSessionIds]);
+  ), [currentCandidates, endedExpiryRevision, liveSessionIds]);
 
   useEffect(() => {
     terminalHistoryRef.current = candidates;
   }, [candidates]);
+
+  // 已关闭会话的终态只保留 TTL 时长，到点主动重算一次快照把它移出四色灯；
+  // 期间没有终端活动也不会有别的重算触发点，所以必须自己安排这个定时器。
+  // 到期时间可能已经过去（例如宠物曾被关闭、跟踪暂停），此时 Math.max 会立刻触发一次重算。
+  useEffect(() => {
+    if (!tracking) return;
+    const now = Date.now();
+    let nextExpiry = Number.POSITIVE_INFINITY;
+    for (const candidate of candidates) {
+      if (candidate.endedAt == null) continue;
+      nextExpiry = Math.min(nextExpiry, candidate.endedAt + DESKTOP_PET_E_ENDED_SESSION_TTL_MS);
+    }
+    if (!Number.isFinite(nextExpiry)) return;
+    const timer = window.setTimeout(
+      () => setEndedExpiryRevision((current) => current + 1),
+      Math.max(16, nextExpiry - now + 50),
+    );
+    return () => window.clearTimeout(timer);
+  }, [candidates, tracking]);
 
   const unversionedSnapshot = useMemo(() => deriveDesktopPetESnapshot({
     instanceId: instanceIdRef.current,

@@ -67,6 +67,9 @@ struct PendingEntry {
     protocol: String,
     method: Option<String>,
     request_id: Option<Value>,
+    // 发起该请求的工具调用 ID。终端侧答完后 CLI 会发出带同一 ID 的
+    // ToolStop/AgentToolStop，靠它精确消除宠物端已作废的待处理项。
+    tool_use_id: Option<String>,
     hook_input: Value,
     action: Value,
     state: PendingState,
@@ -508,7 +511,10 @@ impl DesktopPetEAgentBroker {
 
     pub fn observe_hook(&self, payload: &Value) {
         let event = payload.get("event").and_then(Value::as_str).unwrap_or_default();
-        if !matches!(event, "UserPromptSubmit" | "Stop" | "StopFailure") {
+        if !matches!(
+            event,
+            "UserPromptSubmit" | "Stop" | "StopFailure" | "ToolStop" | "AgentToolStop"
+        ) {
             return;
         }
         let session_id = payload
@@ -519,6 +525,16 @@ impl DesktopPetEAgentBroker {
         let Some(session_id) = session_id else {
             return;
         };
+        // ToolStop/AgentToolStop 在每次工具结束时都会触发，只能靠 toolUseId 精确匹配。
+        // 缺少该 ID 时宁可不消除，也不能改成整个会话清空——否则会误杀无关的待处理项。
+        let tool_stop = matches!(event, "ToolStop" | "AgentToolStop");
+        let tool_use_id = payload
+            .get("toolUseId")
+            .and_then(Value::as_str)
+            .and_then(non_empty_text);
+        if tool_stop && tool_use_id.is_none() {
+            return;
+        }
 
         let mut removed = Vec::new();
         if let Ok(mut state) = self.shared.0.lock() {
@@ -526,10 +542,17 @@ impl DesktopPetEAgentBroker {
                 .pending
                 .iter()
                 .filter(|(_, entry)| {
-                    matches!(&entry.state, PendingState::Waiting)
-                        && entry.session_id == session_id
-                        && (matches!(event, "Stop" | "StopFailure")
-                            || action_adapter_mode(&entry.action) != Some("interactive"))
+                    if !matches!(&entry.state, PendingState::Waiting)
+                        || entry.session_id != session_id
+                    {
+                        return false;
+                    }
+                    if tool_stop {
+                        // 终端侧已给出答案，工具调用已结束：宠物端同一项已经作废。
+                        return entry.tool_use_id.as_deref() == tool_use_id.as_deref();
+                    }
+                    matches!(event, "Stop" | "StopFailure")
+                        || action_adapter_mode(&entry.action) != Some("interactive")
                 })
                 .map(|(id, _)| id.clone())
                 .collect::<Vec<_>>();
@@ -707,6 +730,7 @@ impl DesktopPetEAgentBroker {
                 protocol: request.protocol,
                 method: request.method,
                 request_id: request.request_id,
+                tool_use_id: request.tool_use_id.as_deref().and_then(non_empty_text),
                 hook_input: request.hook_input,
                 action,
                 state: PendingState::Waiting,
@@ -2785,6 +2809,7 @@ mod tests {
             protocol: "codex-app-server".to_string(),
             method: Some("item/tool/requestUserInput".to_string()),
             request_id: Some(json!(27)),
+            tool_use_id: None,
             hook_input: json!({}),
             action: json!({ "kind": "question" }),
             state: PendingState::Waiting,
@@ -2937,6 +2962,7 @@ mod tests {
             protocol: "codex-app-server".to_string(),
             method: Some("item/commandExecution/requestApproval".to_string()),
             request_id: Some(json!(29)),
+            tool_use_id: None,
             hook_input,
             action: json!({ "kind": "approval", "approvalChoices": choices }),
             state: PendingState::Waiting,
@@ -3053,6 +3079,7 @@ mod tests {
             protocol: "codex-app-server".to_string(),
             method: Some("mcpServer/elicitation/request".to_string()),
             request_id: Some(json!(28)),
+            tool_use_id: None,
             hook_input,
             action,
             state: PendingState::Waiting,
@@ -3103,6 +3130,110 @@ mod tests {
             })
             .unwrap();
         broker.observe_hook(&json!({ "event": "Stop", "tabId": "tab-1" }));
+        broker
+            .ack(AckRequest {
+                pending_action_id,
+                transport_action_id: Some("transport-1".to_string()),
+                success: true,
+                error: None,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn tool_stop_clears_only_the_matching_pending_action() {
+        // 终端里答完问题后，CLI 会发一条带同一 toolUseId 的 PostToolUse(ToolStop)。
+        // 宠物端同一项已经作废，应当被精确清除，而不必等 Stop。
+        let broker = DesktopPetEAgentBroker::new();
+        broker
+            .set_available(AvailabilityRequest {
+                instance_id: "frontend-1".to_string(),
+                available: true,
+                accept_new: true,
+            })
+            .unwrap();
+        let opened = broker
+            .open(open_request(
+                "claude-hook",
+                "claude",
+                "PermissionRequest",
+                json!({
+                    "tool_input": {
+                        "questions": [{
+                            "question": "Choose",
+                            "options": [{ "label": "A" }]
+                        }]
+                    }
+                }),
+            ))
+            .unwrap();
+        let pending_action_id = opened["pendingActionId"].as_str().unwrap().to_string();
+
+        // toolUseId 不一致：不能误杀其他工具调用留下的待处理项。
+        broker.observe_hook(&json!({
+            "event": "ToolStop",
+            "tabId": "tab-1",
+            "toolUseId": "tool-other",
+        }));
+        assert!(broker.shared.0.lock().unwrap().pending.contains_key(&pending_action_id));
+
+        // 缺少 toolUseId：宁可不清除，也不整会话清空。
+        broker.observe_hook(&json!({ "event": "ToolStop", "tabId": "tab-1" }));
+        assert!(broker.shared.0.lock().unwrap().pending.contains_key(&pending_action_id));
+
+        // toolUseId 相同：精确清除。
+        broker.observe_hook(&json!({
+            "event": "ToolStop",
+            "tabId": "tab-1",
+            "toolUseId": "tool-1",
+        }));
+        assert!(broker.shared.0.lock().unwrap().pending.is_empty());
+    }
+
+    #[test]
+    fn tool_stop_does_not_cancel_a_submitted_action_before_ack() {
+        // 宠物端已提交但协议侧还没 ack 时，ToolStop 不能把它撤掉，否则回答会丢。
+        let broker = DesktopPetEAgentBroker::new();
+        broker
+            .set_available(AvailabilityRequest {
+                instance_id: "frontend-1".to_string(),
+                available: true,
+                accept_new: true,
+            })
+            .unwrap();
+        let opened = broker
+            .open(open_request(
+                "claude-hook",
+                "claude",
+                "PermissionRequest",
+                json!({
+                    "tool_input": {
+                        "questions": [{
+                            "question": "Choose",
+                            "options": [{ "label": "A" }]
+                        }]
+                    }
+                }),
+            ))
+            .unwrap();
+        let pending_action_id = opened["pendingActionId"].as_str().unwrap().to_string();
+        broker
+            .submit(SubmitRequest {
+                pending_action_id: pending_action_id.clone(),
+                transport_action_id: "transport-1".to_string(),
+                answers: vec![DesktopPetEAgentAnswer {
+                    question_id: "0".to_string(),
+                    values: vec!["A".to_string()],
+                    custom_value: None,
+                }],
+                approval_value: None,
+            })
+            .unwrap();
+        broker.observe_hook(&json!({
+            "event": "ToolStop",
+            "tabId": "tab-1",
+            "toolUseId": "tool-1",
+        }));
         broker
             .ack(AckRequest {
                 pending_action_id,

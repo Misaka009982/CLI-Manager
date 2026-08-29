@@ -56,6 +56,12 @@ test("renderer keeps question scroll position and auto-hides the task bubble", (
   assert.match(source, /const SCROLL_CONTAINERS = \[\"\.questions\", \"\.approval-options\", \"\.task-list\"\]/);
   assert.match(source, /const scrollOffsets = captureScrollOffsets\(\);/);
   assert.match(source, /restoreScrollOffsets\(scrollOffsets\);/);
+  // 重建 DOM 同样会丢焦点与光标，自定义答案输入到一半就打不下去了。
+  assert.match(source, /const focusState = captureFocusState\(\);/);
+  assert.match(source, /restoreFocusState\(focusState\);/);
+  assert.match(source, /textarea\[data-custom="\$\{CSS\.escape\(element\.dataset\.custom\)\}"\]/);
+  assert.match(source, /focus\(\{ preventScroll: true \}\)/);
+  assert.match(source, /setSelectionRange\(state\.selectionStart, state\.selectionEnd\)/);
   assert.match(source, /const TASK_PANEL_AUTO_HIDE_MS = 5000;/);
   assert.match(source, /function syncTaskPanelAutoHide/);
   assert.match(source, /setAutoHidePaused\(Boolean\(target\?\.closest\(\"\.task-panel\"\)\)\)/);

@@ -147,6 +147,54 @@ test("terminal history retains only red and blue records and marks ended session
   ]);
 });
 
+test("closed sessions stamp endedAt and drop out of the four colors after the TTL", () => {
+  const ttl = state.DESKTOP_PET_E_ENDED_SESSION_TTL_MS;
+  const previous = [candidate("gone", "done", 100)];
+  const live = new Set();
+
+  const stamped = state.mergeDesktopPetECandidatesWithHistory(previous, [], live, 1_000);
+  assert.deepEqual(stamped.map((item) => [item.sessionId, item.sessionAlive, item.endedAt]), [
+    ["gone", false, 1_000],
+  ]);
+
+  // TTL 未到：保持原有 endedAt，不因为重算而续期。
+  const kept = state.mergeDesktopPetECandidatesWithHistory(stamped, [], live, 1_000 + ttl - 1);
+  assert.deepEqual(kept.map((item) => item.endedAt), [1_000]);
+  assert.deepEqual(snapshot(kept).counts, { green: 0, yellow: 0, red: 0, blue: 1 });
+
+  const expired = state.mergeDesktopPetECandidatesWithHistory(stamped, [], live, 1_000 + ttl);
+  assert.deepEqual(expired, []);
+  assert.deepEqual(snapshot(expired).counts, { green: 0, yellow: 0, red: 0, blue: 0 });
+});
+
+test("a restored session clears endedAt so the TTL restarts on the next close", () => {
+  const ttl = state.DESKTOP_PET_E_ENDED_SESSION_TTL_MS;
+  const closed = state.mergeDesktopPetECandidatesWithHistory(
+    [candidate("session", "done", 100)],
+    [],
+    new Set(),
+    1_000,
+  );
+  const restored = state.mergeDesktopPetECandidatesWithHistory(
+    closed,
+    [],
+    new Set(["session"]),
+    1_000 + ttl - 1,
+  );
+  assert.deepEqual(restored.map((item) => [item.sessionAlive, item.endedAt]), [[true, null]]);
+
+  // 重新计时：原本早已过期的时间点仍应保留。
+  const reclosed = state.mergeDesktopPetECandidatesWithHistory(
+    restored,
+    [],
+    new Set(),
+    1_000 + ttl * 3,
+  );
+  assert.deepEqual(reclosed.map((item) => [item.sessionAlive, item.endedAt]), [
+    [false, 1_000 + ttl * 3],
+  ]);
+});
+
 test("fallback terminal errors keep one stable task identity until the status changes", () => {
   const input = (generatedAt) => ({
     instanceId: "instance-1",

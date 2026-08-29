@@ -35,6 +35,49 @@ let autoHidePaused = false;
 const SCROLL_CONTAINERS = [".questions", ".approval-options", ".task-list"] as const;
 const INTERACTIVE_SURFACE_SELECTOR = ".task-panel, .action-panel, .lights, .pet-toolbar, .pet.missing";
 
+// 快照刷新（终端输出活动、心跳、后台任务轮询）会重建 DOM，正在输入的自定义答案
+// 会因此失去焦点与光标位置，用户无法继续打字。焦点目标用稳定选择器定位，
+// 因为重建后的元素是新节点，无法直接持有引用。
+interface FocusState {
+  selector: string;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+}
+
+function focusSelector(element: Element): string | null {
+  if (element instanceof HTMLTextAreaElement && element.dataset.custom) {
+    return `textarea[data-custom="${CSS.escape(element.dataset.custom)}"]`;
+  }
+  if (element instanceof HTMLInputElement && element.name) {
+    return `input[name="${CSS.escape(element.name)}"][value="${CSS.escape(element.value)}"]`;
+  }
+  return null;
+}
+
+function captureFocusState(): FocusState | null {
+  const active = document.activeElement;
+  if (!active || !app.contains(active)) return null;
+  const selector = focusSelector(active);
+  if (!selector) return null;
+  return active instanceof HTMLTextAreaElement
+    ? { selector, selectionStart: active.selectionStart, selectionEnd: active.selectionEnd }
+    : { selector, selectionStart: null, selectionEnd: null };
+}
+
+function restoreFocusState(state: FocusState | null): void {
+  if (!state) return;
+  const element = app.querySelector<HTMLElement>(state.selector);
+  if (!element) return;
+  element.focus({ preventScroll: true });
+  if (
+    element instanceof HTMLTextAreaElement
+    && state.selectionStart !== null
+    && state.selectionEnd !== null
+  ) {
+    element.setSelectionRange(state.selectionStart, state.selectionEnd);
+  }
+}
+
 function clearTaskPanelTimer(): void {
   if (taskPanelTimer === null) return;
   window.clearTimeout(taskPanelTimer);
@@ -295,8 +338,10 @@ function render(): void {
   const notification = notificationMarkup();
   const notificationClass = notification ? " notification-active" : "";
   const scrollOffsets = captureScrollOffsets();
+  const focusState = captureFocusState();
   app.innerHTML = `${notification}<div class="pet-shell${notificationClass}">${petMarkup()}${toolbarMarkup()}${lightsMarkup()}${statusMarkup()}${cliLabelMarkup()}</div>${taskListMarkup()}${actionPanelMarkup()}`;
   restoreScrollOffsets(scrollOffsets);
+  restoreFocusState(focusState);
   syncTaskPanelAutoHide();
   queueMicrotask(refreshMouseInteraction);
 }

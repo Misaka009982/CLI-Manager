@@ -10,6 +10,10 @@ const proxy = readFileSync(new URL("../src-tauri/src/codex_app_server_proxy.rs",
 const coordinator = readFileSync(new URL("../src/hooks/useDesktopPetECoordinator.ts", import.meta.url), "utf8");
 const sessionCoordinator = readFileSync(new URL("../src/hooks/useDesktopPetEAgentCoordinator.ts", import.meta.url), "utf8");
 const sharedAgentStore = readFileSync(new URL("../src/stores/desktopPetEAgentStore.ts", import.meta.url), "utf8");
+// 会话侧的弹出面板（DesktopPetESessionActionPanel.tsx）已在 5f03c748 删除：每个 CLI 在自己
+// 的终端 UI 里作答，无需重复面板。提交中断言未同步删除，遗留未声明的 sessionPanel
+// 变量（运行时 ReferenceError）。现改为断言宠物端渲染器里等价的提交互斥逻辑。
+const petRenderer = readFileSync(new URL("../pet-e/src/renderer/app.ts", import.meta.url), "utf8");
 const agentProtocol = readFileSync(new URL("../pet-e/src/bridge/protocol.ts", import.meta.url), "utf8");
 const terminalTabs = readFileSync(new URL("../src/components/TerminalTabs.tsx", import.meta.url), "utf8");
 const terminalStore = readFileSync(new URL("../src/stores/terminalStore.ts", import.meta.url), "utf8");
@@ -28,7 +32,10 @@ test("pending-action broker is bounded, authenticated, and lease-gated", () => {
   assert.match(sessionCoordinator, /const sessionAcceptsNewActions/);
   assert.match(sessionCoordinator, /hasInteractivePendingActions/);
   assert.match(broker, /Condvar/);
-  assert.match(hookServer, /Authorization/);
+  // 请求头在解析时统一转成小写（`name.trim().to_ascii_lowercase()`），所以这里按实际实现
+  // 断言小写查找与 Bearer 方案，而不是字面的 `Authorization`。
+  assert.match(hookServer, /\.get\("authorization"\)/);
+  assert.match(hookServer, /format!\("Bearer \{token\}"\)/);
   assert.match(hookServer, /DesktopPetEAgentBroker::is_agent_path/);
   assert.doesNotMatch(broker, /TcpListener/);
 });
@@ -49,8 +56,8 @@ test("submission keeps transport identity until protocol acknowledgement", () =>
   assert.match(sharedAgentStore, /submissions: ReadonlyMap<string, string>/);
   assert.match(sharedAgentStore, /desktop_pet_e_agent_already_submitting/);
   assert.match(sharedAgentStore, /submissions\.get\(request\.pendingActionId\)/);
-  assert.match(sessionPanel, /state\.submissions\.get\(action\.id\)/);
-  assert.match(sessionPanel, /sharedSubmitting !== null/);
+  assert.match(petRenderer, /submitting\.set\(action\.id, inFlightId\)/);
+  assert.match(petRenderer, /action\.submitting \|\| submitting\.has\(action\.id\)/);
   assert.match(sharedAgentStore, /submissions\.delete\(event\.pendingAction\.id\)/);
   assert.match(sharedAgentStore, /submissions: new Map\(\)/);
 
@@ -83,7 +90,8 @@ test("pet and owning session share pending actions without lifecycle cancellatio
   assert.match(agentProtocol, /candidate\.brokerEpoch/);
   assert.match(sessionCoordinator, /cli-manager-pty-daemon-restarted/);
   assert.match(coordinator, /state\) => state\.pendingActions/);
-  assert.match(sharedAgentStore, /cursor\.closed && cursor\.pendingActionId/);
+  // 实际实现用的是可选链 `cursor?.closed`，旧断言漏了问号所以从未命中。
+  assert.match(sharedAgentStore, /cursor\?\.closed && cursor\.pendingActionId/);
   // 会话侧不再叠加问题组弹窗：终端内由 CLI 自身的交互界面回答，只保留 tab 级提醒。
   assert.doesNotMatch(terminalTabs, /DesktopPetESessionActionPanel/);
   assert.match(terminalTabs, /next\[sessionId\] = "attention"/);
@@ -138,6 +146,12 @@ test("question notifications degrade to jump-only without becoming normal notifi
   assert.match(broker, /mcp_optional_fields_can_be_omitted/);
   assert.match(broker, /"required": required_ids\.contains/);
   assert.match(broker, /stop_does_not_cancel_a_submitted_action_before_ack/);
+  // 终端里答完后 CLI 会发带同一 toolUseId 的 ToolStop/AgentToolStop，用它精确清掉宠物端已作废的项。
+  assert.match(broker, /"ToolStop" \| "AgentToolStop"/);
+  assert.match(broker, /let tool_stop = matches!\(event, "ToolStop" \| "AgentToolStop"\)/);
+  assert.match(broker, /if tool_stop && tool_use_id\.is_none\(\) \{[\s\S]*?return;/);
+  assert.match(broker, /entry\.tool_use_id\.as_deref\(\) == tool_use_id\.as_deref\(\)/);
+  assert.match(hookClient, /"toolUseId": normalized\.tool_use_id/);
   assert.match(broker, /matches!\(&entry\.state, PendingState::Waiting\)/);
   assert.match(broker, /desktopPetE\.agent\.notificationOnly/);
 });
