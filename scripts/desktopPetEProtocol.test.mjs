@@ -23,7 +23,10 @@ test("Desktop Pet E commands and shutdown are registered in the Tauri applicatio
 test("the companion uses parent-child pipes and Windows process governance without a listener", () => {
   const manager = read("../src-tauri/src/commands/desktop_pet_e.rs");
 
-  assert.match(manager, /silent_command\(&runtime\.to_string_lossy\(\)\)/);
+  // 1f328073 起先用 normalize_process_path 规范化路径再交给 silent_command，旧断言仍按直接
+  // 传 runtime 的写法匹配，从那次重构后就一直未命中。
+  assert.match(manager, /let runtime_arg = normalize_process_path\(runtime\)/);
+  assert.match(manager, /silent_command\(&runtime_arg\.to_string_lossy\(\)\)/);
   assert.match(manager, /\.stdin\(Stdio::piped\(\)\)/);
   assert.match(manager, /\.stdout\(Stdio::piped\(\)\)/);
   assert.match(manager, /ChildJob::assign\(&child, "Desktop Pet E"\)/);

@@ -10,7 +10,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { verifyPetEPackage } from "./verify-pet-e-package.mjs";
+import { EXPECTED_RUNTIME_MANIFEST, verifyPetEPackage } from "./verify-pet-e-package.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRuntimeManifest = JSON.parse(readFileSync(path.join(repositoryRoot, "pet-e", "runtime-manifest.json"), "utf8"));
@@ -125,6 +125,7 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   const alphaRelease = readFileSync(path.join(repositoryRoot, ".github/workflows/alpha-release.yml"), "utf8");
   const prepareBundle = readFileSync(path.join(repositoryRoot, "scripts/prepare-bundle-binaries.mjs"), "utf8");
   const prepare = readFileSync(path.join(repositoryRoot, "scripts/prepare-pet-e-runtime.mjs"), "utf8");
+  const verifier = readFileSync(path.join(repositoryRoot, "scripts/verify-pet-e-package.mjs"), "utf8");
   const manager = readFileSync(path.join(repositoryRoot, "src-tauri/src/commands/desktop_pet_e.rs"), "utf8");
   const companion = readFileSync(path.join(repositoryRoot, "pet-e/src/main.ts"), "utf8");
   const portable = readFileSync(path.join(repositoryRoot, "scripts/package-portable.ps1"), "utf8");
@@ -139,7 +140,12 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   assert.match(prepareBundle, /\["\/d", "\/s", "\/c", "npm\.cmd", \.\.\.args\]/);
   assert.doesNotMatch(prepareBundle, /run\(npmCommand/);
   assert.match(prepare, /CLI_MANAGER_PET_E_RUNTIME_ARCHIVE/);
-  assert.match(prepare, /7665990f65b7d2f61671eb342b08c4b6f2e7ce302a269d56c2f3554fc8c8ce72/);
+  // 期望的 manifest（含 sha256）已集中到 verify-pet-e-package.mjs，prepare 从那里导入并逐项比对；
+  // 旧断言把哈希当成 prepare 自己的字面量，从抽取到公共模块后就一直未命中。
+  assert.match(prepare, /EXPECTED_RUNTIME_MANIFEST/);
+  assert.match(prepare, /if \(manifest\[key\] !== expected\) fail\(`manifest_\$\{key\}`\)/);
+  assert.match(verifier, /7665990f65b7d2f61671eb342b08c4b6f2e7ce302a269d56c2f3554fc8c8ce72/);
+  assert.equal(sourceRuntimeManifest.sha256, EXPECTED_RUNTIME_MANIFEST.sha256);
   assert.match(prepare, /appPackage|package\.json/);
   assert.match(prepare, /version: "1\.0\.0"/);
   assert.match(manager, /pet-e\/runtime\/electron\.exe/);

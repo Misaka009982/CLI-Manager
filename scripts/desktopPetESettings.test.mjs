@@ -104,5 +104,6 @@ test("pet selection uses validated Codex artwork buttons instead of a text selec
     settingsPageSource,
     /if \(petsLoading \|\| codexPets\.length === 0 \|\| desktopPetE\.petId\) return;/,
   );
-  assert.doesNotMatch(settingsPageSource, /<Select/);
+  // 用单词边界：折叠功能新增的 <SelectedPetSummary> 不应被当成下拉框误判。
+  assert.doesNotMatch(settingsPageSource, /<Select\b/);
 });

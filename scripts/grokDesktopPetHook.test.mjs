@@ -17,7 +17,8 @@ test("Grok keeps the existing synthetic PermissionRequest admission", () => {
 
 test("bypassPermissions suppresses only Grok approval prompts", () => {
   assert.match(hookClient, /Some\("bypassPermissions"\)/);
-  assert.match(hookClient, /hook_input\.get\("permissionMode"\)/);
+  // rustfmt 把这段拆成了多行（`hook_input` 与 `.get(...)` 不再相邻），旧断言要求两者紧贴所以失效。
+  assert.match(hookClient, /\.get\("permissionMode"\)\s*\.or_else\(\|\| hook_input\.get\("permission_mode"\)\)/);
   assert.match(hookClient, /"grok" =>/);
   assert.match(hookClient, /event != "PermissionRequest"/);
 });
