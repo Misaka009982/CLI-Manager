@@ -231,7 +231,13 @@ const SOURCES: &[SourceSpec] = &[
         default_label: "Grok Build",
         aliases: &[],
         location: SESSION_ROOT,
-        capabilities: NATIVE_READONLY_FILE,
+        capabilities: CapabilitySpec {
+            usage: "supported",
+            resume: "supported",
+            delete: "supported",
+            realtime_stats: "supported",
+            ..NATIVE_READONLY_FILE
+        },
         default_leaf: ".grok",
     },
     SourceSpec {
@@ -582,6 +588,16 @@ mod tests {
         ));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn grok_history_capabilities_include_delete_resume_and_realtime_stats() {
+        let grok = SOURCES.iter().find(|spec| spec.id == "grok").unwrap();
+        assert_eq!(grok.capabilities.delete, "supported");
+        assert_eq!(grok.capabilities.realtime_stats, "supported");
+        assert_eq!(grok.capabilities.resume, "supported");
+    }
+
+    #[cfg(windows)]
     #[test]
     fn grok_default_candidate_is_the_session_root() {
         let grok = SOURCES.iter().find(|spec| spec.id == "grok").unwrap();

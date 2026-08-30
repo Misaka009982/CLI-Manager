@@ -5,6 +5,10 @@ export interface Group {
   name: string;
   parent_id: string | null;
   sort_order: number;
+  /** 外观标记：单个 emoji 字符或内置图标 key；空串表示回退默认文件夹图标。 */
+  icon: string;
+  /** 外观标记：调色板 token（如 `p3`）；空串表示按名称 hash 自动配色。 */
+  color: string;
   created_at: string;
 }
 
@@ -25,7 +29,7 @@ export type SshAuthMode =
 export type SshJumpMode = "none" | "host" | "proxy_jump";
 
 export type SshProxyType = "none" | "http" | "socks5" | "proxy_command";
-export type SshToolSource = "claude" | "codex" | "kimi";
+export type SshToolSource = "claude" | "codex" | "kimi" | "grok";
 export type SshHistorySource = Extract<SshToolSource, "claude" | "codex">;
 export type SshToolIntegrationScopeKind = "hostPrimary" | "projectOverride" | "retainedRoot";
 export type SshToolIntegrationValidationState =
@@ -132,6 +136,18 @@ export interface SshAgentInstallPreview {
   artifactSha256: string;
   installRoot: string;
   installPath: string;
+  currentVersion: string;
+  distributionSource: "bundled" | "remote";
+}
+
+export interface SshAgentAvailableRelease {
+  action: "install" | "upgrade" | "reinstall" | "downgrade";
+  manifestUrl: string;
+  channel: string;
+  version: string;
+  protocolMin: number;
+  protocolMax: number;
+  publishedAt: string;
   currentVersion: string;
   distributionSource: "bundled" | "remote";
 }
@@ -306,6 +322,10 @@ export interface Project {
   ssh_host_id: string | null;
   remote_path: string;
   cli_config_root: string;
+  /** 外观标记：单个 emoji 字符或内置图标 key；空串表示按节点类型回退默认图标。 */
+  icon: string;
+  /** 外观标记：调色板 token（如 `p3`）；空串表示按名称 hash 自动配色。 */
+  color: string;
   created_at: string;
   updated_at: string;
 }
@@ -328,6 +348,8 @@ export interface CreateProjectInput {
   ssh_host_id?: string | null;
   remote_path?: string;
   cli_config_root?: string;
+  icon?: string;
+  color?: string;
 }
 
 export interface UpdateProjectInput {
@@ -349,6 +371,8 @@ export interface UpdateProjectInput {
   ssh_host_id?: string | null;
   remote_path?: string;
   cli_config_root?: string;
+  icon?: string;
+  color?: string;
 }
 
 export type TerminalScope =
@@ -360,6 +384,8 @@ export type TerminalScope =
 export interface CreateGroupInput {
   name: string;
   parent_id?: string | null;
+  icon?: string;
+  color?: string;
 }
 
 export type TreeNode =
@@ -884,6 +910,7 @@ export interface HistorySmartTitleSettings {
   providerId: string | null;
   modelId: string | null;
   enabledAt: number | null;
+  customPrompt: string;
 }
 
 export interface HistoryTitleProviderOption {
@@ -1061,9 +1088,11 @@ export interface RequestLogItem {
   requested_model?: string | null;
   outbound_model?: string | null;
   response_model?: string | null;
-  usage_status?: "complete" | "partial" | "missing" | "invalid";
+  usage_status?: "complete" | "partial" | "missing" | "invalid" | "not_applicable";
   status_code?: number | null;
   outcome?: string;
+  error_code?: string | null;
+  error_detail?: string | null;
   duration_ms?: number;
   attempt_count?: number;
   degraded?: boolean;

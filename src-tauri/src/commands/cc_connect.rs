@@ -990,8 +990,15 @@ fn trusted_binary_version(sha256: &str) -> Option<String> {
 }
 
 fn output_text(stdout: &[u8], stderr: &[u8]) -> String {
-    let stdout = String::from_utf8_lossy(stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    let decode = |bytes: &[u8]| {
+        crate::text_encoding::decode_text(bytes)
+            .map(|decoded| decoded.content)
+            .unwrap_or_else(|_| String::from_utf8_lossy(bytes).into_owned())
+            .trim()
+            .to_string()
+    };
+    let stdout = decode(stdout);
+    let stderr = decode(stderr);
     if stdout.is_empty() {
         stderr
     } else {
@@ -2408,6 +2415,34 @@ fn set_platform_allow_from(
     }
 }
 
+fn prepare_weixin_authorization_platforms(
+    profile: &mut CcConnectProfile,
+) -> Result<String, String> {
+    if profile.platform != CcConnectPlatform::Weixin {
+        return Err("select the Weixin platform before authorization".to_string());
+    }
+    hydrate_profile_platforms(profile);
+
+    let existing_allow_from = platform_profile(profile, CcConnectPlatform::Weixin)
+        .map(|item| item.allow_from)
+        .and_then(|value| normalize_allow_from(CcConnectPlatform::Weixin, &value).ok())
+        .unwrap_or_default();
+
+    for item in &mut profile.platforms {
+        if item.platform == CcConnectPlatform::Weixin {
+            item.enabled = true;
+            item.allow_from = "authorization-pending@im.wechat".to_string();
+        } else if item.enabled && normalize_allow_from(item.platform, &item.allow_from).is_err() {
+            // An unfinished draft for another platform cannot participate in a
+            // runnable profile. Preserve its values, but keep Weixin setup
+            // isolated instead of rejecting the QR authorization.
+            item.enabled = false;
+        }
+    }
+    profile.allow_from = "authorization-pending@im.wechat".to_string();
+    Ok(existing_allow_from)
+}
+
 fn normalize_profile(
     manager: &CcConnectManager,
     mut profile: CcConnectProfile,
@@ -2563,25 +2598,25 @@ fn default_agent_command(agent: CcConnectAgent) -> &'static str {
     }
 }
 
-fn resolve_local_agent_program(program: &str, work_dir: &Path) -> Result<PathBuf, String> {
-    let configured = Path::new(program);
-    if configured.is_absolute() || program.contains(['/', '\\']) {
-        let candidate = if configured.is_absolute() {
-            configured.to_path_buf()
-        } else {
-            work_dir.join(configured)
-        };
-        let candidate = candidate
-            .canonicalize()
-            .map_err(|_| "handoff_agent_unavailable".to_string())?;
-        return candidate
-            .is_file()
-            .then_some(candidate)
-            .ok_or_else(|| "handoff_agent_unavailable".to_string());
+fn directory_matches(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
     }
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
 
-    let path_value = env::var_os("PATH").ok_or_else(|| "handoff_agent_unavailable".to_string())?;
-    for directory in env::split_paths(&path_value) {
+fn resolve_program_from_path(
+    program: &str,
+    path_value: &std::ffi::OsStr,
+    skip_dir: Option<&Path>,
+) -> Result<PathBuf, String> {
+    for directory in env::split_paths(path_value) {
+        if skip_dir.is_some_and(|wrapper| directory_matches(&directory, wrapper)) {
+            continue;
+        }
         #[cfg(target_os = "windows")]
         let candidates = if Path::new(program).extension().is_some() {
             vec![program.to_string()]
@@ -2618,6 +2653,38 @@ fn resolve_local_agent_program(program: &str, work_dir: &Path) -> Result<PathBuf
         }
     }
     Err("handoff_agent_unavailable".to_string())
+}
+
+#[cfg(all(test, unix))]
+fn resolve_codex_launcher_from_path(
+    wrapper_dir: &Path,
+    path_value: impl AsRef<std::ffi::OsStr>,
+) -> Result<PathBuf, String> {
+    resolve_program_from_path("codex", path_value.as_ref(), Some(wrapper_dir))
+}
+
+fn resolve_local_agent_program(program: &str, work_dir: &Path) -> Result<PathBuf, String> {
+    let configured = Path::new(program);
+    if configured.is_absolute() || program.contains(['/', '\\']) {
+        let candidate = if configured.is_absolute() {
+            configured.to_path_buf()
+        } else {
+            work_dir.join(configured)
+        };
+        let candidate = candidate
+            .canonicalize()
+            .map_err(|_| "handoff_agent_unavailable".to_string())?;
+        return candidate
+            .is_file()
+            .then_some(candidate)
+            .ok_or_else(|| "handoff_agent_unavailable".to_string());
+    }
+
+    let path_value = env::var_os("PATH").ok_or_else(|| "handoff_agent_unavailable".to_string())?;
+    let skip_wrapper = (program == "codex" || program.eq_ignore_ascii_case("codex.exe"))
+        .then(|| remote_manager_dir().ok().map(|dir| dir.join("bin")))
+        .flatten();
+    resolve_program_from_path(program, &path_value, skip_wrapper.as_deref())
 }
 
 fn has_handoff_session_argument(agent: CcConnectAgent, argument: &str) -> bool {
@@ -4752,34 +4819,7 @@ impl CcConnectManager {
         }
 
         let mut profile = request.profile;
-        if profile.platform != CcConnectPlatform::Weixin {
-            return Err("select the Weixin platform before authorization".to_string());
-        }
-        hydrate_profile_platforms(&mut profile);
-        let existing_allow_from = platform_profile(&profile, CcConnectPlatform::Weixin)
-            .map(|item| item.allow_from)
-            .unwrap_or_default();
-        let existing_allow_from = if existing_allow_from.trim().is_empty() {
-            String::new()
-        } else {
-            normalize_allow_from(CcConnectPlatform::Weixin, &existing_allow_from)?
-        };
-        if let Some(item) = profile
-            .platforms
-            .iter_mut()
-            .find(|item| item.platform == CcConnectPlatform::Weixin)
-        {
-            item.enabled = true;
-        }
-        set_platform_allow_from(
-            &mut profile,
-            CcConnectPlatform::Weixin,
-            if existing_allow_from.is_empty() {
-                "authorization-pending@im.wechat".to_string()
-            } else {
-                existing_allow_from.clone()
-            },
-        );
+        let existing_allow_from = prepare_weixin_authorization_platforms(&mut profile)?;
         let mut profile = normalize_profile(self, profile)?;
         set_platform_allow_from(&mut profile, CcConnectPlatform::Weixin, existing_allow_from);
 
@@ -6313,6 +6353,14 @@ mod tests {
     }
 
     #[test]
+    fn process_output_decodes_utf8_and_gbk_diagnostics() {
+        assert_eq!(output_text(b"ready", b"ignored"), "ready");
+        let (encoded, _, had_errors) = encoding_rs::GBK.encode("系统找不到指定的路径。\r\n");
+        assert!(!had_errors);
+        assert_eq!(output_text(&[], &encoded), "系统找不到指定的路径。");
+    }
+
+    #[test]
     fn profile_without_yolo_field_defaults_to_safe_mode() {
         let project = tempfile::tempdir().unwrap();
         let mut value = serde_json::to_value(sample_profile(project.path())).unwrap();
@@ -6504,6 +6552,7 @@ mod tests {
             .iter()
             .any(|code| code == "proxy_invalid"));
     }
+    #[cfg(windows)]
     #[test]
     fn git_safe_directory_is_scoped_to_the_registered_project() {
         let environment =
@@ -6689,6 +6738,100 @@ mod tests {
             }]
         );
         assert_eq!(profile.allow_from, "123456789");
+    }
+
+    #[test]
+    fn weixin_authorization_ignores_incomplete_unrelated_platform_drafts() {
+        let project = tempfile::tempdir().unwrap();
+        let mut profile = sample_profile(project.path());
+        profile.platform = CcConnectPlatform::Weixin;
+        profile.allow_from = "legacy-invalid-id".to_string();
+        profile.platforms = vec![
+            CcConnectPlatformProfile {
+                platform: CcConnectPlatform::Telegram,
+                enabled: true,
+                allow_from: String::new(),
+            },
+            CcConnectPlatformProfile {
+                platform: CcConnectPlatform::Feishu,
+                enabled: true,
+                allow_from: "ou_owner".to_string(),
+            },
+            CcConnectPlatformProfile {
+                platform: CcConnectPlatform::Weixin,
+                enabled: true,
+                allow_from: "legacy-invalid-id".to_string(),
+            },
+        ];
+
+        let existing = prepare_weixin_authorization_platforms(&mut profile).unwrap();
+
+        assert!(existing.is_empty());
+        let telegram = platform_profile(&profile, CcConnectPlatform::Telegram).unwrap();
+        assert!(!telegram.enabled);
+        assert!(telegram.allow_from.is_empty());
+        let feishu = platform_profile(&profile, CcConnectPlatform::Feishu).unwrap();
+        assert!(feishu.enabled);
+        assert_eq!(feishu.allow_from, "ou_owner");
+        let weixin = platform_profile(&profile, CcConnectPlatform::Weixin).unwrap();
+        assert!(weixin.enabled);
+        assert_eq!(weixin.allow_from, "authorization-pending@im.wechat");
+        assert_eq!(profile.allow_from, "authorization-pending@im.wechat");
+    }
+
+    #[test]
+    fn weixin_authorization_preserves_valid_existing_allowlist() {
+        let project = tempfile::tempdir().unwrap();
+        let mut profile = sample_profile(project.path());
+        profile.platform = CcConnectPlatform::Weixin;
+        profile.platforms = vec![
+            CcConnectPlatformProfile {
+                platform: CcConnectPlatform::Telegram,
+                enabled: true,
+                allow_from: "123456789".to_string(),
+            },
+            CcConnectPlatformProfile {
+                platform: CcConnectPlatform::Weixin,
+                enabled: true,
+                allow_from: "owner@im.wechat".to_string(),
+            },
+        ];
+
+        let existing = prepare_weixin_authorization_platforms(&mut profile).unwrap();
+
+        assert_eq!(existing, "owner@im.wechat");
+        assert!(
+            platform_profile(&profile, CcConnectPlatform::Telegram)
+                .unwrap()
+                .enabled
+        );
+    }
+
+    #[test]
+    fn regular_profile_validation_still_rejects_incomplete_enabled_platforms() {
+        let project = tempfile::tempdir().unwrap();
+        let mut profile = sample_profile(project.path());
+        profile.platform = CcConnectPlatform::Weixin;
+        profile.allow_from = "owner@im.wechat".to_string();
+        profile.platforms = vec![
+            CcConnectPlatformProfile {
+                platform: CcConnectPlatform::Telegram,
+                enabled: true,
+                allow_from: String::new(),
+            },
+            CcConnectPlatformProfile {
+                platform: CcConnectPlatform::Weixin,
+                enabled: true,
+                allow_from: "owner@im.wechat".to_string(),
+            },
+        ];
+
+        let error = normalize_profile(&CcConnectManager::new(), profile).unwrap_err();
+
+        assert_eq!(
+            error,
+            "allow_from must contain at least one explicit user ID"
+        );
     }
 
     #[test]
@@ -7015,6 +7158,7 @@ allow_from = ""
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn codex_launch_environment_forces_provider_without_embedding_secrets() {
         let mut command = Command::new("cc-connect");
@@ -7082,6 +7226,7 @@ allow_from = ""
             .any(|value| value == "sk-provider-secret"));
     }
 
+    #[cfg(windows)]
     #[test]
     fn codex_launch_environment_clears_provider_overrides_when_unregistered() {
         let mut command = Command::new("cc-connect");
@@ -7114,6 +7259,7 @@ allow_from = ""
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn codex_launch_environment_omits_empty_registered_launcher_args() {
         let mut command = Command::new("cc-connect");

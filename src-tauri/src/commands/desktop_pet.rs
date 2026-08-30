@@ -1534,7 +1534,10 @@ mod tests {
         assert!(!valid_codex_pet_id("banana--cat"));
         assert!(safe_relative_file("assets/pet.svg").is_some());
         assert!(safe_relative_file("../pet.svg").is_none());
+        #[cfg(windows)]
         assert!(safe_relative_file("C:/pet.svg").is_none());
+        #[cfg(not(windows))]
+        assert!(safe_relative_file("/pet.svg").is_none());
     }
 
     #[test]

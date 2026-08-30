@@ -423,6 +423,22 @@ fn request_control(
     }
 }
 
+fn reset_all_daemon_circuits(
+    client: Arc<DaemonClient>,
+    app_type: &str,
+) -> Result<(), RoutingError> {
+    let event = request_control(
+        Some(client.clone()),
+        ClientFrame::RoutingResetCircuit {
+            id: client.next_request_id(),
+            app_type: app_type.to_string(),
+            provider_id: String::new(),
+        },
+    )?;
+    let _ = routing_status(event)?;
+    Ok(())
+}
+
 fn merge_daemon_circuits(
     mut state: RoutingFailoverState,
     client: Option<Arc<DaemonClient>>,
@@ -494,10 +510,17 @@ pub fn routing_get_failover_queue(
 
 #[tauri::command]
 pub fn routing_set_failover_enabled(
+    daemon_bridge: State<'_, DaemonBridge>,
     app_type: String,
     enabled: bool,
 ) -> Result<RoutingFailoverState, RoutingError> {
-    block_on(routing::set_failover_enabled(&app_type, enabled))
+    let app_type = routing::normalize_routing_app_type(&app_type).map_err(map_input_error)?;
+    let client = daemon_bridge.get();
+    if let Some(client) = client.clone() {
+        reset_all_daemon_circuits(client, &app_type)?;
+    }
+    let state = block_on(routing::set_failover_enabled(&app_type, enabled))?;
+    Ok(merge_daemon_circuits(state, client, &app_type))
 }
 
 #[tauri::command]
@@ -594,15 +617,7 @@ pub fn routing_reset_circuit(
     let client = daemon_bridge
         .get()
         .ok_or_else(RoutingError::service_unavailable)?;
-    let event = request_control(
-        Some(client.clone()),
-        ClientFrame::RoutingResetCircuit {
-            id: client.next_request_id(),
-            app_type: app_type.clone(),
-            provider_id: String::new(),
-        },
-    )?;
-    let _ = routing_status(event)?;
+    reset_all_daemon_circuits(client.clone(), &app_type)?;
     if let Some(first_provider_id) = first_provider_id {
         let current_provider_id = block_on(routing::current_provider_id(&app_type))?;
         if current_provider_id != first_provider_id {

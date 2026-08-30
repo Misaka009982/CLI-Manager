@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getDb } from "../lib/db";
 import { createPerfMarker, logInfo, logWarn } from "../lib/logger";
+import { queryClient } from "../lib/queryClient";
 import { normalizeHistoryProjectPaths, resolveHistoryProjectPath } from "../lib/historyProjectPaths";
 import { buildSshAgentHistoryContext, type SshAgentHistoryContext } from "../lib/sshAgentHistory";
 import { ensureHistorySourceSettingsLoaded, getHistoryPathArgs, getHistoryPathArgsSync } from "../lib/historyPathArgs";
@@ -110,6 +111,8 @@ interface HistoryStore {
   focusedMessageSeq: number;
   metaMap: SessionMetaMap;
   generatedTitleMap: GeneratedTitleMap;
+  /** 当前 WebView 已发起、尚未收到最终标题结果的会话；不持久化。 */
+  smartTitleInFlightSessionKeys: Set<string>;
   focusGlobalSearchSeq: number;
   focusSessionSearchSeq: number;
   indexStatus: HistoryIndexStatus;
@@ -805,19 +808,24 @@ export interface FetchHistoryRequestLogStatsOptions {
   force?: boolean;
 }
 
-let requestLogSyncPromise: Promise<unknown> | null = null;
+let requestLogSyncPromise: Promise<RequestLogSyncResult> | null = null;
+
+function requestLogSyncChanged(result: RequestLogSyncResult): boolean {
+  return result.changed_files > 0 || result.removed_files > 0 || result.written_rows > 0;
+}
+
+function invalidateRequestLogQueries(): void {
+  void queryClient.invalidateQueries({ queryKey: ["historyRequestLogs"] });
+  void queryClient.invalidateQueries({ queryKey: ["historyRequestLogStats"] });
+}
+
+function invalidateHistoryStatsQueries(): void {
+  void queryClient.invalidateQueries({ queryKey: ["historyStats"] });
+}
 
 export async function syncHistoryRequestLogs(force = false): Promise<RequestLogSyncResult> {
   if (requestLogSyncPromise && !force) {
-    await requestLogSyncPromise;
-    return {
-      scanned_files: 0,
-      changed_files: 0,
-      removed_files: 0,
-      written_rows: 0,
-      failed_files: 0,
-      synced_at_ms: 0,
-    };
+    return requestLogSyncPromise;
   }
   const pathArgs = await getHistoryPathArgs();
   const promise = invoke<RequestLogSyncResult>("history_sync_request_logs", {
@@ -826,7 +834,10 @@ export async function syncHistoryRequestLogs(force = false): Promise<RequestLogS
   });
   requestLogSyncPromise = promise;
   try {
-    return await promise;
+    const result = await promise;
+    if (requestLogSyncChanged(result)) invalidateRequestLogQueries();
+    invalidateHistoryStatsQueries();
+    return result;
   } finally {
     if (requestLogSyncPromise === promise) requestLogSyncPromise = null;
   }
@@ -835,7 +846,6 @@ export async function syncHistoryRequestLogs(force = false): Promise<RequestLogS
 export async function fetchHistoryRequestLogStats(
   options: FetchHistoryRequestLogStatsOptions,
 ): Promise<RequestLogStatsPayload> {
-  await syncHistoryRequestLogs(options.force ?? false);
   const filters = {
     source: normalizeSourceFilter(options.sourceFilter),
     project_key: options.projectKey?.trim() || null,
@@ -1079,7 +1089,6 @@ export async function fetchTodayProjectStats(
   const normalizedProjectPaths = normalizeHistoryProjectPaths(projectPaths ?? []);
   const hasProjectPaths = normalizedProjectPaths.length > 0;
   try {
-    await syncHistoryRequestLogs(false);
     const raw = await invoke<unknown>("history_get_stats", {
       source: source ?? null,
       ...(await getHistoryPathArgs()),
@@ -2215,6 +2224,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   focusedMessageSeq: 0,
   metaMap: {},
   generatedTitleMap: {},
+  smartTitleInFlightSessionKeys: new Set(),
   focusGlobalSearchSeq: 0,
   focusSessionSearchSeq: 0,
   indexStatus: { ...DEFAULT_HISTORY_INDEX_STATUS },
@@ -2753,6 +2763,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       return;
     }
     await ensureHistoryIndexListener();
+    const activeSessionKey = get().activeSessionKey;
     const raw = await invoke<unknown>("history_refresh_index", {
       ...(await getHistoryPathArgs()),
       wait: true,
@@ -2763,6 +2774,16 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     }
     set({ indexStatus: normalizeIndexStatus(raw) });
     await get().loadSessions({ background: true });
+    // Refreshing the index must also replace the currently open detail; otherwise
+    // the editor can keep rendering the pre-delete snapshot until another session
+    // is opened.
+    if (activeSessionKey) {
+      if (get().sessions.some((session) => session.sessionKey === activeSessionKey)) {
+        await get().openSession(activeSessionKey);
+      } else {
+        set({ activeSessionKey: null, activeSession: null });
+      }
+    }
     const query = get().globalQuery;
     if ([...query.trim()].length >= MIN_GLOBAL_SEARCH_CHARS) {
       await get().runGlobalSearch(query);
@@ -3416,6 +3437,9 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       throw new Error("history_title_pending");
     }
     smartTitleRequestKinds.set(sessionKey, triggerKind);
+    set((state) => ({
+      smartTitleInFlightSessionKeys: new Set(state.smartTitleInFlightSessionKeys).add(sessionKey),
+    }));
     try {
       const target = get().sessions.find((item) => item.sessionKey === sessionKey);
       if (!target) throw new Error("history_title_session_missing");
@@ -3473,6 +3497,12 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     } finally {
       if (smartTitleRequestKinds.get(sessionKey) === triggerKind) {
         smartTitleRequestKinds.delete(sessionKey);
+        set((state) => {
+          if (!state.smartTitleInFlightSessionKeys.has(sessionKey)) return {};
+          const smartTitleInFlightSessionKeys = new Set(state.smartTitleInFlightSessionKeys);
+          smartTitleInFlightSessionKeys.delete(sessionKey);
+          return { smartTitleInFlightSessionKeys };
+        });
       }
     }
   },

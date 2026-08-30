@@ -1340,6 +1340,34 @@ daemon connected -> reconcile persisted intent -> publish bridge
 - Correct: manual mode stores `[B]` and hot-switches to B; automatic mode stores
   `[A, B]` and lets failover traverse it.
 
+## Scenario: Automatic failover circuit lifecycle (2026-08-19)
+
+### 1. Scope / Trigger
+
+- Trigger: the user enables or disables automatic failover for one app type.
+- Goal: prevent a circuit state from leaking across failover toggle cycles or
+  appearing while the app is in manual hot-switch mode.
+
+### 2. Contracts
+
+- A successful automatic-failover toggle resets every daemon circuit entry for
+  that app type before the new mode is used; other app types are unchanged.
+- When automatic failover is disabled, provider surfaces derive availability
+  from provider readiness and do not render cached `open` or `halfOpen` circuit
+  labels from daemon snapshots.
+- Re-enabling automatic failover starts from closed circuit counters; later
+  real upstream failures may establish new circuit state normally.
+- The reset is runtime-only. It does not change provider order, the saved
+  queue, the current provider, or circuit policy parameters.
+
+### 3. Tests Required
+
+- Assert the app-wide reset uses an empty provider ID and clears all provider
+  counters for the selected app type.
+- Verify both provider surfaces hide open/half-open labels while automatic
+  failover is disabled and expose newly established state after re-enabling.
+- Verify toggling one app type does not reset another app type's circuits.
+
 ## Scenario: WSL distribution enumeration with deferred Home detection (2026-08-11)
 
 ### 1. Scope / Trigger

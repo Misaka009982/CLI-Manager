@@ -13,6 +13,7 @@ import {
   GitCompare,
   History,
   ListChecks,
+  LoaderCircle,
   Pencil,
   Sparkles,
   Square,
@@ -21,7 +22,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { toast } from "sonner";
 import aiAvatarUrl from "../../assets/history-ai-avatar.svg";
 import userAvatarUrl from "../../assets/history-user-avatar.svg";
@@ -60,6 +61,7 @@ interface SessionDetailPaneProps {
   activeView: HistorySessionView | null;
   activeSession: HistorySessionDetail | null;
   loadingSessionDetail: boolean;
+  smartTitlePending: boolean;
   aliasDraft: string;
   tagsDraft: string;
   tagSuggestions: string[];
@@ -476,6 +478,8 @@ function HistoryMessageCard({
   const messageMeta = formatMessageMeta(message);
   const [open, setOpen] = useState(forceOpen);
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const insertTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messageEditable = isHistoryMessageEditable(message, canEdit);
   const selectable = selectionMode && messageEditable;
 
@@ -486,6 +490,14 @@ function HistoryMessageCard({
   useEffect(() => {
     if (cardRef.current) measureElement(cardRef.current);
   }, [measureElement, open, isEditing, isInserting]);
+
+  useLayoutEffect(() => {
+    const textarea = isEditing ? editTextareaRef.current : isInserting ? insertTextareaRef.current : null;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+    if (cardRef.current) measureElement(cardRef.current);
+  }, [editDraft, insertDraft, isEditing, isInserting, measureElement]);
 
   const setCardRef = (element: HTMLDivElement | null) => {
     cardRef.current = element;
@@ -582,6 +594,7 @@ function HistoryMessageCard({
           {isEditing ? (
             <div className="ui-history-message-edit">
               <textarea
+                ref={editTextareaRef}
                 autoFocus
                 value={editDraft}
                 onChange={(event) => onEditDraftChange(event.target.value)}
@@ -658,6 +671,7 @@ function HistoryMessageCard({
               </span>
             </div>
             <textarea
+              ref={insertTextareaRef}
               autoFocus
               placeholder={t("history.edit.insertPlaceholder")}
               value={insertDraft}
@@ -706,6 +720,7 @@ export function SessionDetailPane({
   activeView,
   activeSession,
   loadingSessionDetail,
+  smartTitlePending,
   aliasDraft,
   tagsDraft,
   tagSuggestions,
@@ -825,6 +840,7 @@ export function SessionDetailPane({
   }
 
   const sourceIcon = resolveHistorySourceIconKey(activeView.source);
+  const smartTitleGenerationPending = smartTitlePending || activeView.generatedTitle?.state === "pending";
 
   const copyText = (text: string, label: string) => {
     void navigator.clipboard
@@ -991,18 +1007,31 @@ export function SessionDetailPane({
             <>
               <button
                 onClick={onGenerateSmartTitle}
-                disabled={loadingSessionDetail || !activeSession || activeView.generatedTitle?.state === "pending"}
+                disabled={loadingSessionDetail || !activeSession || smartTitleGenerationPending}
                 aria-label={t(
-                  activeView.generatedTitle
+                  smartTitleGenerationPending
+                    ? "history.smartTitle.pending"
+                    : activeView.generatedTitle
                     ? "history.smartTitle.regenerate"
                     : "history.smartTitle.generate",
                 )}
+                aria-busy={smartTitleGenerationPending || undefined}
                 className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
                 style={{ color: "var(--accent)" }}
-                title={t("history.smartTitle.generate")}
+                title={t(
+                  smartTitleGenerationPending
+                    ? "history.smartTitle.pending"
+                    : activeView.generatedTitle
+                      ? "history.smartTitle.regenerate"
+                      : "history.smartTitle.generate",
+                )}
               >
-                <Sparkles size={12} />
-                {activeView.generatedTitle?.state === "pending"
+                {smartTitleGenerationPending ? (
+                  <LoaderCircle size={12} className="animate-spin" />
+                ) : (
+                  <Sparkles size={12} />
+                )}
+                {smartTitleGenerationPending
                   ? t("history.smartTitle.pending")
                   : activeView.generatedTitle
                     ? t("history.smartTitle.regenerate")
@@ -1011,7 +1040,7 @@ export function SessionDetailPane({
               {activeView.generatedTitle?.title ? (
                 <button
                   onClick={onClearSmartTitle}
-                  disabled={loadingSessionDetail}
+                  disabled={loadingSessionDetail || smartTitleGenerationPending}
                   aria-label={t("history.smartTitle.clear")}
                   className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
                   title={t("history.smartTitle.clear")}

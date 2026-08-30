@@ -1101,3 +1101,135 @@ Reviewed PR #220 against current Kimi Code, fixed wire usage parsing, append-onl
 ### Status
 
 [OK] **Completed**
+
+
+## Session 94: Fix provider dialog layering and terminal file navigation
+
+**Date**: 2026-08-21
+**Task**: Fix provider dialog layering and terminal file navigation
+**Branch**: `master`
+
+### Summary
+
+Raised the provider delete confirmation above its parent modal and normalized slash-form Windows file paths at the Explorer boundary, with regression coverage and V1.3.8 release records.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `575f903e` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 95: 修复 PR #224 Grok Hook 配置恢复
+
+**Date**: 2026-08-21
+**Task**: 修复 PR #224 Grok Hook 配置恢复
+**Branch**: `agent/grok-ssh-hooks-history`
+
+### Summary
+
+修复 Grok 兼容 Hook 卸载覆盖用户配置的问题，补齐 Linux 测试编译与 Windows 测试告警清理，并已推送至 PR #224。
+
+### Main Changes
+
+- Grok compat 配置以 installation id marker 记录原始状态，只恢复本实例持有的 true/缺失值。
+- 补充注释、既有 false、外部实例、用户改写、缺失表和 dotted TOML 的回归测试。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dde0f550` | (see git log) |
+| `84326c38` | (see git log) |
+| `e4c62bc2` | (see git log) |
+
+### Testing
+
+- [OK] npx tsc --noEmit；cargo check/test；SSH Agent 90 项主机测试；Linux x86_64/aarch64 测试编译；34 项前端脚本测试通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- PR #224 仍与 master 冲突；解决冲突并合并后，从上游 master 创建 ssh-agent-v0.1.10 标签。
+
+
+## Session 96: Fix file preview refresh and file tab menu
+
+**Date**: 2026-08-24
+**Task**: Fix file preview refresh and file tab menu
+**Branch**: `master`
+
+### Summary
+
+Fixed Markdown preview zoom, persistent local/WSL/SSH file refresh, Markdown table Diff token layout, and terminal-themed file tab close actions.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9c6aa22d` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 97: History smart-title prompt and responsiveness
+
+**Date**: 2026-08-26
+**Task**: History smart-title prompt and responsiveness
+**Branch**: `master`
+
+### Summary
+
+Added a global local smart-title prompt, persisted save feedback, non-blocking Provider execution, shared SQLite contention handling, and immediate generation loading feedback.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `65a6b5cf` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 98: 修复 macOS Fcitx5 终端中文重复输入
+
+**Date**: 2026-08-26
+**Task**: 修复 macOS Fcitx5 终端中文重复输入
+**Branch**: `master`
+
+### Summary
+
+在共享终端输入边界修复 macOS Fcitx5 的同源 CJK 重发，并补齐回归测试与规范。
+
+### Main Changes
+
+- 新增 Process-key 检查点的同源 CJK 去重，覆盖普通 Shell、Codex 与其他内置 CLI。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b669c1db` | (see git log) |
+
+### Testing
+
+- [OK] node --test scripts/terminalImeInputDedup.test.mjs scripts/terminalImeComposition.test.mjs；npx tsc --noEmit；npm run build。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 待 macOS + Fcitx5 真机补测中文候选、标点、ASCII、分屏与切换标签场景。

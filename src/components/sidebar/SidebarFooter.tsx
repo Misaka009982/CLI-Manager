@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { BarChart3, Settings } from "../icons";
+import { BarChart3, Handshake, Settings } from "../icons";
 import { SyncStatusIndicator } from "./SyncStatusIndicator";
 import type { SettingsTab } from "../SettingsModal";
 import { getErrorMessage, getKimiHookErrorMessage, getPiHookErrorMessage } from "../../lib/hookErrors";
@@ -221,7 +221,7 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
       type="button"
       onClick={handleClick}
       disabled={loading || working}
-      className="ui-focus-ring ui-icon-action ui-sidebar-action-hook"
+      className="ui-focus-ring ui-icon-action ui-sidebar-action-hook shrink-0"
       data-hook-status={lightStatus}
       title={working ? t("sidebar.hook.working") : title}
       aria-label={title}
@@ -237,7 +237,7 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
   const statsButton = toolbarVisibility.stats ? (
     <button
       onClick={onOpenStats}
-      className="ui-focus-ring ui-icon-action ui-sidebar-action-stats"
+      className="ui-focus-ring ui-icon-action ui-sidebar-action-stats shrink-0"
       title={t("sidebar.stats")}
       aria-label={t("sidebar.openStats")}
     >
@@ -248,11 +248,23 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
   const settingsButton = (
     <button
       onClick={() => onOpenSettings()}
-      className="ui-focus-ring ui-icon-action ui-sidebar-action-settings"
+      className="ui-focus-ring ui-icon-action ui-sidebar-action-settings shrink-0"
       title={t("sidebar.settings")}
       aria-label={t("sidebar.openSettings")}
     >
       <Settings size={14} strokeWidth={1.5} />
+    </button>
+  );
+
+  const tokenStationButton = (
+    <button
+      type="button"
+      onClick={() => onOpenSettings("sponsors")}
+      className="ui-focus-ring ui-icon-action ui-sidebar-action-token-station shrink-0"
+      title={t("sidebar.tokenStation")}
+      aria-label={t("sidebar.openTokenStation")}
+    >
+      <Handshake size={14} strokeWidth={1.7} aria-hidden="true" />
     </button>
   );
 
@@ -261,6 +273,7 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
       <div className="px-2 py-2">
         <div className="flex flex-col items-center gap-1.5">
           <SyncStatusIndicator collapsed onOpenSettings={onOpenSettings} />
+          {tokenStationButton}
           {statsButton}
           <HookStatusLight onOpenSettings={onOpenSettings} />
           {settingsButton}
@@ -275,6 +288,7 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
         <div className="min-w-0 flex-1">
           <SyncStatusIndicator onOpenSettings={onOpenSettings} />
         </div>
+        {tokenStationButton}
         {statsButton}
         <HookStatusLight onOpenSettings={onOpenSettings} />
         {settingsButton}

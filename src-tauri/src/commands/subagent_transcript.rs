@@ -1280,6 +1280,7 @@ mod tests {
         assert_eq!(err, "parent_transcript_session_mismatch");
     }
 
+    #[cfg(windows)]
     #[test]
     fn resolve_converts_linux_parent_transcript_to_wsl_child_path() {
         let got = resolve_transcript_path(

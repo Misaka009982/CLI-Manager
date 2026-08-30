@@ -1167,7 +1167,7 @@ pub fn apply_probe_output(
         return;
     }
     let mut observed = HashMap::<String, McpHealth>::new();
-    if let Ok(json) = serde_json::from_str::<JsonValue>(output) {
+    let parsed_json = if let Ok(json) = serde_json::from_str::<JsonValue>(output) {
         for record in probe_records(&json) {
             let name = record
                 .get("name")
@@ -1185,17 +1185,24 @@ pub fn apply_probe_output(
                 .get("status")
                 .or_else(|| record.get("state"))
                 .or_else(|| record.get("authStatus"))
+                // Codex CLI emits this field as snake_case in `mcp list --json`.
+                .or_else(|| record.get("auth_status"))
                 .and_then(JsonValue::as_str)
                 .and_then(probe_status_from_text)
                 .unwrap_or(McpHealth::Unknown);
             observed.insert(name.to_lowercase(), status);
         }
-    }
-    for line in output.lines() {
-        if let Some(status) = probe_status_from_text(line) {
-            for item in &snapshot.mcp {
-                if line.to_lowercase().contains(&item.name.to_lowercase()) {
-                    observed.insert(item.name.to_lowercase(), status.clone());
+        true
+    } else {
+        false
+    };
+    if !parsed_json {
+        for line in output.lines() {
+            if let Some(status) = probe_status_from_text(line) {
+                for item in &snapshot.mcp {
+                    if line.to_lowercase().contains(&item.name.to_lowercase()) {
+                        observed.insert(item.name.to_lowercase(), status.clone());
+                    }
                 }
             }
         }
@@ -1370,6 +1377,53 @@ command = "git"
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "config_parse_error"));
+    }
+
+    #[test]
+    fn codex_probe_reads_snake_case_auth_status() {
+        let bundle = DiscoveryBundle {
+            configs: vec![ConfigDocument {
+                path_label: "home/.codex/config.toml".into(),
+                scope: "user".into(),
+                source_kind: "native".into(),
+                format: "toml".into(),
+                content: r#"
+[mcp_servers.authenticated]
+command = "auth"
+
+[mcp_servers.unauthenticated]
+command = "login"
+
+[mcp_servers.stdio]
+command = "local"
+"#
+                .into(),
+            }],
+            ..DiscoveryBundle::default()
+        };
+        let mut snapshot = assemble_snapshot(request(AgentKind::Codex), bundle);
+
+        apply_probe_output(
+            &mut snapshot,
+            r#"[
+              {"name":"authenticated","enabled":true,"auth_status":"authenticated"},
+              {"name":"unauthenticated","enabled":true,"auth_status":"unauthenticated"},
+              {"name":"stdio","enabled":true,"auth_status":"unsupported"}
+            ]"#,
+            true,
+        );
+
+        assert_eq!(snapshot.mcp_summary.healthy, 1);
+        assert_eq!(snapshot.mcp_summary.error, 1);
+        assert_eq!(snapshot.mcp_summary.unknown, 1);
+        assert_eq!(
+            snapshot
+                .mcp
+                .iter()
+                .find(|item| item.name == "unauthenticated")
+                .and_then(|item| item.error_code.as_deref()),
+            Some("agent_reported_mcp_error")
+        );
     }
 
     #[test]
