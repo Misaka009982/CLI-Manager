@@ -10,7 +10,7 @@ const hookServer = readFileSync(new URL("../src-tauri/src/claude_hook.rs", impor
 test("managed Pi extension is generated from the owned decision template", () => {
   assert.match(hookSettings, /include_str!\("\.\.\/pi_extension_template\.ts"\)/);
   assert.match(template, /__CLI_MANAGER_PI_HOOK__|__PI_MARKER__/);
-  assert.match(template, /CLI_MANAGER_PI_EXTENSION_VERSION:5/);
+  assert.match(template, /CLI_MANAGER_PI_EXTENSION_VERSION:6/);
   assert.match(hookSettings, /PI_EXTENSION_VERSION_PREFIX/);
   assert.match(hookSettings, /pi_extension_version\(&content\)\.unwrap_or_default\(\) < PI_EXTENSION_VERSION/);
   assert.match(hookSettings, /managed_legacy_pi_extension_is_upgraded_in_place/);
@@ -45,8 +45,10 @@ test("pet and Pi terminal race for the same decision and cancel the loser", () =
   assert.match(template, /new AbortController\(\)/);
   assert.match(template, /controller\.abort\(\);[\s\S]*resolve\(result\)/);
   assert.match(template, /raceSignal\.aborted \? null/);
-  assert.match(template, /ctx\.ui\.select\(prompt, \[\.\.\.numbered, "Type something\."\], skipMirror\(signal\)\)/);
-  assert.match(template, /ctx\.ui\.select\(question\.prompt, choices, skipMirror\(signal\)\)/);
+  // question / questionnaire 的终端一侧改为自绘面板：ctx.ui.select 只接受字符串数组，
+  // 无法展示每个选项的说明，模型给出的推荐理由会在终端里丢失。
+  assert.match(template, /showQuestionSurface\(\[\{/);
+  assert.match(template, /showQuestionSurface\(\s*questions\.map/);
   assert.match(template, /ctx\.ui\.select\(message, \["Allow", "Deny"\], skipMirror\(raceSignal\)\)/);
   // 原生一侧先赢时，requestDecision 的 finally 会向 broker 发 cancel 清掉宠物端待处理项。
   assert.match(template, /if \(!acknowledged\) \{[\s\S]*pi-decision\/cancel/);
@@ -89,7 +91,9 @@ test("questions preserve ordered groups and keep native TUI fallback", () => {
   assert.match(template, /seen = new Set<string>\(\)/);
   assert.match(template, /answer\.wasCustom/);
   assert.match(template, /ctx\.ui\.select/);
-  assert.match(template, /ctx\.ui\.input/);
+  // 自定义答案走自绘面板内嵌的 Editor，不再弹第二个 ctx.ui.input 对话框。
+  assert.match(template, /const SURFACE_OTHER_LABEL = "Type something\."/);
+  assert.match(template, /editor\.onSubmit = \(value\) =>/);
   assert.match(template, /decision bridge disconnected; returning to Pi's native prompt/);
   assert.match(template, /details: \{ questions, answers, cancelled: false \}/);
 });

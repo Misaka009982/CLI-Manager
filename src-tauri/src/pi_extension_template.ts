@@ -1,8 +1,11 @@
 // __PI_MARKER__
-// CLI_MANAGER_PI_EXTENSION_VERSION:5
+// CLI_MANAGER_PI_EXTENSION_VERSION:6
 // 由 CLI-Manager 管理，请勿手动修改；如需恢复，请在 Hook 设置中重新安装。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+// pi-tui 与 typebox 同在 Pi 扩展加载器的 alias / virtualModules 表里，可安全静态引入；
+// 终端一侧的问题界面要自绘才能展示每个选项的说明，ctx.ui.select 只接受字符串数组。
+import { Editor, Key, matchesKey, Text, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const ENABLED = {
@@ -40,26 +43,39 @@ interface BridgeResponse {
   answer?: DecisionAnswer;
 }
 
+// schema 里的说明文字直接决定模型会不会填写选项说明，必须与 Pi 原生 question /
+// questionnaire 工具保持一致，否则模型只给光秃秃的 label，终端和宠物端都没有解释可展示。
 const QuestionParams = Type.Object({
-  question: Type.String(),
-  options: Type.Array(Type.Object({
-    label: Type.String(),
-    description: Type.Optional(Type.String()),
-  })),
+  question: Type.String({ description: "The question to ask the user" }),
+  options: Type.Array(
+    Type.Object({
+      label: Type.String({ description: "Display label for the option" }),
+      description: Type.Optional(Type.String({ description: "Optional description shown below label" })),
+    }),
+    { description: "Options for the user to choose from" },
+  ),
 });
 
 const QuestionnaireParams = Type.Object({
-  questions: Type.Array(Type.Object({
-    id: Type.String(),
-    label: Type.Optional(Type.String()),
-    prompt: Type.String(),
-    options: Type.Array(Type.Object({
-      value: Type.String(),
-      label: Type.String(),
-      description: Type.Optional(Type.String()),
-    })),
-    allowOther: Type.Optional(Type.Boolean()),
-  })),
+  questions: Type.Array(
+    Type.Object({
+      id: Type.String({ description: "Unique identifier for this question" }),
+      label: Type.Optional(Type.String({
+        description: "Short contextual label for tab bar, e.g. 'Scope', 'Priority' (defaults to Q1, Q2)",
+      })),
+      prompt: Type.String({ description: "The full question text to display" }),
+      options: Type.Array(
+        Type.Object({
+          value: Type.String({ description: "The value returned when selected" }),
+          label: Type.String({ description: "Display label for the option" }),
+          description: Type.Optional(Type.String({ description: "Optional description shown below label" })),
+        }),
+        { description: "Available options to choose from" },
+      ),
+      allowOther: Type.Optional(Type.Boolean({ description: "Allow 'Type something' option (default: true)" })),
+    }),
+    { description: "Questions to ask the user" },
+  ),
 });
 
 const sourceInstanceId = crypto.randomUUID();
@@ -350,6 +366,298 @@ async function raceDecisionSurfaces<N>(
   }
 }
 
+// 终端一侧的问题界面：ctx.ui.select 只接受字符串数组，无法展示每个选项的说明（推荐理由、
+// 取舍等），所以自绘一个组件，与 Pi 原生 question / questionnaire 扩展的呈现保持一致：
+// 选项带编号，说明另起一行缩进成灰字；多问题时顶部有 Tab 条与 Submit 页；
+// “Type something.” 走内嵌编辑器，不再弹第二个对话框。
+interface SurfaceOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+interface SurfaceQuestion {
+  id: string;
+  label: string;
+  prompt: string;
+  allowOther: boolean;
+  options: SurfaceOption[];
+}
+
+interface SurfaceAnswer {
+  id: string;
+  value: string;
+  label: string;
+  wasCustom: boolean;
+  index?: number;
+}
+
+interface SurfaceResult {
+  answers: SurfaceAnswer[];
+  cancelled: boolean;
+}
+
+const SURFACE_OTHER_LABEL = "Type something.";
+
+async function showQuestionSurface(
+  questions: SurfaceQuestion[],
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+): Promise<SurfaceResult> {
+  const cancelledResult: SurfaceResult = { answers: [], cancelled: true };
+  if (ctx.mode !== "tui" || questions.length === 0 || signal?.aborted) return cancelledResult;
+  // ctx.ui.custom 不接受 opts，官方 ui_prompt 事件里也拿不到 skipMirror 标记，
+  // 只能靠 ownDialogs 计数告诉镜像逻辑「这是本扩展自己弹的，宠物端已有待处理项」。
+  ownDialogs += 1;
+  try {
+    const result = await ctx.ui.custom<SurfaceResult>((tui, theme, _keybindings, done) => {
+      const isMulti = questions.length > 1;
+      const submitTab = questions.length;
+      const answers = new Map<string, SurfaceAnswer>();
+      let currentTab = 0;
+      let optionIndex = 0;
+      let editingId: string | null = null;
+      let cachedLines: string[] | undefined;
+
+      const editor = new Editor(tui, {
+        borderColor: (text) => theme.fg("accent", text),
+        selectList: {
+          selectedPrefix: (text) => theme.fg("accent", text),
+          selectedText: (text) => theme.fg("accent", text),
+          description: (text) => theme.fg("muted", text),
+          scrollInfo: (text) => theme.fg("dim", text),
+          noMatch: (text) => theme.fg("warning", text),
+        },
+      });
+
+      const finish = (result: SurfaceResult): void => {
+        signal?.removeEventListener("abort", onAbort);
+        done(result);
+      };
+
+      // 命名函数：同一个引用才能在 finally / dispose 里成对取消监听。
+      function onAbort(): void {
+        finish(cancelledResult);
+      }
+
+      const refresh = () => {
+        cachedLines = undefined;
+        tui.requestRender();
+      };
+
+      const displayOptions = (question: SurfaceQuestion): Array<SurfaceOption & { isOther?: boolean }> =>
+        question.allowOther
+          ? [...question.options, { value: SURFACE_OTHER_LABEL, label: SURFACE_OTHER_LABEL, isOther: true }]
+          : [...question.options];
+
+      const complete = () => answers.size === questions.length;
+
+      const advance = () => {
+        if (!isMulti) {
+          finish({ answers: [...answers.values()], cancelled: false });
+          return;
+        }
+        currentTab = currentTab < questions.length - 1 ? currentTab + 1 : submitTab;
+        optionIndex = 0;
+        refresh();
+      };
+
+      editor.onSubmit = (value) => {
+        if (!editingId) return;
+        const trimmed = value.trim();
+        const questionId = editingId;
+        // 空输入退回选项列表，不记下一个空答案。
+        editingId = null;
+        editor.setText("");
+        if (!trimmed) {
+          refresh();
+          return;
+        }
+        answers.set(questionId, { id: questionId, value: trimmed, label: trimmed, wasCustom: true });
+        advance();
+      };
+
+      const handleInput = (data: string) => {
+        if (editingId) {
+          if (matchesKey(data, Key.escape)) {
+            editingId = null;
+            editor.setText("");
+            refresh();
+            return;
+          }
+          editor.handleInput(data);
+          refresh();
+          return;
+        }
+        if (isMulti) {
+          if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) {
+            currentTab = (currentTab + 1) % (submitTab + 1);
+            optionIndex = 0;
+            refresh();
+            return;
+          }
+          if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left)) {
+            currentTab = (currentTab - 1 + submitTab + 1) % (submitTab + 1);
+            optionIndex = 0;
+            refresh();
+            return;
+          }
+        }
+        if (matchesKey(data, Key.escape)) {
+          finish(cancelledResult);
+          return;
+        }
+        const question = questions[currentTab];
+        if (!question) {
+          if (matchesKey(data, Key.enter) && complete()) {
+            finish({ answers: [...answers.values()], cancelled: false });
+          }
+          return;
+        }
+        const options = displayOptions(question);
+        if (matchesKey(data, Key.up)) {
+          optionIndex = Math.max(0, optionIndex - 1);
+          refresh();
+          return;
+        }
+        if (matchesKey(data, Key.down)) {
+          optionIndex = Math.min(options.length - 1, optionIndex + 1);
+          refresh();
+          return;
+        }
+        if (matchesKey(data, Key.enter)) {
+          const option = options[optionIndex];
+          if (!option) return;
+          if (option.isOther) {
+            editingId = question.id;
+            editor.setText("");
+            refresh();
+            return;
+          }
+          answers.set(question.id, {
+            id: question.id,
+            value: option.value,
+            label: option.label,
+            wasCustom: false,
+            index: optionIndex + 1,
+          });
+          advance();
+        }
+      };
+
+      const render = (width: number): string[] => {
+        if (cachedLines) return cachedLines;
+        const lines: string[] = [];
+        const renderWidth = Math.max(1, width);
+        const push = (prefix: string, text: string) => {
+          const prefixWidth = visibleWidth(prefix);
+          if (prefixWidth >= renderWidth) {
+            lines.push(...wrapTextWithAnsi(prefix + text, renderWidth));
+            return;
+          }
+          const wrapped = wrapTextWithAnsi(text, renderWidth - prefixWidth);
+          const indent = " ".repeat(prefixWidth);
+          wrapped.forEach((line, index) => lines.push(`${index === 0 ? prefix : indent}${line}`));
+        };
+
+        lines.push(theme.fg("accent", "\u2500".repeat(renderWidth)));
+        if (isMulti) {
+          const tabs = questions.map((question, index) => {
+            const answered = answers.has(question.id);
+            const text = ` ${answered ? "\u25a0" : "\u25a1"} ${question.label} `;
+            return index === currentTab
+              ? theme.bg("selectedBg", theme.fg("text", text))
+              : theme.fg(answered ? "success" : "muted", text);
+          });
+          const submitText = " \u2713 Submit ";
+          tabs.push(
+            currentTab === submitTab
+              ? theme.bg("selectedBg", theme.fg("text", submitText))
+              : theme.fg(complete() ? "success" : "dim", submitText),
+          );
+          push(" ", `\u2190 ${tabs.join(" ")} \u2192`);
+          lines.push("");
+        }
+
+        const question = questions[currentTab];
+        if (!question) {
+          push(" ", theme.fg("accent", theme.bold("Ready to submit")));
+          lines.push("");
+          for (const item of questions) {
+            const answer = answers.get(item.id);
+            if (!answer) continue;
+            const value = `${answer.wasCustom ? "(wrote) " : ""}${answer.label}`;
+            push(" ", `${theme.fg("muted", `${item.label}: `)}${theme.fg("text", value)}`);
+          }
+          lines.push("");
+          if (complete()) {
+            push(" ", theme.fg("success", "Press Enter to submit"));
+          } else {
+            const missing = questions
+              .filter((item) => !answers.has(item.id))
+              .map((item) => item.label)
+              .join(", ");
+            push(" ", theme.fg("warning", `Unanswered: ${missing}`));
+          }
+        } else {
+          push(" ", theme.fg("text", question.prompt));
+          lines.push("");
+          const options = displayOptions(question);
+          options.forEach((option, index) => {
+            const selected = index === optionIndex;
+            const editing = option.isOther === true && editingId === question.id;
+            const prefix = selected ? theme.fg("accent", "> ") : "  ";
+            const color = selected || editing ? "accent" : "text";
+            push(prefix, theme.fg(color, `${index + 1}. ${option.label}${editing ? " \u270e" : ""}`));
+            // 选项说明单独一行缩进展示，这是 ctx.ui.select 做不到的部分。
+            if (option.description) push("     ", theme.fg("muted", option.description));
+          });
+          if (editingId === question.id) {
+            lines.push("");
+            push(" ", theme.fg("muted", "Your answer:"));
+            for (const line of editor.render(Math.max(1, renderWidth - 2))) lines.push(` ${line}`);
+          }
+        }
+
+        lines.push("");
+        push(
+          " ",
+          theme.fg(
+            "dim",
+            editingId
+              ? "Enter to submit \u2022 Esc to go back"
+              : isMulti
+              ? "Tab/\u2190\u2192 navigate \u2022 \u2191\u2193 select \u2022 Enter confirm \u2022 Esc cancel"
+              : "\u2191\u2193 navigate \u2022 Enter select \u2022 Esc cancel",
+          ),
+        );
+        lines.push(theme.fg("accent", "\u2500".repeat(renderWidth)));
+
+        cachedLines = lines;
+        return lines;
+      };
+
+      // 竞速中被宠物端抢先时靠 abort 收起自绘面板（ctx.ui.select 内置了这一步，custom 没有）。
+      if (signal) {
+        if (signal.aborted) queueMicrotask(onAbort);
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      return {
+        render,
+        invalidate: () => {
+          cachedLines = undefined;
+        },
+        handleInput,
+        dispose: () => signal?.removeEventListener("abort", onAbort),
+      };
+    });
+    return result ?? cancelledResult;
+  } finally {
+    ownDialogs = Math.max(0, ownDialogs - 1);
+  }
+}
+
 async function nativeQuestion(
   prompt: string,
   options: Array<{ label: string; description?: string }>,
@@ -363,19 +671,23 @@ async function nativeQuestion(
       error: "Error: UI not available (running in non-interactive mode)",
     };
   }
-  const numbered = options.map((option, index) => `${index + 1}. ${option.label}`);
-  const selected = await ctx.ui.select(prompt, [...numbered, "Type something."], skipMirror(signal));
-  if (!selected) return { answer: null, wasCustom: false };
-  if (selected === "Type something.") {
-    return {
-      answer: nonEmpty(await ctx.ui.input(prompt, "Your answer", skipMirror(signal))),
-      wasCustom: true,
-    };
-  }
-  const index = numbered.indexOf(selected);
-  return index >= 0
-    ? { answer: options[index].label, wasCustom: false, index: index + 1 }
-    : { answer: null, wasCustom: false };
+  const result = await showQuestionSurface([{
+    id: "question",
+    label: "Q1",
+    prompt,
+    allowOther: true,
+    // question 工具把 label 当作返回值，这里保持一致。
+    options: options.map((option) => ({
+      value: option.label,
+      label: option.label,
+      description: option.description,
+    })),
+  }], ctx, signal);
+  const answer = result.cancelled ? undefined : result.answers[0];
+  if (!answer) return { answer: null, wasCustom: false };
+  return answer.wasCustom
+    ? { answer: answer.value, wasCustom: true }
+    : { answer: answer.value, wasCustom: false, index: answer.index };
 }
 
 function questionResult(
@@ -486,44 +798,25 @@ async function nativeQuestionnaire(
       details: { questions, answers: [], cancelled: true },
     };
   }
-  const answers: Array<{ id: string; value: string; label: string; wasCustom: boolean; index?: number }> = [];
-  for (const question of questions) {
-    const numbered = question.options.map((option, index) => `${index + 1}. ${option.label}`);
-    const choices = question.allowOther ? [...numbered, "Type something."] : numbered;
-    const selected = await ctx.ui.select(question.prompt, choices, skipMirror(signal));
-    if (!selected) {
-      return {
-        content: [{ type: "text", text: "User cancelled the questionnaire" }],
-        details: { questions, answers, cancelled: true },
-      };
-    }
-    if (selected === "Type something.") {
-      const custom = nonEmpty(await ctx.ui.input(question.prompt, "Your answer", skipMirror(signal)));
-      if (!custom) {
-        return {
-          content: [{ type: "text", text: "User cancelled the questionnaire" }],
-          details: { questions, answers, cancelled: true },
-        };
-      }
-      answers.push({ id: question.id, value: custom, label: custom, wasCustom: true });
-      continue;
-    }
-    const index = numbered.indexOf(selected);
-    const option = question.options[index];
-    if (!option) {
-      return {
-        content: [{ type: "text", text: "User cancelled the questionnaire" }],
-        details: { questions, answers, cancelled: true },
-      };
-    }
-    answers.push({
+  const result = await showQuestionSurface(
+    questions.map((question) => ({
       id: question.id,
-      value: option.value,
-      label: option.label,
-      wasCustom: false,
-      index: index + 1,
-    });
+      label: nonEmpty(question.label) ?? question.id,
+      prompt: question.prompt,
+      allowOther: question.allowOther,
+      options: question.options,
+    })),
+    ctx,
+    signal,
+  );
+  // 自绘面板只在全部问题已答时才交，这里再校一次，避开未来改动造成的部分提交。
+  if (result.cancelled || result.answers.length !== questions.length) {
+    return {
+      content: [{ type: "text", text: "User cancelled the questionnaire" }],
+      details: { questions, answers: result.answers, cancelled: true },
+    };
   }
+  const answers = result.answers;
   return {
     content: [{
       type: "text",
