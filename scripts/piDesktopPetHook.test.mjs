@@ -10,7 +10,7 @@ const hookServer = readFileSync(new URL("../src-tauri/src/claude_hook.rs", impor
 test("managed Pi extension is generated from the owned decision template", () => {
   assert.match(hookSettings, /include_str!\("\.\.\/pi_extension_template\.ts"\)/);
   assert.match(template, /__CLI_MANAGER_PI_HOOK__|__PI_MARKER__/);
-  assert.match(template, /CLI_MANAGER_PI_EXTENSION_VERSION:6/);
+  assert.match(template, /CLI_MANAGER_PI_EXTENSION_VERSION:7/);
   assert.match(hookSettings, /PI_EXTENSION_VERSION_PREFIX/);
   assert.match(hookSettings, /pi_extension_version\(&content\)\.unwrap_or_default\(\) < PI_EXTENSION_VERSION/);
   assert.match(hookSettings, /managed_legacy_pi_extension_is_upgraded_in_place/);
@@ -54,13 +54,12 @@ test("pet and Pi terminal race for the same decision and cancel the loser", () =
   assert.match(template, /if \(!acknowledged\) \{[\s\S]*pi-decision\/cancel/);
 });
 
-test("third-party Pi dialogs mirror to the pet as a notification only", () => {
-  // permission-gate 等扩展直接调 ctx.ui，宠物端无法代答，只镜像成提醒。
-  // Pi 0.84.4+ 提供官方 ui_prompt 事件，优先走它；老版本靠改写 ctx.ui 的兜底补丁。
+test("third-party Pi dialogs are answerable from the pet and fall back to a notification", () => {
+  // permission-gate 等扩展直接调 ctx.ui：select / confirm / input 的选项会搬到宠物端与终端竞速，
+  // 走 pendingAction 通道（不受「通知提醒」开关影响）；editor / custom 搬不过去，仍靠官方事件镜像成提醒。
   assert.match(template, /pi\.on\("ui_prompt_start"/);
   assert.match(template, /pi\.on\("ui_prompt_end"/);
   assert.match(template, /registerPromptEvents\(pi\)/);
-  assert.match(template, /officialPromptEvents = true/);
   assert.match(template, /postHook\("Notification", dialogNotice\(event\.kind, event\.title\)\)/);
   // 官方区间用布尔量配平，不在结束时重新判断 ownDialogs，否则心跳可能永久挂起。
   assert.match(template, /officialSpanMirrored/);
@@ -68,9 +67,18 @@ test("third-party Pi dialogs mirror to the pet as a notification only", () => {
   assert.match(template, /\["select", "confirm", "input"\] as DialogKind\[\]/);
   assert.match(template, /DIALOG_MIRROR_SKIP/);
   assert.match(template, /DIALOG_MIRROR_INSTALLED/);
-  // 兜底通知延后发：官方事件先到就不重复发，避开双份提醒。
-  assert.match(template, /DIALOG_MIRROR_FALLBACK_MS/);
-  assert.match(template, /if \(!officialPromptEvents\) void postHook\("Notification", dialogNotice\(kind, args\[0\]\)\)/);
+  // 代答：选项搬到宠物端，答案必须还原成原生返回值（select 返原字串、confirm 返 boolean）。
+  assert.match(template, /function planDialogTakeover/);
+  assert.match(template, /if \(wasCustom \|\| !labels\.includes\(value\)\) return null;/);
+  assert.match(template, /value: kind === "confirm" \? value === "Yes" : value/);
+  // 危险对话框只把「放行」那一项标红，不加二次确认。
+  assert.match(template, /DANGEROUS_DIALOG_PATTERNS/);
+  assert.match(template, /destructive: dangerous && DIALOG_AFFIRMATIVE_LABELS\.has/);
+  assert.match(broker, /"destructive": destructive,/);
+  // 宠物端确实接住时不发提醒；接不住（未启用、选项不适配）才退回只发一条。
+  assert.match(template, /const mirrorNotice = \(\) => \{/);
+  assert.match(template, /if \(petOpened \|\| mirrored\) return;/);
+  assert.match(template, /if \(!raceSignal\.aborted\) mirrorNotice\(\);/);
   assert.match(template, /installDialogMirror\(ctx\)/);
   // 镜像期间挂起心跳，否则 20 秒一次的 UserPromptSubmit 会把「需要关注」刷回「运行中」。
   assert.match(template, /function beginMirroredDialog/);

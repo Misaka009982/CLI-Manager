@@ -1521,6 +1521,11 @@ fn normalized_questions(value: Option<&Value>, default_allow_other: bool) -> Vec
                     let option_value = first_string(option, &["value"])
                         .unwrap_or_else(|| option_label.clone());
                     let description = first_string(option, &["description"]);
+                    // destructive：镜像第三方对话框时给「放行危险操作」那一项标红，宠物端据此上红色。
+                    let destructive = option
+                        .get("destructive")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
                     if option_label.chars().count() > 160
                         || option_value.chars().count() > MAX_TEXT_LENGTH
                         || description
@@ -1534,6 +1539,7 @@ fn normalized_questions(value: Option<&Value>, default_allow_other: bool) -> Vec
                         "value": option_value,
                         "label": option_label,
                         "description": description,
+                        "destructive": destructive,
                     }));
                 }
             }

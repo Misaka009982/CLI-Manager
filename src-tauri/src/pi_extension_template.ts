@@ -1,5 +1,5 @@
 // __PI_MARKER__
-// CLI_MANAGER_PI_EXTENSION_VERSION:6
+// CLI_MANAGER_PI_EXTENSION_VERSION:7
 // 由 CLI-Manager 管理，请勿手动修改；如需恢复，请在 Hook 设置中重新安装。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -17,9 +17,6 @@ const POLL_INTERVAL_MS = 750;
 const UNAVAILABLE_GRACE_MS = 2_500;
 const REQUEST_TIMEOUT_MS = 2_000;
 const HEARTBEAT_INTERVAL_MS = 20_000;
-// 兜底补丁发通知前先等一会儿：官方 ui_prompt 事件（Pi 0.84.4+）在同一轮微任务里就会到，
-// 抢先接管后补丁就不再发，避免同一个对话框出现两条提醒。
-const DIALOG_MIRROR_FALLBACK_MS = 150;
 
 type DecisionKind = "question" | "questionnaire" | "permission";
 type NotifyEvent = "SessionStart" | "UserPromptSubmit" | "Notification" | "Stop" | "StopFailure";
@@ -214,6 +211,9 @@ async function requestDecision(
   questions: DecisionQuestion[],
   ctx: ExtensionContext,
   signal?: AbortSignal,
+  // 宠物端确实立了待处理项时回调一次：镜像第三方对话框时靠它区分「宠物端已接管」
+  // 与「桥接不可用」，后者才需要退回只发一条提醒。
+  onOpened?: () => void,
 ): Promise<DecisionAnswer | null> {
   const target = bridgeTarget();
   const currentSessionId = sessionId(ctx);
@@ -236,6 +236,7 @@ async function requestDecision(
   if (epoch) pendingDecisions.set(requestId, epoch);
   if (response?.status === "resolved" && response.answer) {
     pendingDecisions.delete(requestId);
+    onOpened?.();
     return response.answer;
   }
   if (response?.status !== "pending") {
@@ -265,6 +266,8 @@ async function requestDecision(
 
   let unavailableSince: number | null = null;
   let acknowledged = false;
+  // 到这里 broker 已经接下请求，宠物端能看到待处理项。
+  onOpened?.();
   try {
     while (!signal?.aborted) {
       await wait(POLL_INTERVAL_MS, signal);
@@ -1066,9 +1069,6 @@ function dialogNotice(kind: PromptKind, title: unknown): string {
 // 镜像期间挂起心跳：心跳每 20 秒发一次 UserPromptSubmit，会把「需要关注」刷回「运行中」，
 // 让刚镜像出来的提示瞬间消失。对话框可以嵌套，所以用计数而不是布尔量。
 let mirroredDialogs = 0;
-// 官方 ui_prompt 事件是否已到达。只要收到过一次就说明当前 Pi 支持它，兜底补丁从此只做
-// 「跳过自身对话框」的判断，不再发通知，避免双份提醒。
-let officialPromptEvents = false;
 
 function beginMirroredDialog(): void {
   mirroredDialogs += 1;
@@ -1084,6 +1084,98 @@ function endMirroredDialog(): void {
 // 本扩展自己发起的对话框数量。官方事件里拿不到 opts 上的 skip 标记，只能靠这个计数
 // 判断当前等待的对话框是不是自己弹的（自己弹的宠物端已有待处理项，不该再发提醒）。
 let ownDialogs = 0;
+
+// 第三方对话框的宠物端代答：把 select / confirm / input 的选项搬到宠物端，与终端竞速。
+// 代答走的是 pendingAction 通道（受「宠物端问题交互」开关管），不再依赖通知气泡，
+// 所以关掉「通知提醒」也能在宠物端看到并回答。无法搬过去的（editor / custom，
+// 或选项不适配）仍然只镜像成一条提醒。
+const DIALOG_AFFIRMATIVE_LABELS = new Set([
+  "yes",
+  "y",
+  "allow",
+  "approve",
+  "continue",
+  "proceed",
+  "ok",
+  "confirm",
+]);
+
+// 危险对话框特征：文本带警告标记，或命中常见的不可逆命令。命中时只把「放行」那一项
+// 标红，不加二次确认：代答只是把终端已有的确认搬了个位置，不应自己又加一道关。
+const DANGEROUS_DIALOG_PATTERNS = [
+  /\u26a0/,
+  /\brm\s+(-[a-z]*[rf]|--recursive|--force)/i,
+  /\bsudo\b/i,
+  /\b(chmod|chown)\b[^\n]*777/i,
+  /\bgit\s+(reset\s+--hard|clean\s+-[a-z]*f|push\s+--force)/i,
+  /\bDROP\s+(TABLE|DATABASE)\b/i,
+];
+
+function looksDangerous(text: string): boolean {
+  return DANGEROUS_DIALOG_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+// 宠物端面板比终端窄，标题只取第一行；正文截断到下面这个上限（后端 prompt 硬限 16384 字符）。
+const MAX_DIALOG_PROMPT_CHARS = 4_000;
+// 后端 normalized_questions 对选项数量的硬限。
+const MAX_DIALOG_OPTIONS = 64;
+
+function dialogHeadline(text: string): string {
+  const firstLine = text.split("\n").map((line) => line.trim()).find((line) => line.length > 0);
+  return (firstLine ?? "Pi dialog").slice(0, 120);
+}
+
+interface DialogTakeover {
+  question: DecisionQuestion;
+  title: string;
+  // 把宠物端答案还原成原生返回值；null 表示答案不合法，不算竞速胜出。
+  toNative: (value: string, wasCustom: boolean) => { value: unknown } | null;
+}
+
+function planDialogTakeover(kind: DialogKind, args: unknown[]): DialogTakeover | null {
+  const title = nonEmpty(args[0]) ?? "";
+  if (kind === "input") {
+    const placeholder = nonEmpty(args[1]);
+    const prompt = [title || "Pi needs text input.", placeholder ? `(${placeholder})` : null]
+      .filter((part) => part)
+      .join("\n")
+      .slice(0, MAX_DIALOG_PROMPT_CHARS);
+    return {
+      title: dialogHeadline(title || "Pi needs text input"),
+      question: { id: "dialog", label: "", prompt, allowOther: true, options: [] },
+      toNative: (value, wasCustom) => (wasCustom && value.trim() ? { value } : null),
+    };
+  }
+  const message = kind === "confirm" ? nonEmpty(args[1]) : null;
+  const prompt = [title, message].filter((part) => part).join("\n").slice(0, MAX_DIALOG_PROMPT_CHARS);
+  const dangerous = looksDangerous(prompt);
+  const labels = kind === "confirm"
+    // Pi 的 confirm 内部就是 Yes / No 选择器，宠物端沿用同一组选项。
+    ? ["Yes", "No"]
+    : Array.isArray(args[1])
+      ? args[1].filter((option): option is string => typeof option === "string" && option.trim().length > 0)
+      : [];
+  // select 必须拿到完整的选项数组，否则还原不出合法返回值。
+  if (kind === "select" && (!Array.isArray(args[1]) || labels.length !== args[1].length)) return null;
+  // 选项为空、超后端上限或 value 重复时不代答，避开宠物端出现无法作答的空面板。
+  if (labels.length === 0 || labels.length > MAX_DIALOG_OPTIONS || new Set(labels).size !== labels.length) {
+    return null;
+  }
+  const options = labels.map((label) => ({
+    value: label,
+    // label 后端限 160 字符，value 保留原串以保证返回值精确。
+    label: label.length > 160 ? `${label.slice(0, 157)}...` : label,
+    destructive: dangerous && DIALOG_AFFIRMATIVE_LABELS.has(label.trim().toLowerCase()),
+  }));
+  return {
+    title: dialogHeadline(title || "Pi needs a choice"),
+    question: { id: "dialog", label: "", prompt: prompt || "Pi needs a choice.", allowOther: false, options },
+    toNative: (value, wasCustom) => {
+      if (wasCustom || !labels.includes(value)) return null;
+      return { value: kind === "confirm" ? value === "Yes" : value };
+    },
+  };
+}
 
 function installDialogMirror(ctx: ExtensionContext): void {
   if (!ENABLED.running || ctx.mode !== "tui") return;
@@ -1101,42 +1193,93 @@ function installDialogMirror(ctx: ExtensionContext): void {
     ui[kind] = async function (this: unknown, ...args: unknown[]) {
       const opts = args[2] as MirroredDialogOptions | undefined;
       const own = opts?.[DIALOG_MIRROR_SKIP] === true;
-      if (own) ownDialogs += 1;
-      // 兜底通知延后发：官方事件（如果这版 Pi 有）会在同一轮微任务里先到并接管，
-      // 到时这里就不再重复发。等待期间也要挂起心跳，否则提示会被刷掉。
-      const fallback = own ? null : setTimeout(() => {
-        if (!officialPromptEvents) void postHook("Notification", dialogNotice(kind, args[0]));
-      }, DIALOG_MIRROR_FALLBACK_MS);
-      if (!own) beginMirroredDialog();
-      try {
-        return await forward.apply(this, args);
-      } finally {
-        if (own) ownDialogs = Math.max(0, ownDialogs - 1);
-        else {
-          if (fallback) clearTimeout(fallback);
-          endMirroredDialog();
+      if (own) {
+        // 本扩展自己的对话框（已在更外层竞速）：直接转发。
+        ownDialogs += 1;
+        try {
+          return await forward.apply(this, args);
+        } finally {
+          ownDialogs = Math.max(0, ownDialogs - 1);
         }
+      }
+      const plan = planDialogTakeover(kind, args);
+      // 代答期间也算「本扩展在管」：官方 ui_prompt 事件不要再发一条重复提醒。
+      ownDialogs += 1;
+      let petOpened = false;
+      let mirrored = false;
+      // 宠物端没接住（未启用、未运行、选项不适配）时退回只发一条提醒，
+      // 并挂起心跳，否则 20 秒一次的 UserPromptSubmit 会把提示刷掉。
+      const mirrorNotice = () => {
+        if (petOpened || mirrored) return;
+        mirrored = true;
+        beginMirroredDialog();
+        void postHook("Notification", dialogNotice(kind, args[0]));
+      };
+      try {
+        if (!plan) {
+          mirrorNotice();
+          return await forward.apply(this, args);
+        }
+        let bridged: { value: unknown } | null = null;
+        const { decision, native } = await raceDecisionSurfaces<{ value: unknown }>(
+          async (raceSignal) => {
+            const answer = await requestDecision(
+              "question",
+              plan.title,
+              null,
+              [plan.question],
+              ctx,
+              raceSignal,
+              () => {
+                petOpened = true;
+              },
+            );
+            const picked = answer?.answers[0];
+            // 桥接拿不到结论且不是被终端抢先，就是宠物端没接住，改发提醒。
+            if (!picked) {
+              if (!raceSignal.aborted) mirrorNotice();
+              return null;
+            }
+            bridged = plan.toNative(picked.value, picked.wasCustom);
+            return bridged ? answer : null;
+          },
+          async (raceSignal) => {
+            // 把竞速 signal 并入调用方自己的 opts：宠物端先答时终端对话框会自动收起。
+            const nativeArgs = [...args];
+            nativeArgs[2] = { ...(opts ?? {}), signal: raceSignal };
+            const value = await forward.apply(this, nativeArgs);
+            // 被宠物端抢先时不参与胜出；否则包一层，让 undefined / false 也能算明确结论。
+            return raceSignal.aborted ? null : { value };
+          },
+          opts?.signal,
+        );
+        if (decision && bridged) return bridged.value;
+        if (native) return native.value;
+        // 两侧都无结论（调用方自己 abort）：沿用原生取消语义。
+        return kind === "confirm" ? false : undefined;
+      } finally {
+        if (mirrored) endMirroredDialog();
+        ownDialogs = Math.max(0, ownDialogs - 1);
       }
     };
   }
   ui[DIALOG_MIRROR_INSTALLED] = true;
 }
 
-// 官方事件通道：Pi 已把嵌套对话框合并成一个外层区间，同一时刻最多只有一个区间，
+// 官方事件通道：只负责补丁覆盖不到的 editor / custom（select / confirm / input 已在包装层
+// 把 ownDialogs 抬起来，这里会直接跳过）。Pi 已把嵌套对话框合并成一个外层区间，
 // 所以用一个布尔量记住「这个区间是否已镜像」，结束时据此配平，而不是在结束时重新判断
 // ownDialogs（那个计数可能已被别处的对话框改动，会导致心跳挂起后无法恢复）。
 let officialSpanMirrored = false;
 
 function registerPromptEvents(pi: ExtensionAPI): void {
   pi.on("ui_prompt_start", async (event) => {
-    officialPromptEvents = true;
     if (!ENABLED.running || ownDialogs > 0) return;
     officialSpanMirrored = true;
     beginMirroredDialog();
     void postHook("Notification", dialogNotice(event.kind, event.title));
   });
   pi.on("ui_prompt_end", async () => {
-    officialPromptEvents = true;
     if (!officialSpanMirrored) return;
     officialSpanMirrored = false;
     endMirroredDialog();

@@ -96,8 +96,12 @@ test("renderer opens task bubbles away from the nearest screen edge", () => {
 
 test("question options are numbered like Pi's question tool", () => {
   const source = read("../src/renderer/app.ts");
+  const css = read("../src/renderer/styles.css");
   // 与 Pi 的 question 工具一致：选项按 1. 2. 3. 编号，自由输入仍为常驻输入框。
   assert.match(source, /options\.map\(\(option, optionIndex\)/);
   assert.match(source, /\$\{optionIndex \+ 1\}\. \$\{escapeText\(option\.label\)\}/);
   assert.match(source, /textarea data-custom=/);
+  // 镜像第三方危险对话框时，「放行」选项标 destructive 后按红色渲染。
+  assert.match(source, /option\.destructive \? " destructive" : ""/);
+  assert.match(css, /\.choice\.destructive \{ color: var\(--red\); \}/);
 });

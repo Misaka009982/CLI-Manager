@@ -68,6 +68,8 @@ export interface DesktopPetEOption {
   value: string;
   label: string;
   description?: string | null;
+  /** 镜像第三方对话框时标出「放行危险操作」的那一项，宠物端按红色渲染。 */
+  destructive?: boolean;
 }
 
 export interface DesktopPetEQuestion {
