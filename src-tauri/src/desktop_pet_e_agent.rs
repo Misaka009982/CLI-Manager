@@ -526,15 +526,15 @@ impl DesktopPetEAgentBroker {
             return;
         };
         // ToolStop/AgentToolStop 在每次工具结束时都会触发，只能靠 toolUseId 精确匹配。
-        // 缺少该 ID 时宁可不消除，也不能改成整个会话清空——否则会误杀无关的待处理项。
+        // 缺 ID 的规则分两类：
+        //   interactive 项仍要求 ID 精确匹配（宠物端正在代答，不能误杀等待中的回答）；
+        //   jump-only/通知型项无法在宠物端作答，终端能继续执行工具就说明对应权限/问题
+        //   已被会话端处理，同会话的任一工具结束信号即可将其清除。
         let tool_stop = matches!(event, "ToolStop" | "AgentToolStop");
         let tool_use_id = payload
             .get("toolUseId")
             .and_then(Value::as_str)
             .and_then(non_empty_text);
-        if tool_stop && tool_use_id.is_none() {
-            return;
-        }
 
         let mut removed = Vec::new();
         if let Ok(mut state) = self.shared.0.lock() {
@@ -548,8 +548,14 @@ impl DesktopPetEAgentBroker {
                         return false;
                     }
                     if tool_stop {
-                        // 终端侧已给出答案，工具调用已结束：宠物端同一项已经作废。
-                        return entry.tool_use_id.as_deref() == tool_use_id.as_deref();
+                        // interactive 项必须 toolUseId 精确匹配，否则可能误杀宠物端
+                        // 正在等待回答的项。非 interactive（jump-only/通知型）项无法在
+                        // 宠物端作答：终端能走到工具结束，即代表会话端已处理该请求，
+                        // 同会话任一工具结束信号（即便缺 ID）都应清除它。
+                        if action_adapter_mode(&entry.action) == Some("interactive") {
+                            return entry.tool_use_id.as_deref() == tool_use_id.as_deref();
+                        }
+                        return true;
                     }
                     matches!(event, "Stop" | "StopFailure")
                         || action_adapter_mode(&entry.action) != Some("interactive")
@@ -3271,5 +3277,75 @@ mod tests {
         assert_eq!(opened["pendingAction"]["kind"], "question");
         assert_eq!(opened["pendingAction"]["adapterMode"], "jump-only");
         assert!(opened["pendingAction"]["approvalChoices"].is_null());
+    }
+
+    #[test]
+    fn tool_stop_clears_jump_only_actions_even_without_tool_use_id() {
+        // 用户在终端会话里直接处理了权限（会话端作答），宠物端无法作答的
+        // jump-only 待处理项应被同会话的工具结束信号清除，不需要 toolUseId。
+        let broker = DesktopPetEAgentBroker::new();
+        broker
+            .set_available(AvailabilityRequest {
+                instance_id: "frontend-1".to_string(),
+                available: true,
+                accept_new: true,
+            })
+            .unwrap();
+        let opened = broker
+            .open(open_request(
+                "claude-hook",
+                "claude",
+                "PermissionRequest",
+                json!({ "tool_input": { "questions": [] } }),
+            ))
+            .unwrap();
+        assert_eq!(opened["pendingAction"]["adapterMode"], "jump-only");
+        let pending_action_id = opened["pendingActionId"].as_str().unwrap().to_string();
+
+        // 缺少 toolUseId 也不影响：会话端已处理，直接清除 jump-only 项。
+        broker.observe_hook(&json!({ "event": "ToolStop", "tabId": "tab-1" }));
+        assert!(!broker.shared.0.lock().unwrap().pending.contains_key(&pending_action_id));
+    }
+
+    #[test]
+    fn tool_stop_does_not_clear_interactive_action_without_matching_id() {
+        // interactive 项仍必须 toolUseId 精确匹配，缺 ID 不能误杀宠物端等待中的回答。
+        let broker = DesktopPetEAgentBroker::new();
+        broker
+            .set_available(AvailabilityRequest {
+                instance_id: "frontend-1".to_string(),
+                available: true,
+                accept_new: true,
+            })
+            .unwrap();
+        let opened = broker
+            .open(open_request(
+                "claude-hook",
+                "claude",
+                "PermissionRequest",
+                json!({
+                    "tool_input": {
+                        "questions": [{
+                            "question": "Choose",
+                            "options": [{ "label": "A" }]
+                        }]
+                    }
+                }),
+            ))
+            .unwrap();
+        assert_eq!(opened["pendingAction"]["adapterMode"], "interactive");
+        let pending_action_id = opened["pendingActionId"].as_str().unwrap().to_string();
+
+        // 缺 toolUseId：interactive 项不清除。
+        broker.observe_hook(&json!({ "event": "ToolStop", "tabId": "tab-1" }));
+        assert!(broker.shared.0.lock().unwrap().pending.contains_key(&pending_action_id));
+
+        // toolUseId 一致：正常清除。
+        broker.observe_hook(&json!({
+            "event": "ToolStop",
+            "tabId": "tab-1",
+            "toolUseId": "tool-1",
+        }));
+        assert!(!broker.shared.0.lock().unwrap().pending.contains_key(&pending_action_id));
     }
 }
