@@ -40,7 +40,7 @@ const ContextMenuSubContent = forwardRef<
   <ContextMenuPrimitive.Portal container={portalContainer ?? undefined}>
     <ContextMenuPrimitive.SubContent
       ref={ref}
-      className={cn("context-menu", className)}
+      className={cn("context-menu radix-context-menu-content", className)}
       {...props}
     />
   </ContextMenuPrimitive.Portal>
@@ -59,7 +59,7 @@ const ContextMenuContent = forwardRef<
   <ContextMenuPrimitive.Portal container={portalContainer ?? undefined}>
     <ContextMenuPrimitive.Content
       ref={ref}
-      className={cn("context-menu outline-none", className)}
+      className={cn("context-menu radix-context-menu-content outline-none", className)}
       {...props}
     />
   </ContextMenuPrimitive.Portal>

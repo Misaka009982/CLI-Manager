@@ -7,6 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/sidebar";
 import { TerminalTabs } from "./components/TerminalTabs";
+import { WorkspaceLayoutShell } from "./components/workspace/WorkspaceLayoutShell";
 import { ProjectFileRefreshController } from "./components/files/ProjectFileRefreshController";
 import { CommandPalette } from "./components/CommandPalette";
 import type { LucideIcon } from "lucide-react";
@@ -410,7 +411,13 @@ async function sendSystemNotification(payload: CliHookPayload, tabId: string | n
     }
 
     try {
-      await invoke("send_interactive_system_notification", { title, body, tabId, actionLabel });
+      await invoke("send_interactive_system_notification", {
+        title,
+        body,
+        tabId,
+        actionLabel,
+        customSoundPath: settings.systemNotificationSoundPath,
+      });
       return;
     } catch (notificationErr) {
       const isWsl = await invoke<boolean>("is_wsl").catch(() => false);
@@ -539,6 +546,7 @@ function App() {
   const uiFontSize = useSettingsStore((s) => s.uiFontSize);
   const uiTextColor = useSettingsStore((s) => s.uiTextColor);
   const viewMode = useSettingsStore((s) => s.viewMode);
+  const projectSidebarSide = useSettingsStore((s) => s.workspaceLayout.projectSidebarSide);
   const closeBehavior = useSettingsStore((s) => s.closeBehavior);
   const exitWithRunningTasksBehavior = useSettingsStore((s) => s.exitWithRunningTasksBehavior);
   const ccusageAnalyticsEnabled = useSettingsStore((s) => s.ccusageAnalyticsEnabled);
@@ -1754,43 +1762,47 @@ function App() {
       <a href="#main-content" className="skip-link">
         {t("app.skipToMain")}
       </a>
-      {(!terminalFullscreen || viewMode === "compact") && <WindowTitleBar />}
-      {viewMode === "compact" ? (
-        <div id="main-content" className="flex min-h-0 flex-1" tabIndex={-1}>
-          <Sidebar
-            onOpenSettings={handleOpenSettings}
-            onOpenStats={handleOpenStats}
-            compactMode
-            projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
-            terminalScope={terminalScope}
-            onTerminalScopeChange={setTerminalScope}
-          />
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-1">
-          {!terminalFullscreen && (
+      <WorkspaceLayoutShell>
+        {(!terminalFullscreen || viewMode === "compact") && <WindowTitleBar />}
+        {viewMode === "compact" ? (
+          <div id="main-content" className="flex min-h-0 flex-1" tabIndex={-1}>
             <Sidebar
               onOpenSettings={handleOpenSettings}
               onOpenStats={handleOpenStats}
+              compactMode
+              dockSide={projectSidebarSide}
               projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
               terminalScope={terminalScope}
               onTerminalScopeChange={setTerminalScope}
             />
-          )}
-          <main id="main-content" className="ui-main-shell flex min-w-0 flex-1 flex-col" tabIndex={-1}>
-            <TerminalTabs
-              fullscreen={terminalFullscreen}
-              onToggleFullscreen={handleToggleTerminalFullscreen}
-              projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
-              terminalScope={terminalScope}
-              onOpenProviderSettings={() => handleOpenSettings("native-providers")}
-              onOpenHistorySettings={() => handleOpenSettings("history-sources")}
-            />
-          </main>
-        </div>
-      )}
-      <CommandPalette />
-      <ExternalSessionSyncDialog />
+          </div>
+        ) : (
+          <div
+            className="ui-workspace-main-layout flex min-h-0 h-full"
+            data-project-sidebar-side={projectSidebarSide}
+          >
+            {!terminalFullscreen && (
+              <Sidebar
+                onOpenSettings={handleOpenSettings}
+                onOpenStats={handleOpenStats}
+                dockSide={projectSidebarSide}
+                projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
+                terminalScope={terminalScope}
+                onTerminalScopeChange={setTerminalScope}
+              />
+            )}
+            <main id="main-content" className="ui-main-shell flex min-w-0 flex-1 flex-col" tabIndex={-1}>
+              <TerminalTabs
+                fullscreen={terminalFullscreen}
+                onToggleFullscreen={handleToggleTerminalFullscreen}
+                projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
+                terminalScope={terminalScope}
+                onOpenProviderSettings={() => handleOpenSettings("native-providers")}
+                onOpenHistorySettings={() => handleOpenSettings("history-sources")}
+              />
+            </main>
+          </div>
+        )}
       <Suspense fallback={null}>
         {settingsEverOpened && (
             <SettingsModal
@@ -1814,6 +1826,9 @@ function App() {
             />
           ))}
       </Suspense>
+      </WorkspaceLayoutShell>
+      <CommandPalette />
+      <ExternalSessionSyncDialog />
       <CloseConfirmDialog
         open={closeDialogOpen}
         onMinimize={handleCloseDialogMinimize}
@@ -1835,6 +1850,7 @@ function App() {
         confirmText="恢复"
         cancelText="不恢复"
         confirmAutoFocus
+        explicitCloseOnly
         contentClassName="w-[calc(100vw-2rem)] max-w-[460px]"
         onConfirm={handleConfirmRestoreSessions}
         onClose={handleRejectRestoreSessions}

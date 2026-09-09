@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const sidebar = read("../src/components/files/FileExplorerSidebar.tsx");
+const contextMenu = read("../src/components/ui/context-menu.tsx");
+const componentStyles = read("../src/styles/components.css");
 const formatter = read("../src/lib/aiPathFormatter.ts");
 const drag = read("../src/lib/terminalFileDrag.ts");
 const terminalInput = read("../src/hooks/useTerminalInput.ts");
@@ -12,6 +14,7 @@ const terminalTabs = read("../src/components/TerminalTabs.tsx");
 const gitPanel = read("../src/components/git/GitChangesPanel.tsx");
 const gitTree = read("../src/components/git/GitChangesTree.tsx");
 const gitNode = read("../src/components/git/GitTreeNode.tsx");
+const attachmentDialog = read("../src/components/settings/pages/SshHostAttachmentDialog.tsx");
 
 test("terminal tab CLI icons inherit the terminal tab foreground color", () => {
   assert.equal((terminalTabs.match(/<CliToolIcon icon=\{cliToolIcon\} size=\{14\} className="text-current" \/>/g) ?? []).length, 3);
@@ -20,6 +23,43 @@ test("terminal tab CLI icons inherit the terminal tab foreground color", () => {
 test("file menus expose relative and absolute path copy actions", () => {
   assert.match(sidebar, /import \{ PathCopyMenu \} from "\.\.\/PathCopyMenu"/);
   assert.equal((sidebar.match(/<PathCopyMenu /g) ?? []).length, 4);
+});
+
+test("file menus portal outside clipping sidebar and panel ancestors", () => {
+  assert.match(sidebar, /import \{ Portal \} from "\.\.\/ui\/Portal"/);
+  assert.match(
+    sidebar,
+    /<Portal>\s*<div ref=\{setMenuPortalContainer\} data-file-explorer-menu-portal="" style=\{panelStyle\} \/>\s*<\/Portal>/,
+  );
+  assert.doesNotMatch(
+    sidebar,
+    /<div ref=\{setMenuPortalContainer\} className="ui-file-explorer-sidebar/,
+  );
+  assert.equal((sidebar.match(/portalContainer=\{menuPortalContainer\}/g) ?? []).length, 4);
+});
+
+test("Radix menu content remains measurable by its Popper wrapper", () => {
+  assert.equal(
+    (contextMenu.match(/context-menu radix-context-menu-content/g) ?? []).length,
+    2,
+  );
+  assert.match(
+    componentStyles,
+    /\.context-menu\.radix-context-menu-content\s*\{\s*position:\s*relative;/,
+  );
+  assert.match(componentStyles, /\.context-menu\s*\{\s*position:\s*fixed;/);
+});
+
+test("an open file context menu highlights its trigger row", () => {
+  assert.equal((sidebar.match(/<ContextMenuTrigger asChild>/g) ?? []).length, 4);
+  assert.match(
+    componentStyles,
+    /\.ui-file-tree-row\[data-selected="true"\],\s*\.ui-file-tree-row\[data-state="open"\]/,
+  );
+  assert.match(
+    componentStyles,
+    /\.ui-file-tree-row\[data-ignored="true"\]\[data-selected="true"\],\s*\.ui-file-tree-row\[data-ignored="true"\]\[data-state="open"\]/,
+  );
 });
 
 test("absolute file paths use the local root or SSH remote root", () => {
@@ -65,4 +105,19 @@ test("Git change files and directories share the terminal pointer-drag source", 
   assert.match(formatter, /kind === "directory" && normalizedPath \? `\$\{absolutePath\}\$\{separator\}` : absolutePath/);
   assert.match(gitNode, /toggleDir\(displayCollapseKey\)/);
   assert.match(gitNode, /isTerminalFilePointerDragClickHandled/);
+});
+
+test("SSH Host attachment local pane browses Desktop and reuses File Explorer icons", () => {
+  assert.match(attachmentDialog, /import \{ dirname as localDirname, desktopDir, join as joinLocalPath \} from "@tauri-apps\/api\/path"/);
+  assert.match(attachmentDialog, /invoke<ProjectFileEntry\[\]>\("file_list_dir", \{ rootPath: localPath, relativePath: "" \}\)/);
+  assert.match(attachmentDialog, /getMaterialFolderIcon\(entry\.name, false\)/);
+  assert.match(attachmentDialog, /getMaterialFileIcon\(entry\.name\)/);
+  assert.match(attachmentDialog, /setLocalPath\(nextPath\)/);
+  assert.match(attachmentDialog, /addPathsToQueue\(\[path\]\)/);
+});
+
+test("SSH Host attachment panes share aligned headers and bounded scrolling lists", () => {
+  assert.equal((attachmentDialog.match(/h-\[108px\] shrink-0/g) ?? []).length, 2);
+  assert.equal((attachmentDialog.match(/h-\[360px\] shrink-0 overflow-y-auto/g) ?? []).length, 2);
+  assert.match(attachmentDialog, /src=\{entry\.kind === "directory" \? getMaterialFolderIcon\(entry\.name, false\) : getMaterialFileIcon\(entry\.name\)\}/);
 });

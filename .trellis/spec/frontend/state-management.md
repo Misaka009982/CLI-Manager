@@ -492,6 +492,45 @@ const { sessions, activeSessionId } = useTerminalStore();
 - Type-check after selector changes.
 - Manual profiling for toolbar/sidebar components during high-frequency terminal or transcript updates; unrelated components should not rerender each tick.
 
+### Pattern: Workspace layout keeps dock positions separate from visibility
+
+**Problem**: The project sidebar and terminal auxiliary region are both side regions, but they have different state owners. Treating their visibility or position as one toggle makes it impossible to compose layouts such as `auxiliary panel | terminal | project sidebar`, and a Workspan visibility button can appear to succeed when no Workspan tab exists to render.
+
+**Solution**: Keep the layout dimensions in the persisted `workspaceLayout` object while retaining local ownership of sidebar width/collapse and terminal panel content state.
+
+```typescript
+interface WorkspaceLayoutSettings {
+  version: 3;
+  projectSidebarSide: "left" | "right";
+  terminalSidePanelSide: "left" | "right";
+  terminalSidePanelVisible: boolean;
+  workspanTabBarPosition: "top" | "bottom";
+  workspanTabBarVisible: boolean;
+}
+```
+
+**Contracts**:
+
+- `migrateWorkspaceLayout(value: unknown)` validates every field and migrates old/missing values to project-sidebar-left, auxiliary-panel-right, Workspan-top, with both visibility flags `true`.
+- `App` uses `projectSidebarSide` only to change the flex order of the project sidebar and terminal main area. It must not move or recreate a PTY, pane tree, terminal panel, or history workspace.
+- A right-docked project sidebar mirrors its separator, collapse affordance, and width-resize calculation to the edge facing the terminal; `sidebarWidth` and collapse state remain the existing `Sidebar` state.
+- `terminalSidePanelSide` independently controls the auxiliary panel frames. Its action rail follows the same side and sits on the outer edge, remaining the entry point for restoring a hidden auxiliary region; side-opening popovers must follow the action rail.
+- The Workspan quick control and menu action are disabled when Workspan is disabled or `terminalStore.workspans` is empty; a disabled action must not persist a visibility change that has no rendered effect.
+- Layout updates use `updateWorkspaceLayout(current, patch)` and the existing `settingsStore.update("workspaceLayout", ...)` path. No database, IPC, or PTY contract is added.
+
+**Good/Base/Bad Cases**:
+
+- Good: choose project sidebar right and auxiliary panel left; the visible order is action rail, auxiliary panel, terminal center, project sidebar, and both widths remain adjustable from their terminal-facing edges.
+- Base: default layout is project sidebar left and auxiliary panel right; existing terminal sessions and panel contents behave unchanged.
+- Bad: reverse only the DOM order while leaving the project sidebar resize math and right-edge handle unchanged, because dragging the right-docked sidebar would change the width in the wrong direction.
+- Bad: toggle `workspanTabBarVisible` while no Workspan exists, because the UI reports a successful state change without any visible result.
+
+**Tests Required**:
+
+- Static contract tests assert layout migration, App order wiring, right-docked resize direction, mirrored header controls, and independent menu actions.
+- Run `node --test scripts/projectSidebarDocking.test.mjs scripts/workspaceLayoutState.test.mjs scripts/workspaceLayoutControls.test.mjs`.
+- Run `npx tsc --noEmit` and `npm run build`; manually verify left/right combinations, collapsed/expanded width behavior, no-Workspan disabled feedback, settings/history opaque surfaces, and both background-fill modes.
+
 ---
 
 ## Common Mistakes
@@ -626,3 +665,17 @@ set((state) => ({
 ```
 
 **Prevention**: For file-tree move/copy/rename/delete flows, check whether the refreshed path can be root or an ancestor of an expanded folder. If yes, avoid intermediate `set()` calls that temporarily drop descendant children.
+
+### Common Mistake: Treating an empty disclosure set as invalid
+
+**Symptom**: Clicking the last expanded item in a timeline immediately opens it again, or expanding one item closes another.
+
+**Cause**: The UI models an accordion with one nullable ID and treats `null` as a synchronization error whenever data exists. An empty set is a valid user choice, and independent disclosures cannot be represented by one ID.
+
+**Fix**: For AI Replay timeline turns, keep the expanded IDs in a `Set<string>`. Toggle only the clicked ID, preserve the set across live model updates, and intersect it with the current turn IDs to remove stale entries. Seed the first turn only during the initial data population; never use an empty set as a reason to auto-open a turn later.
+
+**Tests Required**:
+
+- Verify one expanded turn can be collapsed, all turns can remain collapsed, and any turn can be reopened.
+- Verify multiple turns stay expanded independently while replay data updates.
+- Verify session remounts and model replacement remove IDs for turns that no longer exist without forcing a replacement turn open.

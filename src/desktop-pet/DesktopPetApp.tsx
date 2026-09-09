@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -60,6 +61,7 @@ import {
 } from "../lib/desktopPet";
 import { convertChineseForLanguage, getCurrentLanguage, translate } from "../lib/i18n";
 import { logWarn } from "../lib/logger";
+import { calculateDesktopPetRenderedBounds } from "../lib/desktopPetRenderedBounds";
 import type {
   CcConnectHandoffPlatformTarget,
   CcConnectPlatform,
@@ -305,6 +307,7 @@ interface DesktopPetMenuWindowRequest {
 const DESKTOP_PET_HOVER_OPEN_DELAY_MS = 200;
 const DESKTOP_PET_HOVER_CLOSE_DELAY_MS = 350;
 const DESKTOP_PET_SIZE_WHEEL_COMMIT_DELAY_MS = 250;
+const DESKTOP_PET_RENDERED_CONTENT_MARGIN_PX = 8;
 const DESKTOP_PET_SIZE_ADJUSTMENT_KEYS = new Set([
   "ArrowDown",
   "ArrowLeft",
@@ -373,6 +376,11 @@ export default function DesktopPetApp() {
   const sizeControlRef = useRef<HTMLDivElement | null>(null);
   const sizeWheelHandlerRef = useRef<(event: WheelEvent) => void>(() => {});
   const closeAfterSizeAdjustmentRef = useRef(false);
+  const rootRef = useRef<HTMLElement | null>(null);
+  const renderedFitRafRef = useRef<number | null>(null);
+  const renderedFitPendingRef = useRef(false);
+  const renderedFitInFlightRef = useRef(false);
+  const renderedFitBasePositionKeyRef = useRef<string | null>(null);
   const hoverOpenTimerRef = useRef<number | null>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
   const hoverSuppressedUntilLeaveRef = useRef(false);
@@ -726,6 +734,145 @@ export default function DesktopPetApp() {
       : {}),
   } as CSSProperties;
 
+  useLayoutEffect(() => {
+    if (!config.visible || !documentVisible || menuOpen || menuGeometry) return;
+    const root = rootRef.current;
+    if (!root) return;
+    let disposed = false;
+    let retryTimer: number | null = null;
+
+    const fitRenderedWindow = async () => {
+      if (renderedFitInFlightRef.current) {
+        renderedFitPendingRef.current = true;
+        if (retryTimer === null) {
+          retryTimer = window.setTimeout(() => {
+            retryTimer = null;
+            if (!disposed) scheduleFit();
+          }, 50);
+        }
+        return;
+      }
+      renderedFitInFlightRef.current = true;
+      try {
+        while (renderedFitPendingRef.current && !disposed) {
+          renderedFitPendingRef.current = false;
+          if (menuOpenRef.current) continue;
+
+          const rootRect = root.getBoundingClientRect();
+          if (rootRect.width <= 0 || rootRect.height <= 0) continue;
+          const contentRects = Array.from(
+            root.querySelectorAll<HTMLElement>(".desktop-pet-status, .desktop-pet-stage")
+          ).map((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              left: rect.left - rootRect.left,
+              top: rect.top - rootRect.top,
+              right: rect.right - rootRect.left,
+              bottom: rect.bottom - rootRect.top,
+            };
+          });
+
+          const appWindow = getCurrentWindow();
+          const [position, size, scaleFactor, monitor] = await Promise.all([
+            appWindow.outerPosition(),
+            appWindow.outerSize(),
+            appWindow.scaleFactor().catch(() => 1),
+            currentMonitor().catch(() => null),
+          ]);
+          if (disposed || menuOpenRef.current) continue;
+
+          const geometry = calculateDesktopPetRenderedBounds({
+            current: {
+              x: position.x,
+              y: position.y,
+              width: size.width,
+              height: size.height,
+            },
+            viewportWidth: rootRect.width,
+            viewportHeight: rootRect.height,
+            contentRects,
+            petScale,
+            scaleFactor,
+            workArea: monitor
+              ? {
+                  x: monitor.workArea.position.x,
+                  y: monitor.workArea.position.y,
+                  width: monitor.workArea.size.width,
+                  height: monitor.workArea.size.height,
+                }
+              : null,
+            margin: DESKTOP_PET_RENDERED_CONTENT_MARGIN_PX,
+          });
+          if (!geometry.changed) continue;
+
+          await setManagedDesktopPetWindowBounds(geometry.bounds);
+          if (disposed || menuOpenRef.current) continue;
+
+          // Persist the collapsed anchor instead of the expanded top-left corner.
+          // Otherwise a restart would expand the window upward a second time.
+          if (config.settings.position) {
+            const key = `${geometry.basePosition.x}:${geometry.basePosition.y}`;
+            if (renderedFitBasePositionKeyRef.current !== key) {
+              renderedFitBasePositionKeyRef.current = key;
+              await emitTo("main", DESKTOP_PET_POSITION_EVENT, geometry.basePosition);
+            }
+          }
+        }
+      } finally {
+        renderedFitInFlightRef.current = false;
+        if (renderedFitPendingRef.current && !disposed) scheduleFit();
+      }
+    };
+
+    const scheduleFit = () => {
+      renderedFitPendingRef.current = true;
+      if (renderedFitRafRef.current !== null) {
+        cancelAnimationFrame(renderedFitRafRef.current);
+      }
+      renderedFitRafRef.current = requestAnimationFrame(() => {
+        renderedFitRafRef.current = requestAnimationFrame(() => {
+          renderedFitRafRef.current = null;
+          void fitRenderedWindow();
+        });
+      });
+    };
+
+    const observer = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(scheduleFit);
+    observer?.observe(root);
+    root.querySelectorAll<HTMLElement>(".desktop-pet-status, .desktop-pet-stage")
+      .forEach((element) => observer?.observe(element));
+    scheduleFit();
+
+    return () => {
+      disposed = true;
+      renderedFitPendingRef.current = false;
+      if (renderedFitRafRef.current !== null) {
+        cancelAnimationFrame(renderedFitRafRef.current);
+        renderedFitRafRef.current = null;
+      }
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      observer?.disconnect();
+    };
+  }, [
+    config.settings.position,
+    config.settings.showStatus,
+    config.settings.size,
+    config.visible,
+    detail,
+    displayMood,
+    documentVisible,
+    installedPet,
+    menuGeometry,
+    menuOpen,
+    petScale,
+    runningDetail,
+  ]);
+
   const clearHoverOpenTimer = () => {
     if (hoverOpenTimerRef.current === null) return;
     window.clearTimeout(hoverOpenTimerRef.current);
@@ -944,6 +1091,7 @@ export default function DesktopPetApp() {
 
   return (
     <main
+      ref={rootRef}
       className="desktop-pet-root"
       data-mood={displayMood}
       data-work-bounce={

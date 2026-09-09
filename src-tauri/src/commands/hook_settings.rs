@@ -42,11 +42,12 @@ const CLAUDE_HOOK_EVENTS: [&str; 10] = [
     "PreToolUse",
     "PostToolUse",
 ];
-const CODEX_HOOK_EVENTS: [&str; 7] = [
+const CODEX_HOOK_EVENTS: [&str; 8] = [
     "SessionStart",
     "UserPromptSubmit",
     "PermissionRequest",
     "PreToolUse",
+    "PostToolUse",
     "Stop",
     "SubagentStart",
     "SubagentStop",
@@ -1215,6 +1216,16 @@ fn apply_codex_hook_module(settings: &mut Value, exe: &str, module: CodexHookMod
                 "SubagentStop",
                 build_command(exe, "codex", "SubagentStop"),
             );
+            add_hook_command(
+                settings,
+                "PreToolUse",
+                build_command(exe, "codex", "ToolStart"),
+            );
+            add_hook_command(
+                settings,
+                "PostToolUse",
+                build_command(exe, "codex", "ToolStop"),
+            );
         }
         CodexHookModule::HooksFeature => {}
     }
@@ -1233,11 +1244,15 @@ fn remove_codex_hook_module(settings: &mut Value, module: CodexHookModule) {
             remove_named_hook_command(settings, "PreToolUse", "codex", "Notification");
         }
         CodexHookModule::Stop => remove_hook_commands(settings, &["Stop"], &CODEX_LEGACY_SCRIPTS),
-        CodexHookModule::Subagent => remove_hook_commands(
-            settings,
-            &["SubagentStart", "SubagentStop"],
-            &CODEX_LEGACY_SCRIPTS,
-        ),
+        CodexHookModule::Subagent => {
+            remove_hook_commands(
+                settings,
+                &["SubagentStart", "SubagentStop"],
+                &CODEX_LEGACY_SCRIPTS,
+            );
+            remove_named_hook_command(settings, "PreToolUse", "codex", "ToolStart");
+            remove_named_hook_command(settings, "PostToolUse", "codex", "ToolStop");
+        }
         CodexHookModule::HooksFeature => {}
     }
 }
@@ -1329,6 +1344,7 @@ fn install_codex_hooks(codex_dir: &Path) -> Result<(), String> {
             "UserPromptSubmit",
             "PermissionRequest",
             "PreToolUse",
+            "PostToolUse",
             "Stop",
             "SubagentStart",
             "SubagentStop",
@@ -1634,6 +1650,7 @@ fn codex_hook_state_event_name(event: &str) -> Option<&'static str> {
     match event {
         "PermissionRequest" => Some("permission_request"),
         "PreToolUse" => Some("pre_tool_use"),
+        "PostToolUse" => Some("post_tool_use"),
         "SessionStart" => Some("session_start"),
         "UserPromptSubmit" => Some("user_prompt_submit"),
         "Stop" => Some("stop"),
@@ -1728,7 +1745,12 @@ fn codex_hook_trusted_hash(event: &str, group: &Value, hook: &Value) -> Result<S
     );
     if matches!(
         event,
-        "PermissionRequest" | "PreToolUse" | "SessionStart" | "SubagentStart" | "SubagentStop"
+        "PermissionRequest"
+            | "PreToolUse"
+            | "PostToolUse"
+            | "SessionStart"
+            | "SubagentStart"
+            | "SubagentStop"
     ) {
         if let Some(matcher) = group.get("matcher") {
             normalized_group.insert("matcher".to_string(), matcher.clone());
@@ -1851,6 +1873,7 @@ fn uninstall_codex_hooks(codex_dir: &Path) -> Result<(), String> {
             "UserPromptSubmit",
             "PermissionRequest",
             "PreToolUse",
+            "PostToolUse",
             "Stop",
             "SubagentStart",
             "SubagentStop",
@@ -2938,7 +2961,22 @@ fn build_codex_status(codex_dir: Option<PathBuf>) -> Result<ToolHookSettingsStat
         stop_hook_installed: registered("Stop"),
         failure_hook_installed: false,
         failure_hook_required: false,
-        subagent_start_hook_installed: registered("SubagentStart") && registered("SubagentStop"),
+        subagent_start_hook_installed: registered("SubagentStart")
+            && registered("SubagentStop")
+            && registered_exact_command(
+                &settings,
+                exe.as_deref(),
+                "PreToolUse",
+                "codex",
+                "ToolStart",
+            )
+            && registered_exact_command(
+                &settings,
+                exe.as_deref(),
+                "PostToolUse",
+                "codex",
+                "ToolStop",
+            ),
         subagent_start_hook_required: true,
         hooks_feature_installed: codex_hooks_feature_installed(&config_path)?,
         hooks_trusted: codex_cli_manager_hooks_trusted(&settings, &hooks_path, &config_path)?,
@@ -3683,6 +3721,8 @@ mod tests {
         assert!(hooks_json.contains("--source codex"));
         assert!(hooks_json.contains("--event SubagentStart"));
         assert!(hooks_json.contains("--event SubagentStop"));
+        assert!(hooks_json.contains("--event ToolStart"));
+        assert!(hooks_json.contains("--event ToolStop"));
         assert!(hooks_json.contains(CODEX_QUESTION_TOOL_NAME));
         let hooks: Value = serde_json::from_str(&hooks_json).unwrap();
         let exe = hook_exe_for_dir(&codex_dir).unwrap();
@@ -3693,6 +3733,20 @@ mod tests {
             "codex",
             "Notification",
             CODEX_QUESTION_TOOL_NAME,
+        ));
+        assert!(registered_exact_command(
+            &hooks,
+            Some(&exe),
+            "PreToolUse",
+            "codex",
+            "ToolStart",
+        ));
+        assert!(registered_exact_command(
+            &hooks,
+            Some(&exe),
+            "PostToolUse",
+            "codex",
+            "ToolStop",
         ));
         assert!(!hooks_json.contains(".ps1"));
         assert!(!codex_dir
@@ -3948,7 +4002,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_codex_registers_and_uninstall_removes_subagent_start() {
+    async fn install_codex_registers_and_uninstall_removes_subagent_lifecycle() {
         let tmp = TempDir::new().unwrap();
         let claude_dir = tmp.path().join("claude");
         let codex_dir = tmp.path().join("codex");
@@ -3961,11 +4015,33 @@ mod tests {
         let after_install = fs::read_to_string(codex_dir.join(CODEX_HOOKS_FILE_NAME)).unwrap();
         assert!(after_install.contains("--event SubagentStart"));
         assert!(after_install.contains("--event SubagentStop"));
+        assert!(after_install.contains("--event ToolStart"));
+        assert!(after_install.contains("--event ToolStop"));
 
         uninstall_codex_hooks(&codex_dir).unwrap();
         let after_uninstall = fs::read_to_string(codex_dir.join(CODEX_HOOKS_FILE_NAME)).unwrap();
         assert!(!after_uninstall.contains("--event SubagentStart"));
         assert!(!after_uninstall.contains("--event SubagentStop"));
+        assert!(!after_uninstall.contains("--event ToolStart"));
+        assert!(!after_uninstall.contains("--event ToolStop"));
+    }
+
+    #[test]
+    fn codex_status_requires_internal_tool_lifecycle_upgrade() {
+        let tmp = TempDir::new().unwrap();
+        let codex_dir = tmp.path().join("codex");
+        fs::create_dir_all(&codex_dir).unwrap();
+        install_codex_hooks(&codex_dir).unwrap();
+        trust_installed_codex_hooks(&codex_dir);
+
+        let hooks_path = codex_dir.join(CODEX_HOOKS_FILE_NAME);
+        let mut settings = read_json(&hooks_path).unwrap();
+        remove_named_hook_command(&mut settings, "PostToolUse", "codex", "ToolStop");
+        write_json(&hooks_path, &settings).unwrap();
+
+        let status = build_codex_status_with_trust_repair(Some(codex_dir)).unwrap();
+        assert!(!status.subagent_start_hook_installed);
+        assert!(matches!(status.status, HookInstallStatus::PartialInstalled));
     }
 
     #[tokio::test]

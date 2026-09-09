@@ -1148,6 +1148,20 @@
   background-color: color-mix(in srgb, var(--surface-container-lowest) 54%, transparent);
 }
 
+.ui-tree-leading-icon-inherited {
+  position: relative;
+}
+
+.ui-tree-inherit-marker {
+  position: absolute;
+  top: 50%;
+  left: -13px;
+  z-index: 1;
+  color: color-mix(in srgb, var(--primary) 72%, var(--text-muted) 28%);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
 .ui-tree-project:hover {
   background-color: color-mix(in srgb, var(--surface-container-high) 62%, transparent);
   border-color: color-mix(in srgb, var(--border) 32%, transparent);
@@ -2223,6 +2237,12 @@
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   animation: slide-down var(--animate-duration-fast) var(--ease-standard);
+}
+
+/* Radix owns fixed positioning on its Popper wrapper. Keep the content in
+   normal flow so the wrapper measures the complete menu before flip/shift. */
+.context-menu.radix-context-menu-content {
+  position: relative;
 }
 
 [data-theme="dark"] .context-menu {
@@ -3790,7 +3810,7 @@
   overflow: auto;
   border: 1px solid var(--md-border);
   border-radius: 6px;
-  background-color: #111827;
+  background-color: var(--md-canvas-subtle);
 }
 
 .ui-markdown-code-block pre {
@@ -3801,10 +3821,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--md-border);
   padding: 0.35rem 0.75rem;
-  background-color: rgba(255, 255, 255, 0.04);
-  color: #9ca3af;
+  background-color: var(--md-canvas-muted);
+  color: var(--md-subtle);
   font-family: var(--font-ui-mono);
   font-size: 0.68rem;
   font-weight: 700;
@@ -5169,6 +5189,10 @@
     box-shadow var(--animate-duration-fast) var(--ease-standard);
 }
 
+.ui-terminal-action-sidebar[data-dock-side="left"] {
+  box-shadow: inset 1px 0 0 color-mix(in srgb, var(--term-panel-border, var(--terminal-theme-foreground, #f8fafc)) 52%, transparent);
+}
+
 .ui-terminal-action-sidebar::before {
   content: "";
   position: absolute;
@@ -5228,6 +5252,18 @@
 .ui-file-tooltip[data-tooltip]:focus-visible::after {
   opacity: 1;
   visibility: visible;
+  transform: translate(0, -50%);
+}
+
+.ui-terminal-action-sidebar[data-dock-side="left"] .ui-terminal-action-sort-item[data-tooltip]::after {
+  right: auto;
+  left: calc(100% + 8px);
+  transform: translate(-4px, -50%);
+}
+
+.ui-terminal-action-sidebar[data-dock-side="left"] .ui-terminal-action-sort-item[data-tooltip]:hover::after,
+.ui-terminal-action-sidebar[data-dock-side="left"] .ui-terminal-action-sort-item[data-tooltip]:focus-visible::after,
+.ui-terminal-action-sidebar[data-dock-side="left"] .ui-terminal-action-sort-item[data-tooltip]:has(:focus-visible)::after {
   transform: translate(0, -50%);
 }
 
@@ -8296,7 +8332,8 @@
   background-color: color-mix(in srgb, var(--term-panel-cyan, #5AC8E0) 13%, transparent);
 }
 
-.ui-file-tree-row[data-selected="true"] {
+.ui-file-tree-row[data-selected="true"],
+.ui-file-tree-row[data-state="open"] {
   background-color: color-mix(in srgb, var(--term-panel-cyan, #5AC8E0) 26%, transparent);
   color: var(--term-panel-fg, #ececec);
   box-shadow: inset 2px 0 0 var(--term-panel-cyan, #5AC8E0);
@@ -8310,7 +8347,8 @@
 }
 
 .ui-file-tree-row[data-ignored="true"]:hover,
-.ui-file-tree-row[data-ignored="true"][data-selected="true"] {
+.ui-file-tree-row[data-ignored="true"][data-selected="true"],
+.ui-file-tree-row[data-ignored="true"][data-state="open"] {
   opacity: 0.75;
 }
 

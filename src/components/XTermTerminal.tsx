@@ -41,6 +41,7 @@ import {
 import { requestTerminalFileNavigation } from "../lib/terminalFileNavigation";
 import { findProjectByPath, findWorktreeByPath } from "../lib/terminalProject";
 import { projectSupportsCapability } from "../lib/projectCapabilities";
+import { useWorkspaceBackground } from "./workspace/WorkspaceBackground";
 import { useTerminalSearch } from "../hooks/useTerminalSearch";
 import { useTerminalContextMenu } from "../hooks/useTerminalContextMenu";
 import { useTerminalOsc } from "../hooks/useTerminalOsc";
@@ -51,7 +52,7 @@ import { resolveClaudeImeCompositionAnchor } from "../lib/terminalImeAnchor";
 import { copyTextToClipboard, readTextFromClipboard } from "../lib/systemClipboard";
 import { formatOsc52Reply } from "../lib/terminalOscParse";
 import { eventToCombo } from "../hooks/useKeyboardShortcuts";
-import { hasCodexTuiViewport } from "../lib/terminalTuiDisplay";
+import { hasCodexTuiViewport, hasTuiComposerPromptViewport } from "../lib/terminalTuiDisplay";
 import { createTerminalTuiColorSyncController } from "../lib/terminalTuiColorSync";
 import { hexToRgba, normalizeHexColor } from "../lib/terminalColor";
 import { wrapTerminalPasteTextForCtrlShiftV } from "../lib/terminalKeyboard";
@@ -70,6 +71,7 @@ import { FontSizeControl, useFontSizeControlVisibility } from "./ui/FontSizeCont
 import { useProjectStore } from "../stores/projectStore";
 import { formatStartupInputForPty, useTerminalStore } from "../stores/terminalStore";
 import {
+  ArrowDown,
   Eye,
   EyeOff,
 } from "./icons";
@@ -81,9 +83,13 @@ import {
   createTerminalCliContext,
   isClaudeTerminalContext,
   isCodexTerminalContext,
+  isGrokLaunchCommand,
+  isGrokRuntimeContext,
+  isGrokTerminalContext,
   isOpenCodeTerminalContext,
 } from "../terminal/browser/TerminalCliContext";
 import { createTerminalMouseInteractionOptions } from "../terminal/browser/TerminalMouseInteraction";
+import { resolveTerminalNewlineKeyEvent } from "../terminal/browser/TerminalNewlineShortcut";
 import { attachOpenCodeTuiClipboard } from "../terminal/browser/OpenCodeTuiClipboard";
 import {
   createPiTerminalCompatibility,
@@ -436,6 +442,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const visibilityRestoreFallbackRafRef = useRef<number | null>(null);
   const codexCursorShowTimerRef = useRef<number | null>(null);
   const codexSessionDetectedRef = useRef(false);
+  const grokSessionDetectedRef = useRef(false);
   const osc52ClipboardChainRef = useRef(Promise.resolve());
   const osc52ClipboardPendingRef = useRef(0);
   const displayNormalizeOutputRef = useRef<(text: string) => string>((text) => text);
@@ -476,8 +483,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       overlayDarken: s.terminalBackground.overlayDarken,
     }))
   );
+  const workspaceBackground = useWorkspaceBackground();
   const hiddenForThisSession = useTerminalStore((s) => s.hiddenBackgroundSessionIds.has(sessionId));
   const terminalSession = useTerminalStore((state) => state.sessions.find((item) => item.id === sessionId) ?? null);
+  const terminalSessionStatus = useTerminalStore((state) => state.sessionStatuses[sessionId] ?? null);
   const terminalProject = useProjectStore((state) => (
     terminalSession?.projectId
       ? state.projects.find((item) => item.id === terminalSession.projectId) ?? null
@@ -495,6 +504,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
   const [visibilityRestorePending, setVisibilityRestorePending] = useState(false);
   const [suggestionGhost, setSuggestionGhost] = useState<TerminalSuggestionGhostState | null>(null);
+  const [isScrolledAwayFromBottom, setIsScrolledAwayFromBottom] = useState(false);
   const { fontSizeControlVisible, showFontSizeControl } = useFontSizeControlVisibility();
   const [linuxGraphicsConstrained, setLinuxGraphicsConstrained] = useState(false);
   const [linuxGraphicsDisableWebgl, setLinuxGraphicsDisableWebgl] = useState(false);
@@ -552,7 +562,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
   useEffect(() => {
     let cancelled = false;
-    if (!background.imagePath) {
+    if (workspaceBackground.requested || !background.imagePath) {
       setAssetUrl(null);
       return;
     }
@@ -562,7 +572,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     return () => {
       cancelled = true;
     };
-  }, [background.imagePath]);
+  }, [background.imagePath, workspaceBackground.requested]);
 
   const isTransparent = background.enabled && background.imagePath !== null && !hiddenForThisSession;
   const isTransparentRef = useRef(isTransparent);
@@ -604,8 +614,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     attachPasteAndDrop,
     pasteText,
     readClipboardPasteText,
+    readClipboardImagePasteText,
     attachSelection,
     attachIme,
+    onCommandSubmitted,
   } = useTerminalInput({
     sessionId,
     wrapperRef,
@@ -823,6 +835,27 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       || (runtimeTerminal !== undefined && hasCodexTuiViewport(runtimeTerminal))
     );
     if (detected) codexSessionDetectedRef.current = true;
+    return detected;
+  };
+  const isGrokSession = (
+    context = getSessionToolContext(),
+    runtimeTerminal?: Terminal,
+  ) => {
+    const stableDetected = isGrokTerminalContext(context);
+    const hasVisibleTuiPrompt = runtimeTerminal !== undefined
+      && hasTuiComposerPromptViewport(runtimeTerminal);
+    const detected = isGrokRuntimeContext(context, {
+      manualLaunchDetected: grokSessionDetectedRef.current,
+      hasVisibleTuiPrompt,
+    });
+    if (
+      !stableDetected
+      && grokSessionDetectedRef.current
+      && runtimeTerminal !== undefined
+      && !hasVisibleTuiPrompt
+    ) {
+      grokSessionDetectedRef.current = false;
+    }
     return detected;
   };
   const shouldHideCodexCursor = (runtimeTerminal = terminalRef.current) => (
@@ -1097,8 +1130,15 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   }, [isActive, isVisible, visibilityRestorePending]);
 
   useEffect(() => {
+    if (terminalSessionStatus === "exited" || terminalSessionStatus === "error") {
+      grokSessionDetectedRef.current = false;
+    }
+  }, [terminalSessionStatus]);
+
+  useEffect(() => {
     if (!containerRef.current) return;
     codexSessionDetectedRef.current = false;
+    grokSessionDetectedRef.current = false;
     tuiColorSync.reset();
 
     const baseTheme = withTerminalTextColor(
@@ -1311,6 +1351,11 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     terminal.unicode.activeVersion = "11";
     terminal.loadAddon(webLinksAddon);
     terminal.open(containerRef.current);
+    const updateScrollToBottomButton = () => {
+      const buffer = terminal.buffer.active;
+      const next = buffer.type === "normal" && buffer.viewportY < buffer.baseY;
+      setIsScrolledAwayFromBottom((current) => current === next ? current : next);
+    };
     const updateCtrlKeyState = (event: KeyboardEvent) => {
       if (event.key === "Control") ctrlKeyDown = event.type === "keydown";
     };
@@ -1569,24 +1614,24 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         }
       }
       if (e.type === "keydown" && e.key === "Enter") {
-        const shortcut = useSettingsStore.getState().terminalNewlineShortcut;
-        const managedCombo =
-          (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) ||
-          (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) ||
-          (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey);
-        const matched =
-          (shortcut === "Shift+Enter" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) ||
-          (shortcut === "Ctrl+Enter" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) ||
-          (shortcut === "Alt+Enter" && e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey);
-        if (managedCombo) {
+        const sessionContext = getSessionToolContext();
+        const newlineDecision = resolveTerminalNewlineKeyEvent(e, {
+          shortcut: useSettingsStore.getState().terminalNewlineShortcut,
+          usesEscCrComposerNewline:
+            isCodexSession(sessionContext, terminal)
+            || isGrokSession(sessionContext, terminal),
+        });
+        if (newlineDecision.action === "write") {
           e.preventDefault();
-          if (matched) {
-            markAttentionInputHandled();
-            const newlineData = isCodexSession(getSessionToolContext(), terminal) ? "\x1b\r" : "\n";
-            terminalProcessManager.write(sessionId, newlineData).catch((err) => reportPtyWriteError("newline", err));
-          }
+          markAttentionInputHandled();
+          terminalProcessManager.write(sessionId, newlineDecision.data).catch((err) => reportPtyWriteError("newline", err));
           return false;
         }
+        if (newlineDecision.action === "swallow") {
+          e.preventDefault();
+          return false;
+        }
+        if (newlineDecision.action === "pass") return true;
       }
       if (
         e.type === "keydown" &&
@@ -1639,12 +1684,41 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           return false;
         }
       }
+      if (e.type === "keydown" && terminal.buffer.active.type === "normal") {
+        const scrollShortcuts = useSettingsStore.getState().keyboardShortcuts;
+        const combo = eventToCombo(e);
+        if (scrollShortcuts.scrollToBottom.trim() && combo === scrollShortcuts.scrollToBottom) {
+          e.preventDefault();
+          terminal.scrollToBottom();
+          setIsScrolledAwayFromBottom(false);
+          return false;
+        }
+        if (scrollShortcuts.pageUp.trim() && combo === scrollShortcuts.pageUp) {
+          e.preventDefault();
+          terminal.scrollPages(-1);
+          return false;
+        }
+        if (scrollShortcuts.pageDown.trim() && combo === scrollShortcuts.pageDown) {
+          e.preventDefault();
+          terminal.scrollPages(1);
+          return false;
+        }
+      }
       if (e.type === "keydown" && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "v") {
         e.preventDefault();
         readClipboardPasteText().then((text) => {
           pasteText(terminal, wrapTerminalPasteTextForCtrlShiftV(text));
         }).catch((err) => {
           logError("Failed to read clipboard text", { sessionId, err });
+        });
+        return false;
+      }
+      if (e.type === "keydown" && e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        readClipboardImagePasteText().then((text) => {
+          pasteText(terminal, text);
+        }).catch((err) => {
+          logError("Failed to read clipboard image", { sessionId, err });
         });
         return false;
       }
@@ -1737,6 +1811,12 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       reportPtyWriteError,
       updateSessionCwdIfChanged,
       onInputForwarded: maybeLogCodexImeDuplicate,
+      onCommandSubmitted: (command) => {
+        onCommandSubmitted(command);
+        if (isGrokLaunchCommand(command)) {
+          grokSessionDetectedRef.current = true;
+        }
+      },
     });
     inputDisposables.push({ dispose: inputForwarding.dispose });
 
@@ -1789,12 +1869,17 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const detachViewport = attachViewport(terminal);
     displayDisposables.push({ dispose: detachViewport });
     displayDisposables.push(terminal.onRender((range) => {
+      updateScrollToBottomButton();
       handleVisibilityRestoreRender(terminal, range);
       if (isVisibleRef.current) tuiColorSync.schedule(terminal);
     }));
     displayDisposables.push(terminal.onScroll(() => {
+      updateScrollToBottomButton();
       if (isVisibleRef.current) tuiColorSync.schedule(terminal);
     }));
+    displayDisposables.push(terminal.onWriteParsed(updateScrollToBottomButton));
+    displayDisposables.push(terminal.onResize(updateScrollToBottomButton));
+    updateScrollToBottomButton();
     const detachIme = attachIme(terminal, {
       forwarding: inputForwarding,
       osPlatformRef,
@@ -1837,6 +1922,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       ptyOutput?.dispose();
       tuiColorSync.dispose();
       resetOutputState();
+      grokSessionDetectedRef.current = false;
       clearHiddenWebglDisposeTimer();
       clearVisibilityRestoreRevealSchedule();
       visibilityRestorePendingRef.current = false;
@@ -1848,11 +1934,14 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       terminalRef.current = null;
       fitAddonRef.current = null;
       searchAddonRef.current = null;
+      setIsScrolledAwayFromBottom(false);
     };
   }, [sessionId, tuiColorSync]);
 
   const backgroundOverlayColor = getTerminalBackgroundOverlayColor(terminalTheme);
-  const showBackgroundImage = isTransparent && assetUrl !== null;
+  const showLocalBackgroundImage = isTransparent && !workspaceBackground.requested && assetUrl !== null;
+  const showWorkspaceBackground = isTransparent && workspaceBackground.active;
+  const showBackgroundImage = showLocalBackgroundImage || showWorkspaceBackground;
   const terminalForegroundColor = normalizeHexColor(terminalTheme.foreground, "#d8dee9");
   const terminalBackgroundColor = normalizeHexColor(terminalTheme.background, backgroundColor);
   useEffect(() => {
@@ -1911,6 +2000,12 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   };
   const handleTerminalFontSizeWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if (event.ctrlKey && event.deltaY !== 0) showFontSizeControl();
+  };
+  const handleScrollToBottom = () => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.scrollToBottom();
+    setIsScrolledAwayFromBottom(false);
   };
 
   const handleMenuCopy = () => {
@@ -1977,7 +2072,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
   // When the background image is active, an opaque wrapper background would
   // cover the pseudo-element image layer and break the transparency model.
-  const wrapperStyle: CSSProperties = showBackgroundImage
+  const wrapperStyle: CSSProperties = showLocalBackgroundImage
     ? ({
         "--terminal-font-family": effectiveFontFamily,
         "--terminal-bg-image": `url("${assetUrl}")`,
@@ -1986,7 +2081,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         "--terminal-bg-darken": (background.overlayDarken / 100).toString(),
         "--terminal-bg-overlay-color": backgroundOverlayColor,
       } as CSSProperties)
-    : ({ "--terminal-font-family": effectiveFontFamily, backgroundColor } as CSSProperties);
+    : showWorkspaceBackground
+      ? ({ "--terminal-font-family": effectiveFontFamily } as CSSProperties)
+      : ({ "--terminal-font-family": effectiveFontFamily, backgroundColor } as CSSProperties);
   const visibilityRestoreStarting = isVisible && !isVisibleRef.current;
   const terminalContainerStyle: CSSProperties | undefined = visibilityRestorePending || visibilityRestoreStarting
     ? { visibility: "hidden" }
@@ -1997,9 +2094,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       ref={wrapperRef}
       className="ui-terminal-bg-layer relative h-full w-full overflow-hidden"
       style={wrapperStyle}
-      data-bg-enabled={showBackgroundImage ? "true" : undefined}
-      data-bg-fit={showBackgroundImage ? background.fit : undefined}
-      data-bg-position={showBackgroundImage ? background.position : undefined}
+      data-bg-enabled={showLocalBackgroundImage ? "true" : undefined}
+      data-bg-fit={showLocalBackgroundImage ? background.fit : undefined}
+      data-bg-position={showLocalBackgroundImage ? background.position : undefined}
+      data-workspace-bg-enabled={showWorkspaceBackground ? "true" : undefined}
     >
       {markdownPreviewButtonVisible && (
         <button
@@ -2109,20 +2207,36 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           onWheelCapture={handleTerminalFontSizeWheel}
         >
           <div ref={containerRef} className="relative h-full w-full overflow-hidden pl-2" style={terminalContainerStyle} />
-          {fontSizeControlVisible && (
-            <FontSizeControl
-              fontSize={fontSize}
-              defaultFontSize={TERMINAL_FONT_SIZE_DEFAULT}
-              min={TERMINAL_FONT_SIZE_MIN}
-              max={TERMINAL_FONT_SIZE_MAX}
-              onChange={(next) => {
-                showFontSizeControl();
-                void updateSettings("fontSize", next);
-              }}
-              className="absolute bottom-3 right-3 z-20"
-              style={terminalFontSizeControlStyle}
-              variant="terminal"
-            />
+          {(isScrolledAwayFromBottom || fontSizeControlVisible) && (
+            <div className="absolute bottom-3 right-3 z-20 flex flex-col items-end gap-2">
+              {isScrolledAwayFromBottom && (
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={handleScrollToBottom}
+                  className="terminal-scroll-to-bottom ui-focus-ring inline-flex h-7 w-7 items-center justify-center rounded-full border backdrop-blur-md transition hover:brightness-110"
+                  style={terminalFontSizeControlStyle}
+                  aria-label={t("terminal.scrollToBottom")}
+                  title={t("terminal.scrollToBottom")}
+                >
+                  <ArrowDown size={14} aria-hidden="true" />
+                </button>
+              )}
+              {fontSizeControlVisible && (
+                <FontSizeControl
+                  fontSize={fontSize}
+                  defaultFontSize={TERMINAL_FONT_SIZE_DEFAULT}
+                  min={TERMINAL_FONT_SIZE_MIN}
+                  max={TERMINAL_FONT_SIZE_MAX}
+                  onChange={(next) => {
+                    showFontSizeControl();
+                    void updateSettings("fontSize", next);
+                  }}
+                  style={terminalFontSizeControlStyle}
+                  variant="terminal"
+                />
+              )}
+            </div>
           )}
         </div>
         {markdownPreviewOpen && (

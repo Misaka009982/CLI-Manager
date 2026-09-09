@@ -1,3 +1,64 @@
+# 桌面宠物渲染边界验证（2026-09-06）
+
+## 根因与发现清单
+
+- 根因位于桌宠原生窗口固定尺寸与 WebView 实际渲染边界之间：状态气泡可能通过 CSS 变换或内容布局超出 `190 × 210` 的可视区域，窗口自身的 `overflow: hidden` 随后裁剪气泡。
+- 修复落在 `DesktopPetApp` 的渲染测量与 Tauri 窗口 bounds 调整边界；新增纯函数 `calculateDesktopPetRenderedBounds` 负责 CSS 像素到物理像素、底部中心锚点、DPI 和工作区限制，菜单窗口仍复用既有几何计算。
+- `ResizeObserver` 在 DOM 更新后等待两帧再测量状态气泡和宠物舞台；原生调整期间不把程序化移动误记为用户拖动，窗口尺寸变化不会污染持久化位置。
+
+## 验证结果
+
+- `node --test scripts/desktopPetRenderedBounds.test.mjs`：6 项通过，覆盖顶部裁剪、水平超出、扩展稳定、缩回、DPI 缩放和工作区边界。
+- `npx tsc --noEmit`：通过。
+- `git diff --check`：通过（仅保留仓库既有 LF/CRLF 转换提示）。
+
+## 未覆盖与测试边界
+
+- 尚未在 Windows Tauri 实机上对多显示器、125%/150% DPI、屏幕顶部停靠和菜单开关组合做端到端手测；生产构建与 NSIS 打包需在本次交付中继续验证。
+- Rust 窗口 bounds 命令契约未改变；需要在打包后确认透明无边框窗口的 outer size 与 WebView CSS viewport 在目标 Windows 版本上保持一致。
+
+---
+
+# JetBrains 风格 Git 工作区验证（2026-09-04）
+
+## Git 工作区底部工具窗口与目录树（2026-09-04）
+
+### 根因与发现清单
+
+- 原 Git 工作区替换整个终端区域，导致视觉上从左侧展开；本次仅调整前端布局，将其放入终端容器底部 Dock，终端 PTY、分屏和 Workspan 保持挂载。
+- 原提交详情按路径扁平渲染，无法表达模块目录层级；新增目录树构建与展开状态，文件点击仍复用只读 Diff Viewer。
+
+### 验证结果
+
+- `npx tsc --noEmit`、`npm run build`：通过。
+- `node --test scripts/gitGraphLayout.test.mjs scripts/gitWorkspace.test.mjs`：通过。
+- 未改变 Git Transport、IPC、Rust/SSH Agent 或写操作契约；底部面板真实 Tauri 窗口的拖拽手测仍需在本地完成。
+
+## 实现与影响面
+
+- 项目侧栏底部新增 Git 工作区入口；标准模式在终端容器上方挂载全屏工作区，紧凑模式点击入口时先恢复标准模式。关闭工作区只切换可见性，不卸载 PTY、分屏树或 Workspan。
+- 工作区通过现有 `useGitTransportLease` 读取本地、WSL 与 SSH Git，上层保留每批 50 条 cursor；提交表格使用虚拟列表连续加载，纯前端 DAG lane 算法覆盖线性、分叉、merge、根提交、跨页延续和搜索缺失父提交。
+- 左侧引用树展示当前分支、本地分支、按 remote 分组的远程分支与已加载标签，并支持引用筛选；仓库和搜索切换均使用独立 generation 丢弃迟到结果，SSH 根仓库空字符串 ID 保持合法。
+- 右侧提交详情按需读取文件，继续复用共享 `DiffViewerModal` 且不传入任何回滚/暂存 mutation；“变更”标签复用原 `GitChangesPanel` 与 Git Store，不复制写操作链。
+- codebase-memory 已用 `moderate` 模式重建索引；索引确认 Git 工作区触达 `TerminalTabs`、`SidebarFooter`、Git Transport Lease、变更面板和共享 Diff Viewer，属于 HIGH/CRITICAL UI 主流程，因此通过静态架构测试、类型检查、定向 Rust 测试和生产构建复核。
+
+## 验证结果
+
+- `node --test scripts/gitGraphLayout.test.mjs scripts/gitWorkspace.test.mjs scripts/gitHistory.test.mjs scripts/gitDiffViewerArchitecture.test.mjs scripts/gitTransportLease.test.mjs`：20 项通过。
+- `npx tsc --noEmit`：通过。
+- `cargo test --manifest-path src-tauri/Cargo.toml git_history --lib`：10 项通过。
+- `cargo test --manifest-path src-tauri/ssh-agent/Cargo.toml git_history --lib`：2 项通过。
+- `cargo check --manifest-path src-tauri/Cargo.toml`：通过。
+- `npm run build`：通过。
+- `git diff --check`：通过，仅提示工作区现有的 LF/CRLF 自动转换策略。
+
+## 未覆盖与测试边界
+
+- 浏览器 Vite 页面无法脱离 Tauri runtime 完成应用启动（bootstrap 读取 Tauri metadata 失败），因此未在纯浏览器中伪造项目数据做截图；需要在 Tauri 窗口中手动确认中英文切换、真实仓库拓扑和窄窗口横向滚动。
+- 本次未改变 Rust/SSH wire contract、Git 写操作、Diff 大小限制或凭证策略；未连接真实 SSH Host 执行端到端 Git 浏览。
+
+---
+
 # Grok TUI 鼠标点击恢复验证（2026-08-25）
 
 ## 根因与发现清单

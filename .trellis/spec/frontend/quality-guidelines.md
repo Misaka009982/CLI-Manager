@@ -123,6 +123,12 @@ function GitChangesPanel() {
 
 **Required check**: Verify the header, title, maximum summary line count, metadata row, gaps, and vertical padding fit without flex shrink at every supported canvas zoom level.
 
+### Preserve the workspace background at shell boundaries
+
+When `WorkspaceBackground` is active (`data-workspace-background="true"`), normal workspace-level shells must use `background: transparent !important` so the single shared image remains visible through utility classes, Mantine defaults, and component surface rules. Settings and History are intentional opaque-page exceptions; Statistics remains an image-capable page. Do not use a high-opacity `color-mix` as a shell fallback for a page intended to expose the image: in the light theme it is visually opaque and hides the background.
+
+Keep readability surfaces on cards, fields, menus, dialogs, and other interactive content. Any settings/statistics page must carry the active marker through `useWorkspaceBackground`; image or opaque selectors must be scoped to that marker so `fillWorkspace=false` retains terminal-only behavior. Add a static regression assertion for each new shell boundary.
+
 ### Convention: File and Git path copy menus share one formatter
 
 **What**: File explorer and Git change tree context menus must expose absolute-path copy as the primary action and put AI-path and project-relative formats under the shared `PathCopyMenu` component. Absolute paths use the active local project root or SSH `remote_path`; nested Git repositories use the active repository root.
@@ -180,6 +186,70 @@ The replacement keeps `context-menu file-explorer-menu`, removes the old sibling
 ```
 - Clipboard success and failure messages must use i18n keys in both supported UI languages.
 - Radix submenus must render through `ContextMenuPrimitive.Portal`; custom sidebar menu containers may have `overflow-x-hidden` and must not clip nested menus.
+
+### Convention: Preserve both Radix menu positioning boundaries
+
+**What**: A Radix context menu has two positioning contracts:
+
+1. Its Portal host must not be a descendant of an element that combines `transform` (or another
+   fixed-position containing-block property) with `overflow: hidden`. Put the host under
+   `document.body` and copy the owning surface's semantic CSS variables onto that host.
+2. `ContextMenuPrimitive.Content` and `SubContent` must remain in normal flow inside Radix's Popper
+   wrapper. If a shared visual class uses `position: fixed` for hand-positioned menus, override that
+   declaration with a Radix-only class such as `radix-context-menu-content { position: relative; }`.
+
+**Why**: Radix assigns fixed coordinates and collision middleware to its Popper wrapper. A clipped,
+transformed Portal ancestor changes the wrapper's containing block. Independently, fixing the
+content child removes it from the wrapper's normal flow, so the wrapper no longer measures the full
+menu width and height and cannot reliably flip or shift it at window edges. Escaping only the
+clipping ancestor does not repair the measurement contract.
+
+**Correct**:
+
+```tsx
+<Portal>
+  <div ref={setMenuPortalContainer} style={panelStyle} />
+</Portal>
+<ContextMenuPrimitive.Portal container={menuPortalContainer ?? undefined}>
+  <ContextMenuPrimitive.Content className="context-menu radix-context-menu-content" />
+</ContextMenuPrimitive.Portal>
+```
+
+```css
+.context-menu { position: fixed; } /* manual menus */
+.context-menu.radix-context-menu-content { position: relative; }
+```
+
+**Wrong**:
+
+```tsx
+<aside className="transform overflow-hidden">
+  <ContextMenuPrimitive.Content className="context-menu" />
+</aside>
+```
+
+**Tests**: Assert both contracts: the themed Portal host is separate from the visible clipped panel
+root, and both Radix `Content` variants carry the positioning override while the base class remains
+fixed for manual menus. Manually trigger the longest menu at every viewport edge in both left- and
+right-docked panel modes, and verify theme variables, keyboard focus, and replacement-menu behavior.
+
+### Convention: Keep a context-menu target visibly identified while the menu is open
+
+**What**: File-tree rows used as Radix `ContextMenuTrigger` elements must render their `data-state="open"`
+state with the same visual treatment as `data-selected="true"`. Include ignored/dimmed rows in the
+open-state opacity override.
+
+**Why**: Right-click does not imply opening a file or changing the editor's active-file state, but
+the user still needs an unambiguous visual link between a detached Portal menu and its target row.
+Using Radix's trigger state supplies that feedback only for the menu lifetime and restores the
+previous selection automatically when the menu closes.
+
+**Wrong**: Mutating `activeFile` on right-click just to obtain a highlight, or styling only hover;
+the former changes application state and the latter disappears when pointer focus moves into the
+Portal menu.
+
+**Tests**: Assert that every file-browser menu uses an `asChild` trigger and that selected/open rows,
+including ignored rows, share the highlight selectors.
 
 ---
 

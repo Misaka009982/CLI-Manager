@@ -599,18 +599,19 @@ Claude PreToolUse matcher=AskUserQuestion -> Notification
 ### 1. Scope / Trigger
 
 - Trigger: a `claude-hook-notification` payload should also surface as an OS-level notification while preserving the existing in-app toast and tab status behavior.
-- Applies to: frontend hook event listener, persisted hook notification settings, Tauri notification permission, and WSL-to-Windows notification bridge commands.
+- Applies to: frontend hook event listener, persisted hook notification settings, Windows-local WAV validation/playback, Tauri notification permission, and WSL-to-Windows notification bridge commands.
 
 ### 2. Signatures
 
 - Frontend event: `listen<CliHookPayload>("claude-hook-notification", handler)`.
-- Frontend setting fields: `systemNotificationsEnabled: boolean`, `suppressSystemNotificationsWhenFocused: boolean`, and `systemNotificationEvents: Record<HookEventType, boolean>`.
+- Frontend setting fields: `systemNotificationsEnabled: boolean`, `systemNotificationSoundPath: string | null`, `suppressSystemNotificationsWhenFocused: boolean`, and `systemNotificationEvents: Record<HookEventType, boolean>`.
 - Hook event union for system notifications: `SessionStart | UserPromptSubmit | Notification | Stop | StopFailure | PermissionRequest`.
 - Backend command: `is_wsl() -> bool`.
 - Backend command: `send_notification_via_windows(title: String, body: String) -> Result<(), String>`.
-- Backend command: `send_interactive_system_notification(title: String, body: String, tabId: String, actionLabel: String) -> Result<(), String>`.
+- Backend command: `send_interactive_system_notification(title: String, body: String, tabId: String, actionLabel: String, customSoundPath?: String | null) -> Result<(), String>`.
+- Windows-local settings commands: `validate_system_notification_sound(path: String) -> Result<(), String>` and `play_system_notification_sound(path: String) -> Result<(), String>`.
 - Backend-to-frontend activation event: `system-notification-action` with `{ tabId }`.
-- Non-WSL frontend notifier: `send_interactive_system_notification({ title, body, tabId, actionLabel })`.
+- Non-WSL frontend notifier: `send_interactive_system_notification({ title, body, tabId, actionLabel, customSoundPath })`.
 
 ### 3. Contracts
 
@@ -625,6 +626,10 @@ Claude PreToolUse matcher=AskUserQuestion -> Notification
 - Backend guard: `send_notification_via_windows` must reject non-WSL calls so Windows native app instances cannot accidentally show a `Windows PowerShell` source/icon.
 - Non-WSL path: frontend checks/requests notification permission before `send_interactive_system_notification`; Windows native app instances must not route through PowerShell because that makes the toast appear as `Windows PowerShell`.
 - Click behavior: native interactive notifications emit `system-notification-action`; the frontend shows/focuses the app and activates the owning terminal `tabId`. If the tab no longer exists, the app is focused and the user sees a target-closed toast.
+- `systemNotificationSoundPath` defaults to `null`, is persisted locally, and is excluded from WebDAV/local snapshot sync because it is a machine-specific absolute path.
+- On Windows, a valid persisted `.wav` path is canonicalized and checked as a regular RIFF/WAVE file before playback; the action-capable Toast's audio is silenced and the validated file is played asynchronously with WinMM. A missing, stale, malformed, oversized, or otherwise unplayable path logs a warning and preserves the existing default notification behavior.
+- The settings UI validates a selected file before persistence, revalidates stale paths on load, and offers localized choose, preview, and clear actions. The custom sound card is hidden on non-Windows platforms.
+- WSL fallback never receives or interprets `systemNotificationSoundPath`; WSL and non-Windows notification behavior remains unchanged.
 
 ### 4. Validation & Error Matrix
 
@@ -637,13 +642,17 @@ Claude PreToolUse matcher=AskUserQuestion -> Notification
 - `is_wsl` command failure or notification API failure -> catch and log warning; app toast/tab state must continue.
 - WSL bridge title/body too long or containing NUL -> command returns `Err(String)`; frontend catches and logs warning.
 - `powershell.exe` unavailable in WSL -> command returns `Err(String)`; frontend catches and logs warning.
+- Windows custom sound path is missing, non-WAV, malformed, too large, or no longer readable -> settings validation reports a stable error; notification send logs a warning, keeps the default Toast audio, and does not block Hook UI/state/action delivery.
+- Windows custom sound path is valid -> the OS notification is sent once with custom playback; no second default Toast sound is requested.
 
 ### 5. Good/Base/Bad Cases
 
 - Good: `Stop` for a tab titled `CLI-Manager` sends title `CLI-Manager` with body like `✅ Claude Code 在 CLI-Manager 的任务已完成` and still updates the tab status.
 - Good: WSL fallback `PermissionRequest` sends through `send_notification_via_windows` without asking Tauri notification permission, and the Toast XML includes `来自 CLI-Manager` attribution.
 - Good: native Windows/macOS/Linux `PermissionRequest` emits `system-notification-action` after notification click and activates the matching terminal tab.
+- Good: Windows `Stop` with a valid selected `.wav` plays the custom file while the interactive notification still activates its owning terminal when clicked.
 - Base: `SessionStart` updates session binding but sends no system notification under default settings.
+- Base: no selected sound uses the existing notification backend default; WSL fallback does not attempt to play a Windows-local path.
 - Base: main window focused and foreground suppression enabled -> no OS notification, but the Hook toast still appears inside CLI-Manager.
 - Base: main window focused and foreground suppression disabled -> OS notification is allowed if global and per-event settings allow it.
 - Bad: system notification failure prevents `showClaudeHookToast` or `handleCliHookEvent` from running; notification errors must stay isolated.
@@ -662,6 +671,8 @@ Claude PreToolUse matcher=AskUserQuestion -> Notification
 - Settings UI test point: toggling one event preserves the other `systemNotificationEvents` values.
 - Settings UI test point: toggling focused-window suppression changes only OS-level notification behavior, not app toast or tab status behavior.
 - Regression test point: app toast and tab indicators still work when system notifications are disabled or fail.
+- Windows file test point: choose valid/uppercase-extension, malformed, missing, directory, oversized, NUL-containing, and non-WAV paths; verify preview/clear and restart persistence without syncing the absolute path.
+- Windows delivery test point: valid custom playback does not duplicate the default sound, stale-path delivery falls back safely, and native notification click activation remains intact.
 
 ### 7. Wrong vs Correct
 
@@ -1068,7 +1079,11 @@ validate_explicit_transcript_path(path) -> PathBuf | error
 - One global sink remains the sole classifier before app, daemon, third-party, and remote-handoff fan-out; no downstream sink may independently defer or duplicate an approval.
 - Only a message-less Codex child event from `local` or `wsl` is a provisional candidate. SSH spool/replay events always deliver immediately.
 - A provisional approval may resolve only against the same source, environment, tab, parent session, and child-agent scope. `Some(session)` and `None` are never equivalent.
+- Local/WSL Codex installs internal `PreToolUse -> ToolStart` and `PostToolUse -> ToolStop` reporters. These events are admitted only to shared arbitration and never reach app, pet, toast, taskbar, system, third-party, or remote-handoff delivery sinks.
+- Tool progress and approval delivery may arrive in either order. A short-lived, bounded, single-consumption progress tombstone uses the exact scoped tool ID when both sides provide one, otherwise the exact tool name; it never crosses source, environment, tab, parent session, or child-agent boundaries.
+- Progress resolves pending approvals before deadline polling, so a matching event received at the grace boundary cannot first fan out a stale approval. Real unresolved approvals retain bounded fallback delivery exactly once.
 - Transcript metadata is read only after explicit path normalization and transcript-root validation. Native metadata polling of `\\wsl$` / `\\wsl.localhost` paths is forbidden.
+- Trusted child and parent transcript candidates are evaluated independently. The Hook-provided byte baseline applies only to the exact path it measured; when absent, the backend captures a native baseline after validation, while WSL UNC candidates never trigger native metadata access.
 - Missing, untrusted, unreadable, or non-local transcript metadata leaves the approval unresolved; the bounded fallback delivery remains authoritative and must never suppress it permanently.
 
 ### 4. Validation & Error Matrix
@@ -1077,6 +1092,8 @@ validate_explicit_transcript_path(path) -> PathBuf | error
 |---|---|
 | SSH `PermissionRequest` from spool replay | Forward immediately; do not enter provisional state. |
 | Local/WSL message-less Codex child request | Hold only for the bounded arbitration window. |
+| Matching Codex ToolStart/ToolStop before or after a provisional request | Resolve it silently; no downstream fan-out. |
+| Progress event lacks tool ID | Match only an exact tool name inside the exact child scope. |
 | Source/environment/tab/session/agent mismatch | Do not resolve or cancel the other approval. |
 | Explicit path outside a trusted transcript root | Do not read metadata; use normal fallback delivery. |
 | WSL UNC transcript path | Do not call native `fs::metadata`; rely on Hook event/timing flow. |
@@ -1092,7 +1109,9 @@ validate_explicit_transcript_path(path) -> PathBuf | error
 ### 6. Tests Required
 
 - Rust tests cover SSH immediate delivery, local/WSL candidate admission, source/environment/session isolation, and timeout fallback delivery.
+- Rust tests cover ToolStart/ToolStop before and after PermissionRequest, exact-name fallback, tool-ID mismatch, multi-child isolation, deadline ordering, tombstone expiry, and zero downstream delivery for internal progress.
 - Rust tests cover rejected untrusted paths and WSL UNC paths without native metadata polling.
+- Hook settings tests cover Codex lifecycle install/status/trust/uninstall; an older installation without `PostToolUse -> ToolStop` must report partial until explicitly reinstalled.
 - Run `cargo fmt --check`, targeted approval/remote Hook tests, `cargo check --lib`, and `git diff --check`.
 
 ### 7. Wrong vs Correct

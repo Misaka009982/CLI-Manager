@@ -27,7 +27,10 @@ export interface CliToolDescriptor {
   icon: CliToolIconKey;
   vendor: VendorKey | null;
   historySourceId?: HistorySourceId;
+  imagePasteMode?: ImagePasteMode;
 }
+
+export type ImagePasteMode = "native" | "at" | "aider" | "unsupported";
 
 export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
   {
@@ -37,6 +40,7 @@ export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
     icon: "claude-code",
     vendor: "claude",
     historySourceId: "claude",
+    imagePasteMode: "native",
   },
   {
     id: "codex",
@@ -45,6 +49,7 @@ export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
     icon: "codex",
     vendor: "openai",
     historySourceId: "codex",
+    imagePasteMode: "native",
   },
   {
     id: "opencode",
@@ -53,6 +58,7 @@ export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
     icon: "opencode",
     vendor: null,
     historySourceId: "opencode",
+    imagePasteMode: "at",
   },
   {
     id: "kimi",
@@ -61,6 +67,7 @@ export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
     icon: "kimi",
     vendor: "kimi",
     historySourceId: "kimi",
+    imagePasteMode: "at",
   },
   {
     id: "grok",
@@ -76,6 +83,7 @@ export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
     label: "Qwen Code",
     icon: "qwen",
     vendor: "qwen",
+    imagePasteMode: "at",
   },
   {
     id: "gemini",
@@ -84,6 +92,7 @@ export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
     icon: "gemini-cli",
     vendor: "gemini",
     historySourceId: "gemini",
+    imagePasteMode: "at",
   },
   {
     id: "copilot",
@@ -121,6 +130,7 @@ export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
     label: "Aider",
     icon: "aider",
     vendor: null,
+    imagePasteMode: "aider",
   },
   {
     id: "crush",
@@ -128,6 +138,7 @@ export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
     label: "Crush",
     icon: "crush",
     vendor: null,
+    imagePasteMode: "at",
   },
   {
     id: "pi",
@@ -135,11 +146,23 @@ export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
     label: "Pi Coding Agent",
     icon: "pi",
     vendor: null,
+    imagePasteMode: "at",
     historySourceId: "pi",
   },
 ];
 
 export const CLI_TOOL_COMMANDS = CLI_TOOL_DESCRIPTORS.map((tool) => tool.command);
+
+export function resolveCliToolImagePasteMode(cliTool: string | null | undefined): ImagePasteMode {
+  const normalized = cliTool?.trim().toLowerCase() ?? "";
+  if (!normalized) return "unsupported";
+  const descriptor = CLI_TOOL_DESCRIPTORS.find(
+    (tool) => tool.id === normalized || tool.command === normalized || commandMatches(normalized, tool.command),
+  );
+  if (descriptor?.imagePasteMode) return descriptor.imagePasteMode;
+  if (normalized.includes("claude") || normalized.includes("codex")) return "native";
+  return "unsupported";
+}
 
 const HISTORY_SOURCE_ICON_KEYS: Partial<Record<HistorySourceId, CliToolIconKey>> = {
   claude: "claude-code",
