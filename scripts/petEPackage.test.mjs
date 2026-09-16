@@ -136,6 +136,13 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   assert.match(alphaRelease, /npm install --prefix pet-e --ignore-scripts/);
   assert.doesNotMatch(alphaRelease, /prepare-electron-pet-runtime/);
   assert.doesNotMatch(alphaRelease, /node \.\/scripts\/prepare-pet-e-runtime\.mjs/);
+  // 上游 V1.4.0 起 bundle.resources 由字符串数组改为「源 -> 目标」对象映射。
+  // alpha 工作流必须同时兼容两种形态，否则「Resolve and stamp alpha version」
+  // 会直接抛出 Tauri bundle resources are unavailable 让整个发布挂掉。
+  assert.match(alphaRelease, /const bundleResources = tauriConfig\.bundle\?\.resources/);
+  assert.match(alphaRelease, /Array\.isArray\(bundleResources\)/);
+  assert.match(alphaRelease, /for \(const key of Object\.keys\(bundleResources\)\)/);
+  assert.doesNotMatch(alphaRelease, /!Array\.isArray\(tauriConfig\.bundle\.resources\)/);
   assert.match(prepareBundle, /process\.env\.ComSpec \|\| "cmd\.exe"/);
   assert.match(prepareBundle, /\["\/d", "\/s", "\/c", "npm\.cmd", \.\.\.args\]/);
   assert.doesNotMatch(prepareBundle, /run\(npmCommand/);

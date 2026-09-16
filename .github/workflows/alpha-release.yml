@@ -128,18 +128,30 @@ jobs:
           const bundleVersion = `${targetVersion}-${runNumberValue}`;
           const tag = `V${releaseVersion}`;
 
-          if (!tauriConfig.bundle || !Array.isArray(tauriConfig.bundle.resources)) {
+          // 上游 V1.4.0 起把 bundle.resources 由字符串数组改为「源 -> 目标」对象映射，
+          // 两种形态都要能剔除内置 SSH Agent 资源。
+          const bundleResources = tauriConfig.bundle?.resources;
+          if (typeof bundleResources !== "object" || bundleResources === null) {
             throw new Error("Tauri bundle resources are unavailable");
           }
+          const isSshAgentResource = (entry) => entry.startsWith("resources/ssh-agent/");
           packageJson.version = bundleVersion;
           packageLock.version = bundleVersion;
           packageLock.packages[""].version = bundleVersion;
           tauriConfig.version = bundleVersion;
           tauriConfig.bundle.targets = ["msi", "nsis"];
           tauriConfig.bundle.createUpdaterArtifacts = false;
-          tauriConfig.bundle.resources = tauriConfig.bundle.resources.filter(
-            (resource) => resource !== "resources/ssh-agent/**/*",
-          );
+          if (Array.isArray(bundleResources)) {
+            tauriConfig.bundle.resources = bundleResources.filter(
+              (resource) => !isSshAgentResource(resource),
+            );
+          } else {
+            for (const key of Object.keys(bundleResources)) {
+              if (isSshAgentResource(key)) {
+                delete bundleResources[key];
+              }
+            }
+          }
 
           writeFileSync("package.json", `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
           writeFileSync("package-lock.json", `${JSON.stringify(packageLock, null, 2)}\n`, "utf8");
