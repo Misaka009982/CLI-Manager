@@ -6,7 +6,7 @@ import type {
   SessionStatus,
   TabNotificationState,
   TabStatusDetails,
-} from "../../features/terminal/store/terminalStore";
+} from "../../features/terminal/types/terminalStoreTypes";
 import {
   DESKTOP_PET_E_PROTOCOL_VERSION,
   type DesktopPetEAgentSource,
