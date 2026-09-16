@@ -192,10 +192,13 @@ WHERE history_messages_fts MATCH ?
 - Frontend helper: `fetchLatestProjectSessionDetail(projectPath, prev, source, cliSessionId, options?)`.
 - Realtime options: `forceCatalogRefresh?: boolean`, `freshDetail?: boolean`, and `waitForCatalogRefresh?: boolean`.
 - Tauri command: `history_refresh_index(..., wait: boolean) -> HistoryIndexStatus`.
+- Query scheduling: `session_query::list_sessions_with_query_refresh(dirty, query, limit, offset, load, refresh)`; the existing `history_list_sessions` IPC signature stays unchanged.
 
 ### 3. Contracts
 
 - A bound preview lookup must match `source + cliSessionId`; a project/path miss must never fall back to an unrelated recent session.
+- For a clean catalog, read before waiting for a query-triggered refresh. A single result whose `session_id` exactly equals the trimmed query, with `limit=1` and `offset=0`, returns without waiting for the global refresh lock. Provider ID formats must not be guessed from UUID syntax.
+- Dirty catalogs still refresh before any read. Text searches, missing/mismatched IDs, and paginated searches still refresh and reread; a cached match by title alone is not a bound-session hit.
 - `waitForCatalogRefresh=true` is reserved for the explicit bound Markdown preview and is passed to `history_refresh_index`; statistics polling keeps the default non-blocking `false` behavior.
 - The preview records its load trigger only after receiving a non-null matching detail. A catalog miss, parse error, or transport error remains retryable when the panel is opened or refreshed.
 - The preview consumes `SessionTranscriptContent` only; it must not alter xterm output, the terminal background-image wrapper, transparency, WebGL policy, or split geometry.
@@ -204,7 +207,9 @@ WHERE history_messages_fts MATCH ?
 
 | Condition | Required behavior |
 |---|---|
-| Exact session is already indexed | Load detail through the normal fast path. |
+| Exact session is already indexed while the global refresh is busy | Return the matching summary immediately, then load fresh detail; do not queue behind the refresh. |
+| Dirty catalog after edit/delete | Refresh before returning any summary. |
+| Text/name search or paginated query | Refresh and reread so newly changed Codex names still participate in filtering. |
 | Exact session is missing and preview requests freshness | Wait for one forced catalog refresh, then retry the exact lookup. |
 | Refresh or detail loading fails | Show the existing preview error and leave the trigger uncommitted so a later open/refresh can retry. |
 | Source/session identity mismatches | Return no detail; never display another session's answer. |
@@ -215,12 +220,14 @@ WHERE history_messages_fts MATCH ?
 - Good: Hook completion races catalog indexing; the preview waits for the refresh and renders the final assistant message for the same session.
 - Base: the catalog already contains the session; no forced refresh is needed.
 - Bad: cache a failed hidden preload trigger and make opening the visible panel permanently reuse the failure.
+- Bad: treat every nonempty `query` as a text search and wait for all providers to finish indexing before reading an already indexed session ID.
 - Bad: use the project's latest session as a fallback when the bound `cliSessionId` is absent.
 
 ### 6. Tests Required
 
 - Frontend source regression test: assert preview freshness passes `waitForCatalogRefresh=true`, the store forwards it as `wait`, and failed loads do not write the loaded trigger.
 - Frontend background regression test: assert the existing terminal background-enabled wrapper and xterm container remain present.
+- `cargo test --manifest-path src-tauri/Cargo.toml --lib session_query`: use a never-completing refresh future to verify cached exact lookup returns; cover misses, wrong IDs, text search, pagination, dirty catalogs, and visible read errors.
 - Run `npx tsc --noEmit` and the Markdown preview/background layout Node tests.
 
 ### 7. Wrong vs Correct

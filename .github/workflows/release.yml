@@ -37,8 +37,9 @@ jobs:
           cargo install cargo-zigbuild --locked
           npm ci
 
-      - name: Test R2 release preparation
+      - name: Test release preparation
         run: |
+          node .github/scripts/release-workflow.test.mjs
           node .github/scripts/r2-release-config.test.mjs
           node .github/scripts/prepare-r2-release.test.mjs
 
@@ -149,14 +150,6 @@ jobs:
         if: matrix.platform == 'windows-latest'
         run: npm install --prefix pet-e --ignore-scripts --no-audit --no-fund --package-lock=false
 
-      - name: Test Codex app-server proxy
-        if: matrix.platform == 'windows-latest'
-        run: npm run test:codex-proxy:e2e
-
-      - name: Test Tauri dev proxy preparation
-        if: matrix.platform == 'windows-latest'
-        run: npm run test:tauri-dev-proxy
-
       - name: Test Desktop Pet E contracts
         if: matrix.platform == 'windows-latest'
         run: npm run test:pet-e:contracts
@@ -178,6 +171,18 @@ jobs:
           do
             test -f "src-tauri/resources/ssh-agent/$required" || exit 1
           done
+
+      - name: Build bundled web assets for Windows checks
+        if: matrix.platform == 'windows-latest'
+        run: npm run web:build
+
+      - name: Test Codex app-server proxy
+        if: matrix.platform == 'windows-latest'
+        run: npm run test:codex-proxy:e2e
+
+      - name: Test Tauri dev proxy preparation
+        if: matrix.platform == 'windows-latest'
+        run: npm run test:tauri-dev-proxy
 
       - name: Extract version from tag
         id: version

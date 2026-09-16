@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 53
-- **Last Active**: 2026-09-07
+- **Total Sessions**: 56
+- **Last Active**: 2026-09-08
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1737 | Active |
+| `journal-1.md` | ~1811 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,9 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 56 | 2026-09-08 | 修复桌宠 ID 路径穿越 | `c936751b` | `refactor/ai-architecture` |
+| 55 | 2026-09-08 | 补全后端函数注释 | `e7e44585` | `refactor/ai-architecture` |
+| 54 | 2026-09-07 | PR252 合并与全项目 AI 架构重构 | `361edeb1`, `78cd43ed`, `33916085`, `220564b5`, `b9b00a04`, `2d1eb7fe`, `fc92405e`, `6cf6222d`, `9488d0be`, `8cf2a86c`, `8a5325df`, `3914b123` | `refactor/ai-architecture` |
 | 53 | 2026-09-07 | 修复 WSL AI CLI 图片粘贴 | `34dc164c`, `f81d31be` | `master` |
 | 52 | 2026-08-24 | 修复供应商目录残留选中态 | `320d4d6f` | `master` |
 | 51 | 2026-08-17 | 修复应用重启后本地路由未恢复 | `a3958343` | `master` |
@@ -49,6 +52,7 @@
 | 36 | 2026-08-03 | 修复子任务分屏滚动条与工具栏 | `b7c148b7` | `master` |
 | 35 | 2026-07-31 | 终端状态标记设置预览 | `2e73f3a7` | `feat/terminal-status-marker-settings` |
 | 34 | 2026-07-31 | 终端状态标记设置与视觉优化 | `5603bde1` | `feat/terminal-status-marker-settings` |
+| 34 | 2026-07-22 | 修复 Web Server 迁移校验漂移 | `2663048e` | `feat/web-management-capabilities` |
 | 33 | 2026-07-24 | 完善终端 Tab 悬浮信息卡 | `592729e9` | `master` |
 | 32 | 2026-07-23 | 修复跨 Workspan 终端空白 | `5cd5011d` | `master` |
 | 31 | 2026-07-23 | 修复 Codex 子任务窗格自动关闭 | `0347ab8e` | `master` |

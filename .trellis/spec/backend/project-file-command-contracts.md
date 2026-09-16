@@ -14,7 +14,7 @@
 
 ### 2. Signatures
 
-Backend commands in `src-tauri/src/commands/fs.rs`:
+Backend commands in `src-tauri/src/features/files/commands.rs`:
 
 ```rust
 file_watch_start(project_path: String) -> Result<(), String>
@@ -69,6 +69,8 @@ ProjectFilesChangedPayload { project_path: String, changed_paths: Vec<String> }
 - `file_search_content` scans supported user-project text encodings within the project root, skips large/binary/undecodable files and common binary extensions, and returns at most one representative match per file with 1-based line numbers and bounded context snippets.
 - `overwrite=false` must return `target_exists` when the destination exists.
 - `overwrite=true` may replace the target after Rust revalidates the destination stays inside root.
+- `file_delete` and `file_move` reject symlink/reparse components in the source relative path before canonicalizing it; otherwise a source link could be dereferenced and its target destructively operated on. The selected project root itself remains canonicalized normally.
+- The frontend skips same-parent moves. Direct same-source commands retain the existing `source_equals_target` rejection. Moving over an ancestor containing the source is rejected before any destination removal.
 
 ### 4. Validation & Error Matrix
 
@@ -86,6 +88,8 @@ ProjectFilesChangedPayload { project_path: String, changed_paths: Vec<String> }
 | Child name contains path separator | `name_contains_separator` |
 | Delete target is root | `cannot_delete_root` |
 | Copy/move directory into itself | `target_inside_source` |
+| Delete/move source has a symlink/reparse component | `path_is_symlink` |
+| Move destination is an ancestor of the source | `target_contains_source` |
 | Destination exists without overwrite | `target_exists` |
 | Text file is too large | `file_too_large` |
 | Text path has a known video extension | `video_preview_unsupported` |
@@ -109,7 +113,7 @@ ProjectFilesChangedPayload { project_path: String, changed_paths: Vec<String> }
 - Good: `file_search_content(rootPath, "invoke")` returns bounded `{ path, line_number, line_text, before, after }` snippets for UTF-8 project files, with duplicate hits in the same file collapsed to the first match.
 - Good: `file_watch_start(projectPath)` uses a debounced recursive watcher for local Windows paths and returns a stable error such as `wsl_watch_unsupported` when notify cannot be used.
 - Good: watcher events for `src/main.ts` emit `changedPaths: ["src/main.ts"]`, allowing the frontend to refresh `src` instead of every expanded directory.
-- Base: `file_write_text(rootPath, "src/App.tsx", content)` writes only if `src` remains inside `rootPath`.
+- Base: `file_write_text(rootPath, "src/app/App.tsx", content)` writes only if `src` remains inside `rootPath`.
 - Good: `file_read_project_text` opens GBK or UTF-16 BOM source files and `file_write_project_text` writes them back with the same encoding/BOM.
 - Good: local and SSH `src/main.ts` source files bypass video classification and return text; `clip.mp4` remains rejected before content reading on both paths.
 - Good: the frontend rejects a known oversized entry before invoking Rust; Rust repeats size and pixel checks for search results with unknown size and direct IPC calls.
@@ -261,3 +265,20 @@ LiveServerOpenResult { session: LiveServerSession, url: String, reused: bool }
 - Validate case-insensitive HTML injection with and without `</body>`.
 - Validate generated-directory watcher filtering and relevant in-root changes.
 - Start a real loopback listener; assert static response, exact Host behavior, same-root reuse, stop, and listener shutdown.
+
+## Explicit external clipboard imports (TEMP, 2026-09-14)
+New commands live in `src-tauri/src/features/files/commands/clipboard_import.rs`; existing filesystem and terminal attachment signatures stay stable.
+
+```rust
+clipboard_get_revision() -> Option<u32>
+file_clipboard_read(app: AppHandle, known_revision: Option<u32>) -> Result<ClipboardSnapshot, String>
+file_import_external(root_path: String, source_path: String, target_parent_path: String, name: String, overwrite: bool, protected_source_paths: Vec<String>) -> Result<(), String>
+file_import_image(root_path: String, target_parent_path: String, name: String, data_base64: String, overwrite: bool) -> Result<(), String>
+```
+- Snapshot serializes `{ unchanged, entries: [{ path, name, kind, isSymlink, dataBase64 }] }`; `dataBase64=null` means absolute native source path. Screenshot identities are `clipboard-image:<uuid>` and names are unique timestamped PNGs.
+- Windows uses native sequence numbers and CF_HDROP handles; `DragQueryFileW` receives the handle, never the GlobalLock pointer. Clipboard acquisition is bounded to 5 attempts / 20 ms intervals; file lists cap at 4096. A changed revision during snapshot reads fails explicitly. Clipboard is never written/cleared.
+- Images are obtained from the existing clipboard plugin on a blocking worker, encoded as PNG, limited to 12M pixels / 64 MiB encoded bytes, and validated on import. No temporary-attachment retention applies to project imports.
+- External files are COPY-only, including Explorer Cut. Absolute sources and canonical project-relative destinations are validated independently; reject unsafe child names, device/ADS aliases, links/reparse points, non-regular files, excessive nesting, self/ancestor/descendant imports and overlap with any protected batch source. Windows existing target aliases are canonicalized for overlap checks.
+- Stage complete source data beside target before modifying old destination. No-overwrite is default; directory overwrite replaces, not merges. Confirmed overwrite backs up the old item and rolls it back on publication failure. Failed rollback preserves `.cli-manager-import-<uuid>/previous` and returns its path. Windows publication uses MoveFileExW with flags=0 to refuse replacing a concurrently created target. Windows local/WSL/UNC filesystem availability and permissions remain authoritative.
+- No app-data/config/asset protocol scope changes. SSH remains UI/store read-only; no remote upload is implied.
+- Required tests: copied bytes/empty files/Unicode/nested directories, conflict retry, dirty and stale-context guards, screenshot PNG validity, invalid source/target/image, self/ancestor/descendant/batch overlap, case aliases, actual links, staging failure and publication rollback. Desktop clipboard/menu/focus/language checks require a human per frontend quality rules.

@@ -3,12 +3,17 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const template = readFileSync(new URL("../src-tauri/src/pi_extension_template.ts", import.meta.url), "utf8");
-const hookSettings = readFileSync(new URL("../src-tauri/src/commands/hook_settings.rs", import.meta.url), "utf8");
+const hookSettings = [
+  "../src-tauri/src/features/hooks/settings/mod.rs",
+  "../src-tauri/src/features/hooks/settings/pi.rs",
+  "../src-tauri/src/features/hooks/settings/tests.rs",
+  "../src-tauri/src/features/hooks/settings/json_hooks.rs",
+].map((path) => readFileSync(new URL(path, import.meta.url), "utf8")).join("\n");
 const broker = readFileSync(new URL("../src-tauri/src/desktop_pet_e_agent.rs", import.meta.url), "utf8");
-const hookServer = readFileSync(new URL("../src-tauri/src/claude_hook.rs", import.meta.url), "utf8");
+const hookServer = readFileSync(new URL("../src-tauri/src/features/hooks/claude.rs", import.meta.url), "utf8");
 
 test("managed Pi extension is generated from the owned decision template", () => {
-  assert.match(hookSettings, /include_str!\("\.\.\/pi_extension_template\.ts"\)/);
+  assert.match(hookSettings, /include_str!\("\.\.\/\.\.\/\.\.\/pi_extension_template\.ts"\)/);
   assert.match(template, /__CLI_MANAGER_PI_HOOK__|__PI_MARKER__/);
   assert.match(template, /CLI_MANAGER_PI_EXTENSION_VERSION:7/);
   assert.match(hookSettings, /PI_EXTENSION_VERSION_PREFIX/);

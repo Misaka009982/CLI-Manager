@@ -3,21 +3,26 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const broker = readFileSync(new URL("../src-tauri/src/desktop_pet_e_agent.rs", import.meta.url), "utf8");
-const hookClient = readFileSync(new URL("../src-tauri/src/hook_client.rs", import.meta.url), "utf8");
-const hookServer = readFileSync(new URL("../src-tauri/src/claude_hook.rs", import.meta.url), "utf8");
-const hookSettings = readFileSync(new URL("../src-tauri/src/commands/hook_settings.rs", import.meta.url), "utf8");
-const proxy = readFileSync(new URL("../src-tauri/src/codex_app_server_proxy.rs", import.meta.url), "utf8");
-const coordinator = readFileSync(new URL("../src/hooks/useDesktopPetECoordinator.ts", import.meta.url), "utf8");
-const sessionCoordinator = readFileSync(new URL("../src/hooks/useDesktopPetEAgentCoordinator.ts", import.meta.url), "utf8");
-const sharedAgentStore = readFileSync(new URL("../src/stores/desktopPetEAgentStore.ts", import.meta.url), "utf8");
+const hookClient = readFileSync(new URL("../src-tauri/src/features/hooks/client.rs", import.meta.url), "utf8");
+const hookServer = readFileSync(new URL("../src-tauri/src/features/hooks/claude.rs", import.meta.url), "utf8");
+const hookSettings = [
+  "../src-tauri/src/features/hooks/settings/mod.rs",
+  "../src-tauri/src/features/hooks/settings/json_hooks.rs",
+].map((path) => readFileSync(new URL(path, import.meta.url), "utf8")).join("\n");
+const proxy = readFileSync(new URL("../src-tauri/src/features/codex-proxy/mod.rs", import.meta.url), "utf8");
+const coordinator = readFileSync(new URL("../src/features/terminal/hooks/useDesktopPetECoordinator.ts", import.meta.url), "utf8");
+const sessionCoordinator = readFileSync(new URL("../src/features/terminal/hooks/useDesktopPetEAgentCoordinator.ts", import.meta.url), "utf8");
+const sharedAgentStore = readFileSync(new URL("../src/features/terminal/api/desktopPetEAgentStore.ts", import.meta.url), "utf8");
 // 会话侧的弹出面板（DesktopPetESessionActionPanel.tsx）已在 5f03c748 删除：每个 CLI 在自己
 // 的终端 UI 里作答，无需重复面板。提交中断言未同步删除，遗留未声明的 sessionPanel
 // 变量（运行时 ReferenceError）。现改为断言宠物端渲染器里等价的提交互斥逻辑。
 const petRenderer = readFileSync(new URL("../pet-e/src/renderer/app.ts", import.meta.url), "utf8");
 const agentProtocol = readFileSync(new URL("../pet-e/src/bridge/protocol.ts", import.meta.url), "utf8");
-const terminalTabs = readFileSync(new URL("../src/components/TerminalTabs.tsx", import.meta.url), "utf8");
-const terminalStore = readFileSync(new URL("../src/stores/terminalStore.ts", import.meta.url), "utf8");
-const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+const terminalTabs = readFileSync(new URL("../src/features/terminal/hooks/useTerminalTabsController.tsx", import.meta.url), "utf8");
+const terminalStore = readFileSync(new URL("../src/features/terminal/store/terminalStore.ts", import.meta.url), "utf8");
+// attachDaemonSession 的 options 类型声明在上游拆出的 terminalStoreTypes.ts 中。
+const terminalStoreTypes = readFileSync(new URL("../src/features/terminal/types/terminalStoreTypes.ts", import.meta.url), "utf8");
+const app = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
 
 test("pending-action broker is bounded, authenticated, and lease-gated", () => {
   assert.match(broker, /DESKTOP_PET_E_AGENT_MAX_BODY_BYTES: usize = 1024 \* 1024/);
@@ -74,14 +79,14 @@ test("pet and owning session share pending actions without lifecycle cancellatio
   assert.match(sessionCoordinator, /sessionInteractionAvailable = sessionAcceptsNewActions/);
   assert.match(sessionCoordinator, /RUNTIME_FAILURE_AVAILABILITY_GRACE_MS = 15_000/);
   assert.match(sessionCoordinator, /attachDaemonSession\(sessionId, \{[\s\S]*activate: false,[\s\S]*requireAlive: true/);
-  assert.match(terminalStore, /requireAlive\?: boolean/);
+  assert.match(terminalStoreTypes, /requireAlive\?: boolean/);
+  assert.match(terminalStoreTypes, /activate\?: boolean/);
   assert.match(terminalStore, /options\?\.requireAlive && !daemonSession\.alive/);
   assert.match(sessionCoordinator, /useTerminalStore\.subscribe/);
   assert.match(sessionCoordinator, /scheduleOwningSessionRecovery/);
   assert.match(sessionCoordinator, /next\.sessions === previous\.sessions/);
   assert.match(sessionCoordinator, /currentAction\?\.id !== pendingActionId/);
   assert.match(sessionCoordinator, /reason: "owning-session-unavailable"/);
-  assert.match(terminalStore, /activate\?: boolean/);
   assert.match(terminalStore, /setPaneActiveSession\(paneResult\.tree, targetWorkspan\.activeSessionId\)/);
   assert.match(sharedAgentStore, /requestGeneration < cursor\.requestGeneration/);
   assert.match(sharedAgentStore, /state\.brokerEpoch === event\.brokerEpoch/);
@@ -146,11 +151,13 @@ test("question notifications degrade to jump-only without becoming normal notifi
   assert.match(broker, /mcp_optional_fields_can_be_omitted/);
   assert.match(broker, /"required": required_ids\.contains/);
   assert.match(broker, /stop_does_not_cancel_a_submitted_action_before_ack/);
-  // 终端里答完后 CLI 会发带同一 toolUseId 的 ToolStop/AgentToolStop，用它精确清掉宠物端已作废的项。
+  // 终端里答完后 CLI 会发带同一 toolUseId 的 ToolStop/AgentToolStop；interactive 项靠 ID 精确清掉，
+  // jump-only/通知型项无法在宠物端作答，同会话任一工具结束信号即视为会话端已处理，直接清除。
   assert.match(broker, /"ToolStop" \| "AgentToolStop"/);
   assert.match(broker, /let tool_stop = matches!\(event, "ToolStop" \| "AgentToolStop"\)/);
-  assert.match(broker, /if tool_stop && tool_use_id\.is_none\(\) \{[\s\S]*?return;/);
-  assert.match(broker, /entry\.tool_use_id\.as_deref\(\) == tool_use_id\.as_deref\(\)/);
+  assert.match(broker, /if action_adapter_mode\(&entry\.action\) == Some\("interactive"\) \{[\s\S]*?return entry\.tool_use_id\.as_deref\(\) == tool_use_id\.as_deref\(\);/);
+  assert.match(broker, /tool_stop_clears_jump_only_actions_even_without_tool_use_id/);
+  assert.match(broker, /tool_stop_does_not_clear_interactive_action_without_matching_id/);
   assert.match(hookClient, /"toolUseId": normalized\.tool_use_id/);
   assert.match(broker, /matches!\(&entry\.state, PendingState::Waiting\)/);
   assert.match(broker, /desktopPetE\.agent\.notificationOnly/);

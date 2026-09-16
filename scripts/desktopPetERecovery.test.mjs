@@ -86,11 +86,11 @@ test("terminal red and blue history is process-local and rebuilt empty after res
 });
 
 test("source contracts preserve tray/fullscreen tracking and the unified exit guard", () => {
-  const petCoordinator = read("src/hooks/useDesktopPetECoordinator.ts");
-  const app = read("src/App.tsx");
-  const terminalExit = read("src/lib/terminalExitCleanup.ts");
+  const petCoordinator = read("src/features/terminal/hooks/useDesktopPetECoordinator.ts");
+  const app = read("src/app/App.tsx");
+  const terminalExit = read("src/features/terminal/api/terminalExitCleanup.ts");
   const manager = read("src-tauri/src/commands/desktop_pet_e.rs");
-  const terminalStore = read("src/stores/terminalStore.ts");
+  const terminalStore = read("src/features/terminal/store/terminalStore.ts");
 
   assert.match(petCoordinator, /const tracking = appReady && settingsLoaded && settings\.enabled/);
   assert.match(petCoordinator, /const visible = tracking && !\(settings\.autoHideFullscreen && terminalFullscreen\)/);
@@ -108,9 +108,9 @@ test("source contracts preserve tray/fullscreen tracking and the unified exit gu
 });
 
 test("shared action availability survives pet visibility changes", () => {
-  const sessionCoordinator = read("src/hooks/useDesktopPetEAgentCoordinator.ts");
-  const petCoordinator = read("src/hooks/useDesktopPetECoordinator.ts");
-  const terminalTabs = read("src/components/TerminalTabs.tsx");
+  const sessionCoordinator = read("src/features/terminal/hooks/useDesktopPetEAgentCoordinator.ts");
+  const petCoordinator = read("src/features/terminal/hooks/useDesktopPetECoordinator.ts");
+  const terminalTabs = read("src/features/terminal/hooks/useTerminalTabsController.tsx");
 
   assert.match(sessionCoordinator, /const sessionAcceptsNewActions/);
   assert.match(sessionCoordinator, /sessionInteractionAvailable = sessionAcceptsNewActions/);

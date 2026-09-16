@@ -2,9 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const hookClient = readFileSync(new URL("../src-tauri/src/hook_client.rs", import.meta.url), "utf8");
-const hookServer = readFileSync(new URL("../src-tauri/src/claude_hook.rs", import.meta.url), "utf8");
-const hookSettings = readFileSync(new URL("../src-tauri/src/commands/hook_settings.rs", import.meta.url), "utf8");
+const hookClient = readFileSync(new URL("../src-tauri/src/features/hooks/client.rs", import.meta.url), "utf8");
+const hookServer = readFileSync(new URL("../src-tauri/src/features/hooks/claude.rs", import.meta.url), "utf8");
+const hookSettings = [
+  "../src-tauri/src/features/hooks/settings/mod.rs",
+  "../src-tauri/src/features/hooks/settings/grok.rs",
+  "../src-tauri/src/features/hooks/settings/json_hooks.rs",
+].map((path) => readFileSync(new URL(path, import.meta.url), "utf8")).join("\n");
 const broker = readFileSync(new URL("../src-tauri/src/desktop_pet_e_agent.rs", import.meta.url), "utf8");
 
 test("Grok keeps the existing synthetic PermissionRequest admission", () => {

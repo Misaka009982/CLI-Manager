@@ -47,8 +47,8 @@ test("the manager allows one restart and disables E after the next failure", () 
 
 test("both backend start paths enforce mutual exclusion", () => {
   const manager = read("../src-tauri/src/commands/desktop_pet_e.rs");
-  const existingPet = read("../src-tauri/src/commands/desktop_pet.rs");
-  const existingCoordinator = read("../src/hooks/useDesktopPetCoordinator.ts");
+  const existingPet = read("../src-tauri/src/features/desktop-pet/commands.rs");
+  const existingCoordinator = read("../src/features/desktop-pet/api/useDesktopPetCoordinator.ts");
 
   assert.match(manager, /request\.enabled[\s\S]*request\.existing_desktop_pet_enabled[\s\S]*state\.existing_desktop_pet_enabled/);
   assert.match(manager, /desktop_pet_e_mutual_exclusion/);
@@ -59,7 +59,7 @@ test("both backend start paths enforce mutual exclusion", () => {
 
 const tempDir = mkdtempSync(join(tmpdir(), "cli-manager-desktop-pet-e-transport-"));
 process.on("exit", () => rmSync(tempDir, { recursive: true, force: true }));
-const source = read("../src/lib/desktopPetETransport.ts");
+const source = read("../src/shared/lib/desktopPetETransport.ts");
 const output = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
   fileName: "desktopPetETransport.ts",

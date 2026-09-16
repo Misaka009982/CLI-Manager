@@ -45,31 +45,31 @@ writeFileSync(
   "utf8",
 );
 
-transpile(new URL("../src/lib/resumeCliArgs.ts", import.meta.url), "resumeCliArgs.mjs");
-transpile(new URL("../src/lib/providerSwitching.ts", import.meta.url), "providerSwitching.mjs");
+transpile(new URL("../src/features/history/api/resumeCliArgs.ts", import.meta.url), "resumeCliArgs.mjs");
+transpile(new URL("../src/features/providers/api/providerSwitching.ts", import.meta.url), "providerSwitching.mjs");
 const projectStartupPath = transpile(
-  new URL("../src/lib/projectStartupCommand.ts", import.meta.url),
+  new URL("../src/features/projects/api/projectStartupCommand.ts", import.meta.url),
   "projectStartupCommand.mjs",
   {
-    "./providerSwitching": "./providerSwitching.mjs",
-    "./resumeCliArgs": "./resumeCliArgs.mjs",
-    "./shell": "./shell.mjs",
+    "../../providers/api/providerSwitching": "./providerSwitching.mjs",
+    "../../history/api/resumeCliArgs": "./resumeCliArgs.mjs",
+    "../../../shared/platform/shell": "./shell.mjs",
   },
 );
 const saveSessionPath = transpile(
-  new URL("../src/lib/saveSessionToSidebar.ts", import.meta.url),
+  new URL("../src/features/projects/api/saveSessionToSidebar.ts", import.meta.url),
   "saveSessionToSidebar.mjs",
   {
-    "../stores/terminalStore": "./terminalStore.mjs",
-    "./resumeCliArgs": "./resumeCliArgs.mjs",
+    "../../terminal/state": "./terminalStore.mjs",
+    "../../history/api/resumeCliArgs": "./resumeCliArgs.mjs",
   },
 );
 const historyResumeCommandPath = transpile(
-  new URL("../src/lib/historyResumeCommand.ts", import.meta.url),
+  new URL("../src/features/history/api/historyResumeCommand.ts", import.meta.url),
   "historyResumeCommand.mjs",
   {
-    "./cliTools": "./cliTools.mjs",
-    "./projectStartupCommand": "./projectStartupCommand.mjs",
+    "../../../shared/lib/cliTools": "./cliTools.mjs",
+    "../../projects/api/projectStartupCommand": "./projectStartupCommand.mjs",
     "./resumeCliArgs": "./resumeCliArgs.mjs",
   },
 );
@@ -82,13 +82,18 @@ const {
 } = await import(
   pathToFileURL(join(tempDir, "resumeCliArgs.mjs")).href
 );
-const { appendResumeCliArgs, withCodexConfigOverrides, withGrokModelOverride } = await import(pathToFileURL(projectStartupPath).href);
+const {
+  appendResumeCliArgs,
+  withCodexConfigOverrides,
+  withCodexProfile,
+  withGrokModelOverride,
+} = await import(pathToFileURL(projectStartupPath).href);
 const { buildResumeCliArgs } = await import(pathToFileURL(saveSessionPath).href);
 const { buildHistoryResumeCommand, buildRemoteHandoffResumeCommand, stripPiResumeCliArgs, stripKimiResumeCliArgs } = await import(
   pathToFileURL(historyResumeCommandPath).href
 );
 const historySourcesPath = transpile(
-  new URL("../src/lib/historySources.ts", import.meta.url),
+  new URL("../src/shared/lib/historySources.ts", import.meta.url),
   "historySources.mjs",
 );
 const { HISTORY_SOURCE_DESCRIPTOR_BY_ID } = await import(pathToFileURL(historySourcesPath).href);
@@ -239,6 +244,33 @@ test("scoped Codex overrides keep the real CODEX_HOME and prepend safe config ar
   assert.throws(
     () => withCodexConfigOverrides("codex", ["model='$(whoami)'"]),
     /provider_codex_override_invalid/,
+  );
+});
+
+test("scoped Codex command can carry provider and project MCP overrides together", () => {
+  const command = withCodexConfigOverrides("codex", [
+    "model_provider='cli_manager_scope'",
+    "model_providers.cli_manager_scope.env_key='CLI_MANAGER_PROVIDER_KEY'",
+    "mcp_servers.exa_web_search.url='''https://mcp.exa.ai/mcp'''",
+    "mcp_servers.exa_web_search.enabled=true",
+    "skills.config=[{path='''C:/skills/doc/SKILL.md',enabled=true}]",
+  ]);
+
+  assert.equal(
+    command,
+    `codex -c "model_provider='cli_manager_scope'" -c "model_providers.cli_manager_scope.env_key='CLI_MANAGER_PROVIDER_KEY'" -c "mcp_servers.exa_web_search.url='''https://mcp.exa.ai/mcp'''" -c "mcp_servers.exa_web_search.enabled=true" -c "skills.config=[{path='''C:/skills/doc/SKILL.md',enabled=true}]"`,
+  );
+  assert.equal(command.includes("--profile"), false);
+});
+
+test("scoped Codex project profile keeps the launch command compact", () => {
+  assert.equal(
+    withCodexProfile("codex", "cli-manager-project-123"),
+    "codex --profile cli-manager-project-123",
+  );
+  assert.equal(
+    withCodexProfile("codex resume session-1", "cli-manager-project-123"),
+    "codex --profile cli-manager-project-123 resume session-1",
   );
 });
 

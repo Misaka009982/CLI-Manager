@@ -25,7 +25,7 @@ writeFileSync(join(tempDir, "desktopPetStatus.mjs"), [
   "}",
 ].join("\n"), "utf8");
 
-const stateSource = readFileSync(new URL("../src/lib/desktopPetEState.ts", import.meta.url), "utf8");
+const stateSource = readFileSync(new URL("../src/shared/lib/desktopPetEState.ts", import.meta.url), "utf8");
 const stateOutput = ts.transpileModule(stateSource, {
   compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
   fileName: "desktopPetEState.ts",

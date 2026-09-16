@@ -149,10 +149,10 @@ test("fake agent transport retains failed answers and resolves duplicate submits
 test("cross-layer sources expose one authoritative snapshot and one shared action state", () => {
   const protocol = read("pet-e/src/bridge/protocol.ts");
   const manager = read("src-tauri/src/commands/desktop_pet_e.rs");
-  const coordinator = read("src/hooks/useDesktopPetECoordinator.ts");
-  const sessionCoordinator = read("src/hooks/useDesktopPetEAgentCoordinator.ts");
-  const sharedStore = read("src/stores/desktopPetEAgentStore.ts");
-  const terminalTabs = read("src/components/TerminalTabs.tsx");
+  const coordinator = read("src/features/terminal/hooks/useDesktopPetECoordinator.ts");
+  const sessionCoordinator = read("src/features/terminal/hooks/useDesktopPetEAgentCoordinator.ts");
+  const sharedStore = read("src/features/terminal/api/desktopPetEAgentStore.ts");
+  const terminalTabs = read("src/features/terminal/hooks/useTerminalTabsController.tsx");
   const broker = read("src-tauri/src/desktop_pet_e_agent.rs");
   const codexE2e = read("scripts/codexAppServerProxy.e2e.test.mjs");
 
@@ -188,8 +188,8 @@ test("cross-layer sources expose one authoritative snapshot and one shared actio
 });
 
 test("pet failure cannot remove the owning-session action surface", () => {
-  const petCoordinator = read("src/hooks/useDesktopPetECoordinator.ts");
-  const sessionCoordinator = read("src/hooks/useDesktopPetEAgentCoordinator.ts");
+  const petCoordinator = read("src/features/terminal/hooks/useDesktopPetECoordinator.ts");
+  const sessionCoordinator = read("src/features/terminal/hooks/useDesktopPetEAgentCoordinator.ts");
 
   assert.doesNotMatch(petCoordinator, /desktop_pet_e_agent_cancel/);
   assert.doesNotMatch(petCoordinator, /pet-closed|pet-interaction-unavailable|terminal-fallback/);

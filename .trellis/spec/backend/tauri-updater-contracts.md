@@ -303,6 +303,46 @@ test "$R2_PUBLIC_BASE_URL" = "https://current-host.example.com"
 "permissions": ["updater:default", "process:allow-restart"]
 ```
 
+## Scenario: Bundle resources before direct Cargo release checks
+
+### Root cause and contract
+
+Direct Cargo commands invoke `src-tauri/build.rs` and validate `bundle.resources` before
+Tauri can run `build.beforeBuildCommand`. The Windows release job must produce the Web
+bundle and download/verify the signed SSH Agent files before either proxy check. A warm
+checkout containing `apps/web/dist` does not prove this ordering is correct.
+
+- Prepare resources in the invoking workflow; keep `build.rs` as a thin `tauri_build::build()` entry.
+- Do not remove resource mappings, inject a synthetic `TAURI_CONFIG`, or allow checks to fail silently.
+- Linux/macOS continue using Tauri's normal `beforeBuildCommand` to build the frontend and Web bundle.
+- Both Windows checks must complete before the signed Tauri packaging step.
+
+### Discovery list
+
+- [x] `.github/workflows/release.yml`: owns prerequisite ordering and failure propagation.
+- [x] `apps/web/package.json` and the root `web:build` script: produce `dist/index.html` and `dist/assets`; commands unchanged.
+- [x] `src-tauri/tauri.conf.json`: declares Web and SSH Agent bundle resources; mappings and signing configuration unchanged.
+- [x] `src-tauri/build.rs`: validates those resources for direct Cargo builds as well as Tauri builds; unchanged.
+- [x] `scripts/codexAppServerProxy.e2e.test.mjs`: builds the real proxy with Cargo and checks its behavior; assertions unchanged.
+- [x] `scripts/tauri-cli.mjs` and `scripts/tauriCliDevProxy.test.mjs`: direct local Cargo/prebuild callers share the resource prerequisite; runtime wrapper unchanged.
+- [x] `.github/scripts/release-workflow.test.mjs`: prevents resource producers from moving after Windows Cargo consumers.
+- [x] PTY, IPC, window focus, split panes, WSL project paths and CLI Hooks: unrelated to build-host resource preparation.
+
+### Scenario and validation matrix
+
+| Scenario | Required behavior |
+|---|---|
+| Fresh Windows checkout without `apps/web/dist` | Build real Web assets before invoking the proxy's Cargo build. |
+| Warm Windows checkout | Rebuild Web assets; do not infer freshness from directory existence. |
+| Missing/failed SSH Agent download | Fail resource verification before proxy tests and packaging. |
+| Linux/macOS release | Keep normal Tauri frontend/Web preparation and signed bundle checks. |
+| Direct local Cargo or Windows development prebuild | Prepare configured bundle resources first; the Cargo build script does not run npm. |
+| Resource producer or Windows test fails | Fail the job; do not publish the draft release. |
+
+Run `node .github/scripts/release-workflow.test.mjs` in release preparation. Verify that the
+old workflow fails this guard, then run `npm run web:build`, `npm run test:codex-proxy:e2e`
+and `npm run test:tauri-dev-proxy` from a clean Windows checkout with the required Agent resources.
+
 ## Scenario: Target-scoped Tauri configuration features
 
 ### 1. Scope / Trigger

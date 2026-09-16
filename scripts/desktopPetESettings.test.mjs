@@ -11,7 +11,7 @@ process.on("exit", () => rmSync(tempDir, { recursive: true, force: true }));
 
 const source = readFileSync(new URL("../pet-e/src/bridge/protocol.ts", import.meta.url), "utf8");
 const settingsPageSource = readFileSync(
-  new URL("../src/components/settings/pages/DesktopPetESettingsPage.tsx", import.meta.url),
+  new URL("../src/features/settings/components/pages/DesktopPetESettingsPage.tsx", import.meta.url),
   "utf8",
 );
 const output = ts.transpileModule(source, {

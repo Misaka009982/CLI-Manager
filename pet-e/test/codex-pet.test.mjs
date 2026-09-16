@@ -6,8 +6,8 @@ const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
 test("宠物E只消费已校验的 Codex 宠物包", () => {
   const protocol = read("../src/bridge/protocol.ts");
-  const coordinator = read("../../src/hooks/useDesktopPetECoordinator.ts");
-  const settings = read("../../src/components/settings/pages/DesktopPetESettingsPage.tsx");
+  const coordinator = read("../../src/features/terminal/hooks/useDesktopPetECoordinator.ts");
+  const settings = read("../../src/features/settings/components/pages/DesktopPetESettingsPage.tsx");
   assert.match(protocol, /petId: string \| null/);
   assert.match(protocol, /spritePath: string/);
   assert.match(coordinator, /desktop_pet_list_installed/);

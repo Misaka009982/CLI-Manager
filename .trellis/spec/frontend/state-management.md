@@ -8,25 +8,27 @@
 
 This project uses **Zustand** for global stores and `tauri-plugin-store` for persistent settings (`settings.json`). Local component state via `useState` is preferred for ephemeral UI.
 
-Real state files live under `src/stores/`:
+State ownership follows the feature-first layout:
 
-- `settingsStore.ts` — user preferences (theme, font, terminal background, shortcuts), persisted
-- `terminalStore.ts` — PTY sessions, active session, splits, in-memory session overrides
-- `projectStore.ts`, `historyStore.ts`, `syncStore.ts`, `templateStore.ts`, `commandHistoryStore.ts`, `sessionStore.ts`, `updateStore.ts`
+- Application-wide persisted preferences live in `src/shared/preferences/settingsStore.ts`.
+- Feature-owned state lives under `src/features/<domain>` next to its consumers.
 
-(Filling status: spec captures only patterns we have hit in practice. Other sections remain "To be filled by the team".)
+This file records only state patterns verified in the current codebase.
 
 ---
 
 ## State Categories
 
-(To be filled by the team)
+- Feature-owned state lives under `src/features/<domain>` next to its consumers.
+- Application-wide persisted preferences live in `src/shared/preferences/settingsStore.ts`.
 
 ---
 
 ## When to Use Global State
 
-(To be filled by the team)
+- Keep transient interaction state local to its component.
+- Use a domain store when several components in one feature share lifecycle state.
+- Use shared preferences only for settings consumed across feature boundaries.
 
 ---
 
@@ -173,6 +175,74 @@ entries.lowMemoryMode =
 
 - Run `npx tsc --noEmit` after adding the setting.
 - Manual smoke: toggle the setting, restart the app, and verify the value persists.
+
+## Scenario: Project pin preference and sidebar projection
+
+### 1. Scope / Trigger
+
+- Trigger: Adding a project-level pin shortcut that is persisted in shared settings, included in preference backup/sync, and projected into the project sidebar.
+- The pin relationship belongs to the preference layer and is rendered from the current project collection; it does not become a second project record.
+
+### 2. Signatures
+
+- `pinnedProjectIds: string[]` — persisted project IDs in user-selected order.
+- `sidebarPinnedSectionCollapsed: boolean` — persisted disclosure state, default `false`.
+- `migratePinnedProjectIds(value: unknown): string[]` — pure list migration and normalization.
+- `usePinnedProjects(projects: Project[], projectStoreLoaded: boolean)` — derives valid projects and exposes pin/disclosure actions.
+- `SETTING_BACKUP_POLICY.pinnedProjectIds` and `SETTING_BACKUP_POLICY.sidebarPinnedSectionCollapsed` — both map to the `preferences` backup domain.
+
+### 3. Contracts
+
+- `pinnedProjectIds` accepts strings only, removes duplicates while preserving the first occurrence, and appends newly pinned IDs to the end.
+- The derived `pinnedProjects` list joins IDs against the current `Project[]` and preserves persisted order. Unknown IDs are omitted from rendering and cleaned after both settings and the project store are loaded.
+- The pin list is not stored in `Project`, the `projects` table, or tree `sort_order`; project rename, move, and configuration changes therefore keep the same relationship.
+- Workspace restoration refreshes the project cache before applying preferences that contain `pinnedProjectIds`.
+- The sidebar filter control remains governed by `sidebarProjectFilterVisible` and defaults to hidden. Existing pin data must not force the control to appear.
+- The expanded “Pinned” section is a virtual folder-like group. It renders only when the derived list is non-empty; its children are the pinned projects and are excluded from the ordinary sortable tree. The explicit `pinned` filter may show a localized empty state when no valid pin remains.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Missing, non-array, or malformed pin setting | Use an empty list after migration. |
+| Duplicate string IDs | Keep the first occurrence and its order. |
+| Pin ID absent from the loaded project collection | Omit it from the derived list; persist cleanup after loading completes. |
+| No valid pinned project | Do not render the virtual pinned folder. |
+| Filter visibility setting is `false` | Keep the three-state filter row hidden, regardless of pin count. |
+| Snapshot includes workspace and preferences | Refresh projects before applying pinned IDs. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `pinnedProjectIds` stores stable IDs, the hook derives current project objects, and the UI renders a non-empty folder-like shortcut group.
+- Base: An old settings file has no pin keys; defaults produce no pinned group and no filter row.
+- Bad: Add a `pinned` field to each project or force `sidebarProjectFilterVisible` to `true` whenever a pin exists; both duplicate ownership and alter an unrelated user preference.
+
+### 6. Tests Required
+
+- Assert `migratePinnedProjectIds` handles missing values, non-arrays, duplicates, non-string entries, and order preservation.
+- Run `npx tsc --noEmit`, `npm run build`, `npm run check:architecture`, and `npm run check:architecture -- --strict`.
+- Manually verify pin/unpin persistence, project rename/move/delete cleanup, preference restore/sync, no-pin folder absence, one-or-more-pin folder rendering, filter setting off/on, expanded/collapsed sidebar, search, keyboard actions, and zh-CN/en-US labels.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```tsx
+const showFilter = sidebarProjectFilterVisible || pinnedProjects.length > 0;
+return <SidebarHeader showProjectFilter={showFilter} />;
+```
+
+#### Correct
+
+```tsx
+const showFilter = sidebarProjectFilterVisible;
+return (
+  <>
+    <SidebarHeader showProjectFilter={showFilter} />
+    {pinnedProjects.length > 0 && <PinnedProjectSection projects={pinnedProjects} />}
+  </>
+);
+```
 
 ### Pattern: Legacy key remapping next to the migration
 

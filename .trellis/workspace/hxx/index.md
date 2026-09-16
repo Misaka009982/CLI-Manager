@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 111
-- **Last Active**: 2026-09-07
+- **Total Sessions**: 124
+- **Last Active**: 2026-09-14
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1534 | Active |
+| `journal-2.md` | ~1804 | Active |
 | `journal-1.md` | ~2014 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,19 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 124 | 2026-09-14 | 终端 Markdown 预览加载与滚动导航 | `ca2151a8`, `0cc91a0a` | `master` |
+| 123 | 2026-09-14 | 完成 MCP 与 Skills 管理 UI 优化 | `9b933639` | `mcp-skill-manager` |
+| 122 | 2026-09-14 | 完成 MCP 与 Skills 管理 | `f71f4974` | `mcp-skill-manager` |
+| 121 | 2026-09-11 | Fix global MCP and Skills provider Home reuse | `38b2c468` | `mcp-skill-manager` |
+| 120 | 2026-09-11 | 完成 V1.4.0 MCP 与 Skills 管理主线 | `58fe4b05`, `d9e04ace`, `e606b4f3`, `1b421ec4` | `mcp-skill-manager` |
+| 119 | 2026-09-13 | 修复 PR #259 文件浏览器审查问题 | `160bb416` | `fix/pr-259-review-findings` |
+| 118 | 2026-09-11 | Codex 供应商模型编辑与生效预览修复 | `b63acd59` | `master` |
+| 117 | 2026-09-10 | 修复 Pi CLI 全屏 TUI 底部输入框 | `09341b65` | `master` |
+| 116 | 2026-09-10 | 修复大型仓库 Git 面板卡顿 #257 | `ae116d6b` | `master` |
+| 115 | 2026-09-09 | 完成项目置顶快捷入口 | `0b2ccabe` | `master` |
+| 114 | 2026-09-09 | Worktree 强制合并按钮 | `7ad2134a` | `master` |
+| 113 | 2026-09-09 | Codex Goal Hook 状态与通知修复 | `3bf53d31` | `master` |
+| 112 | 2026-09-09 | Git 双组件布局验收与提交 | `dc039078` | `master` |
 | 111 | 2026-09-07 | 修复文件浏览器右键菜单裁剪 | `c1163a2d` | `master` |
 | 110 | 2026-09-07 | 修复 Markdown 文件链接与锚点导航 | `3680fa64` | `master` |
 | 109 | 2026-09-07 | 完成 Issue #248 VS Code 式工作区布局控制 | `1a780b2e` | `master` |

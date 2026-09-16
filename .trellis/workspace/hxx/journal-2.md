@@ -1532,3 +1532,273 @@ v1.3.9-history-detail-ordering-persistence-codex-thread-name-and-descending-tran
 ### Status
 
 [OK] **Completed**
+
+
+## Session 112: Git 双组件布局验收与提交
+
+**Date**: 2026-09-09
+**Task**: Git 双组件布局验收与提交
+**Branch**: `master`
+
+### Summary
+
+用户已验收：历史在底部三栏工作区，变更在终端侧栏，Tab 双向切换独立组件；统一 Git 入口、滚动条并优化拖拽。记录归入 V1.4.0，仅提交 12 个相关文件；保留 Codex Goal/Hook 等其他工作。12 项定向测试、tsc 和严格架构检查通过，未推送。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dc039078` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 113: Codex Goal Hook 状态与通知修复
+
+**Date**: 2026-09-09
+**Task**: Codex Goal Hook 状态与通知修复
+**Branch**: `master`
+
+### Summary
+
+修复阶段性 Stop 提前完成与旧 Hook 空 goal 载荷导致完成通知遗漏；只读查询 Codex goal 状态并贯通 daemon、前端及通知出口。用户实测验证成功。Hook 34 项测试、cargo check、architecture strict 与 diff-check 通过；V1.4.0 记录及协议契约已更新。保留无关终端面板改动，未推送。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3bf53d31` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 114: Worktree 强制合并按钮
+
+**Date**: 2026-09-09
+**Task**: Worktree 强制合并按钮
+**Branch**: `master`
+
+### Summary
+
+新增 Worktree 强制保存并合并流程：原子化 stash、精确 OID 恢复并保留 stash；补充恢复冲突保护、不可外部关闭的二次确认框、双语文案、契约与交付记录。通过 Rust 全量测试、TypeScript、架构严格检查。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7ad2134a` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 115: 完成项目置顶快捷入口
+
+**Date**: 2026-09-09
+**Task**: 完成项目置顶快捷入口
+**Branch**: `master`
+
+### Summary
+
+实现项目置顶持久化、同步、筛选与文件夹式快捷分组；根据验收反馈恢复筛选栏默认隐藏，并将置顶按钮放到启动按钮左侧。已通过 TypeScript、Vite 构建、架构检查与任务校验。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0b2ccabe` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 116: 修复大型仓库 Git 面板卡顿 #257
+
+**Date**: 2026-09-10
+**Task**: 修复大型仓库 Git 面板卡顿 #257
+**Branch**: `master`
+
+### Summary
+
+V1.4.0：虚拟化变更树、Worker 建树及刷新合并；64887 文件浏览器验证、38 项回归、构建与严格架构检查通过，用户验证成功。提交正文 Fixes #257。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ae116d6b` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 117: 修复 Pi CLI 全屏 TUI 底部输入框
+
+**Date**: 2026-09-10
+**Task**: 修复 Pi CLI 全屏 TUI 底部输入框
+**Branch**: `master`
+
+### Summary
+
+修复 Pi 全屏 TUI 中跨 PTY 帧输出的 MCP 直连工具提示覆盖底部输入框问题；补充过滤器、测试、规范与 V1.4.0 文档记录。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `09341b65` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 119: 修复 PR #259 文件浏览器审查问题
+
+**Date**: 2026-09-13
+**Task**: 修复 PR #259 文件浏览器审查问题
+**Branch**: `fix/pr-259-review-findings`
+
+### Summary
+
+修复重命名后文件选择状态保留旧路径，以及 Windows 大小写变体移动祖先保护绕过；补充前后端回归测试，更新 V1.4.0 文档并完成类型、构建、架构与 Rust 全量测试验收。
+
+| Hash | Message |
+|------|---------|
+| `160bb416` | (see git log) |
+
+## Session 118: Codex 供应商模型编辑与生效预览修复
+
+**Date**: 2026-09-11
+**Task**: Codex 供应商模型编辑与生效预览修复
+**Branch**: `master`
+
+### Summary
+
+修复映射输入失焦、Codex 模型预览不一致，并隐藏全局应用指纹。V1.4.0 文档与回归契约已更新。13 项前端测试、17 项 Rust 测试、tsc、cargo check 和严格架构检查通过；用户确认验证通过并授权提交。任务已归档。
+## Session 120: 完成 V1.4.0 MCP 与 Skills 管理主线
+
+**Date**: 2026-09-11
+**Task**: 完成 V1.4.0 MCP 与 Skills 管理主线
+**Branch**: `mcp-skill-manager`
+
+### Summary
+
+按模型适配、导入同步、全局管理、项目 Worktree 策略顺序完成 MCP/Skills 主线；通过 Rust 全库单测、扩展单测、TypeScript、架构 strict 与生产构建。WSL、macOS、SSH 端到端及 GUI 手动验证保留发布门禁，Grok 项目策略保持 global-only。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b63acd59` | (see git log) |
+
+| `58fe4b05` | (see git log) |
+| `d9e04ace` | (see git log) |
+| `e606b4f3` | (see git log) |
+| `1b421ec4` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 121: Fix global MCP and Skills provider Home reuse
+
+**Date**: 2026-09-11
+**Task**: Fix global MCP and Skills provider Home reuse
+**Branch**: `mcp-skill-manager`
+
+### Summary
+
+Removed the duplicate global Environment & Home editor, reused the provider active Home for Skills/GitHub deployment, scoped Skill installation inspection to the active environment, and removed obsolete extension Home state/API plus translations. Verified TypeScript, architecture, build, extension tests, Rust checks, and reran the one flaky daemon port test successfully.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `38b2c468` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 122: 完成 MCP 与 Skills 管理
+
+**Date**: 2026-09-14
+**Task**: 完成 MCP 与 Skills 管理
+**Branch**: `mcp-skill-manager`
+
+### Summary
+
+完成 MCP/Skills 全局与项目策略管理、Codex/Claude 启动隔离、导入部署、保存应用和项目弹框布局修复；扩展测试、TypeScript、Rust、生产构建与架构检查通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f71f4974` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 123: 完成 MCP 与 Skills 管理 UI 优化
+
+**Date**: 2026-09-14
+**Task**: 完成 MCP 与 Skills 管理 UI 优化
+**Branch**: `mcp-skill-manager`
+
+### Summary
+
+完成 MCP/Skills 管理界面与离开提示修复，并通过 TypeScript、扩展测试和架构检查。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9b933639` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 124: 终端 Markdown 预览加载与滚动导航
+
+**Date**: 2026-09-14
+**Task**: 终端 Markdown 预览加载与滚动导航
+**Branch**: `master`
+
+### Summary
+
+用户验收成功后，快进合并远程 master 的 22 个提交，解决功能清单冲突并保留双方记录，完成 V1.4.0 预览加载修复与滚动导航提交，归档任务；按追加要求单独提交微信群二维码图片。
+
+### Main Changes
+
+- 精确绑定会话查询不等待全局历史刷新；新增可拖动历史滚动条、正文到底、最新回答到底与列表末尾跳转，同步中英翻译和契约。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ca2151a8` | (see git log) |
+| `0cc91a0a` | (see git log) |
+
+### Testing
+
+- [OK] 合并后 38/38 前端定向测试、7/7 Rust 定向测试通过；前端构建（含 TypeScript）、cargo check --locked、git diff 检查通过。
+- [KNOWN FAILURE] 独立 normal/strict 架构检查仍有远程 master 既有 38 项违规；全部违规文件与合并后的上游一致，本任务无新增违规。用户已确认桌面验证成功。
+- [OK] 提交前运行 GitNexus detect_changes 并结合定向引用与差异核对；二维码图像解码成功，文件内容保持用户版本。
+
+### Status
+
+[OK] **Completed**
