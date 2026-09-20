@@ -12,9 +12,30 @@ export function startWebBridgePolling(callbacks: BridgePollingCallbacks) {
   let online = false;
   let checking = false;
   let checkAgain = false;
+  let operationWakePending = false;
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
   let drainingTerminal = false;
   let drainingOperations = false;
+
+  async function drainOperationsNow() {
+    if (!online || disposed) return;
+    if (drainingOperations) {
+      operationWakePending = true;
+      return;
+    }
+    drainingOperations = true;
+    try {
+      await callbacks.drainOperations();
+    } catch (error) {
+      if (!disposed) callbacks.onError(error);
+    } finally {
+      drainingOperations = false;
+      if (!disposed && operationWakePending) {
+        operationWakePending = false;
+        void drainOperationsNow();
+      }
+    }
+  }
 
   async function checkStatus() {
     if (disposed) return;
@@ -27,6 +48,10 @@ export function startWebBridgePolling(callbacks: BridgePollingCallbacks) {
       const becameConnected = connected && !online;
       online = connected;
       if (becameConnected) callbacks.onConnected();
+      if (connected && operationWakePending) {
+        operationWakePending = false;
+        void drainOperationsNow();
+      }
     } catch (error) {
       online = false;
       if (!disposed) callbacks.onError(error);
@@ -46,13 +71,7 @@ export function startWebBridgePolling(callbacks: BridgePollingCallbacks) {
     catch (error) { if (!disposed) callbacks.onError(error); }
     finally { drainingTerminal = false; }
   }, 75);
-  const operationTimer = setInterval(async () => {
-    if (!online || disposed || drainingOperations) return;
-    drainingOperations = true;
-    try { await callbacks.drainOperations(); }
-    catch (error) { if (!disposed) callbacks.onError(error); }
-    finally { drainingOperations = false; }
-  }, 1_000);
+  const operationTimer = setInterval(() => void drainOperationsNow(), 1_000);
   void checkStatus();
 
   return {
@@ -60,9 +79,20 @@ export function startWebBridgePolling(callbacks: BridgePollingCallbacks) {
       clearTimeout(statusTimer);
       void checkStatus();
     },
+    wakeOperations() {
+      operationWakePending = true;
+      if (online) {
+        operationWakePending = false;
+        void drainOperationsNow();
+        return;
+      }
+      clearTimeout(statusTimer);
+      void checkStatus();
+    },
     stop() {
       disposed = true;
       online = false;
+      operationWakePending = false;
       clearTimeout(statusTimer);
       clearInterval(terminalTimer);
       clearInterval(operationTimer);

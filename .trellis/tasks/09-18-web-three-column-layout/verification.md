@@ -1,5 +1,33 @@
 # Web three-column layout
 
+## 2026-09-20 follow-up: event-driven file operation pickup
+
+The user approved reopening this Trellis task to remove the visible delay when expanding an uncached Web file-tree directory.
+
+Root cause: the Rust Web device bridge already emitted `OPERATION_EVENT` as soon as the server delivered a management operation, but the React listener called the generic status-only `polling.wake()`. Operation execution therefore still waited for the independent one-second fallback timer. The fix lands in the shared bridge scheduler: operation events now request an immediate, non-overlapping drain, while the periodic drain remains as recovery protection.
+
+Discovery list and implementation scope:
+
+- Rust Web device queue: confirmed it already emits `OPERATION_EVENT` for every newly inserted operation; no protocol or daemon change required.
+- Shared Web bridge polling: add event-driven operation wake-up, reconnect handoff and one coalesced follow-up when events arrive during a drain.
+- Desktop Web bridge hook: route operation events to the dedicated operation wake-up; status events keep their existing status-only wake-up.
+- Web project file tree: retain immediate busy/accessibility state, but delay the row spinner by 150 ms so fast reads do not flash.
+- Periodic recovery: retain the one-second operation drain as a safety net for missed events.
+- Confirmed unrelated: terminal command polling, PTY ownership and sizing, file-list IPC implementation, SSH directory transport, WSL path handling, project tree layout and desktop file explorer.
+
+Scenario matrix: already-online and reconnecting bridges; single and burst operation events; event arrival during an in-flight drain; event loss with fallback polling; stop/unmount during pending work; first-time and cached folder expansion; local, WSL and slow/network-backed directories; desktop and mobile Web layouts. Slow directories continue to show feedback after the threshold, while cached directories keep their existing instant expansion.
+
+Implementation verification before packaging:
+
+- `node --test src/shared/lib/webBridgePolling.test.mjs`: 9 passed, including the desktop event binding, immediate event drain, pre-online event handoff, burst coalescing, non-overlap and periodic fallback.
+- `node --test scripts/webProjectFiles.test.mjs`: 9 passed.
+- Web and desktop TypeScript checks passed.
+- `npm run check:architecture -- --strict`: 1155 source files, zero files above 2000 lines and zero violations.
+- Web production build passed; Vite retains the existing large-chunk warning.
+- GitNexus CLI cannot read the pre-existing unowned `.gitnexus` storage and reports that no code index database is present; GitNexus MCP tools are not exposed in this session. The required impact review therefore used the refreshed codebase-memory graph plus current source, tests and Git diff; the shared scheduler call surface was classified CRITICAL before editing.
+
+Packaging results will be appended after the required pre-package commit and NSIS build.
+
 ## 2026-09-20 follow-up: proactive shared-terminal geometry sync
 
 The user approved reopening this Trellis task for the Web terminal's stale initial geometry. This is a root-cause fix because the failure crosses desktop viewport ownership, Tauri IPC, daemon protocol, server relay and browser rendering.

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { startWebBridgePolling } from "./webBridgePolling.ts";
 
@@ -108,4 +109,64 @@ test("slow operation does not stall terminal polling or overlap operation drains
   assert.ok(calls.terminal >= 5);
   release();
   await settle();
+});
+
+test("operation events drain immediately and retain the periodic fallback", async (t) => {
+  const { calls, setOnline, polling } = fixture(t);
+  await settle();
+  setOnline(true);
+  polling.wake();
+  await settle();
+  assert.equal(calls.operations, 0);
+  polling.wakeOperations();
+  await settle();
+  assert.equal(calls.operations, 1);
+  t.mock.timers.tick(1_000);
+  await settle();
+  assert.equal(calls.operations, 2);
+});
+
+test("operation event received before status is online drains after reconnect", async (t) => {
+  const { calls, setOnline, polling } = fixture(t);
+  await settle();
+  setOnline(true);
+  polling.wakeOperations();
+  await settle();
+  assert.equal(calls.connected, 1);
+  assert.equal(calls.operations, 1);
+});
+
+test("operation event burst during a drain schedules one non-overlapping follow-up", async (t) => {
+  let active = 0;
+  let maximumActive = 0;
+  const releases = [];
+  const { setOnline, polling } = fixture(t, {
+    drainOperations: () => {
+      active++;
+      maximumActive = Math.max(maximumActive, active);
+      return new Promise((resolve) => releases.push(() => { active--; resolve(); }));
+    },
+  });
+  await settle();
+  setOnline(true);
+  polling.wake();
+  await settle();
+  polling.wakeOperations();
+  polling.wakeOperations();
+  polling.wakeOperations();
+  await settle();
+  assert.equal(active, 1);
+  releases.shift()();
+  await settle();
+  assert.equal(active, 1);
+  assert.equal(releases.length, 1);
+  assert.equal(maximumActive, 1);
+  releases.shift()();
+  await settle();
+});
+
+test("desktop bridge routes operation events to the immediate operation wake-up", () => {
+  const bridge = readFileSync(new URL("../../features/terminal/hooks/useWebDeviceBridge.ts", import.meta.url), "utf8");
+  assert.match(bridge, /listen\(OPERATION_EVENT, \(\) => polling\.wakeOperations\(\)\)/);
+  assert.match(bridge, /listen<WebDeviceStatus>\(STATUS_EVENT, \(\) => polling\.wake\(\)\)/);
 });

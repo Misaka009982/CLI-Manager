@@ -637,7 +637,7 @@ export function useWebDeviceBridge(ready: boolean) {
       onConnected: () => void publishWorkspace(),
       onError: (error) => logWarn("Failed to poll Web device bridge", error),
     });
-    const unlisten = listen(OPERATION_EVENT, () => polling.wake());
+    const unlisten = listen(OPERATION_EVENT, () => polling.wakeOperations());
     const unlistenStatus = listen<WebDeviceStatus>(STATUS_EVENT, () => polling.wake());
     let workspacePublishTimer: number | null = null;
     const unsubscribeProjects = useProjectStore.subscribe((state, previous) => {

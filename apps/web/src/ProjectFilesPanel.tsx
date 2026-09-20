@@ -54,6 +54,7 @@ function FileBrowser({ device, context, t, onClose }: Required<Pick<Props, "devi
   const [error, setError] = useState<TranslationKey | null>(null);
   const request = useRef<AbortController | null>(null);
   const requestKind = useRef<FileReadKind | null>(null);
+  const loadingIndicatorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const run = async (kind: FileReadKind, path: string) => {
     request.current?.abort();
@@ -61,7 +62,14 @@ function FileBrowser({ device, context, t, onClose }: Required<Pick<Props, "devi
     request.current = controller;
     requestKind.current = kind;
     setBusy(true);
-    setLoadingPath(kind === "file.list" ? path : null);
+    if (loadingIndicatorTimer.current) clearTimeout(loadingIndicatorTimer.current);
+    loadingIndicatorTimer.current = null;
+    setLoadingPath(null);
+    if (kind === "file.list") {
+      loadingIndicatorTimer.current = setTimeout(() => {
+        if (request.current === controller && !controller.signal.aborted) setLoadingPath(path);
+      }, 150);
+    }
     setError(null);
     try {
       const value = await readProjectFiles(device.id, context, kind, path, controller.signal);
@@ -75,13 +83,21 @@ function FileBrowser({ device, context, t, onClose }: Required<Pick<Props, "devi
     } catch (reason) {
       if (!controller.signal.aborted) setError(fileError(reason, kind));
     } finally {
-      if (!controller.signal.aborted) { setBusy(false); setLoadingPath(null); }
+      if (request.current === controller) {
+        if (loadingIndicatorTimer.current) clearTimeout(loadingIndicatorTimer.current);
+        loadingIndicatorTimer.current = null;
+        if (!controller.signal.aborted) setBusy(false);
+        setLoadingPath(null);
+      }
     }
   };
 
   useEffect(() => {
     void run("file.list", "");
-    return () => { request.current?.abort(); };
+    return () => {
+      request.current?.abort();
+      if (loadingIndicatorTimer.current) clearTimeout(loadingIndicatorTimer.current);
+    };
     // Identity changes remount this component; do not restart reads on workspace snapshots.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -136,6 +136,7 @@ test("Web columns keep terminals mounted and remove geometry-driven overlays", (
   assert.match(panel, /request.current\?\.abort/);
   assert.ok(!panel.includes("dangerouslySetInnerHTML"));
   assert.match(panel, /entries\.slice\(0, visibleCount\[path\] \?\? 200\)/);
+  assert.match(panel, /setTimeout\(\(\) => \{[\s\S]*setLoadingPath\(path\);[\s\S]*\}, 150\)/);
   const layout = read("../apps/web/src/useFileSidebarLayout.ts");
   assert.doesNotMatch(layout, /xterm-screen|scrollWidth|sessionId/);
   assert.match(layout, /localStorage.setItem/);
