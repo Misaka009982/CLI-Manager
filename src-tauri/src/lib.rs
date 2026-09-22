@@ -57,6 +57,7 @@ mod crash_reporter;
 pub(crate) mod credential_store;
 mod desktop_pet_e_agent;
 mod desktop_pet_e_bridge;
+mod window_state;
 // daemon 二进制（src/bin/cli-manager-daemon.rs）经 lib 复用以下模块，
 // 因此 app_paths 与 daemon 需 pub。
 #[path = "infrastructure/daemon/mod.rs"]
@@ -402,6 +403,8 @@ pub fn run() {
             if let Err(err) = crash_reporter::start_runtime() {
                 log::warn!("failed to start CLI-Manager crash runtime marker: {err}");
             }
+            // 尽早恢复主窗口上次的大小/位置/最大化，并开始监听后续变更（fork 模块）。
+            window_state::install(app.handle());
             let startup_args: Vec<String> = std::env::args().collect();
             if let Some(session_id) = background_session_arg(&startup_args) {
                 if let Ok(mut pending) = app.state::<PendingBackgroundSession>().0.lock() {

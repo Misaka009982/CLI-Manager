@@ -7,6 +7,12 @@
 - 同步上游 V1.4.0 的大规模架构重构（Rust 命令层拆为 `features/`、`infrastructure/`、`app/`，前端拆为 `features/`、`shared/`、`app/`），桌面宠物E 功能完整保留：宠物进程与资源、待处理项桥接、宠物端与终端竞速作答、Codex 宠物包选择与折叠、通知与任务区域行为均与同步前一致，宠物E 的 42 个文件与代码签名发布流程一个不少。
 - 随架构调整迁移位置：Rust 侧 Hook 设置拆分为 `features/hooks/settings/*`，保留 Pi 扩展外部模板与版本原地升级；前端宠物E 的 hook、store 与文案并入 `features/terminal`、`features/settings`、`shared/lib`、`shared/i18n/messages`。
 
+### 窗口状态记忆
+
+- 主窗口现在记住上次关闭时的大小、屏幕位置与是否最大化，下次启动自动恢复；上游不提供该能力，默认启用。全屏属临时态不记忆。
+- 位置只在能落到当前某个显示器的可见区域时才恢复，否则保留居中，避免窗口恢复到已拔掉的显示器或屏幕外；恢复尺寸会限定在与窗口最小尺寸一致的合理范围。
+- 作为 fork 独立模块实现（`src-tauri/src/window_state.rs`），状态存于数据目录下的 `window-state.json`，不依赖官方插件、不新增依赖、也不改动设置/文案，便于后续上游同步。
+
 ### 版本与发布
 
 - 桌面应用版本统一升级为 `1.4.0`，同步 npm、Rust、Tauri 及锁文件中的应用版本；使用 `V1.4.0` 标签发布 Windows、macOS 和 Linux 安装包及签名更新资源。
