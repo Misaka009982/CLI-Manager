@@ -6,7 +6,6 @@ import type {
   AgentRuntimeKind,
   McpActivation,
   McpCapabilityItem,
-  McpHealth,
   SkillCapabilityItem,
   SkillState,
 } from "../../agents/api/agentCapabilities";
@@ -32,20 +31,6 @@ interface AgentCapabilitiesCardProps {
   openCodeHookError: string | null;
   onInstallOpenCodeHook: () => void;
 }
-
-const MCP_COLORS: Record<McpHealth, string> = {
-  healthy: TERM.green,
-  error: TERM.red,
-  checking: TERM.yellow,
-  unknown: TERM.dim,
-};
-
-const MCP_LABEL_KEYS: Record<McpHealth, TranslationKey> = {
-  healthy: "termStats.agentCapabilities.health.healthy",
-  error: "termStats.agentCapabilities.health.error",
-  checking: "termStats.agentCapabilities.health.checking",
-  unknown: "termStats.agentCapabilities.health.unknown",
-};
 
 const MCP_ACTIVATION_LABEL_KEYS: Record<McpActivation, TranslationKey> = {
   active: "termStats.agentCapabilities.activation.active",
@@ -119,16 +104,8 @@ function McpRow({ item }: { item: McpCapabilityItem }) {
           <Badge color={disabled ? "gray" : "cyan"} variant="light">
             {t(MCP_ACTIVATION_LABEL_KEYS[item.activation])}
           </Badge>
-          {!disabled && (
-            <Badge color={item.health === "error" ? "red" : item.health === "healthy" ? "green" : "gray"} variant="light">
-              {t(MCP_LABEL_KEYS[item.health])}
-            </Badge>
-          )}
         </Group>
       </Group>
-      {!disabled && item.health === "unknown" && (
-        <Text size="xs" c="dimmed" mt={6}>{t("termStats.agentCapabilities.health.unknownReason")}</Text>
-      )}
       {item.lastEvidence && (
         <Text size="xs" c="dimmed" mt={6}>
           {t("termStats.agentCapabilities.lastEvidence", {
@@ -300,9 +277,6 @@ function AgentCapabilitiesModal({
                 aria-label={t("termStats.agentCapabilities.mcpFilter")}
                 data={[
                   { value: "all", label: t("termStats.agentCapabilities.filter.all") },
-                  { value: "healthy", label: t(MCP_LABEL_KEYS.healthy) },
-                  { value: "error", label: t(MCP_LABEL_KEYS.error) },
-                  { value: "unknown", label: t(MCP_LABEL_KEYS.unknown) },
                   { value: "disabled", label: t("termStats.agentCapabilities.activation.disabled") },
                 ]}
               />
@@ -396,16 +370,6 @@ export function AgentCapabilitiesCard(props: AgentCapabilitiesCardProps) {
             >
               <StatChip dotColor={(skills?.invalid ?? 0) > 0 ? TERM.red : TERM.cyan} label={t("termStats.agentCapabilities.skillsAvailable")} value={String(skills?.available ?? 0)} />
             </button>
-          </div>
-        )}
-        {snapshot && (
-          <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
-            {(["healthy", "error", "unknown"] as const).map((health) => (
-              <span key={health} className="inline-flex items-center gap-1" style={{ color: MCP_COLORS[health] }}>
-                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: MCP_COLORS[health] }} />
-                {t(MCP_LABEL_KEYS[health])} {snapshot.mcpSummary[health]}
-              </span>
-            ))}
           </div>
         )}
       </StatCard>
