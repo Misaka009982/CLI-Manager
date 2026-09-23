@@ -503,11 +503,13 @@ corresponding detection or persistence transition.
   and Grok Build use `{ "config": "<TOML>" }` plus any existing envelope fields.
 - Existing JSON secret fields and TOML secret paths remain owned by the key
   manager. A provider document edit may change non-secret fields only.
-- Provider TOML documents treat the exact option
-  `model_auto_compact_token_limit` as ordinary configuration despite its name;
-  read redaction, new-field rejection, and credential preservation must share
-  this classification. This exception does not apply to Claude JSON fields or
-  to other fields containing `token`.
+- Provider TOML documents share the credential-name classifier used by the
+  global TOML projection, plus protection for nonstandard private keys and
+  credentials. Ordinary options including `model_auto_compact_token_limit`
+  and `api_key_model_discovery` are not secrets even if their names contain
+  `token` or `key`. Read redaction, new-field rejection, and preservation of
+  existing secrets must agree; Claude JSON keeps its separate conservative
+  classifier. Invalid TOML remains conservatively redacted.
 - Current detection scans active-key candidates for a plan whose every target
   live byte sequence equals its desired byte sequence. Exact materialized match
   takes precedence over a stale `is_current` flag; the flag remains a fallback

@@ -263,7 +263,7 @@ pub(super) fn ensure_codex_provider_mapping(
 }
 
 // 规范化键名后按已知凭据名及 token/secret/password/api_key 后缀识别，不检查值内容。
-pub(super) fn is_toml_secret_key(key: &str) -> bool {
+pub(crate) fn is_toml_secret_key(key: &str) -> bool {
     let normalized = key.trim().to_ascii_lowercase().replace(['-', '.'], "_");
     matches!(
         normalized.as_str(),

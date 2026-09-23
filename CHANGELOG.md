@@ -4,7 +4,7 @@
 
 ### 供应商原始配置文档
 
-- 修复 Codex/Grok Build 供应商原始文档误将 `model_auto_compact_token_limit` 识别为密钥、遮罩数值并阻止新增保存的问题；保留真正 API 密钥的脱敏和文档编辑限制。
+- 修复 Codex/Grok Build 供应商原始文档将 `model_auto_compact_token_limit`、`api_key_model_discovery` 等普通选项误识别为密钥的问题；原始文档与生效投影复用凭据识别规则，仍保护真正 API 密钥及非标准私钥字段。
 
 ## [TEMP] - 2026-09-18
 

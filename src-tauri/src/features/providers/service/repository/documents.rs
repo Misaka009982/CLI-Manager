@@ -4,6 +4,7 @@ use super::support::{
     error, is_secret_key as is_json_secret_key, load_provider, map_database_error, normalize_app_type, redact_json,
     redact_settings_config,
 };
+use super::super::global::is_toml_secret_key;
 use crate::provider::database;
 use serde_json::{Map, Value as JsonValue};
 use toml_edit::{DocumentMut, Item, Table, Value as TomlValue};
@@ -258,9 +259,17 @@ pub(super) fn project_effective_model(app_type: &str, raw: &str) -> String {
     settings.to_string()
 }
 
-// 仅 TOML 原始文档识别普通数值选项；JSON 凭据仍采用原有保守规则。
+// TOML 使用投影时的凭据识别规则，同时保留对非标准 key/credential 命名的保护；JSON 保持原规则。
 fn is_secret_key(key: &str) -> bool {
-    !key.eq_ignore_ascii_case("model_auto_compact_token_limit") && is_json_secret_key(key)
+    let normalized = key.trim().to_ascii_lowercase().replace(['-', '.'], "_");
+    is_toml_secret_key(key)
+        || normalized == "key"
+        || normalized.ends_with("_key")
+        || normalized.starts_with("key_")
+        || normalized.starts_with("token_")
+        || ["secret", "password", "credential", "authorization"]
+            .iter()
+            .any(|marker| normalized.contains(marker))
 }
 
 // 按项类型分派脱敏；表数组使用 any，首个返回 true 的表之后不会继续遍历。
@@ -784,7 +793,7 @@ mod tests {
 
     #[test]
     fn ordinary_codex_token_limit_is_not_a_secret_and_round_trips() {
-        let config = "model = \"gpt-test\"\nmodel_auto_compact_token_limit = 240000\n[model_providers.official]\nrequires_openai_auth = true\n";
+        let config = "model = \"gpt-test\"\nservice_tier = \"default\"\nmodel_auto_compact_token_limit = 240000\nmodel_context_window = 272000\n[model_providers.official]\nrequires_openai_auth = true\n[features]\nfast_mode = false\nenable_request_compression = true\napi_key_model_discovery = true\n";
         let (display, has_secret, valid) = redact_toml_document(config);
         assert!(valid);
         assert!(!has_secret);
@@ -822,6 +831,35 @@ mod tests {
         let config = saved["config"].as_str().unwrap();
         assert!(config.contains("model_auto_compact_token_limit = 240000"));
         assert!(config.contains("api_key = \"old-secret\""));
+    }
+
+    #[test]
+    fn codex_boolean_key_discovery_option_can_change_without_being_masked() {
+        let existing = r#"{"config":"[features]\napi_key_model_discovery = false\n"}"#;
+        let incoming = "[features]\napi_key_model_discovery = true\n";
+        let (display, has_secret, valid) = redact_toml_document(incoming);
+        assert!(valid);
+        assert!(!has_secret);
+        assert_eq!(display, incoming);
+
+        let updated = patch_settings_document("codex", existing, "codex.config", incoming).unwrap();
+        let saved: Value = serde_json::from_str(&updated).unwrap();
+        assert_eq!(saved["config"].as_str(), Some(incoming));
+    }
+
+    #[test]
+    fn key_discovery_option_does_not_unmask_actual_toml_credentials() {
+        let config = "[features]\napi_key_model_discovery = true\nprivate_key = \"private-test\"\naccess_token = \"token-test\"\n";
+        let (display, has_secret, valid) = redact_toml_document(config);
+        assert!(valid);
+        assert!(has_secret);
+        assert!(display.contains("api_key_model_discovery = true"));
+        assert!(!display.contains("private-test"));
+        assert!(!display.contains("token-test"));
+
+        let existing = r#"{"config":"[features]\napi_key_model_discovery = true\n"}"#;
+        let rejected = patch_settings_document("codex", existing, "codex.config", config).unwrap_err();
+        assert!(rejected.contains("provider_document_secret_edit_requires_key_manager"));
     }
 
     #[test]
