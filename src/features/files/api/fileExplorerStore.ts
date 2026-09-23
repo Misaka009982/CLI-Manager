@@ -1650,7 +1650,8 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
       return true;
     } catch (error) {
       if (String(error).includes("file_operation_context_changed")) throw error;
-      if (["clipboard_busy", "clipboard_write_failed", "clipboard_window_unavailable", "clipboard_write_unsupported"]
+      if (["clipboard_busy", "clipboard_write_failed", "clipboard_window_unavailable", "clipboard_write_unsupported",
+        "clipboard_shell_", "clipboard_move_mixed_parents_unsupported"]
         .some((code) => String(error).includes(code))) return false;
       if (get().clipboard?.id === id) set({ clipboard: null });
       throw error;

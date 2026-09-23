@@ -408,6 +408,7 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
     isComposingRef,
     lowMemoryMode,
     disableHardwareAcceleration,
+    disableWebglForSessionRef: codexSessionDetectedRef,
     linuxGraphicsDisableWebgl,
     isTransparentRef,
     normalizeOutputRef: displayNormalizeOutputRef,
@@ -562,6 +563,9 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
   };
   displayAfterWriteRef.current = (terminal) => {
     if (!isVisibleRef.current) return;
+    if (isCodexSession(undefined, terminal) && disposeWebglRenderer()) {
+      scheduleViewportRefresh();
+    }
     tuiColorSync.normalize(terminal);
     tuiColorSync.schedule(terminal);
   };
@@ -829,7 +833,7 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
 
   useEffect(() => {
     if (!containerRef.current) return;
-    codexSessionDetectedRef.current = false;
+    codexSessionDetectedRef.current = isCodexTerminalContext(getSessionToolContext());
     grokSessionDetectedRef.current = false;
     tuiColorSync.reset();
 

@@ -98,6 +98,18 @@ test("unavailable native clipboard preserves app-only copy and WSL does not publ
   assert.equal(h.calls.slice(before).some((call) => call.command === "file_clipboard_write"), false);
 });
 
+test("mixed-parent Shell cut failure keeps an app-only move snapshot", async () => {
+  const h = harness(async (command) => {
+    if (command === "file_clipboard_write") throw new Error("clipboard_move_mixed_parents_unsupported");
+    if (command === "clipboard_get_revision") return 7;
+    if (command === "file_clipboard_read") return { unchanged: true, entries: [] };
+  });
+  assert.equal(await h.store.getState().copyEntries("move", [entry("left/a"), entry("right/b")]), false);
+  const clipboard = await h.store.getState().readPasteClipboard();
+  assert.equal(clipboard.mode, "move");
+  assert.deepEqual(clipboard.entries.map((item) => item.path), ["left/a", "right/b"]);
+});
+
 test("invalid native source does not leave a clipboard snapshot that can later paste", async () => {
   const h = harness(async (command) => {
     if (command === "file_clipboard_write") throw new Error("path_is_symlink");

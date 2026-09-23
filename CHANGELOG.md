@@ -90,6 +90,8 @@
 - 右键菜单与 Ctrl+C／Ctrl+X 共用复制入口及中英文反馈；新增 Windows Unicode 路径编码与文件菜单链路测试。
 - Codex Attention Hook 的 PreToolUse 匹配器同时覆盖 `request_user_input` 和 `request_user_input_async`，本机/WSL/SSH 安装、状态检查与通知识别保持一致；特殊异步工具是否触发 Hook 仍需实际 Codex 会话验证。
 - Codex 内建 TUI 的 Ctrl+A／Z／Y 与鼠标点击定位暂不改动：尚无可靠的草稿状态/编辑协议，避免方向键模拟或隐藏光标导致重复输入和闪跳。
+- 修复 Windows 资源管理器跨盘粘贴“剪切”文件后源文件仍在：剪切改用支持粘贴完成反馈的 Shell 数据对象，只有目标报告移动成功才由系统完成源文件删除；系统剪贴板不可用时仍保留应用内剪切。
+- Codex 会话使用 xterm 默认渲染器，避免 WebGL 下输入与输出时的光标闪烁；其他终端保留现有 WebGL 加速，Codex 运行时光标隐藏开关仍由用户决定。
 
 ### 本地打包提速
 

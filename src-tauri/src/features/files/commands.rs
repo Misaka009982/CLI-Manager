@@ -18,6 +18,9 @@ use crate::text_encoding::{decode_text, encode_text};
 mod path_guards;
 #[path = "commands/clipboard_files.rs"]
 mod clipboard_files;
+#[cfg(target_os = "windows")]
+#[path = "commands/clipboard_shell.rs"]
+mod clipboard_shell;
 #[path = "commands/clipboard_image.rs"]
 mod clipboard_image;
 #[path = "commands/clipboard_dib.rs"]

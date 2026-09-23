@@ -41,21 +41,30 @@ pub async fn file_clipboard_write(window: tauri::Window, root_path: String, path
     let owner = window.hwnd().map_err(|error| format!("clipboard_window_unavailable: {error}"))?.0 as usize;
     #[cfg(not(target_os = "windows"))]
     let _ = window;
-    tokio::task::spawn_blocking(move || {
+    let sources = tokio::task::spawn_blocking(move || {
         let root = canonical_root(&root_path)?;
         if paths.is_empty() || paths.len() > 4096 { return Err("clipboard_invalid_file_count".into()); }
-        let sources = paths.iter().map(|path| resolve_mutation_source(&root, path)).collect::<Result<Vec<_>, _>>()?;
-        #[cfg(target_os = "windows")]
-        {
-            super::clipboard_files::write_clipboard_file_paths(&sources, mode == "move", owner)?;
-            clipboard_get_revision().ok_or_else(|| "clipboard_write_failed".into())
+        paths.iter().map(|path| resolve_mutation_source(&root, path)).collect::<Result<Vec<_>, _>>()
+    }).await.map_err(|error| error.to_string())??;
+    #[cfg(target_os = "windows")]
+    {
+        if mode == "move" {
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            window.run_on_main_thread(move || {
+                let _ = sender.send(super::clipboard_shell::write_shell_cut_file_paths(&sources));
+            }).map_err(|error| format!("clipboard_window_unavailable: {error}"))?;
+            receiver.await.map_err(|error| format!("clipboard_window_unavailable: {error}"))??;
+        } else {
+            tokio::task::spawn_blocking(move || super::clipboard_files::write_clipboard_file_paths(&sources, owner))
+                .await.map_err(|error| error.to_string())??;
         }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = sources;
-            Err("clipboard_write_unsupported".into())
-        }
-    }).await.map_err(|error| error.to_string())?
+        clipboard_get_revision().ok_or_else(|| "clipboard_write_failed".into())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = sources;
+        Err("clipboard_write_unsupported".into())
+    }
 }
 
 #[tauri::command]

@@ -33,7 +33,7 @@ fn encode_hdrop(paths: &[std::path::PathBuf]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_os = "windows")]
-pub(super) fn write_clipboard_file_paths(paths: &[std::path::PathBuf], move_files: bool, owner: usize) -> Result<(), String> {
+pub(super) fn write_clipboard_file_paths(paths: &[std::path::PathBuf], owner: usize) -> Result<(), String> {
     use windows_sys::Win32::Foundation::GlobalFree;
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
@@ -58,7 +58,7 @@ pub(super) fn write_clipboard_file_paths(paths: &[std::path::PathBuf], move_file
 
     let bytes = encode_hdrop(paths)?;
     let hdrop = unsafe { allocate(&bytes)? };
-    let effect = if move_files { 2u32 } else { 1u32 }.to_le_bytes();
+    let effect = 1u32.to_le_bytes();
     let effect_handle = match unsafe { allocate(&effect) } {
         Ok(handle) => handle,
         Err(error) => {
