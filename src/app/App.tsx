@@ -87,6 +87,7 @@ const COMPACT_WINDOW_WIDTH = 350;
 const WINDOW_MIN_HEIGHT = 600;
 const CLAUDE_QUESTION_TOOL_NAME = "AskUserQuestion";
 const CODEX_QUESTION_TOOL_NAME = "request_user_input";
+const CODEX_ASYNC_QUESTION_TOOL_NAME = "request_user_input_async";
 interface DaemonSessionMeta {
   sessionId: string;
   alive: boolean;
@@ -260,7 +261,8 @@ function isQuestionRequestNotification(payload: CliHookPayload): boolean {
   return (
     payload.event === "Notification" &&
     ((payload.source === "claude" && payload.toolName === CLAUDE_QUESTION_TOOL_NAME) ||
-      (payload.source === "codex" && payload.toolName === CODEX_QUESTION_TOOL_NAME))
+      (payload.source === "codex" && (payload.toolName === CODEX_QUESTION_TOOL_NAME
+        || payload.toolName === CODEX_ASYNC_QUESTION_TOOL_NAME)))
   );
 }
 

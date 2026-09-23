@@ -26,7 +26,7 @@ const MAX_CONFIG_BYTES: u64 = 2 * 1024 * 1024;
 const MISSING_FINGERPRINT: &str = "missing";
 const ADAPTER_VERSION: u16 = 1;
 const CLAUDE_QUESTION_TOOL_NAME: &str = "AskUserQuestion";
-const CODEX_QUESTION_TOOL_NAME: &str = "request_user_input";
+const CODEX_QUESTION_TOOL_MATCHER: &str = "^request_user_input(_async)?$";
 
 const CLAUDE_HOOKS: &[(&str, &str, &str)] = &[
     ("SessionStart", "SessionStart", ""),
@@ -51,7 +51,7 @@ const CODEX_HOOKS: &[(&str, &str, &str)] = &[
     ("SessionStart", "SessionStart", ""),
     ("UserPromptSubmit", "UserPromptSubmit", ""),
     ("PermissionRequest", "PermissionRequest", ""),
-    ("PreToolUse", "Notification", CODEX_QUESTION_TOOL_NAME),
+    ("PreToolUse", "Notification", CODEX_QUESTION_TOOL_MATCHER),
     ("Stop", "Stop", ""),
     ("SubagentStart", "SubagentStart", ""),
     ("SubagentStop", "SubagentStop", ""),

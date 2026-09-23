@@ -166,6 +166,7 @@ interface FileExplorerStore {
   deleteEntry: (path: string) => Promise<void>;
   deleteEntries: (entries: FileOperationEntry[], project: Project) => Promise<FileBatchResult>;
   setClipboard: (clipboard: Pick<FileClipboard, "mode" | "entries"> | null) => void;
+  copyEntries: (mode: ClipboardMode, entries: FileOperationEntry[]) => Promise<boolean>;
   pasteInto: (targetParentPath: string, overwrite: boolean, snapshot?: FileClipboard) => Promise<FileBatchResult>;
   readPasteClipboard: () => Promise<FileClipboard | null>;
 }
@@ -1622,6 +1623,38 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
       systemRevision: invoke<number | null>("clipboard_get_revision").catch(() => null),
       project: { ...project }, generation: openProjectRequestSeq,
     } });
+  },
+
+  copyEntries: async (mode, entries) => {
+    const project = get().project;
+    if (!project || project.environment_type === "ssh") throw new Error("remote_project_read_only");
+    const id = ++fileClipboardSequence;
+    const normalized = normalizeFileOperationEntries(entries, isFileExplorerIgnoreCaseInsensitive(project.path));
+    if (!normalized.length) throw new Error("clipboard_invalid_file_count");
+    const generation = openProjectRequestSeq;
+    const write = project.environment_type === "local"
+      ? invoke<number>("file_clipboard_write", {
+          rootPath: project.path, paths: normalized.map((entry) => entry.path), mode,
+        })
+      : Promise.reject(new Error("clipboard_write_unsupported"));
+    // A failed OS write still leaves an explicit app-only clipboard. Capture the current
+    // revision so a later external copy invalidates it instead of replaying stale entries.
+    const systemRevision = write.catch(() => invoke<number | null>("clipboard_get_revision").catch(() => null));
+    set({ clipboard: {
+      id, mode, entries: normalized, systemRevision,
+      project: { ...project }, generation,
+    } });
+    try {
+      await write;
+      if (get().clipboard?.id !== id || generation !== openProjectRequestSeq) throw new Error("file_operation_context_changed");
+      return true;
+    } catch (error) {
+      if (String(error).includes("file_operation_context_changed")) throw error;
+      if (["clipboard_busy", "clipboard_write_failed", "clipboard_window_unavailable", "clipboard_write_unsupported"]
+        .some((code) => String(error).includes(code))) return false;
+      if (get().clipboard?.id === id) set({ clipboard: null });
+      throw error;
+    }
   },
 
   pasteInto: async (targetParentPath, overwrite, snapshot) => {

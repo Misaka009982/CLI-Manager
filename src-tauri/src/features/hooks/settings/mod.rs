@@ -84,7 +84,7 @@ const PI_MODULE_RUNNING: &str = "CLI_MANAGER_MODULE:running";
 const PI_MODULE_STOP: &str = "CLI_MANAGER_MODULE:stop";
 const PI_EXTENSION_CONFLICT_ERROR: &str = "pi_extension_conflict";
 const CLAUDE_QUESTION_TOOL_NAME: &str = "AskUserQuestion";
-const CODEX_QUESTION_TOOL_NAME: &str = "request_user_input";
+const CODEX_QUESTION_TOOL_MATCHER: &str = "^request_user_input(_async)?$";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1239,7 +1239,7 @@ fn apply_codex_hook_module(settings: &mut Value, exe: &str, module: CodexHookMod
             add_hook_command_with_matcher(
                 settings,
                 "PreToolUse",
-                CODEX_QUESTION_TOOL_NAME,
+                CODEX_QUESTION_TOOL_MATCHER,
                 build_command(exe, "codex", "Notification"),
             );
         }
@@ -1570,7 +1570,7 @@ fn build_codex_status(codex_dir: Option<PathBuf>) -> Result<ToolHookSettingsStat
                 "PreToolUse",
                 "codex",
                 "Notification",
-                CODEX_QUESTION_TOOL_NAME,
+                CODEX_QUESTION_TOOL_MATCHER,
             ),
         attention_hook_required: true,
         stop_hook_installed: registered("Stop"),

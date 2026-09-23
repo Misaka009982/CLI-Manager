@@ -70,6 +70,42 @@ test("nested moves refresh both exact parents and expanded overwritten destinati
   for (const path of ["source", "target", "target/folder", "target/folder/nested"]) assert.ok(paths.includes(path), `not refreshed: ${path}`);
 });
 
+test("menu copy publishes native files and keeps the matching internal snapshot", async () => {
+  const h = harness(async (command) => {
+    if (command === "file_clipboard_write") return 42;
+    if (command === "file_clipboard_read") return { unchanged: true, entries: [] };
+  });
+  assert.equal(await h.store.getState().copyEntries("copy", [entry("src/a"), entry("src/b")]), true);
+  const write = h.calls.find((call) => call.command === "file_clipboard_write");
+  assert.equal(write.args.rootPath, project().path);
+  assert.deepEqual([...write.args.paths], ["src/a", "src/b"]);
+  assert.equal(write.args.mode, "copy");
+  assert.equal((await h.store.getState().readPasteClipboard()).mode, "copy");
+  assert.equal(h.calls.find((call) => call.command === "file_clipboard_read").args.knownRevision, 42);
+});
+
+test("unavailable native clipboard preserves app-only copy and WSL does not publish fake paths", async () => {
+  const h = harness(async (command) => {
+    if (command === "file_clipboard_write") throw new Error("clipboard_busy");
+    if (command === "clipboard_get_revision") return 7;
+    if (command === "file_clipboard_read") return { unchanged: true, entries: [] };
+  });
+  assert.equal(await h.store.getState().copyEntries("move", [entry("a")]), false);
+  assert.equal((await h.store.getState().readPasteClipboard()).mode, "move");
+  h.store.setState({ project: { ...project(), environment_type: "wsl", path: "/home/user/repo" } });
+  const before = h.calls.length;
+  assert.equal(await h.store.getState().copyEntries("copy", [entry("b")]), false);
+  assert.equal(h.calls.slice(before).some((call) => call.command === "file_clipboard_write"), false);
+});
+
+test("invalid native source does not leave a clipboard snapshot that can later paste", async () => {
+  const h = harness(async (command) => {
+    if (command === "file_clipboard_write") throw new Error("path_is_symlink");
+  });
+  await assert.rejects(h.store.getState().copyEntries("copy", [entry("link")]), /path_is_symlink/);
+  assert.equal(h.store.getState().clipboard, null);
+});
+
 test("watcher events during a batch cause one full visible refresh afterwards", async () => {
   const h = harness(async (command, _args, store) => {
     if (command === "file_delete") await store.getState().refreshVisibleState(["unrelated/changed"]);

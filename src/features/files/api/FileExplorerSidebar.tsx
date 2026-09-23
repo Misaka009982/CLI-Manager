@@ -246,6 +246,17 @@ function fileOperationErrorMessage(error: unknown, t: Translate): string {
   return match ? t(match[1]) : `${t("files.batch.error.failed")} ${message}`;
 }
 
+async function copyFileEntries(mode: "copy" | "move", entries: FileOperationEntry[], t: Translate) {
+  try {
+    const system = await useFileExplorerStore.getState().copyEntries(mode, entries);
+    toast[system ? "success" : "warning"](t(system
+      ? mode === "copy" ? "files.clipboard.copied" : "files.clipboard.cut"
+      : "files.clipboard.internalOnly", { count: entries.length }));
+  } catch (error) {
+    toast.error(fileOperationErrorMessage(error, t));
+  }
+}
+
 // 逐项复用现有转义格式，同时保留跨项目终端投递需要的绝对路径回退。
 function createSelectedTerminalDragPayload(project: Project, entries: FileOperationEntry[]) {
   const payloads = entries.map((entry) => createTerminalFileDragPayload(project, entry.path, entry.kind));
@@ -340,15 +351,15 @@ function FileSelectionMenuItems({ entry, onInput, onConfirm }: {
   const busy = useFileExplorerStore((state) => state.mutationBusy);
   const entries = fileActionEntries(selected, entry);
   if (!project || project.environment_type === "ssh") return null;
-  const copy = (mode: "copy" | "move") => useFileExplorerStore.getState().setClipboard({ mode, entries });
+  const copy = (mode: "copy" | "move") => copyFileEntries(mode, entries, t);
   return <>
     <ContextMenuItem disabled={busy || entries.length !== 1} onSelect={() => onInput({ kind: "rename", path: entry.path, currentName: entry.name })}>
       <Pencil size={13} /> {t("files.menu.rename")}
     </ContextMenuItem>
-    <ContextMenuItem disabled={busy} onSelect={() => copy("copy")}>
+    <ContextMenuItem disabled={busy} onSelect={() => void copy("copy")}>
       <Copy size={13} /> {t("files.batch.copy", { count: entries.length })}
     </ContextMenuItem>
-    <ContextMenuItem disabled={busy} onSelect={() => copy("move")}>
+    <ContextMenuItem disabled={busy} onSelect={() => void copy("move")}>
       <Copy size={13} /> {t("files.batch.cut", { count: entries.length })}
     </ContextMenuItem>
     <ContextMenuItem danger disabled={busy} onSelect={() => onConfirm({ kind: "delete", entries, project })}>
@@ -1165,8 +1176,8 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
     if (key !== "c" && key !== "x" && key !== "v") return;
     event.preventDefault(); event.stopPropagation();
     if (key === "v") void pasteIntoTarget(getPasteTargetPath(entry));
-    else if (entries.length) setClipboard({ mode: key === "c" ? "copy" : "move", entries: [...entries] });
-  }, [clearSelection, getPasteTargetPath, pasteIntoTarget, setClipboard]);
+    else if (entries.length) void copyFileEntries(key === "c" ? "copy" : "move", [...entries], t);
+  }, [clearSelection, getPasteTargetPath, pasteIntoTarget, t]);
 
   const handleRootKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (isFileActionInput(event.target)) return;

@@ -685,6 +685,7 @@ pub fn run() {
             commands::live_server::live_server_stop,
             commands::fs::clipboard_read_file_paths,
             commands::fs::clipboard_import::clipboard_get_revision,
+            commands::fs::clipboard_import::file_clipboard_write,
             commands::fs::clipboard_import::file_clipboard_read,
             commands::fs::clipboard_import::file_import_external,
             commands::fs::clipboard_import::file_import_image,

@@ -17,6 +17,7 @@ const MAX_HEADER_BYTES: usize = 16 * 1024;
 const RECENT_HOOK_EVENT_LIMIT: usize = 1024;
 const CLAUDE_QUESTION_TOOL_NAME: &str = "AskUserQuestion";
 const CODEX_QUESTION_TOOL_NAME: &str = "request_user_input";
+const CODEX_ASYNC_QUESTION_TOOL_NAME: &str = "request_user_input_async";
 const PROVISIONAL_APPROVAL_GRACE: Duration = Duration::from_secs(15);
 const PROVISIONAL_APPROVAL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_PROVISIONAL_APPROVALS: usize = 256;
@@ -135,7 +136,7 @@ impl ClaudeHookPayload {
                 && matches!(
                     (self.source.as_str(), self.tool_name.as_deref()),
                     ("claude", Some(CLAUDE_QUESTION_TOOL_NAME))
-                        | ("codex", Some(CODEX_QUESTION_TOOL_NAME))
+                        | ("codex", Some(CODEX_QUESTION_TOOL_NAME | CODEX_ASYNC_QUESTION_TOOL_NAME))
                 ))
     }
 
@@ -1313,6 +1314,9 @@ mod remote_tests {
         assert!(remote_question_notification("claude", "AskUserQuestion").requires_user_response());
         assert!(
             remote_question_notification("codex", "request_user_input").requires_user_response()
+        );
+        assert!(
+            remote_question_notification("codex", "request_user_input_async").requires_user_response()
         );
         assert!(!remote_question_notification("codex", "Read").requires_user_response());
     }
