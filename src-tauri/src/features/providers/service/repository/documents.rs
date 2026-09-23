@@ -1,7 +1,7 @@
 use super::catalog::get_provider;
 use super::dto::{ProviderDetail, ProviderDocument, ProviderDocumentUpdateInput};
 use super::support::{
-    error, is_secret_key, load_provider, map_database_error, normalize_app_type, redact_json,
+    error, is_secret_key as is_json_secret_key, load_provider, map_database_error, normalize_app_type, redact_json,
     redact_settings_config,
 };
 use crate::provider::database;
@@ -258,6 +258,11 @@ pub(super) fn project_effective_model(app_type: &str, raw: &str) -> String {
     settings.to_string()
 }
 
+// 仅 TOML 原始文档识别普通数值选项；JSON 凭据仍采用原有保守规则。
+fn is_secret_key(key: &str) -> bool {
+    !key.eq_ignore_ascii_case("model_auto_compact_token_limit") && is_json_secret_key(key)
+}
+
 // 按项类型分派脱敏；表数组使用 any，首个返回 true 的表之后不会继续遍历。
 fn redact_toml_item(item: &mut Item) -> bool {
     match item {
@@ -333,7 +338,7 @@ fn reject_new_json_secrets(
         JsonValue::Object(incoming_object) => {
             let existing_object = existing.and_then(JsonValue::as_object);
             for (key, value) in incoming_object {
-                if is_secret_key(key) {
+                if is_json_secret_key(key) {
                     if existing_object.and_then(|object| object.get(key)).is_none() {
                         return Err(error(
                             "provider_document_secret_edit_requires_key_manager",
@@ -369,7 +374,7 @@ fn preserve_json_secrets(existing: &JsonValue, incoming: &mut JsonValue) -> Resu
     match (existing, incoming) {
         (JsonValue::Object(existing_object), JsonValue::Object(incoming_object)) => {
             for (key, existing_value) in existing_object {
-                if is_secret_key(key) {
+                if is_json_secret_key(key) {
                     match incoming_object.get(key) {
                         None => {
                             incoming_object.insert(key.clone(), existing_value.clone());
@@ -775,6 +780,59 @@ mod tests {
         assert!(redacted.contains("# keep this comment"));
         assert!(redacted.contains("https://example.test"));
         assert!(!redacted.contains("sk-secret"));
+    }
+
+    #[test]
+    fn ordinary_codex_token_limit_is_not_a_secret_and_round_trips() {
+        let config = "model = \"gpt-test\"\nmodel_auto_compact_token_limit = 240000\n[model_providers.official]\nrequires_openai_auth = true\n";
+        let (display, has_secret, valid) = redact_toml_document(config);
+        assert!(valid);
+        assert!(!has_secret);
+        assert_eq!(display, config);
+
+        for app_type in ["codex", "grokbuild"] {
+            let stored = serde_json::json!({"config": config}).to_string();
+            let documents = documents_from_settings(app_type, &stored);
+            let document = documents.iter().find(|document| document.kind == format!("{app_type}.config")).unwrap();
+            assert!(document.valid);
+            assert!(!document.has_secret);
+            assert_eq!(document.value, config);
+
+            let existing = r#"{"config":"model = \"gpt-test\"\n"}"#;
+            let updated = patch_settings_document(app_type, existing, &format!("{app_type}.config"), config).unwrap();
+            let saved: Value = serde_json::from_str(&updated).unwrap();
+            assert_eq!(saved["config"].as_str(), Some(config));
+        }
+    }
+
+    #[test]
+    fn ordinary_token_limit_can_be_edited_without_exposing_existing_api_key() {
+        let existing = r#"{"config":"model_auto_compact_token_limit = 100000\napi_key = \"old-secret\"\n"}"#;
+        let incoming = "model_auto_compact_token_limit = 240000\napi_key = \"[REDACTED]\"\n";
+        let (display, has_secret, valid) = redact_toml_document(
+            "model_auto_compact_token_limit = 100000\napi_key = \"old-secret\"\n",
+        );
+        assert!(valid);
+        assert!(has_secret);
+        assert!(display.contains("model_auto_compact_token_limit = 100000"));
+        assert!(!display.contains("old-secret"));
+
+        let updated = patch_settings_document("codex", existing, "codex.config", incoming).unwrap();
+        let saved: Value = serde_json::from_str(&updated).unwrap();
+        let config = saved["config"].as_str().unwrap();
+        assert!(config.contains("model_auto_compact_token_limit = 240000"));
+        assert!(config.contains("api_key = \"old-secret\""));
+    }
+
+    #[test]
+    fn toml_exception_does_not_relax_claude_json_secret_protection() {
+        let raw = r#"{"model_auto_compact_token_limit":"sensitive"}"#;
+        let documents = documents_from_settings("claude", raw);
+        assert!(documents[0].has_secret);
+        assert!(!documents[0].value.contains("sensitive"));
+
+        let rejected = patch_settings_document("claude", "{}", "claude.settings", raw).unwrap_err();
+        assert!(rejected.contains("provider_document_secret_edit_requires_key_manager"));
     }
 
     #[test]

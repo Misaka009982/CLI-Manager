@@ -1,5 +1,11 @@
 # Changelog
 
+## [TEMP] - 2026-09-23
+
+### 供应商原始配置文档
+
+- 修复 Codex/Grok Build 供应商原始文档误将 `model_auto_compact_token_limit` 识别为密钥、遮罩数值并阻止新增保存的问题；保留真正 API 密钥的脱敏和文档编辑限制。
+
 ## [TEMP] - 2026-09-18
 
 ### Web 三栏布局与文件树
