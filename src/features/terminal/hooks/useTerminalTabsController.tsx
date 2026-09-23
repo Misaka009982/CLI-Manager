@@ -714,7 +714,10 @@ export function useTerminalTabsController({
     const activeProject = activeSession?.projectId ? projectById.get(activeSession.projectId) : null;
     if (useExternalTerminal) {
       if (rejectUnsupportedCapability(activeProject, "externalTerminal")) return;
-      await openWindowsTerminal([{ title: newTerminalContext.title, cwd: newTerminalContext.cwd ?? undefined }]);
+      await openWindowsTerminal([{
+        title: newTerminalContext.title, cwd: newTerminalContext.cwd ?? undefined,
+        shell: activeProject ? activeProject.shell || useSettingsStore.getState().defaultShell : activeSession?.shell ?? undefined,
+      }]);
       closeHistory();
       setActiveWorkspaceTab("terminal");
       return;

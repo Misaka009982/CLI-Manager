@@ -66,7 +66,13 @@ pub(super) fn read_clipboard_file_paths() -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+// Finder 的文件 URL 与 Windows CF_HDROP 共用上层文件/图片处理链路。
+pub(super) fn read_clipboard_file_paths() -> Result<Vec<String>, String> {
+    super::clipboard_image::platform::read_file_paths()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub(super) fn read_clipboard_file_paths() -> Result<Vec<String>, String> {
     Ok(Vec::new())
 }

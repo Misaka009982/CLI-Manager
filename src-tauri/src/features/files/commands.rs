@@ -1,12 +1,10 @@
 use std::{
     fs,
-    io::Cursor,
     path::{Component, Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{engine::general_purpose, Engine as _};
-use image::ImageDecoder;
 use memchr::memmem;
 use serde::Serialize;
 use tauri::{AppHandle, State};
@@ -20,6 +18,10 @@ use crate::text_encoding::{decode_text, encode_text};
 mod path_guards;
 #[path = "commands/clipboard_files.rs"]
 mod clipboard_files;
+#[path = "commands/clipboard_image.rs"]
+mod clipboard_image;
+#[path = "commands/clipboard_dib.rs"]
+mod clipboard_dib;
 use clipboard_files::read_clipboard_file_paths;
 #[path = "commands/clipboard_import.rs"]
 pub mod clipboard_import;
@@ -115,7 +117,7 @@ pub struct ClipboardImageAttachments {
     pub rejection_code: Option<String>,
 }
 /// 读取系统剪贴板中的 `CF_HDROP` 文件路径列表（Windows 资源管理器复制文件时写入的格式）。
-/// WebView2 的 ClipboardEvent 拿不到该格式，需走原生 Win32 API。非 Windows 平台返回空列表。
+/// Windows 走原生 Win32 API，macOS 读取 Finder 文件 URL；其他平台保持空列表。
 #[tauri::command]
 // 在线程池读取系统剪贴板中的文件路径列表。
 pub async fn clipboard_read_file_paths() -> Result<Vec<String>, String> {
@@ -123,22 +125,46 @@ pub async fn clipboard_read_file_paths() -> Result<Vec<String>, String> {
         .await
         .map_err(|err| err.to_string())?
 }
-/// Convert image files currently present in the Windows clipboard to PNG attachments.
-/// The command intentionally accepts no paths from the WebView: it reads CF_HDROP itself
+/// Convert native clipboard images or copied image files to PNG attachments.
+/// The command intentionally accepts no paths from the WebView: it reads the clipboard itself
 /// so a compromised renderer cannot turn this into an arbitrary file reader.
 #[tauri::command]
 // 从原生剪贴板取得图片文件并转换为应用 PNG 附件，不接受前端文件路径。
-pub async fn clipboard_attach_image_files() -> Result<ClipboardImageAttachments, String> {
-    tokio::task::spawn_blocking(attach_clipboard_image_files)
+pub async fn clipboard_attach_image_files(app: AppHandle) -> Result<ClipboardImageAttachments, String> {
+    tokio::task::spawn_blocking(move || attach_clipboard_image_files(&app))
         .await
         .map_err(|err| err.to_string())?
 }
+// 浏览器粘贴图片先验证实际内容，再统一转 PNG；不信任 MIME 或文件扩展名。
+#[tauri::command]
+pub async fn file_attach_image_data(data_base64: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        if data_base64.len() > clipboard_image::MAX_BYTES.div_ceil(3) * 4 {
+            return Err("clipboard_image_too_large".into());
+        }
+        let bytes = general_purpose::STANDARD.decode(data_base64).map_err(|_| "clipboard_image_unsupported")?;
+        if bytes.len() > clipboard_image::MAX_BYTES { return Err("clipboard_image_too_large".into()); }
+        save_terminal_image(clipboard_image::encode_png(clipboard_image::decode(&bytes, false)?)?)
+    }).await.map_err(|err| err.to_string())?
+}
+
+// 只接收通过标准化的 PNG，保存到现有受管附件目录供本机/WSL 或 SSH 上传使用。
+fn save_terminal_image(png: Vec<u8>) -> Result<String, String> {
+    let directory = ensure_attachment_dir(&cli_manager_data_dir()?)?;
+    let target = unique_attachment_target(&directory, "clipboard-image.png")?;
+    fs::write(&target, png).map_err(|_| "write_file_failed")?;
+    Ok(target.to_string_lossy().into_owned())
+}
 // 处理剪贴板中的前八个文件，收集生成附件及首个拒绝原因。
-fn attach_clipboard_image_files() -> Result<ClipboardImageAttachments, String> {
+fn attach_clipboard_image_files(app: &AppHandle) -> Result<ClipboardImageAttachments, String> {
     let file_paths = read_clipboard_file_paths()?;
     if file_paths.is_empty() {
+        let paths = match clipboard_image::read(app)? {
+            Some(image) => vec![save_terminal_image(clipboard_image::encode_png(image)?)?],
+            None => Vec::new(),
+        };
         return Ok(ClipboardImageAttachments {
-            paths: Vec::new(),
+            paths,
             had_files: false,
             rejected_count: 0,
             rejection_code: None,
@@ -172,52 +198,20 @@ fn convert_clipboard_image_file(source: &Path, attachments_dir: &Path) -> Result
     if is_symlink_or_reparse(&metadata) || !metadata.is_file() {
         return Err("clipboard_image_not_regular_file".into());
     }
-    if metadata.len() == 0 || metadata.len() > IMAGE_FILE_MAX_BYTES {
+    if metadata.len() == 0 || metadata.len() > clipboard_image::MAX_BYTES as u64 {
         return Err("clipboard_image_too_large".into());
     }
     if !is_clipboard_image_extension(source) {
         return Err("unsupported_image".into());
     }
 
-    let mut decoder = image::ImageReader::open(source)
-        .map_err(|_| "unsupported_image")?
-        .with_guessed_format()
-        .map_err(|_| "unsupported_image")?
-        .into_decoder()
-        .map_err(|_| "unsupported_image")?;
-    let (width, height) = decoder.dimensions();
-    validate_image_pixel_count(width, height)?;
-    let orientation = decoder
-        .orientation()
-        .unwrap_or(image::metadata::Orientation::NoTransforms);
-    let mut image = image::DynamicImage::from_decoder(decoder).map_err(|_| "unsupported_image")?;
-    image.apply_orientation(orientation);
-
-    let mut encoded = Vec::new();
-    for _ in 0..5 {
-        encoded.clear();
-        image
-            .write_to(&mut Cursor::new(&mut encoded), image::ImageFormat::Png)
-            .map_err(|_| "image_encode_failed")?;
-        if encoded.len() as u64 <= IMAGE_FILE_MAX_BYTES {
-            break;
-        }
-        let (current_width, current_height) = image::GenericImageView::dimensions(&image);
-        let scale = (IMAGE_FILE_MAX_BYTES as f64 / encoded.len() as f64).sqrt() * 0.9;
-        let next_width = ((current_width as f64 * scale).round() as u32).max(1);
-        let next_height = ((current_height as f64 * scale).round() as u32).max(1);
-        if next_width >= current_width && next_height >= current_height {
-            break;
-        }
-        image = image.resize(
-            next_width,
-            next_height,
-            image::imageops::FilterType::Lanczos3,
-        );
-    }
-    if encoded.len() as u64 > IMAGE_FILE_MAX_BYTES {
-        return Err("clipboard_image_too_large".into());
-    }
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    fs::File::open(source).map_err(|_| "clipboard_image_unavailable")?
+        .take(clipboard_image::MAX_BYTES as u64 + 1).read_to_end(&mut bytes)
+        .map_err(|_| "clipboard_image_unavailable")?;
+    if bytes.len() > clipboard_image::MAX_BYTES { return Err("clipboard_image_too_large".into()); }
+    let encoded = clipboard_image::encode_png(clipboard_image::decode(&bytes, false)?)?;
 
     let target = unique_attachment_target(attachments_dir, "clipboard-image.png")?;
     fs::write(&target, encoded).map_err(|_| "write_file_failed")?;
@@ -782,16 +776,19 @@ pub async fn file_copy(
     .map_err(|err| err.to_string())?
 }
 #[tauri::command]
-// 解码并校验非空且不超过 5 MiB 的附件，清理名称后写入应用目录。
+// 解码并校验非空且不超过 20 MiB 的附件，清理名称后写入应用目录。
 pub async fn file_attach_data(file_name: String, data_base64: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
+        if data_base64.len() > clipboard_image::MAX_BYTES.div_ceil(3) * 4 {
+            return Err("attachment_too_large".into());
+        }
         let data = general_purpose::STANDARD
             .decode(data_base64)
             .map_err(|err| format!("decode_failed: {err}"))?;
         if data.is_empty() {
             return Err("attachment_empty".into());
         }
-        if data.len() as u64 > IMAGE_FILE_MAX_BYTES {
+        if data.len() > clipboard_image::MAX_BYTES {
             return Err("attachment_too_large".into());
         }
 

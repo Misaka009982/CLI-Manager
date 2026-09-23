@@ -103,6 +103,9 @@ cli-manager-web-server = { path = "../apps/server" }
 # 注意：macos-private-api 必须在上方 [dependencies].tauri 中声明（不能仅放在 macOS target 下），
 # 因为 tauri.conf.json 的 macOSPrivateApi 会在所有平台的 build script 中校验 feature allowlist。
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSString", "NSEnumerator"] }
 git2 = { version = "0.19", features = ["vendored-libgit2", "vendored-openssl"] }
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
 

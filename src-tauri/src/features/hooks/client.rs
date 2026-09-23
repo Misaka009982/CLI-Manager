@@ -124,11 +124,12 @@ fn try_notify(source: &str, event: &str) -> Result<(), HookNotifyError> {
     }
 
     // 字段名为 camelCase，对应 claude_hook::ClaudeHookRequest 的 serde(rename_all = "camelCase")。
+    // 刻意不发 title：标题属于展示层文案，必须由前端按当前 UI 语言本地化
+    // （见 App.tsx 的 notifications.hookToast.title.*），后端只上报结构化事件。
     let payload = json!({
         "tabId": tab_id,
         "source": source,
         "event": event,
-        "title": title_for(source, event),
         "message": normalized.message,
         "sessionId": normalized.session_id,
         "cwd": cwd,
@@ -404,68 +405,15 @@ fn should_suppress_codex_permission_request(source: &str, event: &str, hook_inpu
         _ => false,
     }
 }
-/// 与旧 PowerShell 脚本保持一致的标题文案；新增 source 由前端按当前语言生成标题。
-// 按来源和事件提供兼容标题；Kimi 返回空值交由前端本地化。
-fn title_for(source: &str, event: &str) -> Option<&'static str> {
-    if source == "kimi" {
-        return None;
-    }
-    Some(match (source, event) {
-        ("codex", "SessionStart") => "Codex CLI session started",
-        ("codex", "UserPromptSubmit") => "Codex CLI running",
-        ("codex", "Stop") => "Codex CLI done",
-        ("codex", "SubagentStart") => "Codex CLI subagent started",
-        ("codex", "SubagentStop") => "Codex CLI subagent done",
-        ("codex", _) => "Codex CLI needs attention", // PermissionRequest
-        ("pi", "SessionStart") => "Pi Agent session started",
-        ("pi", "UserPromptSubmit") => "Pi Agent running",
-        ("pi", "Stop") => "Pi Agent done",
-        ("pi", _) => "Pi Agent needs attention",
-        ("grok", "SessionStart") => "Grok Build session started",
-        ("grok", "UserPromptSubmit") => "Grok Build running",
-        ("grok", "Stop") => "Grok Build done",
-        ("grok", "StopFailure") => "Grok Build failed",
-        ("grok", "SubagentStart") => "Grok Build subagent started",
-        ("grok", "SubagentStop") => "Grok Build subagent done",
-        ("grok", "AgentToolStart") => "Grok Build Agent tool started",
-        ("grok", "AgentToolStop") => "Grok Build Agent tool done",
-        ("grok", "ToolStart") => "Grok Build tool started",
-        ("grok", "ToolStop") => "Grok Build tool done",
-        ("grok", _) => "Grok Build needs attention",
-        ("opencode", "SessionStart") => "OpenCode session started",
-        ("opencode", "UserPromptSubmit") => "OpenCode running",
-        ("opencode", "Stop") => "OpenCode done",
-        ("opencode", "StopFailure") => "OpenCode failed",
-        ("opencode", _) => "OpenCode needs attention",
-        (_, "SessionStart") => "Claude Code session started",
-        (_, "UserPromptSubmit") => "Claude Code running",
-        (_, "Stop") => "Claude Code done",
-        (_, "StopFailure") => "Claude Code failed",
-        (_, "SubagentStart") => "Claude Code subagent started",
-        (_, "SubagentStop") => "Claude Code subagent done",
-        (_, "AgentToolStart") => "Claude Code Agent tool started",
-        (_, "AgentToolStop") => "Claude Code Agent tool done",
-        (_, "ToolStart") => "Claude Code tool started",
-        (_, "ToolStop") => "Claude Code tool done",
-        (_, _) => "Claude Code needs attention", // Notification
-    })
-}
 
 #[cfg(test)]
 mod tests {
     use super::{
         approval_transcript_bytes, failure_diagnostic_line, read_hook_input,
-        should_suppress_codex_permission_request, title_for,
+        should_suppress_codex_permission_request,
     };
     use serde_json::json;
     use std::fs;
-
-    #[test]
-    // 验证 Kimi 审批结果与中断事件不携带固定英文标题。
-    fn kimi_titles_defer_to_localized_frontend() {
-        assert_eq!(title_for("kimi", "PermissionResult"), None);
-        assert_eq!(title_for("kimi", "Interrupt"), None);
-    }
 
     #[test]
     fn hook_stdin_reader_rejects_oversized_payloads() {

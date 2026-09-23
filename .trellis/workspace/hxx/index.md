@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 124
-- **Last Active**: 2026-09-14
+- **Total Sessions**: 125
+- **Last Active**: 2026-09-20
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1804 | Active |
+| `journal-2.md` | ~1829 | Active |
 | `journal-1.md` | ~2014 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 125 | 2026-09-20 | 终端字体回退与外部程序选择 | `77eb48be` | `master` |
 | 124 | 2026-09-14 | 终端 Markdown 预览加载与滚动导航 | `ca2151a8`, `0cc91a0a` | `master` |
 | 123 | 2026-09-14 | 完成 MCP 与 Skills 管理 UI 优化 | `9b933639` | `mcp-skill-manager` |
 | 122 | 2026-09-14 | 完成 MCP 与 Skills 管理 | `f71f4974` | `mcp-skill-manager` |

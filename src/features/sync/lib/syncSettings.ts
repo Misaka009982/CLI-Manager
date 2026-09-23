@@ -30,6 +30,7 @@ export const SETTING_BACKUP_POLICY = {
   pinnedProjectIds: "preferences",
   sidebarPinnedSectionCollapsed: "preferences",
   useExternalTerminal: "excluded",
+  externalTerminalProgram: "excluded",
   debugMode: "excluded",
   terminalThemeMode: "preferences",
   terminalThemeName: "preferences",

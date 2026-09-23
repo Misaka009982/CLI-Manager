@@ -115,6 +115,9 @@ mod web_device_outbox;
 mod webdav;
 #[path = "infrastructure/process/wsl.rs"]
 mod wsl;
+#[cfg(target_os = "windows")]
+#[path = "shared/windows_command_line.rs"]
+mod windows_command_line;
 
 use log::LevelFilter;
 use serde_json::Value;
@@ -686,6 +689,7 @@ pub fn run() {
             commands::fs::clipboard_import::file_import_external,
             commands::fs::clipboard_import::file_import_image,
             commands::fs::clipboard_attach_image_files,
+            commands::fs::file_attach_image_data,
             commands::fs::check_paths_exist,
             commands::fs::file_get_path_kind,
             commands::fs::file_watch_start,

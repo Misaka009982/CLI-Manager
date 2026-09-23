@@ -29,8 +29,9 @@ import {
 } from "../../../../shared/lib/terminalThemes";
 import { debugConsoleWarn } from "../../../../shared/platform/debugConsole";
 import { FOLLOW_TERMINAL_PREVIEW_THEME } from "../../../../shared/lib/terminalPreviewTheme";
-import { normalizeTerminalFontFamily } from "../../../terminal/api/terminalFontFamily";
+import { normalizeTerminalFontFamily, normalizeTerminalFontPreference } from "../../../terminal/api/terminalFontFamily";
 import { normalizeShellKey, getOsPlatform } from "../../../../shared/platform/shell";
+import { ExternalTerminalProgramSetting } from "./ExternalTerminalProgramSetting";
 import type { OsPlatform } from "../../../../shared/platform/shell";
 import {
   getEnabledTerminalShellOptions,
@@ -628,16 +629,16 @@ export function ThemeSettingsPage() {
   const fontFamilyOptions = useMemo(
     () =>
       mergeFontFamilyOptions(
-        normalizedFontFamily,
+        normalizeTerminalFontPreference(fontFamily),
         FONT_FAMILY_OPTIONS.map((option) => ({
-          value: normalizeTerminalFontFamily(option.value),
+          value: normalizeTerminalFontPreference(option.value),
           label: pickByLanguage(language, option.label, option.labelEn ?? option.label),
         })),
         systemFonts,
         TERMINAL_FONT_FALLBACK,
-        normalizeTerminalFontFamily,
+        normalizeTerminalFontPreference,
       ),
-    [language, normalizedFontFamily, systemFonts]
+    [language, fontFamily, systemFonts]
   );
   const unsplitOptions = useMemo(
     () => UNSPLIT_OPTIONS.map((option) => ({
@@ -738,6 +739,7 @@ export function ThemeSettingsPage() {
 
   const shellProfileSection = (
     <Stack gap="md">
+      {osPlatform === "windows" && <ExternalTerminalProgramSetting />}
       <Group justify="space-between" align="center" gap="md">
         <Box>
           <Text size="xs" c="var(--on-surface-variant)">
@@ -1033,9 +1035,9 @@ export function ThemeSettingsPage() {
 
             <FontFamilySelect
               label={text("终端字体族", "Terminal Font Family")}
-              value={normalizedFontFamily}
+              value={normalizeTerminalFontPreference(fontFamily)}
               onChange={(value) => {
-                if (value) void update("fontFamily", normalizeTerminalFontFamily(value));
+                if (value) void update("fontFamily", normalizeTerminalFontPreference(value));
               }}
               data={fontFamilyOptions}
               maxDropdownHeight={320}

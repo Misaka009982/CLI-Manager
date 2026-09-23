@@ -356,7 +356,8 @@ The taskbar sink is independent and consumes only its own master switch plus the
 
 ### 3. Contracts
 
-- Common payload fields: `tabId`, `source`, `event`, `title`, `message`, `sessionId`, `cwd`, `timestamp`, optional `wslDistroName`, optional `reasoningEffort`.
+- Common payload fields: `tabId`, `source`, `event`, `message`, `sessionId`, `cwd`, `timestamp`, optional `wslDistroName`, optional `reasoningEffort`.
+- `__hook` must not send `title`: notification copy is presentation-layer text and is localized by the frontend from `source` + `event` (`notifications.hookToast.title.*`). The `title` field stays only on the receiving struct (`ClaudeHookRequest` / `ClaudeHookPayload`) so that pre-fix remote/SSH Hook clients still sending it parse without error; no frontend surface may render it.
 - Claude Code effort display is hook-derived, not history-derived: `__hook` reads `effort.level` (plus flat legacy keys such as `reasoning_effort` / `effort_level`) and falls back to `$CLAUDE_EFFORT`. The frontend may use that value as a realtime-only fallback when `HistorySessionUsage.reasoning_effort` is absent.
 - Claude Agent tool fallback events are normalized as `AgentToolStart` from `PreToolUse` and `AgentToolStop` from `PostToolUse`; hook installer must use a matcher limited to `Agent`/`Task`.
 - Claude sub-agent fields: `agentId`, `toolUseId`, `agentType`, `agentTranscriptPath`.

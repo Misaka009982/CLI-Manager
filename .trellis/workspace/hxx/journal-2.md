@@ -1802,3 +1802,28 @@ Removed the duplicate global Environment & Home editor, reused the provider acti
 ### Status
 
 [OK] **Completed**
+
+
+## Session 125: 终端字体回退与外部程序选择
+
+**Date**: 2026-09-20
+**Task**: 终端字体回退与外部程序选择
+**Branch**: `master`
+
+### Summary
+
+V1.4.1：保留用户字体优先，增加外部程序选择，修复 WSL 参数与新控制台继承日志管道导致空白。用户验证完成并授权提交。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `77eb48be` | (see git log) |
+
+### Testing
+
+- [OK] 25 项前端测试、15 项 Rust Shell 测试及 Windows 引用测试通过；真实新控制台覆盖 6 组；tsc、cargo check、严格架构检查通过。
+
+### Status
+
+[OK] **Completed**

@@ -450,7 +450,11 @@ function FileNode({
       }
       return;
     }
-    void expandCompactDirChain(entry.path);
+    // Expand from the visible leaf. A watcher-created directory can be
+    // rendered as the leaf of a compact chain before its parent subtree is
+    // refreshed; using the entry root in that state can reload stale data and
+    // leave the visible directory collapsed.
+    void expandCompactDirChain(displayEntry.path);
   };
 
   const childRows = isDir && isOpen && displayEntry.children ? (

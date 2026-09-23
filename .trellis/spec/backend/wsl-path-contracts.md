@@ -66,6 +66,14 @@ pub async fn ccusage_install_tools(
 
 ## 3. Contracts
 
+### WSL external terminal launch (V1.4.1)
+
+- `shell_commands::push_tab_args` routes only the exact built-in `wsl` key to its dedicated Windows Terminal argument builder. Other shell branches keep their existing arguments.
+- WSL UNC cwd supplies `--distribution <distro> --cd <linux-path>` to `wsl.exe`; drive paths use `windows_path_to_wsl`, and Linux paths use the default distro. Do not pass the guest cwd as Windows Terminal `-d` or interpolate it into a script.
+- Nonempty startup commands run through `--exec bash --login -i -c`; a newline followed by `exec bash --login -i` retains an interactive terminal after the command. Empty commands preserve WSL's default shell.
+- Escape semicolons as `\;` in WSL tab arguments for Windows Terminal to restore; keep the outer multi-tab `;` delimiter separate. Never send PowerShell `-Command` to WSL.
+- Regression coverage must include WSL UNC variants, explicit/default distro, drive/Linux/empty cwd, quoted paths/commands, mixed tabs and exact non-WSL argument vectors. Run `cargo test --lib commands::shell::tests` on Windows.
+
 ### Plan 9 文件系统限制
 
 | 操作 | Windows 原生 API | WSL UNC 路径行为 | 规避方式 |

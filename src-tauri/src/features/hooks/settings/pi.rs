@@ -69,7 +69,6 @@ pub(super) fn pi_extension_source(modules: &[PiHookModule]) -> String {
     // 内嵌 nonEmpty：修剪可选字符串，空值返回 null，不读写外部状态。
     // 内嵌 postHookEvent：缺少回调环境即返回；携带令牌 POST 到本机 Hook，吞掉请求异常并在 finally 清理计时器。
     // 内嵌 setTimeout 回调：一秒后中止该次 fetch，不启动重试；中止异常由 postHookEvent 捕获。
-    // 内嵌 titleFor：将三种通知事件映射为固定标题，无外部副作用。
     // 内嵌 readSessionId：调用可选会话管理器取得 ID，调用异常或空 ID 返回 null。
     // 内嵌默认扩展函数：仅为启用模块注册 Pi 监听器，不等待通知请求，也不捕获注册异常。
     // 内嵌 session_start 回调：读取会话 ID，异步发送 SessionStart，不阻塞 Pi 生命周期。
@@ -107,7 +106,6 @@ async function postHookEvent(event: NotifyEvent, sessionId: string | null, messa
     tabId,
     source: "pi",
     event,
-    title: titleFor(event),
     message: message ?? null,
     sessionId,
     cwd: process.cwd(),
@@ -130,17 +128,6 @@ async function postHookEvent(event: NotifyEvent, sessionId: string | null, messa
     // Hook bridge failures must never interrupt Pi.
   }} finally {{
     clearTimeout(timeout);
-  }}
-}}
-
-function titleFor(event: NotifyEvent): string {{
-  switch (event) {{
-    case "SessionStart":
-      return "Pi Agent session started";
-    case "UserPromptSubmit":
-      return "Pi Agent running";
-    case "Stop":
-      return "Pi Agent done";
   }}
 }}
 

@@ -1,6 +1,10 @@
 import type { zh } from "./settings.zh-CN";
 
 export const en: Record<keyof typeof zh, string> = {
+  "settings.terminal.externalProgram": "External terminal program",
+  "settings.terminal.externalProgramDescription": "Choose the program that opens external windows; the project Shell determines the command environment. Applies to external mode and Open External Terminal. Windows may host the window in its default terminal.",
+  "settings.terminal.externalOpenFailed": "Unable to open external terminal",
+  "settings.terminal.externalProgramMissing": "The selected terminal program or project Shell was not found. Install it or adjust terminal settings.",
   "settings.dialogLabel": "Settings",
   "settings.navTitle": "Settings",
   "settings.searchLabel": "Settings search",

@@ -145,7 +145,7 @@ daemon → 客户端：应答 `auth_ok{daemon_version,pid}` `auth_err` `pong` `o
 | PowerShell、CMD、Pwsh | 是 | Windows Shell 矩阵 |
 | WSL | 有条件必测 | 已安装 WSL 时执行 |
 | macOS Apple Silicon | 发布前必测 | GitHub Actions 当前目标 |
-| Ubuntu 22.04 | 发布前必测 | `.deb` / AppImage 目标 |
+| Ubuntu 22.04 | 发布前必测 | `.deb` 目标（x86_64 / arm64） |
 
 测试前：
 
@@ -504,7 +504,7 @@ cargo build --bin cli-manager-daemon
 - **步骤**：构建并安装 MSI/NSIS；检查安装目录；启动后执行 TC-F-001。
 - **预期结果**：`cli-manager-daemon.exe` 与主程序同目录；用户无需额外下载；安装版能成功拉起 daemon。
 
-#### TC-E-003：Linux `.deb`/AppImage 与 AUR 布局
+#### TC-E-003：Linux `.deb` 与 AUR 布局
 
 - **优先级**：P1
 - **步骤**：解包或安装发布产物，定位主程序与 daemon；AUR 包检查 `/usr/lib/CLI-Manager/` 和 wrapper。

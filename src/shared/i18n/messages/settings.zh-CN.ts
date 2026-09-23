@@ -1,4 +1,8 @@
 export const zh = {
+  "settings.terminal.externalProgram": "外部终端程序",
+  "settings.terminal.externalProgramDescription": "选择打开外部窗口的程序，项目 Shell 决定命令运行环境。适用于外部终端开关和“打开外部终端”操作；Windows 可能使用系统默认终端承载窗口。",
+  "settings.terminal.externalOpenFailed": "无法打开外部终端",
+  "settings.terminal.externalProgramMissing": "未找到所选终端程序或项目 Shell，请先安装，或调整终端设置。",
   "settings.dialogLabel": "设置窗口",
   "settings.navTitle": "设置",
   "settings.searchLabel": "设置搜索",

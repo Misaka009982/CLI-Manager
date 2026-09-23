@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { normalizeExternalTerminalProgram, type ExternalTerminalProgram } from "../lib/externalTerminalProgram";
 import { normalizeWebTerminalBatchKiB, type WebTerminalBatchKiB } from "../lib/webTerminalFrames";
 import { Store } from "@tauri-apps/plugin-store";
 import { invoke } from "@tauri-apps/api/core";
@@ -404,6 +405,7 @@ export interface Settings {
   pinnedProjectIds: string[];
   sidebarPinnedSectionCollapsed: boolean;
   useExternalTerminal: boolean;
+  externalTerminalProgram: ExternalTerminalProgram;
   debugMode: boolean;
   terminalThemeMode: TerminalThemeMode;
   terminalThemeName: string;
@@ -574,6 +576,7 @@ const DEFAULTS: Settings = {
   pinnedProjectIds: [],
   sidebarPinnedSectionCollapsed: false,
   useExternalTerminal: false,
+  externalTerminalProgram: "windows-terminal",
   debugMode: false,
   terminalThemeMode: "independent",
   terminalThemeName: "windowsTerminalCampbell",
@@ -1534,6 +1537,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.systemResourceMonitoringEnabled === "boolean"
         ? entries.systemResourceMonitoringEnabled
         : DEFAULTS.systemResourceMonitoringEnabled;
+    entries.externalTerminalProgram = normalizeExternalTerminalProgram(entries.externalTerminalProgram);
     entries.useExternalTerminal =
       typeof entries.useExternalTerminal === "boolean"
         ? entries.useExternalTerminal

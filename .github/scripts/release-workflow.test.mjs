@@ -36,4 +36,12 @@ assert.doesNotMatch(
   "resource preparation and Windows checks must fail the release on error",
 );
 assert.match(workflow, /node \.github\/scripts\/release-workflow\.test\.mjs/);
+
+// Linux 构建矩阵：新增 runner 时依赖安装必须同样生效，且只能产出 deb（AppImage / rpm 已停止发布）。
+const linuxDeps = stepIndex(/name: Install Linux dependencies\b/, "Linux bundle dependencies must be installed");
+assert.match(steps[linuxDeps], /if: startsWith\(matrix\.platform, 'ubuntu'\)/);
+assert.match(build, /- platform: ubuntu-22\.04-arm\b/, "Linux arm64 must be built on an arm runner");
+for (const entry of build.matchAll(/- platform: (ubuntu-[\w.-]+)\n\s+args: "([^"]*)"/g)) {
+  assert.match(entry[2], /--bundles deb/, `${entry[1]} must bundle deb only`);
+}
 console.log("release workflow resource prerequisites: checks passed");

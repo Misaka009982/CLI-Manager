@@ -754,7 +754,7 @@ export function useSidebarController({
       cwd: resolveProjectPath(project, useProjectStore.getState().groups),
       title: project.name,
       startupCmd: resolveProjectStartupCommand(project, { includeCodexProviderProfile: false }),
-      shell: project.shell || undefined,
+      shell: project.shell || useSettingsStore.getState().defaultShell,
     }));
     await openWindowsTerminal(
       launchItems
@@ -924,7 +924,7 @@ export function useSidebarController({
     async (project: Project) => {
       if (compactMode || useExternalTerminal) {
         if (rejectUnsupportedCapability(project, "externalTerminal")) return;
-        await openWindowsTerminal([{ title: project.name, cwd: resolveProjectPath(project, groups) }]);
+        await openWindowsTerminal([{ title: project.name, cwd: resolveProjectPath(project, groups), shell: project.shell || useSettingsStore.getState().defaultShell }]);
       } else {
         // 空字符串表示显式创建普通 Shell；undefined 会继承项目的 CLI/启动命令。
         await createSession(project.id, resolveProjectPath(project, groups), project.name, "", undefined, project.shell || undefined);
@@ -942,7 +942,7 @@ export function useSidebarController({
       if (rejectMissingWorktree(worktree)) return;
       const title = worktree.name;
       if (compactMode || useExternalTerminal) {
-        await openWindowsTerminal([{ title, cwd: worktree.path }]);
+        await openWindowsTerminal([{ title, cwd: worktree.path, shell: project.shell || useSettingsStore.getState().defaultShell }]);
       } else {
         // Worktree 右键新建终端同样必须绕过项目启动配置。
         await createSession(project.id, worktree.path, title, "", undefined, project.shell || undefined, undefined, worktree.id);
