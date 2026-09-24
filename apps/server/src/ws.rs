@@ -749,6 +749,7 @@ async fn handle_device_socket(mut socket: WebSocket, state: AppState) {
                                     user_id: owner_id.to_string(),
                                     frame: BrowserSocketFrame::TerminalStatus {
                                         device_id: device_id.clone(), session_id, status: "error".into(), exit_code: None, control_mode: None,
+                                        cols: None, rows: None,
                                     },
                                 });
                             }
@@ -760,15 +761,20 @@ async fn handle_device_socket(mut socket: WebSocket, state: AppState) {
                             frame: BrowserSocketFrame::TerminalOutput { device_id: device_id.clone(), session_id, sequence, frames },
                         });
                     }
-                    DeviceToServerFrame::TerminalStatus { session_id, status, exit_code, control_mode } => {
+                    DeviceToServerFrame::TerminalStatus { session_id, status, exit_code, control_mode, cols, rows } => {
                         let Some(owner_id) = user_id.as_deref() else { continue; };
                         let valid_control_mode = control_mode
                             .as_deref()
                             .is_none_or(|mode| matches!(mode, "desktop" | "web"));
-                        if session_id.is_empty() || session_id.len() > 128 || !valid_control_mode || !matches!(status.as_str(), "running" | "exited" | "error") { continue; }
+                        let valid_geometry = match (cols, rows) {
+                            (None, None) => true,
+                            (Some(cols), Some(rows)) => (2..=500).contains(&cols) && (1..=300).contains(&rows),
+                            _ => false,
+                        };
+                        if session_id.is_empty() || session_id.len() > 128 || !valid_control_mode || !valid_geometry || !matches!(status.as_str(), "running" | "exited" | "error") { continue; }
                         state.registry.broadcast_browser(crate::registry::BrowserBroadcast {
                             user_id: owner_id.to_string(),
-                            frame: BrowserSocketFrame::TerminalStatus { device_id: device_id.clone(), session_id, status, exit_code, control_mode },
+                            frame: BrowserSocketFrame::TerminalStatus { device_id: device_id.clone(), session_id, status, exit_code, control_mode, cols, rows },
                         });
                     }
                     DeviceToServerFrame::OperationAccepted { operation_id } => {

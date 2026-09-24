@@ -22,7 +22,7 @@ import { GroupEditDialog } from "./GroupEditDialog";
 import { NodeAppearancePanel } from "./NodeAppearancePanel";
 import { SidebarFooter } from "./SidebarFooter";
 import { FileExplorerSidebar } from "../../files/api/FileExplorerSidebar";
-import { ArrowLeftRight, Check, CircleStop, Copy, FileCode, FolderOpen, FolderPlus, ListClockIcon, Palette, Pencil, Pin, Play, Plus, Settings, SquareSplitHorizontal, SquareSplitVertical, Terminal, TerminalSquare, Trash2, X } from "../../../shared/ui/icons";
+import { ArrowLeftRight, Check, CircleStop, Copy, Crosshair, FileCode, FolderOpen, FolderPlus, ListClockIcon, Palette, Pencil, Pin, Play, Plus, Settings, SquareSplitHorizontal, SquareSplitVertical, Terminal, TerminalSquare, Trash2, X } from "../../../shared/ui/icons";
 import { buildProjectSplitOptions } from "../lib/sidebarModel";
 import type { Project, WorktreeRecord } from "../../../shared/types/index";
 
@@ -265,6 +265,26 @@ export function SidebarView({
           >
             {contextMenu.kind === "project" && (
               <>
+                {/* 「定位位置」只对置顶区副本提供：置顶项不在列表区滚动容器内，看到它却找不到它在
+                    列表里的位置。仅在菜单来源为置顶区（fromPinned）时渲染，避免与真实行重复。
+                    不可定位（如已被筛选排除）时由 hook 给出提示。 */}
+                {contextMenu.fromPinned && (
+                  <>
+                    <button
+                      className="context-menu-item"
+                      hidden={showProjectBatchContextMenu}
+                      role="menuitem"
+                      onClick={() => {
+                        treeActions.onLocateProject(contextMenu.project);
+                        setContextMenu(null);
+                      }}
+                    >
+                      <Crosshair size={14} strokeWidth={1.5} />
+                      {t("sidebar.menu.locate")}
+                    </button>
+                    <div className="context-menu-separator" role="separator" hidden={showProjectBatchContextMenu} />
+                  </>
+                )}
                 <button
                   className="context-menu-item"
                   hidden={showProjectBatchContextMenu}

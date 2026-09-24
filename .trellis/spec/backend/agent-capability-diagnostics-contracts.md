@@ -39,6 +39,7 @@ SSH required capability:
 - Config contents are reduced to a SHA-256 fingerprint plus normalized MCP metadata. Responses never contain commands, URLs, headers, tokens, environment values, config bodies, or raw probe stderr.
 - TOML configuration input is a complete document, not an individual TOML value. With `toml 0.9`, parse it through `toml::from_str::<toml::Value>()` (or `str::parse::<toml::Table>()` and wrap the table); `str::parse::<toml::Value>()` uses `ValueDeserializer` and falsely rejects ordinary top-level assignments and leading comments.
 - Local inspection uses canonical local directories. WSL inspection uses fixed `wsl.exe --exec` reads and never opens the WSL UNC path directly. SSH inspection uses only the negotiated SSH Agent RPC and never falls back to local paths.
+- The WSL request must carry a guest-side identity: `wslDistroName` is taken from the Hook-reported `WSL_DISTRO_NAME` (persisted on the terminal session, `resolveWslCapabilityLocation`), with WSL UNC path inference only as fallback, and `cwd` must be the guest Linux form. Windows drive paths are translated (`F:\x` → `/mnt/f/x`) and OSC 7 host-prefixed paths are reduced to the guest path (`//<hostname>/home/x` → `/home/x`); an unresolvable cwd is passed through unchanged so the backend returns `agent_capability_wsl_cwd_invalid` instead of silently scanning a wrong directory.
 - Frontend cache and request-generation keys include terminal, CLI session, Agent, environment identity, cwd, and config-root identity. Scope changes discard stale responses. Deep check marks active MCPs `checking` while the bounded probe is in flight.
 - The summary card reuses the shared CLI brand icon and terminal-panel theme tokens. MCP and Skills summaries are separate keyboard-focusable triggers that set the controlled detail tab before opening the modal. Detail rows keep metadata in a `min-width: 0` flexible column and the status badge non-shrinking so long descriptions or paths cannot push state information outside the viewport.
 - OpenCode local binding is a marker-owned global plugin. Install may create or replace only the marker-owned `cli-manager-hook.js`; an unowned same-name file is `conflict`. The plugin reports `SessionStart`, `UserPromptSubmit`, `Stop`, and `StopFailure`, and missing callback environment is a silent no-op.
@@ -52,7 +53,7 @@ SSH required capability:
 |---|---|
 | Empty/control-character terminal or CLI session ID | Stable `agent_capability_*_invalid`; no scan or process launch. |
 | Local cwd/config root is not an existing canonical directory | Stable `agent_capability_*_unavailable`. |
-| WSL distro is missing/mismatched or cwd is not a valid Linux/UNC path | Stable `agent_capability_wsl_*` error. |
+| WSL distro is missing/mismatched or cwd is not a valid guest path | Stable `agent_capability_wsl_*` error; the frontend supplies the Hook-reported distro and a converted guest cwd, so this fires only when neither the Hook nor any path identifies the environment. |
 | SSH launch/consumer context is absent | `agent_capability_ssh_context_required`. |
 | SSH Agent lacks `agentCapabilitiesV1` | Snapshot `bridgeStatus=upgradeRequired`; no local fallback. |
 | Config is unreadable, oversized, or malformed | Safe diagnostic code; no config content in the response. |
@@ -86,8 +87,8 @@ SSH required capability:
 - Shared Rust crate: Pi MCP Adapter sources follow the documented user/project precedence; `disabled: true` is disabled, configured active entries remain unknown, and a configured entry suppresses `pi_mcp_extension_observability_unknown` without exposing command data.
 - Desktop Rust: boundary validation, OpenCode marker ownership/source admission, fixed probe timeout paths, and SSH upgrade mapping.
 - SSH Agent: request environment validation, `agentCapabilitiesV1` advertisement, protocol minor identity, and full Agent tests.
-- Frontend Node/TypeScript: five-Agent resolution, WSL distro resolution, MCP evidence extraction, exact OpenCode hook source binding, stable error redaction, additive settings migration, and `npx tsc --noEmit`.
-- Manual: switch zh-CN/en-US, verify keyboard modal/tabs/filters, local and WSL sessions, SSH upgrade state, rapid split/Tab changes, and 24-hour timestamps.
+- Frontend Node/TypeScript: five-Agent resolution, WSL distro resolution (Hook-reported distro preferred, guest cwd normalization for drive and OSC host-prefixed paths), MCP evidence extraction, exact OpenCode hook source binding, stable error redaction, additive settings migration, and `npx tsc --noEmit`.
+- Manual: switch zh-CN/en-US, verify keyboard modal/tabs/filters, local and WSL sessions (Windows-path project with `shell=wsl`, WSL UNC project, and worktree tabs), SSH upgrade state, rapid split/Tab changes, and 24-hour timestamps.
 
 ### 7. Wrong vs Correct
 

@@ -15,7 +15,7 @@ use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,11 +25,19 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Error as WsError, Message, WebSocket};
 use uuid::Uuid;
 
+#[path = "infrastructure/web/device_urls.rs"]
+mod device_urls;
+pub(crate) use device_urls::{normalize_device_url, normalize_public_url};
+
 const PROFILE_FILE_NAME: &str = "web-device.json";
 const DEV_PROFILE_FILE_NAME: &str = "web-device.dev.json";
 const TOKEN_ACCOUNT_PREFIX: &str = "web-device-token:";
 const INFO_FILE_NAME: &str = "web-daemon.json";
 const DEV_INFO_FILE_NAME: &str = "web-daemon.dev.json";
+
+pub(crate) fn pairing_is_expired(pairing_expires_at: Option<i64>, now: i64) -> bool {
+    pairing_expires_at.is_some_and(|expires_at| expires_at <= now)
+}
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
 const READ_TIMEOUT: Duration = Duration::from_millis(500);
@@ -129,6 +137,8 @@ pub enum Request {
         status: String,
         exit_code: Option<i32>,
         control_mode: Option<String>,
+        cols: Option<u16>,
+        rows: Option<u16>,
     },
     PublishHistory {
         #[serde(default)]
@@ -475,12 +485,16 @@ impl DaemonState {
                 status,
                 exit_code,
                 control_mode,
+                cols,
+                rows,
             } => {
                 self.queue(DeviceToServerFrame::TerminalStatus {
                     session_id,
                     status,
                     exit_code,
                     control_mode,
+                    cols,
+                    rows,
                 })?;
                 Ok(None)
             }
@@ -560,10 +574,14 @@ impl DaemonState {
 
     fn status(&self) -> Result<Status, String> {
         let profile = load_profile()?;
-        let runtime = self
+        let mut runtime = self
             .runtime
             .lock()
             .map_err(|_| "web daemon state lock poisoned")?;
+        if pairing_is_expired(runtime.pairing_expires_at, now_millis()) {
+            runtime.pairing_code = None;
+            runtime.pairing_expires_at = None;
+        }
         let pending = self
             .operations
             .lock()
@@ -1376,81 +1394,6 @@ fn client_kind() -> &'static str {
     }
 }
 
-#[cfg(test)]
-fn normalize_server_url(raw: &str) -> Result<String, String> {
-    normalize_device_url(raw, false)
-}
-
-pub(crate) fn normalize_device_url(raw: &str, trusted_network: bool) -> Result<String, String> {
-    let parsed = reqwest::Url::parse(raw.trim()).map_err(|_| "invalid web device server URL")?;
-    if !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err("web device URL must not contain credentials, query, or fragment".into());
-    }
-    let uri = raw
-        .trim()
-        .parse::<tungstenite::http::Uri>()
-        .map_err(|_| "invalid web device server URL".to_string())?;
-    let scheme = uri
-        .scheme_str()
-        .ok_or_else(|| "web device server URL requires a scheme".to_string())?;
-    let host = uri
-        .host()
-        .ok_or_else(|| "web device server URL requires a host".to_string())?;
-    let secure = matches!(scheme, "https" | "wss");
-    if !secure && !matches!(scheme, "http" | "ws") {
-        return Err("web device server URL must use http, https, ws, or wss".into());
-    }
-    if !secure && !is_loopback_host(host) && !trusted_network {
-        return Err("remote web device server must use TLS".into());
-    }
-    let authority = uri
-        .authority()
-        .ok_or_else(|| "web device server URL requires an authority".to_string())?;
-    Ok(format!(
-        "{}://{}/ws/device",
-        if secure { "wss" } else { "ws" },
-        authority
-    ))
-}
-
-pub(crate) fn normalize_public_url(raw: &str, trusted_network: bool) -> Result<String, String> {
-    if raw.trim().is_empty() {
-        return Ok(String::new());
-    }
-    let mut url = reqwest::Url::parse(raw.trim()).map_err(|_| "invalid public access URL")?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || url.path() != "/"
-    {
-        return Err(
-            "public access URL must be an HTTP(S) origin without credentials or path".into(),
-        );
-    }
-    if url.scheme() == "http" && !is_loopback_host(url.host_str().unwrap_or("")) && !trusted_network
-    {
-        return Err("public access URL requires HTTPS or explicit trusted network mode".into());
-    }
-    url.set_path("/");
-    Ok(url.to_string())
-}
-
-fn is_loopback_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<IpAddr>()
-            .map(|ip| ip.is_loopback())
-            .unwrap_or(false)
-}
 fn token_account(device_id: &str) -> String {
     format!("{TOKEN_ACCOUNT_PREFIX}{device_id}")
 }
@@ -1561,6 +1504,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pairing_expiry_boundary_is_inclusive() {
+        assert!(!pairing_is_expired(None, 100));
+        assert!(!pairing_is_expired(Some(101), 100));
+        assert!(pairing_is_expired(Some(100), 100));
+        assert!(pairing_is_expired(Some(99), 100));
+    }
+
+    #[test]
     fn web_output_wakes_silent_socket_without_receive_timeout() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let address = listener.local_addr().unwrap();
@@ -1623,60 +1574,6 @@ mod tests {
             assert!(request_with_info::<bool>(Request::GetStatus, false, &info).unwrap());
         }
         server.join().unwrap();
-    }
-
-    #[test]
-    fn trusted_network_requires_explicit_opt_in_for_ip_and_domain() {
-        for endpoint in [
-            "http://192.168.1.20:9090",
-            "ws://100.95.251.17:9090",
-            "http://desktop.internal:9090",
-            "http://[fd00::1]:9090",
-        ] {
-            assert!(normalize_device_url(endpoint, false).is_err(), "{endpoint}");
-            assert!(normalize_device_url(endpoint, true)
-                .unwrap()
-                .ends_with("/ws/device"));
-        }
-        assert_eq!(
-            normalize_device_url("http://[::1]:9090", false).unwrap(),
-            "ws://[::1]:9090/ws/device"
-        );
-        assert_eq!(
-            normalize_device_url("https://cli.example.com", false).unwrap(),
-            "wss://cli.example.com/ws/device"
-        );
-        for endpoint in [
-            "ftp://example.com",
-            "http://user:secret@example.com",
-            "http://example.com?token=secret",
-            "http://example.com/#secret",
-        ] {
-            assert!(normalize_device_url(endpoint, true).is_err());
-        }
-    }
-
-    #[test]
-    fn public_browser_origin_is_independent_and_bounded() {
-        assert_eq!(
-            normalize_public_url("https://cli.example.com", false).unwrap(),
-            "https://cli.example.com/"
-        );
-        assert_eq!(
-            normalize_public_url("http://desktop.internal:9090", true).unwrap(),
-            "http://desktop.internal:9090/"
-        );
-        assert!(normalize_public_url("http://desktop.internal:9090", false).is_err());
-        for endpoint in [
-            "ws://example.com",
-            "https://example.com/path",
-            "https://example.com?x=1",
-            "https://user:pass@example.com",
-            "https://example.com/#secret",
-        ] {
-            assert!(normalize_public_url(endpoint, true).is_err());
-        }
-        assert_eq!(normalize_public_url("", false).unwrap(), "");
     }
 
     fn control_info(port: u16) -> DaemonInfo {
@@ -1972,19 +1869,6 @@ mod tests {
         }
         assert!(!queue.push(operation("overflow".into())));
         assert_eq!(queue.snapshot().len(), MAX_OPERATIONS);
-    }
-
-    #[test]
-    fn remote_plaintext_urls_are_rejected() {
-        assert_eq!(
-            normalize_server_url("http://localhost:8787").unwrap(),
-            "ws://localhost:8787/ws/device"
-        );
-        assert!(normalize_server_url("http://example.com").is_err());
-        assert_eq!(
-            normalize_server_url("https://example.com").unwrap(),
-            "wss://example.com/ws/device"
-        );
     }
 
     #[test]

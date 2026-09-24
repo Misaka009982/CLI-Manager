@@ -837,3 +837,59 @@ const command = buildHistoryResumeCommand(session, project);
 - Pure projection tests cover both directions, tail-first pagination, stable raw indexes, and independent per-view defaults.
 - Source/interaction tests cover structured filter-then-reverse behavior, aggregate/statistical ordering exceptions, persistence migration/write serialization, and Canvas/Context exclusion.
 - Run `npx tsc --noEmit`, `npm run build`, and the focused history Node tests; manually verify `zh-CN`, `zh-TW`, and `en-US` copy with 24-hour time.
+
+## Scenario: Answer Stars in the Terminal Markdown Preview
+
+### 1. Scope / Trigger
+
+- Trigger: changing how per-answer stars are stored, resolved, displayed, or filtered in the terminal Markdown preview answer list.
+- Goal: let a user mark individual answers and find them later, without letting a rewritten conversation make a star point at the wrong answer.
+
+### 2. Signatures
+
+- SQLite table: `message_stars` (migration `41`, `MIGRATION_CREATE_MESSAGE_STARS_VERSION`)
+  - `session_key TEXT NOT NULL`
+  - `message_index INTEGER NOT NULL` (source-array coordinate, not the 1-based display order)
+  - `timestamp TEXT` (redundant; enables index-drift self-healing)
+  - `source TEXT NOT NULL`, `session_id TEXT NOT NULL`, `created_at INTEGER NOT NULL`
+  - `PRIMARY KEY (session_key, message_index)`
+- `readMessageStars(sessionKey) -> MessageStarRow[]` (throws on failure), `writeMessageStar(input)`, `deleteMessageStar(sessionKey, messageIndex)`
+- Store: `useMessageStarStore` (`bySession`, `failure`, `ensureLoaded`, `setStar`)
+- Pure resolver: `resolveStarredMessageIndexes(messages, rows) -> Map<number, MessageStarRow>`
+- Host identity: `summarySessionKey(detail)` from `src/features/history/index.ts`; `messageIndex` is the source `detail.messages` index.
+
+### 3. Contracts
+
+- Stars are keyed by `(session_key, message_index)` and stay local: no `settingsStore`, no WebDAV sync, matching `session_meta` / `session_favorite_snapshots`.
+- `message_index` is the raw `detail.messages` coordinate. Never store or compare the 1-based list order (`MarkdownPreviewMessage.order`), which shifts whenever a non-assistant message is added.
+- Resolution is index-first, timestamp-second. A row is accepted at its stored index only when the timestamp also matches; otherwise the star follows the timestamp to the answer's new index. An unresolvable star is dropped from the UI (never pointed at a neighbour) while its row stays for a later match.
+- Two rows must never resolve to the same index; keep the first by ascending `message_index`.
+- Reads are cached per session key. A failed read must leave `bySession[key]` as `undefined` so a later trigger retries; it must not be cached as "loaded with no stars".
+- Writes are optimistic with rollback to the pre-write rows on failure. Unstarring deletes the resolved row's real `message_index`, which may differ from the displayed answer's index.
+- Star failures must be visible, not just logged. A failed read or write sets `failure` on the store; the preview shows `terminal.markdownPreview.starUnavailable` above the body while it is set, and any successful read or write clears it. Without this, a missing `message_stars` table only presents as a star that flickers and reverts — the panel body, the row stars, and the floating star all fail for that one reason.
+- The row star lives inside a Radix `role="option"`, so it must swallow pointerdown/pointerup/click and Space/Enter, otherwise the item selects and the menu closes. It is `tabIndex={-1}`: marking an answer is a pointer-only action by design, and a floating star on the current answer is not an accepted alternative (removed on user feedback).
+- "Starred only" filters the list and never changes the rendered answer. When the selected answer is filtered out the trigger uses `value=undefined` plus `placeholder`; it must not fall back to the first starred answer, because the trigger label would then describe a different answer than the body.
+- Filter state resets with session identity (`key={previewSessionKey}`); replacing the list wholesale resets the list scroll offset.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Row index matches and timestamp matches | Star renders at that index |
+| Row index matches, timestamp differs or is absent | Re-resolve by timestamp; drop if nothing matches |
+| `/rewind` or compaction shifted indexes | Star follows the timestamp to the new index |
+| Answer no longer in the transcript | Star hidden, row retained, no mispoint |
+| Two rows resolve to one index | Only the lowest `message_index` row renders |
+| Read fails | Log, set `failure`, leave the session uncached, retry on a later trigger |
+| Write fails | Restore the previous rows for that session, log, set `failure` |
+| A later read or write succeeds | Clear `failure` so the notice disappears |
+| Migrations not applied yet (`message_stars` missing) | Both stars revert after the optimistic write; the failure notice explains why instead of appearing to ignore clicks |
+| Session key empty | `readMessageStars` returns `[]` without touching the database |
+
+### 5. Tests Required
+
+- `scripts/messageStars.test.mjs` covers index+timestamp validation, timestamp follow-up after a rewind, index reuse, missing answers, duplicate rows, per-session caching with a retryable failure, optimistic write with rollback, real-row deletion, and the failure signal being set on a failed read/write and cleared by a later success.
+- `scripts/terminalMarkdownPreviewNavigation.test.mjs` covers pointer/key isolation on the inline star, the starred-only filter with placeholder degradation, the empty state, the trigger value, and the failure notice appearing above the body and disappearing once the store recovers.
+- Run `npx tsc --noEmit` after frontend changes and `cd src-tauri && cargo test --lib message_star` after migration changes.
+- Migration `41` only runs when the Rust process builds its pool, so an already-running dev instance keeps failing every star write until it is restarted. Verify with a read-only query for `MAX(version)` on `_sqlx_migrations` and for `message_stars` in `sqlite_master` before treating a write failure as a code bug.
+- Manual desktop check: star answers in two different sessions, restart the app, confirm the stars persist and "starred only" lists exactly those answers with the body unchanged.

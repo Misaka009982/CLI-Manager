@@ -1,17 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useProjectStore } from "../../features/projects/api/projectStore";
-import { useSettingsStore } from "../preferences/settingsStore";
-import { useSshHostStore } from "../../features/remote/api/sshHostStore";
-import { useTerminalStore } from "../../features/terminal/state";
-import { useWorktreeStore } from "../../features/projects/api/worktreeStore";
-import type { CreateSshHostInput, Project, SshAuthMode, UpdateSshHostInput, WorktreeRecord } from "../types/index";
-import { buildSshConnectionSpec } from "../../features/remote/api/ssh";
-import { projectWithWorktreeProviderOverrides } from "../../features/terminal/api/terminalProject";
-import { resolveProjectStartupCommand } from "../../features/projects/api/projectStartupCommand";
-import { parseProjectEnvVars } from "../../features/providers/api/providerSwitching";
-import { openWindowsTerminal } from "../../features/terminal/api/externalTerminal";
-import { requestWebDeviceAction, type WebDeviceActionTarget } from "./webDeviceActionBus";
-import { webDeviceApi, type WebDeviceOperation } from "./webDevice";
+import { useProjectStore } from "../../projects/api/projectStore";
+import { useSettingsStore } from "../../../shared/preferences/settingsStore";
+import { useSshHostStore } from "../../remote/api/sshHostStore";
+import { useTerminalStore } from "../state";
+import { useWorktreeStore } from "../../projects/api/worktreeStore";
+import type { CreateSshHostInput, Project, SshAuthMode, UpdateSshHostInput, WorktreeRecord } from "../../../shared/types/index";
+import { buildSshConnectionSpec } from "../../remote/api/ssh";
+import { projectWithWorktreeProviderOverrides } from "../api/terminalProject";
+import { resolveProjectStartupCommand } from "../../projects/api/projectStartupCommand";
+import { parseProjectEnvVars } from "../../providers/api/providerSwitching";
+import { openWindowsTerminal } from "../api/externalTerminal";
+import { requestWebDeviceAction, type WebDeviceActionTarget } from "../../../shared/lib/webDeviceActionBus";
+import { webDeviceApi, type WebDeviceOperation } from "../../../shared/lib/webDevice";
 
 const MANAGEMENT_KINDS = new Set([
   "project.tree.reorder",

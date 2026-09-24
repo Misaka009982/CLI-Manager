@@ -36,7 +36,27 @@ test("snapshots do not transmit transcript metadata or unsupported raw records",
 });
 
 test("shared parser accepts Claude and Codex messages, tool results, bilingual labels and malformed records", () => {
-  const content = ["null", "bad-json", JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Claude" }] } }), JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Codex" }] } }), JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "test", arguments: "{}" } }), JSON.stringify({ type: "response_item", payload: { type: "function_call_output", output: "passed" } })].join("\n");
+  const content = [
+    "null",
+    "bad-json",
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Claude" }] } }),
+    JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Codex" }],
+      },
+    }),
+    JSON.stringify({
+      type: "response_item",
+      payload: { type: "function_call", name: "test", arguments: "{}" },
+    }),
+    JSON.stringify({
+      type: "response_item",
+      payload: { type: "function_call_output", output: "passed" },
+    }),
+  ].join("\n");
   const result = parseTranscriptLines(content, 1, { toolCall: "Tool call", toolResult: "Tool result" });
   assert.deepEqual(result.messages.map((item) => item.role), ["assistant", "assistant", "tool", "tool"]);
   assert.match(result.messages[2].text, /Tool call: test/); assert.match(result.messages[3].text, /Tool result: passed/);

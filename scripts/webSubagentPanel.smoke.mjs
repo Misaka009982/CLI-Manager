@@ -39,7 +39,12 @@ function render() {
   const props = {
     key: narrow ? 'narrow' : 'wide', restricted: false, sending: false, detailState: 'ready', t: key => translate(language, key), userName: 'Test',
     devices: [device], selectedDevice: device, history: [], workspace: { groups: [], projects: [], worktrees: [], subagents: agents, updatedAt: Date.now() },
-    projectContexts: [{ key: 'x', projectKey: 'x', projectName: 'Project A', cwd: 'F:\\very-long-mobile-path\\workspace\\Project-A', source: 'codex', title: 'Project A', freshness: 'live' }, { key: 'y', projectKey: 'y', projectName: 'Project B', cwd: '/home/test/worktrees/project-b', source: 'codex', title: 'Project B', freshness: 'live' }], selectedProjectContext: { key: parent === 'p1' ? 'x' : 'y', projectKey: 'selected', projectName: 'Selected project', cwd: null, source: 'codex', title: 'Selected project', freshness: 'live' }, terminalSessionId: parent, terminalTabs: [{ sessionId: 'p1', contextKey: 'x', status: 'running', controlMode: 'desktop' }, { sessionId: 'p2', contextKey: 'y', status: 'running', controlMode: 'desktop' }],
+    projectContexts: [{ key: 'x', projectKey: 'x', projectName: 'Project A', cwd: 'F:\\very-long-mobile-path\\workspace\\Project-A', source: 'codex', title: 'Project A', freshness: 'live' },
+      { key: 'y', projectKey: 'y', projectName: 'Project B', cwd: '/home/test/worktrees/project-b', source: 'codex', title: 'Project B', freshness: 'live' }],
+    selectedProjectContext: { key: parent === 'p1' ? 'x' : 'y', projectKey: 'selected', projectName: 'Selected project', cwd: null, source: 'codex', title: 'Selected project', freshness: 'live' },
+    terminalSessionId: parent,
+    terminalTabs: [{ sessionId: 'p1', contextKey: 'x', status: 'running', controlMode: 'desktop' },
+      { sessionId: 'p2', contextKey: 'y', status: 'running', controlMode: 'desktop' }],
     terminalStatus: 'running', terminalStream: stream, terminalControlMode: 'desktop', timeline: [], pairing: { phase: 'idle' }, socketState: 'open', latestSyncAt: null, resolvedTheme: 'dark',
     onTheme: noop, onLanguage: noop, onLogout: noop, onBackToHosts: noop, onRefresh: noop, onSelectDevice: noop, onSelectSession: noop, onSelectProjectContext: noop,
     onOpenTerminal: noop, onSelectTerminalTab: noop, onCloseTerminal: noop, onTerminalInput: () => true, onTerminalResize: () => true, onClaimPairing: async () => {}, onResetPairing: noop, onSubmitManagement: async () => {},

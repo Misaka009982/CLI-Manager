@@ -181,6 +181,18 @@ async fn rejected_terminal_output_preserves_device_socket_and_browser_stream() {
         assert_eq!(recovered["deviceId"], "device-output");
         assert_eq!(recovered["sequence"], 2);
         assert_eq!(recovered["frames"][0]["data"], "aGVsbG8=");
+        write_json_frame(&mut device, &serde_json::json!({
+            "type": "terminal_status",
+            "sessionId": "terminal-test",
+            "status": "running",
+            "controlMode": "desktop",
+            "cols": 132,
+            "rows": 38
+        }));
+        let geometry = read_until_type(&mut browser, "terminal_status");
+        assert_eq!(geometry["controlMode"], "desktop");
+        assert_eq!(geometry["cols"], 132);
+        assert_eq!(geometry["rows"], 38);
     }).await.unwrap();
     stop.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(4), server)

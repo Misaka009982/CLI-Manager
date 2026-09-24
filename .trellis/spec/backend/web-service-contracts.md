@@ -88,6 +88,7 @@ The server also accepts `--bind host:port` and `--port number`. Precedence is co
 - Browser session Cookie is `HttpOnly`, `SameSite=Strict`, path `/`, seven-day max age; `Secure` follows configuration.
 - Device tokens are random secrets; SQLite stores SHA-256 hashes only.
 - Pairing codes are normalized to 6-12 ASCII letters/digits, short-lived, and single-use.
+- Desktop status clears an expired pairing code in both the in-process and helper-daemon paths; the settings UI refreshes at the expiry boundary and never presents an expired code as usable.
 - If token delivery to the live device queue fails, the pairing claim must be rolled back; do not leave a paired device that never received its token.
 
 ### Device connection
@@ -105,6 +106,7 @@ The server also accepts `--bind host:port` and `--port number`. Precedence is co
 - The non-secret installed profile is `.cli-manager/web-device.json`; Dev uses `.cli-manager/web-device.dev.json`. Both share `.cli-manager/machine-id`, while each profile owns a distinct stable `clientId`. `deviceToken` is keyed by `clientId` in the native credential store and must never enter a WebView payload, log, SQLite row, or JSON profile.
 - Only loopback servers may use `ws://`; remote device servers require `wss://`.
 - The embedded desktop Web service defaults to loopback and manual startup. A non-loopback bind must be a current local-interface IP or an explicit unspecified address, and must use an exact browser Origin; `autoStart` remains independent from the Web device connection's `autoStart`.
+- When an Origin is still the automatically derived URL of the previous concrete listener, changing bind/port updates it to the new listener. Explicit custom domains, reverse-proxy Origins and Origins paired with unspecified binds remain authoritative.
 
 ### Browser events
 

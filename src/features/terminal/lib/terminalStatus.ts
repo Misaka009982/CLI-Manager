@@ -131,6 +131,12 @@ export const SUBAGENT_DISCOVERY_SLOW_INTERVAL_MS = 5000;
 
 export const SUBAGENT_DIRECTORY_DISCOVERY_TTL_MS = 15000;
 
+/**
+ * 待落地子 Agent 面板的存活上限：登记后若始终没有流式内容到达（典型是只发了
+ * SubagentStop、根本不会写转录文件的内部 agent），到期即静默丢弃，不产生任何 UI。
+ */
+export const SUBAGENT_PENDING_PANE_TTL_MS = 60_000;
+
 export const PTY_ORPHAN_RECONCILE_INTERVAL_MS = 30_000;
 
 export const TERMINAL_STORE_IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;

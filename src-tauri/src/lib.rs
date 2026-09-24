@@ -32,7 +32,8 @@ pub(crate) use app::migrations::{
     MIGRATION_CREATE_EXTENSION_MCP_RESOURCES_VERSION,
     MIGRATION_CREATE_EXTENSION_SCOPE_POLICIES_VERSION,
     MIGRATION_CREATE_EXTENSION_SKILLS_DESCRIPTION, MIGRATION_CREATE_EXTENSION_SKILLS_SQL,
-    MIGRATION_CREATE_EXTENSION_SKILLS_VERSION,
+    MIGRATION_CREATE_EXTENSION_SKILLS_VERSION, MIGRATION_CREATE_MESSAGE_STARS_DESCRIPTION,
+    MIGRATION_CREATE_MESSAGE_STARS_SQL, MIGRATION_CREATE_MESSAGE_STARS_VERSION,
     MIGRATION_MATERIALIZE_REQUEST_LOG_PROJECT_PATH_VERSION,
 };
 
@@ -117,6 +118,9 @@ mod web_device_outbox;
 mod webdav;
 #[path = "infrastructure/process/wsl.rs"]
 mod wsl;
+#[cfg(target_os = "windows")]
+#[path = "shared/windows_command_line.rs"]
+mod windows_command_line;
 
 use log::LevelFilter;
 use serde_json::Value;
@@ -693,10 +697,12 @@ pub fn run() {
             commands::live_server::live_server_stop,
             commands::fs::clipboard_read_file_paths,
             commands::fs::clipboard_import::clipboard_get_revision,
+            commands::fs::clipboard_import::file_clipboard_write,
             commands::fs::clipboard_import::file_clipboard_read,
             commands::fs::clipboard_import::file_import_external,
             commands::fs::clipboard_import::file_import_image,
             commands::fs::clipboard_attach_image_files,
+            commands::fs::file_attach_image_data,
             commands::fs::check_paths_exist,
             commands::fs::file_get_path_kind,
             commands::fs::file_watch_start,
@@ -1351,6 +1357,7 @@ mod provider_migration_tests {
         MIGRATION_CREATE_EXTENSION_SKILLS_SQL,
         MIGRATION_CREATE_EXTENSION_SKILLS_VERSION,
         MIGRATION_CREATE_HISTORY_GENERATED_TITLES_VERSION,
+        MIGRATION_CREATE_MESSAGE_STARS_VERSION,
         MIGRATION_MATERIALIZE_REQUEST_LOG_PROJECT_PATH_VERSION,
     };
 
@@ -1503,9 +1510,14 @@ mod provider_migration_tests {
             .expect("extension scope policy migration must be registered");
         assert_eq!(scope_policy_migration.version, 40);
         assert!(extension_skill_migration.version < scope_policy_migration.version);
+        let message_star_migration = registry
+            .iter()
+            .find(|migration| migration.version == MIGRATION_CREATE_MESSAGE_STARS_VERSION)
+            .expect("message star migration must be registered");
+        assert!(scope_policy_migration.version < message_star_migration.version);
         assert!(registry
             .iter()
-            .all(|migration| migration.version <= scope_policy_migration.version));
+            .all(|migration| migration.version <= message_star_migration.version));
         assert!(registry.iter().any(|migration| migration.version == 29
             && migration.description == "optimize_unified_usage_record_queries"));
     }
@@ -1530,6 +1542,34 @@ mod extension_scope_policy_migration_tests {
             .contains("PRIMARY KEY (scope_kind, scope_id, cli, extension_kind)"));
         assert!(migration.sql.contains("CHECK(mode IN ('inherit', 'custom'))"));
         assert!(migration.sql.contains("REFERENCES projects(id) ON DELETE CASCADE"));
+    }
+}
+
+#[cfg(test)]
+mod message_star_migration_tests {
+    use super::{
+        migrations, MIGRATION_CREATE_MESSAGE_STARS_DESCRIPTION, MIGRATION_CREATE_MESSAGE_STARS_SQL,
+        MIGRATION_CREATE_MESSAGE_STARS_VERSION,
+    };
+
+    #[test]
+    // 验证回答星标表迁移登记在扩展策略迁移之后，且按会话键与回答序号唯一。
+    fn message_star_migration_is_registered_after_extension_scope_policies() {
+        let registry = migrations();
+        let migration = registry
+            .iter()
+            .find(|migration| migration.version == MIGRATION_CREATE_MESSAGE_STARS_VERSION)
+            .expect("message star migration must be registered");
+        assert_eq!(migration.version, 41);
+        assert_eq!(migration.description, MIGRATION_CREATE_MESSAGE_STARS_DESCRIPTION);
+        assert_eq!(migration.sql, MIGRATION_CREATE_MESSAGE_STARS_SQL);
+        assert!(migration
+            .sql
+            .contains("CREATE TABLE IF NOT EXISTS message_stars"));
+        assert!(migration.sql.contains("PRIMARY KEY (session_key, message_index)"));
+        assert!(migration
+            .sql
+            .contains("idx_message_stars_session ON message_stars(session_key)"));
     }
 }
 

@@ -1,4 +1,4 @@
-import { parseWslPath } from "../../../shared/lib/wslPaths";
+import { parseWslPath, windowsPathToLinux } from "../../../shared/lib/wslPaths";
 import type { HistorySessionDetail, HistoryToolEvent, ProjectEnvironmentType } from "../../../shared/types/index";
 
 export type AgentRuntimeKind = "claude" | "codex" | "pi" | "grok" | "opencode";
@@ -105,6 +105,40 @@ export function inferWslDistroName(...paths: Array<string | null | undefined>): 
     if (parsed) return parsed.distro;
   }
   return null;
+}
+
+// 把 Windows 侧看到的路径归一成 guest 内的 Linux 绝对路径；解析不出返回 null。
+export function toWslGuestPath(value: string | null | undefined): string | null {
+  const raw = value?.trim();
+  if (!raw) return null;
+  const unc = parseWslPath(raw);
+  if (unc) return unc.linuxPath;
+  const mounted = windowsPathToLinux(raw);
+  if (mounted) return mounted;
+  if (!raw.startsWith("/")) return null;
+  // OSC 7 在 Windows 上会把主机名拼进路径（//<hostname>/home/...）；WSL 会话不可能以 SMB UNC
+  // 作为 cwd（创建时已由 pty/wsl_launch.rs 拒绝），所以这里只保留 guest 内的绝对路径。
+  if (!raw.startsWith("//")) return raw;
+  return raw.slice(2).replace(/^[^/]*/, "") || "/";
+}
+
+export interface WslCapabilityLocation {
+  distroName: string | null;
+  cwd: string | null;
+}
+
+// 组装 WSL 能力诊断目标：发行版以 hook 上报的 WSL_DISTRO_NAME 为准，UNC 路径推断兜底；
+// cwd 必须是 guest 内路径，否则后端 inspect_wsl 会直接拒绝。
+export function resolveWslCapabilityLocation(input: {
+  hookDistroName?: string | null;
+  sessionCwd?: string | null;
+  projectPath?: string | null;
+  configRoot?: string | null;
+}): WslCapabilityLocation {
+  const hookDistroName = input.hookDistroName?.trim();
+  const distroName = hookDistroName || inferWslDistroName(input.sessionCwd, input.projectPath, input.configRoot);
+  const cwd = toWslGuestPath(input.projectPath) ?? toWslGuestPath(input.sessionCwd);
+  return { distroName: distroName || null, cwd };
 }
 
 function evidenceFromEvent(event: HistoryToolEvent): McpRuntimeEvidence | null {

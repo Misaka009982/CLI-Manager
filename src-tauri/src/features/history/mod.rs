@@ -188,7 +188,8 @@ use file_changes::{
 };
 mod message_stream;
 use message_stream::{
-    extract_codex_context_info, extract_codex_token_count, extract_context_window, extract_usage_tokens, iter_session_messages,
+    extract_codex_context_info, extract_codex_token_count, extract_context_window,
+    extract_usage_tokens, is_codex_token_usage_record, iter_session_messages,
     CodexCumulativeUsage,
 };
 mod tool_observations;
@@ -250,7 +251,8 @@ const OOM_HISTORY_DETAIL_WARN_BYTES: usize = 10 * 1024 * 1024;
 const OOM_HISTORY_STATS_WARN_BYTES: usize = 5 * 1024 * 1024;
 const OOM_HISTORY_MESSAGES_WARN_COUNT: usize = 2_000;
 const CODEX_HISTORY_INDEX_TEXT_MAX_CHARS: usize = 4_000;
-const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 6;
+// 7：Codex 会话用量口径变更（逐响应 token_usage_record 去重），旧版本物化的 catalog 行需重算。
+const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 7;
 const HISTORY_INDEX_V2_ADAPTER_MODEL_VERSION: i64 = 1;
 const OPENCODE_SESSION_LOCATOR_MARKER: &str = "#session=";
 const DAEMON_READY_WAIT_ATTEMPTS: usize = 60;

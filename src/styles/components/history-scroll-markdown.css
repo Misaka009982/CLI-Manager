@@ -1045,7 +1045,6 @@
 }
 
 .terminal-markdown-preview-answer-end {
-  border-top: 1px solid var(--term-panel-border);
   color: var(--term-panel-dim);
 }
 
@@ -1053,6 +1052,55 @@
 .terminal-markdown-preview-answer-end:focus-visible {
   background-color: color-mix(in srgb, var(--term-panel-fg) 9%, transparent);
   color: var(--term-panel-fg);
+}
+
+/* 回答列表底部固定操作行：与列表之间保持既有分隔线，星标筛选与“跳到列表末尾”并排。 */
+.terminal-markdown-preview-answer-actions {
+  padding-top: 4px;
+  border-top: 1px solid var(--term-panel-border);
+}
+
+/* 行内星标常态克制，点亮后使用终端主题的黄色语义色，与历史会话收藏保持一致的含义。 */
+.terminal-markdown-preview-answer-star {
+  color: color-mix(in srgb, var(--term-panel-fg) 36%, transparent);
+  transition: color var(--animate-duration-fast), background-color var(--animate-duration-fast);
+}
+
+.terminal-markdown-preview-answer-star:hover,
+.terminal-markdown-preview-answer-star:focus-visible {
+  background-color: color-mix(in srgb, var(--term-panel-fg) 12%, transparent);
+  color: var(--term-panel-fg);
+}
+
+.terminal-markdown-preview-answer-star[data-starred="true"] {
+  color: var(--term-panel-yellow, #e5c453);
+}
+
+.terminal-markdown-preview-answer-star-filter {
+  color: var(--term-panel-dim);
+  border: 1px solid transparent;
+}
+
+.terminal-markdown-preview-answer-star-filter:hover,
+.terminal-markdown-preview-answer-star-filter:focus-visible {
+  background-color: color-mix(in srgb, var(--term-panel-fg) 9%, transparent);
+  color: var(--term-panel-fg);
+}
+
+.terminal-markdown-preview-answer-star-filter[data-active="true"] {
+  color: var(--term-panel-yellow, #e5c453);
+  border-color: color-mix(in srgb, var(--term-panel-yellow, #e5c453) 42%, transparent);
+}
+
+.terminal-markdown-preview-answer-empty {
+  color: var(--term-panel-dim);
+}
+
+/* 星标写库失败时的提示条：只用红字 + 极淡底色，避免盖过正文。 */
+.terminal-markdown-preview-star-error {
+  color: var(--term-panel-red, #f25e5e);
+  background-color: color-mix(in srgb, var(--term-panel-red, #f25e5e) 14%, var(--term-panel-bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--term-panel-red, #f25e5e) 30%, var(--term-panel-border));
 }
 
 .terminal-markdown-preview-answer-option {

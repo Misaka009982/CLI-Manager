@@ -1,5 +1,5 @@
 import type { SubagentTranscriptSource, TerminalSession } from "../../../shared/types/index";
-import { type CliHookPayload } from "../types/terminalStoreTypes";
+import { type CliHookPayload, type SubagentTranscriptSubscribeResult } from "../types/terminalStoreTypes";
 
 export function hasCodexTerminalEvent(content: string): boolean {
   for (const line of content.split("\n")) {
@@ -135,6 +135,19 @@ export function mergeSubagentSource(previous: SubagentTranscriptSource | undefin
 
 export function shouldSubscribeSubagentSource(previous: SubagentTranscriptSource | undefined, next: SubagentTranscriptSource): boolean {
   return next.kind === "child-jsonl" && Boolean(next.transcriptPath) && previous?.transcriptPath !== next.transcriptPath;
+}
+
+/**
+ * 订阅结果是否构成「面板可以落地」的正向证据。
+ *
+ * 只有文件确实存在、或已经读到完整行时才允许把分屏面板插进布局；否则该子 Agent
+ * 只是登记为待落地，等首批流式内容到达再落地。这样既保住「不等 SubagentStop 就边跑边流」，
+ * 又不会为不会写转录文件的内部 agent 开出一个空窗口。
+ *
+ * `exists` 缺失（旧后端）时退化为只看 `initialContent`。
+ */
+export function hasSubagentPaneEvidence(result: SubagentTranscriptSubscribeResult): boolean {
+  return result.exists === true || result.initialContent.length > 0;
 }
 
 export function shouldAttemptDerivedChildTranscript(payload: CliHookPayload, source: SubagentTranscriptSource): boolean {

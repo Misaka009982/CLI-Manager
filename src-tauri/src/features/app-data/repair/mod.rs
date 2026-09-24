@@ -33,6 +33,9 @@ use tauri::{AppHandle, Manager};
 const SQLX_MIGRATIONS_TABLE: &str = "_sqlx_migrations";
 const KNOWN_DRIFT_START_VERSION: i64 = 13;
 const KNOWN_DRIFT_END_VERSION: i64 = 15;
+// 已移除的供应商原型迁移窗口：25 建原型 providers/provider_keys，26 建 managed_* 原型表。
+const PROVIDER_PROTOTYPE_TOMBSTONE_START_VERSION: i64 = 25;
+const PROVIDER_PROTOTYPE_TOMBSTONE_END_VERSION: i64 = 26;
 const REPLAY_SNAPSHOT_PATCH_DIR: &str = "replay-snapshots";
 const REPLAY_SNAPSHOT_PATCH_STORAGE: &str = "file";
 const REPLAY_SNAPSHOT_CLEANUP_MARKER_FILE: &str = "replay-snapshot-patch-cleanup.version";
@@ -203,6 +206,11 @@ pub async fn db_repair_known_migration_drift(
         result.repaired = true;
         result.status =
             append_repair_status(&result.status, "deferred_request_log_project_path_backfill");
+    }
+    if reconcile_legacy_provider_prototype_drift(&mut conn).await? {
+        result.repaired = true;
+        result.status =
+            append_repair_status(&result.status, "reconciled_legacy_provider_prototype_drift");
     }
     conn.close()
         .await
@@ -651,6 +659,97 @@ async fn defer_request_log_project_path_backfill(
         Err(err) => {
             let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
             Err(format!("request_log_backfill_defer_insert_failed: {err}"))
+        }
+    }
+}
+
+/// 旧 providers 覆盖表与已移除供应商原型迁移的漂移自愈。
+///
+/// 由带旧 providers 覆盖表（列有 category/base_url/api_key，没有 app_type）的分支演进而来的
+/// 历史库，`_sqlx_migrations` 里 25–26 整段缺失，而 v25 会执行
+/// `CREATE INDEX ... ON providers(app_type)`：`CREATE TABLE IF NOT EXISTS providers` 因为同名的
+/// 旧表已存在而变成空操作，紧接着建索引就撞 `no such column: app_type`，整条迁移链当场中止。
+/// 插件在跑迁移前已把该 URL 的迁移登记移除，于是本进程后续每次 `Database.load` 都不再迁移，
+/// 任何待应用版本（例如星标表 v41）都永远落不了库。
+///
+/// 原型表已随分支移除，当前代码不再读写它们（见 providers/service/migration.rs 的墓碑说明），
+/// 迁移注册表保留这两条只为让 sqlx 校验已有数据库，因此这里按注册表的 description 与 checksum
+/// 补登记，让 sqlx 跳过重放，迁移链得以继续推进。
+// 旧 providers 表缺少 app_type 列时登记已移除的供应商原型迁移，避免整条迁移链在 v25 中止。
+async fn reconcile_legacy_provider_prototype_drift(
+    conn: &mut SqliteConnection,
+) -> Result<bool, String> {
+    if !table_exists(conn, SQLX_MIGRATIONS_TABLE).await? || !table_exists(conn, "providers").await?
+    {
+        return Ok(false);
+    }
+    // 只有旧覆盖表才会缺 app_type；原型 providers 表自带该列，说明 v25 已落过库。
+    if table_columns(conn, "providers").await?.contains("app_type") {
+        return Ok(false);
+    }
+
+    let mut missing: Vec<(i64, String, Vec<u8>)> = Vec::new();
+    for migration in crate::migrations() {
+        if !(PROVIDER_PROTOTYPE_TOMBSTONE_START_VERSION..=PROVIDER_PROTOTYPE_TOMBSTONE_END_VERSION)
+            .contains(&migration.version)
+        {
+            continue;
+        }
+        let registered: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(
+                 SELECT 1 FROM _sqlx_migrations
+                 WHERE version = ?1 AND success = 1
+             )",
+        )
+        .bind(migration.version)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|err| format!("provider_prototype_drift_query_failed: {err}"))?;
+        if registered == 0 {
+            missing.push((
+                migration.version,
+                migration.description.to_string(),
+                migration_checksum(&migration.sql),
+            ));
+        }
+    }
+    if missing.is_empty() {
+        return Ok(false);
+    }
+
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *conn)
+        .await
+        .map_err(|err| format!("provider_prototype_drift_begin_failed: {err}"))?;
+    let result = async {
+        for (version, description, checksum) in &missing {
+            sqlx::query(
+                "INSERT INTO _sqlx_migrations
+                     (version, description, installed_on, success, checksum, execution_time)
+                 VALUES (?1, ?2, CURRENT_TIMESTAMP, 1, ?3, 0)",
+            )
+            .bind(version)
+            .bind(description)
+            .bind(checksum)
+            .execute(&mut *conn)
+            .await
+            .map_err(|err| format!("provider_prototype_drift_register_failed: {err}"))?;
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => {
+            sqlx::query("COMMIT")
+                .execute(&mut *conn)
+                .await
+                .map_err(|err| format!("provider_prototype_drift_commit_failed: {err}"))?;
+            Ok(true)
+        }
+        Err(err) => {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            Err(err)
         }
     }
 }
@@ -1696,6 +1795,7 @@ async fn table_columns(
         "ssh_hosts" => "PRAGMA table_info(ssh_hosts)",
         "ssh_host_groups" => "PRAGMA table_info(ssh_host_groups)",
         "usage_records" => "PRAGMA table_info(usage_records)",
+        "providers" => "PRAGMA table_info(providers)",
         _ => return Err("migration_repair_unsupported_table".to_string()),
     };
     let rows = sqlx::query(query)

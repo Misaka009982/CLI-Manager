@@ -25,4 +25,4 @@
 
 - Rust unit tests cover auto detection, explicit modes, precedence, non-overwrite behavior, and non-Linux no-op behavior.
 - Run `cargo check`, `cargo test`, and `npx tsc --noEmit`.
-- Manual runtime verification requires NVIDIA Wayland plus Mesa Wayland/X11 comparison; AppImage, source build, and AUR package must be tested separately.
+- Manual runtime verification requires NVIDIA Wayland plus Mesa Wayland/X11 comparison; the `.deb` package, source build, and AUR package must be tested separately.

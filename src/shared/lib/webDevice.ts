@@ -126,8 +126,10 @@ export const webDeviceApi = {
     status: string,
     exitCode: number | null = null,
     controlMode?: "desktop" | "web",
+    cols?: number,
+    rows?: number,
   ) => invoke<void>("web_device_terminal_status", {
-    request: { sessionId, status, exitCode, controlMode },
+    request: { sessionId, status, exitCode, controlMode, cols, rows },
   }),
   publishWorkspace: (workspace: WebWorkspaceSnapshot, sessions: WebHistorySessionSummary[] = [], workspaceOnly = false) =>
     invoke<void>("web_device_publish_history", { request: { sessions, workspace, workspaceOnly } }),

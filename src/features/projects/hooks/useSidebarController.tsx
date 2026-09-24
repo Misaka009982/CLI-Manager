@@ -3,6 +3,7 @@ import { useShallow } from "zustand/shallow";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../api/projectStore";
+import { useProjectLocate } from "./useProjectLocate";
 import { useTerminalStore, type SessionStatus } from "../../terminal/state";
 import { useFileExplorerStore } from "../../files/api/fileExplorerStore";
 import { useHistoryStore } from "../../history/index";
@@ -24,10 +25,18 @@ import { toast } from "sonner";
 import { logError } from "../../../shared/platform/logger";
 import { type ProjectListFilter } from "../components/SidebarHeader";
 import { useI18n } from "../../../shared/i18n/index";
-import { getOsPlatform } from "../../../shared/platform/shell";
 import { resolveProjectPath } from "../api/groupPath";
-import { SIDEBAR_EXPAND_REQUEST_EVENT, SIDEBAR_TOGGLE_REQUEST_EVENT, notifySidebarStateChange } from "../api/sidebarCommands";
-import { type SidebarProps, SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_COLLAPSE_THRESHOLD, SIDEBAR_MAX_WIDTH, SIDEBAR_AUTO_COLLAPSE_BREAKPOINT, IN_TAURI, preserveSidebarScrollAfterContextMenu, isLikelyMacOs, clampExpandedSidebarWidth, normalizePersistedSidebarWidth, resolveHistorySourceFilter, buildProjectSplitOptions, filterTreeForOpenTerminals, collectGroupTerminalTargets, getSyncedSessionKeysForProject, type SidebarConfirmAction } from "../lib/sidebarModel";
+import {
+  type SidebarProps,
+  preserveSidebarScrollAfterContextMenu,
+  resolveHistorySourceFilter,
+  buildProjectSplitOptions,
+  filterTreeForOpenTerminals,
+  collectGroupTerminalTargets,
+  getSyncedSessionKeysForProject,
+  type SidebarConfirmAction,
+} from "../lib/sidebarModel";
+import { useSidebarLayout } from "./useSidebarLayout";
 import { createSidebarDeleteConfirmation } from "../lib/sidebarDeleteConfirmation";
 import { usePinnedProjects } from "./usePinnedProjects";
 import { registerWebDeviceActionHandler, type WebDeviceActionRequest } from "../../../shared/lib/webDeviceActionBus";
@@ -108,7 +117,6 @@ export function useSidebarController({
   const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
   const confirmBeforeClosingTerminalTab = useSettingsStore((s) => s.confirmBeforeClosingTerminalTab);
   const updateSetting = useSettingsStore((s) => s.update);
-  const persistedSidebarWidth = useSettingsStore((s) => s.sidebarWidth);
   const openFileProject = useFileExplorerStore((s) => s.openProject);
   const fileProject = useFileExplorerStore((s) => s.project);
   const closeHistory = useHistoryStore((s) => s.closeHistory);
@@ -123,25 +131,17 @@ export function useSidebarController({
     togglePinnedSection,
   } = usePinnedProjects(projects, projectStoreLoaded);
 
-  const initialSidebarWidth = normalizePersistedSidebarWidth(persistedSidebarWidth);
-  const [sidebarWidth, setSidebarWidth] = useState(initialSidebarWidth);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    initialSidebarWidth <= SIDEBAR_COLLAPSED_WIDTH
-  );
+  const {
+    sidebarElementRef,
+    sidebarWidth,
+    sidebarCollapsed,
+    sidebarResizing,
+    toggleSidebarCollapsed,
+    ensureSidebarExpanded,
+    expandSidebar,
+    startResize,
+  } = useSidebarLayout({ compactMode, dockSide });
   const [showFileExplorer, setShowFileExplorer] = useState(false);
-  const [sidebarResizing, setSidebarResizing] = useState(false);
-  const [isMacOs, setIsMacOs] = useState(isLikelyMacOs);
-
-  const sidebarElementRef = useRef<HTMLElement | null>(null);
-  const isResizingRef = useRef(false);
-  const resizeFrameRef = useRef<number | null>(null);
-  const sidebarCollapsedRef = useRef(initialSidebarWidth <= SIDEBAR_COLLAPSED_WIDTH);
-  const autoCollapsedByViewportRef = useRef(false);
-  const lastExpandedWidthRef = useRef(
-    initialSidebarWidth <= SIDEBAR_COLLAPSED_WIDTH
-      ? 248
-      : clampExpandedSidebarWidth(initialSidebarWidth)
-  );
 
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editingGroup, setEditingGroup] = useState<Group | null>(null);
@@ -399,7 +399,7 @@ export function useSidebarController({
 
   const [contextMenu, setContextMenu] = useState<
     | null
-    | { kind: "project"; project: Project; x: number; y: number }
+    | { kind: "project"; project: Project; x: number; y: number; fromPinned?: boolean }
     | { kind: "worktree"; project: Project; worktree: WorktreeRecord; x: number; y: number }
     | { kind: "group"; groupId: string; groupName: string; x: number; y: number }
   >(null);
@@ -430,193 +430,6 @@ export function useSidebarController({
   const [initialLoading, setInitialLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!IN_TAURI) return;
-    void getOsPlatform()
-      .then((platform) => setIsMacOs(platform === "macos"))
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (compactMode) {
-      setSidebarCollapsed(false);
-      return;
-    }
-    if (isResizingRef.current) return;
-    const normalized = normalizePersistedSidebarWidth(persistedSidebarWidth);
-    setSidebarWidth(normalized);
-    setSidebarCollapsed(normalized <= SIDEBAR_COLLAPSED_WIDTH);
-    sidebarCollapsedRef.current = normalized <= SIDEBAR_COLLAPSED_WIDTH;
-    if (normalized > SIDEBAR_COLLAPSED_WIDTH) {
-      lastExpandedWidthRef.current = normalized;
-    }
-  }, [compactMode, persistedSidebarWidth]);
-
-  useEffect(() => {
-    return () => {
-      if (resizeFrameRef.current !== null) {
-        cancelAnimationFrame(resizeFrameRef.current);
-        resizeFrameRef.current = null;
-      }
-    };
-  }, []);
-
-  const persistSidebarWidth = useCallback(
-    (nextWidth: number) => {
-      void updateSetting("sidebarWidth", nextWidth);
-    },
-    [updateSetting]
-  );
-
-  const previewSidebarWidth = useCallback((rawWidth: number) => {
-    const clampedRaw = Math.max(SIDEBAR_COLLAPSED_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, rawWidth));
-    const shouldCollapse = clampedRaw < SIDEBAR_COLLAPSE_THRESHOLD;
-    const nextWidth = shouldCollapse
-      ? SIDEBAR_COLLAPSED_WIDTH
-      : clampExpandedSidebarWidth(clampedRaw);
-
-    if (sidebarElementRef.current) {
-      sidebarElementRef.current.style.width = `${nextWidth}px`;
-    }
-    sidebarCollapsedRef.current = shouldCollapse;
-    if (!shouldCollapse) {
-      lastExpandedWidthRef.current = nextWidth;
-    }
-    return { nextWidth, shouldCollapse };
-  }, []);
-
-  const collapseSidebar = useCallback((persist = true) => {
-    setSidebarCollapsed(true);
-    sidebarCollapsedRef.current = true;
-    setSidebarWidth(SIDEBAR_COLLAPSED_WIDTH);
-    if (persist) {
-      autoCollapsedByViewportRef.current = false;
-      persistSidebarWidth(SIDEBAR_COLLAPSED_WIDTH);
-    }
-  }, [persistSidebarWidth]);
-
-  const expandSidebar = useCallback((persist = true) => {
-    const fallbackWidth = lastExpandedWidthRef.current;
-    const nextWidth = clampExpandedSidebarWidth(fallbackWidth);
-    setSidebarCollapsed(false);
-    sidebarCollapsedRef.current = false;
-    setSidebarWidth(nextWidth);
-    lastExpandedWidthRef.current = nextWidth;
-    if (persist) {
-      autoCollapsedByViewportRef.current = false;
-      persistSidebarWidth(nextWidth);
-    }
-  }, [persistSidebarWidth]);
-
-  const toggleSidebarCollapsed = useCallback(() => {
-    if (sidebarCollapsed) {
-      expandSidebar();
-    } else {
-      collapseSidebar();
-    }
-  }, [sidebarCollapsed, expandSidebar, collapseSidebar]);
-
-  const ensureSidebarExpanded = useCallback(() => {
-    if (sidebarCollapsed) {
-      expandSidebar();
-    }
-  }, [sidebarCollapsed, expandSidebar]);
-
-  useEffect(() => {
-    notifySidebarStateChange({
-      collapsed: compactMode ? false : sidebarCollapsed,
-      compactMode,
-    });
-  }, [compactMode, sidebarCollapsed]);
-
-  useEffect(() => {
-    if (compactMode) return;
-    const handleExpandRequest = () => {
-      if (sidebarCollapsedRef.current) expandSidebar();
-    };
-    window.addEventListener(SIDEBAR_EXPAND_REQUEST_EVENT, handleExpandRequest);
-    return () => window.removeEventListener(SIDEBAR_EXPAND_REQUEST_EVENT, handleExpandRequest);
-  }, [compactMode, expandSidebar]);
-
-  useEffect(() => {
-    if (compactMode) return;
-    const handleToggleRequest = () => toggleSidebarCollapsed();
-    window.addEventListener(SIDEBAR_TOGGLE_REQUEST_EVENT, handleToggleRequest);
-    return () => window.removeEventListener(SIDEBAR_TOGGLE_REQUEST_EVENT, handleToggleRequest);
-  }, [compactMode, toggleSidebarCollapsed]);
-
-  useEffect(() => {
-    if (compactMode || isMacOs) return;
-    const syncViewportCollapse = () => {
-      if (window.innerWidth < SIDEBAR_AUTO_COLLAPSE_BREAKPOINT) {
-        if (!sidebarCollapsedRef.current) {
-          autoCollapsedByViewportRef.current = true;
-          collapseSidebar(false);
-        }
-        return;
-      }
-
-      if (autoCollapsedByViewportRef.current) {
-        autoCollapsedByViewportRef.current = false;
-        if (sidebarCollapsedRef.current) {
-          expandSidebar(false);
-        }
-      }
-    };
-
-    syncViewportCollapse();
-    window.addEventListener("resize", syncViewportCollapse);
-    return () => {
-      window.removeEventListener("resize", syncViewportCollapse);
-    };
-  }, [compactMode, isMacOs, collapseSidebar, expandSidebar]);
-
-  const startResize = useCallback(
-    (e: ReactMouseEvent) => {
-      e.preventDefault();
-      isResizingRef.current = true;
-      setSidebarResizing(true);
-
-      let latestX = e.clientX;
-      const getWidthFromPointer = (clientX: number) => (
-        dockSide === "right" ? window.innerWidth - clientX : clientX
-      );
-      const flush = () => {
-        resizeFrameRef.current = null;
-        previewSidebarWidth(getWidthFromPointer(latestX));
-      };
-
-      const onMove = (ev: MouseEvent) => {
-        latestX = ev.clientX;
-        if (resizeFrameRef.current === null) {
-          resizeFrameRef.current = requestAnimationFrame(flush);
-        }
-      };
-
-      const onUp = () => {
-        if (resizeFrameRef.current !== null) {
-          cancelAnimationFrame(resizeFrameRef.current);
-          resizeFrameRef.current = null;
-        }
-        const { nextWidth, shouldCollapse } = previewSidebarWidth(getWidthFromPointer(latestX));
-        setSidebarCollapsed(shouldCollapse);
-        setSidebarWidth(nextWidth);
-        isResizingRef.current = false;
-        setSidebarResizing(false);
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-        persistSidebarWidth(nextWidth);
-      };
-
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-    },
-    [dockSide, persistSidebarWidth, previewSidebarWidth]
-  );
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -941,7 +754,7 @@ export function useSidebarController({
       cwd: resolveProjectPath(project, useProjectStore.getState().groups),
       title: project.name,
       startupCmd: resolveProjectStartupCommand(project, { includeCodexProviderProfile: false }),
-      shell: project.shell || undefined,
+      shell: project.shell || useSettingsStore.getState().defaultShell,
     }));
     await openWindowsTerminal(
       launchItems
@@ -1111,7 +924,7 @@ export function useSidebarController({
     async (project: Project) => {
       if (compactMode || useExternalTerminal) {
         if (rejectUnsupportedCapability(project, "externalTerminal")) return;
-        await openWindowsTerminal([{ title: project.name, cwd: resolveProjectPath(project, groups) }]);
+        await openWindowsTerminal([{ title: project.name, cwd: resolveProjectPath(project, groups), shell: project.shell || useSettingsStore.getState().defaultShell }]);
       } else {
         // 空字符串表示显式创建普通 Shell；undefined 会继承项目的 CLI/启动命令。
         await createSession(project.id, resolveProjectPath(project, groups), project.name, "", undefined, project.shell || undefined);
@@ -1129,7 +942,7 @@ export function useSidebarController({
       if (rejectMissingWorktree(worktree)) return;
       const title = worktree.name;
       if (compactMode || useExternalTerminal) {
-        await openWindowsTerminal([{ title, cwd: worktree.path }]);
+        await openWindowsTerminal([{ title, cwd: worktree.path, shell: project.shell || useSettingsStore.getState().defaultShell }]);
       } else {
         // Worktree 右键新建终端同样必须绕过项目启动配置。
         await createSession(project.id, worktree.path, title, "", undefined, project.shell || undefined, undefined, worktree.id);
@@ -1596,14 +1409,16 @@ export function useSidebarController({
     setShowAdd(true);
   }, []);
 
-  const handleContextMenuProject = useCallback((e: ReactMouseEvent, project: Project) => {
+  // fromPinned 标识菜单来自置顶区副本：置顶区与列表区是两个兄弟滚动容器，
+  // 其 closest 命中的滚动容器不同，菜单据此决定是否提供「定位位置」。
+  const handleContextMenuProject = useCallback((e: ReactMouseEvent, project: Project, fromPinned?: boolean) => {
     e.preventDefault();
     e.stopPropagation();
     preserveSidebarScrollAfterContextMenu(e, (until) => {
       contextMenuInternalScrollUntilRef.current = until;
     });
     contextMenuOpenedAtRef.current = Date.now();
-    setContextMenu({ kind: "project", project, x: e.clientX, y: e.clientY });
+    setContextMenu({ kind: "project", project, x: e.clientX, y: e.clientY, fromPinned });
   }, []);
 
   const handleContextMenuWorktree = useCallback((e: ReactMouseEvent, project: Project, worktree: WorktreeRecord) => {
@@ -1923,9 +1738,20 @@ export function useSidebarController({
     [contextMenuGroupProjectIds, sessions]
   );
 
+  const { locateRequest, locateProject } = useProjectLocate({
+    tree,
+    projectFilter,
+    setProjectFilter,
+    setCollapsedIds,
+    setSelectedId,
+    onBeforeLocate: () => setContextMenu(null),
+  });
+
   const treeActions = useMemo<TreeActions>(
     () => ({
       selectedId,
+      locateRequest,
+      onLocateProject: locateProject,
       selectedProjectIds,
       selectedGroupIds,
       selectedWorktreeIds,
@@ -1969,6 +1795,8 @@ export function useSidebarController({
     }),
     [
       selectedId,
+      locateRequest,
+      locateProject,
       selectedProjectIds,
       selectedGroupIds,
       selectedWorktreeIds,

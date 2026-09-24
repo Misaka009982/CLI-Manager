@@ -45,7 +45,9 @@
 .ui-tree-project {
   position: relative;
   border: 1px solid transparent;
-  background-color: color-mix(in srgb, var(--surface-container-lowest) 54%, transparent);
+  /* 常态不铺底：一屏数十行时，逐行铺底会堆出"每行一块卡片"的沉重感。
+     填充只保留给 hover / selected 这类真正需要表态的状态。 */
+  background-color: transparent;
 }
 
 .ui-tree-leading-icon-inherited {
@@ -64,39 +66,22 @@
 
 .ui-tree-project:hover {
   background-color: color-mix(in srgb, var(--surface-container-high) 62%, transparent);
-  border-color: color-mix(in srgb, var(--border) 32%, transparent);
 }
 
+/* 选中态只留两层线索：左侧色条（.ui-tree-node[data-selected]::before）+
+   单层 primary 底。去掉描边与 inset 阴影，避免选中的瞬间"长出一个框"。 */
 .ui-tree-project[data-selected="true"] {
-  border-color: color-mix(in srgb, var(--primary) 34%, var(--border) 66%);
-  background: color-mix(in srgb, var(--primary) 10%, var(--surface-container-lowest) 90%);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
   box-shadow: none;
 }
 
-[data-theme="dark"] .ui-tree-project {
-  border-color: transparent;
-  background-color: transparent;
-}
-
 [data-theme="dark"] .ui-tree-project:hover {
-  border-color: color-mix(in srgb, var(--border) 18%, transparent);
   background-color: color-mix(in srgb, var(--surface-container-high) 26%, transparent);
 }
 
-[data-theme="dark"] .ui-tree-project[data-selected="true"] {
-  border-color: color-mix(in srgb, var(--primary) 24%, transparent);
-  background: color-mix(in srgb, var(--primary) 8%, transparent);
-}
-
-[data-theme="light"] .ui-tree-project[data-selected="true"] {
-  color: var(--on-surface);
-  border-color: color-mix(in srgb, var(--interactive-selected-border) 58%, transparent);
-  background: color-mix(in srgb, var(--primary) 13%, white 87%);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 22%, transparent);
-}
-
-[data-theme="light"] .ui-tree-project {
-  background-color: color-mix(in srgb, var(--surface-container-lowest) 90%, var(--surface-container-low) 10%);
+[data-theme="dark"] .ui-tree-project[data-selected="true"]:hover {
+  background-color: color-mix(in srgb, var(--primary) 17%, transparent);
 }
 
 .ui-synced-history {
@@ -347,12 +332,12 @@
 
 [data-theme="light"] .ui-tree-project:hover {
   background-color: color-mix(in srgb, var(--surface-container-high) 62%, white 38%);
-  border-color: color-mix(in srgb, var(--border) 40%, transparent);
 }
 
-[data-theme="light"] .ui-tree-group-shell {
-  background: var(--surface-container-lowest);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 14%, transparent);
+/* 选中行被 hover 时保持选中色调。此前 hover 规则与选中规则特异性相同且位于其后，
+   中性 hover 底会把选中色整个顶掉（被描边掩盖了，去掉描边后必须显式守住）。 */
+[data-theme="light"] .ui-tree-project[data-selected="true"]:hover {
+  background-color: color-mix(in srgb, var(--primary) 15%, transparent);
 }
 
 [data-theme="light"] .ui-tree-group:hover,
@@ -364,14 +349,13 @@
   border-color: color-mix(in srgb, var(--danger) 22%, transparent);
 }
 
+/* 分组壳不再画自己的面：原先亮色下它的填充色就是 --surface-container-lowest，
+   与侧栏底色同值（等于没画），真正在"勾框"的只有那圈 1px 内描边。
+   去掉描边与实底后，分组由"组头行的填充 + 组间距"表达，与暗色分支行为一致。 */
 .ui-tree-group-shell {
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--surface-container-low) 58%, transparent);
-  box-shadow: none;
-}
-
-[data-theme="dark"] .ui-tree-group-shell {
+  border-radius: 10px;
   background: transparent;
+  box-shadow: none;
 }
 
 .ui-tree-group {
@@ -852,6 +836,40 @@
   background-color: color-mix(in srgb, var(--surface-container-highest) 24%, transparent);
 }
 
+/* 侧栏分区滚动（2026-09-15）：置顶区与项目列表各自独立滚动。
+   滚轮由浏览器原生判定作用于指针所在区域，此处刻意不拦截 wheel 事件。 */
+.ui-sidebar-pinned-scroll {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  /* 上限三七分：置顶项少时按内容高度收缩，达到可用高度的 30% 后在本区域内滚动。 */
+  max-height: 30%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.ui-sidebar-region-divider {
+  flex: 0 0 auto;
+  height: 1px;
+  margin: 4px 2px;
+  background-color: color-mix(in srgb, var(--border) 42%, transparent);
+}
+
+/* 列表区：置顶区受 30% 上限约束，这里拿剩余空间。
+   实测（无头渲染，容器内容盒 786px）：置顶 12 项时置顶区 235.8px = 30.0%、列表区 541.2px = 68.9%，
+   差的约 1.2% 是分隔线自身占位（1px + 上下 margin 各 4px = 9px）。换言之 30% 是置顶区的硬上限，
+   列表区拿的是余量而非一个独立的 70% 下限。
+   未分区时（「已置顶」筛选 / 搜索态 / 无置顶项）承载置顶区与列表的全部内容。 */
+.ui-sidebar-main-scroll {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 .ui-pinned-project-section {
   margin: 0 2px 4px;
   overflow: visible;
@@ -906,8 +924,10 @@
   background-color: var(--surface-container-lowest);
 }
 
+/* 展开态不额外加底部内边距：与折叠态共用「section margin-bottom + 分隔线 margin」同一套分隔带。
+   若在此叠加 padding，展开时分隔带会比折叠态厚（2026-09-15 无头实测：折叠 9px / 展开 20px）。 */
 .ui-pinned-project-list {
-  padding: 0 0 3px;
+  padding: 0;
 }
 
 .ui-pinned-project-item {

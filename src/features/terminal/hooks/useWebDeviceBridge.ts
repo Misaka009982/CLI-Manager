@@ -7,7 +7,11 @@ import { confirm as confirmNative } from "@tauri-apps/plugin-dialog";
 import { fetchLatestProjectSessionDetail, useHistoryStore } from "../../history/index";
 import { useProjectStore } from "../../projects/api/projectStore";
 import { useSettingsStore } from "../../../shared/preferences/settingsStore";
-import { hasVisibleDesktopViewport, restoreDesktopViewportSize } from "../../../shared/lib/terminalSizeOwnership";
+import {
+  getVisibleDesktopViewportSize,
+  hasVisibleDesktopViewport,
+  restoreDesktopViewportSize,
+} from "../../../shared/lib/terminalSizeOwnership";
 import { useTerminalStore } from "../state";
 import { PtyHostSocket, type TerminalBinaryFrame } from "../transport/PtyHostSocket";
 import { normalizeProjectPath, projectWithWorktreeProviderOverrides } from "../api/terminalProject";
@@ -34,7 +38,7 @@ import {
   isWebManagementOperation,
   validateWebManagementOperation,
   webManagementOperationNeedsConfirmation,
-} from "../../../shared/lib/webManagement";
+} from "../lib/webManagement";
 
 const OPERATION_EVENT = "web-device-operation-ready";
 const WORKSPACE_PUBLISH_MS = 60_000;
@@ -66,6 +70,7 @@ interface WebTerminalBridge {
   controlMode: WebTerminalControlMode;
   terminalStatus: string;
   exitCode: number | null;
+  publishedGeometry: string | null;
 }
 
 const terminalBridges = new Map<string, WebTerminalBridge>();
@@ -81,21 +86,30 @@ function isMissingTerminalSessionError(error: unknown): boolean {
   return /session .* not found/i.test(message) || /terminal session .* not found/i.test(message);
 }
 
-function publishTerminalBridgeStatus(sessionId: string, bridge: WebTerminalBridge): Promise<void> {
-  return webDeviceApi.terminalStatus(
+async function publishTerminalBridgeStatus(sessionId: string, bridge: WebTerminalBridge): Promise<void> {
+  const geometry = bridge.controlMode === "desktop" ? getVisibleDesktopViewportSize(sessionId) : null;
+  await webDeviceApi.terminalStatus(
     sessionId,
     bridge.terminalStatus,
     bridge.exitCode,
     bridge.controlMode,
+    geometry?.cols,
+    geometry?.rows,
   );
+  bridge.publishedGeometry = geometry ? `${geometry.cols}:${geometry.rows}` : "";
 }
 
 async function syncTerminalControlModes() {
   for (const [sessionId, bridge] of terminalBridges) {
     const nextMode = terminalControlMode(sessionId);
-    if (nextMode === bridge.controlMode) continue;
-    bridge.controlMode = nextMode;
-    if (nextMode === "desktop") restoreDesktopViewportSize(sessionId);
+    const modeChanged = nextMode !== bridge.controlMode;
+    if (modeChanged) {
+      bridge.controlMode = nextMode;
+      if (nextMode === "desktop") restoreDesktopViewportSize(sessionId);
+    }
+    const geometry = nextMode === "desktop" ? getVisibleDesktopViewportSize(sessionId) : null;
+    const geometryKey = geometry ? `${geometry.cols}:${geometry.rows}` : "";
+    if (!modeChanged && geometryKey === bridge.publishedGeometry) continue;
     await publishTerminalBridgeStatus(sessionId, bridge);
   }
 }
@@ -175,6 +189,7 @@ async function attachWebTerminal(sessionId: string, afterSequence?: number) {
     controlMode: terminalControlMode(sessionId),
     terminalStatus: "connecting",
     exitCode: null,
+    publishedGeometry: null,
   };
   const status = socket.subscribeStatus(sessionId, (event) => {
     bridge.terminalStatus = event.status;
@@ -622,7 +637,7 @@ export function useWebDeviceBridge(ready: boolean) {
       onConnected: () => void publishWorkspace(),
       onError: (error) => logWarn("Failed to poll Web device bridge", error),
     });
-    const unlisten = listen(OPERATION_EVENT, () => polling.wake());
+    const unlisten = listen(OPERATION_EVENT, () => polling.wakeOperations());
     const unlistenStatus = listen<WebDeviceStatus>(STATUS_EVENT, () => polling.wake());
     let workspacePublishTimer: number | null = null;
     const unsubscribeProjects = useProjectStore.subscribe((state, previous) => {

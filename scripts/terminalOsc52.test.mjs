@@ -19,6 +19,10 @@ export function decodeOscPathValue(value) { return value; }
 writeFileSync(join(tempDir, "terminalColor.mjs"), `
 export function normalizeHexColor(value, fallback) { return value || fallback; }
 `);
+const terminatorSource = readFileSync(new URL("../src/shared/lib/terminalOscTerminator.ts", import.meta.url), "utf8");
+writeFileSync(join(tempDir, "terminalOscTerminator.mjs"), ts.transpileModule(terminatorSource, {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+}).outputText);
 const parseSource = readFileSync(new URL("../src/features/terminal/lib/terminalOscParse.ts", import.meta.url), "utf8");
 const transpiledParse = ts.transpileModule(parseSource, {
   compilerOptions: {
@@ -28,6 +32,7 @@ const transpiledParse = ts.transpileModule(parseSource, {
   fileName: "terminalOscParse.ts",
 }).outputText
   .replace('from "./terminalOscPath"', 'from "./terminalOscPath.mjs"')
+  .replace('from "../../../shared/lib/terminalOscTerminator"', 'from "./terminalOscTerminator.mjs"')
   .replace('from "../../../shared/lib/terminalColor"', 'from "./terminalColor.mjs"');
 writeFileSync(join(tempDir, "terminalOscParse.mjs"), transpiledParse, "utf8");
 writeFileSync(join(tempDir, "terminalStore.mjs"), `

@@ -511,17 +511,54 @@ export function ProjectTree(props: Props) {
     focusable[menuIndex]?.focus();
   }, [contextMenu, menuEntries, menuIndex]);
 
-  const menu = contextMenu && menuEntries.length > 0 && typeof document !== "undefined"
-    ? createPortal(
-      <div ref={menuRef} className="web-context-menu" role="menu" style={{ left: menuPosition?.left ?? contextMenu.x, top: menuPosition?.top ?? contextMenu.y }}>
-        {menuEntries.map((entry) => entry.kind === "separator"
-          ? <div key={entry.key} className="web-context-menu-separator" role="separator" />
-          : <button key={entry.key} className={`web-context-menu-item${entry.danger ? " danger" : ""}`} type="button" role="menuitem" disabled={entry.disabled} title={entry.reason} onMouseEnter={() => { if (!entry.disabled) setMenuIndex(menuEntries.filter((candidate): candidate is Extract<MenuEntry, { kind: "item" }> => candidate.kind === "item" && !candidate.disabled).findIndex((candidate) => candidate.key === entry.key)); }} onClick={entry.onClick}>{entry.icon}<span>{entry.label}{entry.reason && <small> · {props.t("desktopOnlyShort")}</small>}</span></button>
-        )}
-      </div>,
-      document.body,
-    )
-    : null;
+  const menu =
+    contextMenu && menuEntries.length > 0 && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            ref={menuRef}
+            className="web-context-menu"
+            role="menu"
+            style={{
+              left: menuPosition?.left ?? contextMenu.x,
+              top: menuPosition?.top ?? contextMenu.y,
+            }}
+          >
+            {menuEntries.map((entry) =>
+              entry.kind === "separator" ? (
+                <div key={entry.key} className="web-context-menu-separator" role="separator" />
+              ) : (
+                <button
+                  key={entry.key}
+                  className={`web-context-menu-item${entry.danger ? " danger" : ""}`}
+                  type="button"
+                  role="menuitem"
+                  disabled={entry.disabled}
+                  title={entry.reason}
+                  onMouseEnter={() => {
+                    if (!entry.disabled)
+                      setMenuIndex(
+                        menuEntries
+                          .filter(
+                            (candidate): candidate is Extract<MenuEntry, { kind: "item" }> =>
+                              candidate.kind === "item" && !candidate.disabled,
+                          )
+                          .findIndex((candidate) => candidate.key === entry.key),
+                      );
+                  }}
+                  onClick={entry.onClick}
+                >
+                  {entry.icon}
+                  <span>
+                    {entry.label}
+                    {entry.reason && <small> · {props.t("desktopOnlyShort")}</small>}
+                  </span>
+                </button>
+              ),
+            )}
+          </div>,
+          document.body,
+        )
+      : null;
 
   if (!workspace || tree.length === 0) return <p className="empty-copy">{props.t("noProjectContext")}</p>;
   return (

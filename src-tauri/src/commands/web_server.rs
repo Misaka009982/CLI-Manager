@@ -192,15 +192,45 @@ fn validate_config(config: &WebServerConfig) -> Result<(), String> {
         );
     }
     let origin = normalize_origin(config.allowed_origin.as_deref())?;
-    if !ip.is_loopback() && !config.trusted_network
-        && !origin.as_deref().is_some_and(|value| value.starts_with("https://")) {
-        return Err("Enable trusted network HTTP explicitly, or configure an HTTPS browser origin".into());
+    if !ip.is_loopback()
+        && !config.trusted_network
+        && !origin
+            .as_deref()
+            .is_some_and(|value| value.starts_with("https://"))
+    {
+        return Err(
+            "Enable trusted network HTTP explicitly, or configure an HTTPS browser origin".into(),
+        );
     }
     Ok(())
 }
 
 fn default_origin(ip: IpAddr, port: u16) -> String {
     format!("http://{}", SocketAddr::new(ip, port))
+}
+
+fn resolve_allowed_origin(
+    previous: &WebServerConfig,
+    bind: IpAddr,
+    port: u16,
+    requested: Option<&str>,
+) -> Result<Option<String>, String> {
+    let requested = normalize_origin(requested)?;
+    let previous_listener_origin = previous
+        .bind
+        .parse::<IpAddr>()
+        .ok()
+        .filter(|ip| !ip.is_unspecified())
+        .map(|ip| default_origin(ip, previous.port));
+    if requested == previous.allowed_origin
+        && requested == previous_listener_origin
+        && !bind.is_unspecified()
+    {
+        return Ok(Some(default_origin(bind, port)));
+    }
+    Ok(requested.or_else(|| {
+        (!bind.is_unspecified() && !bind.is_loopback()).then(|| default_origin(bind, port))
+    }))
 }
 
 fn status(manager: &WebServerManager) -> Result<WebServerStatus, String> {
@@ -232,8 +262,22 @@ fn status(manager: &WebServerManager) -> Result<WebServerStatus, String> {
         .clone();
     Ok(WebServerStatus {
         trusted_network: config.trusted_network,
-        local_device_url: format!("ws://{}/ws/device", SocketAddr::new(if ip.is_ipv6() && (ip.is_loopback() || ip.is_unspecified()) { IpAddr::V6(std::net::Ipv6Addr::LOCALHOST) } else { IpAddr::V4(std::net::Ipv4Addr::LOCALHOST) }, config.port)),
-        interfaces: local_ip_address::list_afinet_netifas().unwrap_or_default().into_iter().map(|(name, ip)| (name, ip.to_string())).collect(),
+        local_device_url: format!(
+            "ws://{}/ws/device",
+            SocketAddr::new(
+                if ip.is_ipv6() && (ip.is_loopback() || ip.is_unspecified()) {
+                    IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+                } else {
+                    IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+                },
+                config.port
+            )
+        ),
+        interfaces: local_ip_address::list_afinet_netifas()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, ip)| (name, ip.to_string()))
+            .collect(),
         configured: credential_exists()?,
         running,
         stopping,
@@ -479,8 +523,12 @@ pub fn web_server_save_config(
     let ip = bind
         .parse::<IpAddr>()
         .map_err(|_| "Web server bind address must be a valid IP address".to_string())?;
-    let allowed_origin = normalize_origin(request.allowed_origin.as_deref())?
-        .or_else(|| (!ip.is_unspecified() && !ip.is_loopback()).then(|| default_origin(ip, request.port)));
+    let allowed_origin = resolve_allowed_origin(
+        &previous,
+        ip,
+        request.port,
+        request.allowed_origin.as_deref(),
+    )?;
     let config = WebServerConfig {
         trusted_network: request.trusted_network,
         auto_start: request.auto_start,
@@ -626,6 +674,50 @@ mod tests {
         assert_eq!(
             default_origin("::1".parse().unwrap(), 8787),
             "http://[::1]:8787"
+        );
+    }
+
+    #[test]
+    fn generated_origin_follows_listener_but_custom_origins_are_preserved() {
+        let previous = WebServerConfig {
+            bind: "100.95.251.17".into(),
+            port: 9091,
+            allowed_origin: Some("http://100.95.251.17:9091".into()),
+            ..WebServerConfig::default()
+        };
+        assert_eq!(
+            resolve_allowed_origin(
+                &previous,
+                "100.95.251.17".parse().unwrap(),
+                9090,
+                previous.allowed_origin.as_deref()
+            )
+            .unwrap()
+            .as_deref(),
+            Some("http://100.95.251.17:9090")
+        );
+        let mut custom = previous.clone();
+        custom.allowed_origin = Some("https://cli.example.com".into());
+        assert_eq!(
+            resolve_allowed_origin(
+                &custom,
+                "100.95.251.17".parse().unwrap(),
+                9090,
+                custom.allowed_origin.as_deref()
+            )
+            .unwrap()
+            .as_deref(),
+            Some("https://cli.example.com")
+        );
+        assert_eq!(
+            resolve_allowed_origin(
+                &previous,
+                "0.0.0.0".parse().unwrap(),
+                9090,
+                previous.allowed_origin.as_deref()
+            )
+            .unwrap(),
+            previous.allowed_origin
         );
     }
 }

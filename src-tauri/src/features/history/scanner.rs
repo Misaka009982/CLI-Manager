@@ -3,7 +3,8 @@ use super::{
     codex_usage_delta, collect_tool_calls, extract_branch, extract_codex_context_info,
     extract_codex_token_count, extract_command_name, extract_context_window, extract_editable_text,
     extract_model, extract_reasoning_effort, extract_session_meta_id, extract_timestamp,
-    extract_timestamp_millis, extract_usage_dedup_key, extract_usage_tokens, is_jsonl,
+    extract_timestamp_millis, extract_usage_dedup_key, extract_usage_tokens,
+    is_codex_token_usage_record, is_jsonl,
     is_synthetic_model, kimi, looks_like_antigravity_transcript_file,
     looks_like_copilot_events_file, looks_like_cursor_agent_transcript_file,
     looks_like_grok_updates_file, looks_like_pi_session_file, message_title_candidate,
@@ -239,6 +240,14 @@ fn scan_native_session(
             if let Some(command) = extract_command_name(trimmed) {
                 *skill_calls.entry(command).or_insert(0) += 1;
             }
+        }
+
+        // Codex 新版 rollout 把同一批 token 记两次：累计的 token_count 与逐响应的
+        // token_usage_record（后者与同回合 last_token_usage 逐字段相同）。用量一律以累计
+        // 流高水位差分为准，重复行在此整体跳过——否则 input/output 被计两次，且该行的
+        // cached_input_tokens 不经过 Codex 归一化（只会落在普通 input 上），缓存命中率被稀释。
+        if is_codex_token_usage_record(&value) {
+            continue;
         }
 
         let mut codex_message_usage = None;

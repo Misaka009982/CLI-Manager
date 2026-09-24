@@ -181,6 +181,7 @@ interface UseTerminalDisplayOptions {
   isComposingRef: RefObject<boolean>;
   lowMemoryMode: boolean;
   disableHardwareAcceleration: boolean;
+  disableWebglForSessionRef: RefObject<boolean>;
   linuxGraphicsDisableWebgl: boolean;
   isTransparentRef: RefObject<boolean>;
   normalizeOutputRef: RefObject<NormalizeTerminalOutput>;
@@ -221,6 +222,7 @@ export function useTerminalDisplay({
   isComposingRef,
   lowMemoryMode,
   disableHardwareAcceleration,
+  disableWebglForSessionRef,
   linuxGraphicsDisableWebgl,
   isTransparentRef,
   normalizeOutputRef,
@@ -293,6 +295,7 @@ export function useTerminalDisplay({
 
   const canUseWebglRenderer = (theme: ITheme) => (
     !disableHardwareAcceleration
+    && !disableWebglForSessionRef.current
     && !linuxGraphicsDisableWebgl
     && !webglContextLostRef.current
     && !isTransparentRef.current

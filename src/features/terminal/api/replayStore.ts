@@ -364,9 +364,10 @@ function classifyPayload(payload: CliHookPayload): Pick<ReplayEvent, "kind" | "t
   if (mcpServer) tags.push(mcpServer);
   if (skillName) tags.push(skillName);
 
-  const titleFromPayload = trimOptional(payload.title);
   const message = trimOptional(payload.message);
-  const toolTitle = toolName ?? titleFromPayload;
+  // 上游 title 是旧版远端 Hook / 旧 Pi 扩展携带的硬编码英文，后端已停发；
+  // 回放标题不再采信该字段，统一由事件名兜底，再由 isGeneratedReplaySessionTitle 回退到真实 prompt 标题。
+  const toolTitle = toolName;
   const toolDetail = mcpServer
     ? `MCP ${mcpServer}${toolName ? ` · ${toolName}` : ""}`
     : skillName
@@ -377,84 +378,84 @@ function classifyPayload(payload: CliHookPayload): Pick<ReplayEvent, "kind" | "t
   const eventMap: Record<CliHookEventName, Pick<ReplayEvent, "kind" | "title" | "detail" | "status" | "durationMs">> = {
     SessionStart: {
       kind: "session",
-      title: titleFromPayload ?? "SessionStart",
+      title: "SessionStart",
       detail: message ?? "CLI session bound to terminal tab",
       status: "recorded",
       durationMs: null,
     },
     UserPromptSubmit: {
       kind: "prompt",
-      title: titleFromPayload ?? "UserPromptSubmit",
+      title: "UserPromptSubmit",
       detail: message ?? "User prompt submitted",
       status: "running",
       durationMs: null,
     },
     Notification: {
       kind: "notification",
-      title: titleFromPayload ?? "Notification",
+      title: "Notification",
       detail: message ?? "CLI notification",
       status: "attention",
       durationMs: null,
     },
     Stop: {
       kind: "session",
-      title: titleFromPayload ?? "Stop",
+      title: "Stop",
       detail: message ?? "AI response completed",
       status: "completed",
       durationMs: null,
     },
     StopFailure: {
       kind: "error",
-      title: titleFromPayload ?? "StopFailure",
+      title: "StopFailure",
       detail: message ?? "AI response failed",
       status: "failed",
       durationMs: null,
     },
     PermissionRequest: {
       kind: "permission",
-      title: titleFromPayload ?? "PermissionRequest",
+      title: "PermissionRequest",
       detail: message ?? "Permission requested",
       status: "attention",
       durationMs: null,
     },
     PermissionResult: {
       kind: "permission",
-      title: titleFromPayload ?? "PermissionResult",
+      title: "PermissionResult",
       detail: message ?? "Permission resolved",
       status: "running",
       durationMs: null,
     },
     Interrupt: {
       kind: "session",
-      title: titleFromPayload ?? "Interrupt",
+      title: "Interrupt",
       detail: message ?? "Turn interrupted",
       status: "recorded",
       durationMs: null,
     },
     SubagentStart: {
       kind: "subtask",
-      title: titleFromPayload ?? `${agentType ?? "Subagent"} started`,
+      title: `${agentType ?? "Subagent"} started`,
       detail: message ?? "Subtask started",
       status: "running",
       durationMs: null,
     },
     SubagentStop: {
       kind: "subtask",
-      title: titleFromPayload ?? `${agentType ?? "Subagent"} finished`,
+      title: `${agentType ?? "Subagent"} finished`,
       detail: message ?? "Subtask finished",
       status: "completed",
       durationMs: null,
     },
     AgentToolStart: {
       kind: toolKind,
-      title: titleFromPayload ?? "AgentToolStart",
+      title: "AgentToolStart",
       detail: toolDetail,
       status: "running",
       durationMs: null,
     },
     AgentToolStop: {
       kind: toolKind,
-      title: titleFromPayload ?? "AgentToolStop",
+      title: "AgentToolStop",
       detail: toolDetail,
       status: "completed",
       durationMs: null,

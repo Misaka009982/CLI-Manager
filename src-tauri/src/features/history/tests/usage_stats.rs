@@ -479,6 +479,34 @@ fn scan_session_combined_diffs_codex_cumulative_token_count() {
 }
 
 #[test]
+// 验证 Codex 逐响应 token_usage_record 不参与累计（用量已由 token_count 差分覆盖）。
+fn scan_session_combined_ignores_codex_token_usage_record_duplicates() {
+    let temp_dir = TempDir::new().unwrap();
+    let file = temp_dir.path().join("rollout-session.jsonl");
+    write_text(
+        &file,
+        concat!(
+            r#"{"type":"turn_context","payload":{"model":"gpt-5.4"}}"#,
+            "\n",
+            // 逐响应记录行：与紧随其后的 token_count.last_token_usage 逐字段相同
+            r#"{"type":"token_usage_record","payload":{"usage":{"input_tokens":1000,"cached_input_tokens":900,"cache_write_input_tokens":100,"output_tokens":50,"total_tokens":1050}}}"#,
+            "\n",
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":900,"cache_write_input_tokens":100,"output_tokens":50,"total_tokens":1050},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":900,"cache_write_input_tokens":100,"output_tokens":50,"total_tokens":1050}}}}"#,
+            "\n",
+        ),
+    );
+
+    let (_, stats) = scan_session_combined(&file);
+
+    // 只按累计差分记一次：input 为扣除缓存命中的 1000-900，缓存命中 900 归入 cache_read
+    assert_eq!(stats.input_tokens, 100);
+    assert_eq!(stats.cache_read_tokens, 900);
+    assert_eq!(stats.output_tokens, 50);
+    assert_eq!(stats.token_trend.len(), 1);
+    assert_eq!(stats.usage_events.len(), 1);
+}
+
+#[test]
 // 验证 Codex 差分用量按事件日期与小时归档。
 fn history_stats_buckets_codex_usage_by_event_day() {
     let temp_dir = TempDir::new().unwrap();

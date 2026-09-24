@@ -39,7 +39,7 @@ export function toCssFontFamilyName(family: string) {
   return JSON.stringify(trimmed);
 }
 
-function splitFontFamilyStack(stack: string) {
+export function splitFontFamilyStack(stack: string) {
   const tokens: string[] = [];
   let current = "";
   let quote: "\"" | "'" | null = null;

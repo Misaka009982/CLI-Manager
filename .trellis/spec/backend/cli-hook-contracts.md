@@ -346,9 +346,9 @@ The taskbar sink is independent and consumes only its own master switch plus the
 - Installed hook command: `<cli-manager-exe> __hook --source <claude|codex> --event <event>`.
 - Hook command quoting: Windows-native exe paths are wrapped by a PowerShell command with single-quote escaping; WSL/macOS/Linux exe paths are POSIX shell single-quoted (`'...'\''...'`). Keep the command shape `<exe> __hook --source <source> --event <event>`.
 - Bridge event name: `claude-hook-notification`.
-- Frontend subscribe command: `subagent_transcript_subscribe({ key, transcriptPath, parentTranscriptPath, cwd, sessionId, agentId, wslDistroName }) -> { path, initialContent }`.
+- Frontend subscribe command: `subagent_transcript_subscribe({ key, transcriptPath, parentTranscriptPath, cwd, sessionId, agentId, wslDistroName }) -> { path, initialContent, exists }`.
 - Codex rollout discovery command: `codex_subagent_transcript_discover({ parentSessionId, agentId, codexConfigDir, wslDistroName, parentTranscriptPath }) -> string | null`.
-- Frontend store action on start/update: `openSubagentTranscript(payload)`.
+- Frontend store action on start/update: `openSubagentTranscript(payload, options?)`, with `options.allowCreate` (default `true`) deciding whether an event may register a brand-new pane.
 - Frontend store action on stop: `finishSubagentTranscript(payload)`.
 - Frontend transcript state: `SubagentTranscriptContent { content: string; ended: boolean; source?: SubagentTranscriptSource; truncatedBytes?: number; resetSeq: number }`.
 - Frontend transcript view prop: `SubagentTranscriptView({ sessionId, title, isVisible })`.
@@ -356,7 +356,8 @@ The taskbar sink is independent and consumes only its own master switch plus the
 
 ### 3. Contracts
 
-- Common payload fields: `tabId`, `source`, `event`, `title`, `message`, `sessionId`, `cwd`, `timestamp`, optional `wslDistroName`, optional `reasoningEffort`.
+- Common payload fields: `tabId`, `source`, `event`, `message`, `sessionId`, `cwd`, `timestamp`, optional `wslDistroName`, optional `reasoningEffort`.
+- `__hook` must not send `title`: notification copy is presentation-layer text and is localized by the frontend from `source` + `event` (`notifications.hookToast.title.*`). The `title` field stays only on the receiving struct (`ClaudeHookRequest` / `ClaudeHookPayload`) so that pre-fix remote/SSH Hook clients still sending it parse without error; no frontend surface may render it.
 - Claude Code effort display is hook-derived, not history-derived: `__hook` reads `effort.level` (plus flat legacy keys such as `reasoning_effort` / `effort_level`) and falls back to `$CLAUDE_EFFORT`. The frontend may use that value as a realtime-only fallback when `HistorySessionUsage.reasoning_effort` is absent.
 - Claude Agent tool fallback events are normalized as `AgentToolStart` from `PreToolUse` and `AgentToolStop` from `PostToolUse`; hook installer must use a matcher limited to `Agent`/`Task`.
 - Claude sub-agent fields: `agentId`, `toolUseId`, `agentType`, `agentTranscriptPath`.
@@ -371,14 +372,16 @@ The taskbar sink is independent and consumes only its own master switch plus the
   - Claude may emit `ToolStart` / `ToolStop` payloads carrying `agentId` instead of normalized `AgentToolStart` / `AgentToolStop` in some WSL hook paths. Treat `source=claude` plus `ToolStart|ToolStop` plus non-empty `agentId` as a sub-agent transcript lifecycle hint, but do not treat ordinary tool events without `agentId` as sub-agents.
   - Explicit native POSIX transcript paths such as `/Users/...` or `/home/...` must be tailed as native paths when `wslDistroName` is missing. Do not infer a default WSL distro for explicit `/...` paths.
   - `AgentToolStart` should create/update a `pending` pane only; it must not subscribe to the parent transcript.
-  - When a Claude start/update event already has `sessionId`, `agentId`, and either `parentTranscriptPath` or `cwd`, the frontend may subscribe to the derived child JSONL immediately. The backend tail waits for the child file to appear, so streaming must not wait for the stop event.
-  - `AgentToolStop` and Claude `ToolStop` with `agentId` may upgrade the matching pending pane to `child-jsonl` when they have an independent `agentTranscriptPath` or enough parent/cwd data to derive `subagents/agent-<agentId>.jsonl`; they must not call `finishSubagentTranscript` or schedule auto-close.
+  - Pane visibility is deferred until there is positive evidence. A lifecycle event registers a *pending* pane (subscribing and buffering content, but inserting nothing into the layout); the split pane is only materialized when the subscription reports `exists: true`, returns non-empty `initialContent`, or the first tailed content arrives for that key. A pending pane that never produces content is dropped when the child finishes, when its parent tab closes/unsplits, or after the pending TTL — it must never surface as an empty pane. This is what keeps pane creation honest for CLI-internal agents that emit lifecycle events but never write a transcript file.
+  - When a Claude start/update event already has `sessionId`, `agentId`, and either `parentTranscriptPath` or `cwd`, the frontend may subscribe to the derived child JSONL immediately. The backend tail waits for the child file to appear, so streaming must not wait for the stop event — but pane insertion waits for the first content, so a still-missing child file never shows an empty pane.
+  - `AgentToolStop` and Claude `ToolStop` with `agentId` may upgrade the matching already-existing (materialized or pending) pane to `child-jsonl` when they have an independent `agentTranscriptPath` or enough parent/cwd data to derive `subagents/agent-<agentId>.jsonl`; they must not call `finishSubagentTranscript` or schedule auto-close.
 - Codex `SubagentStart` rollout discovery is eventually consistent: when the first discovery returns no path, the frontend performs a per-child lifecycle retry and subscribes as soon as the matching rollout appears. Retry every second during the initial 15-second window, then reduce to every 5 seconds; stop after subscription, finish, pane close, or unsplit. Do not use a fixed timeout that can leave a long-running child pending until `SubagentStop` backfills the transcript.
 - Codex rollout discovery must preserve the Hook runtime boundary: when `wslDistroName` is present, prefer the parent rollout's `/sessions/` root, otherwise use the configured Codex root, and finally resolve that distro's `$HOME` and scan its `.codex/sessions` through `wsl.exe`; never substitute the Windows process user's `.codex/sessions`. A configured Codex root may be a Linux absolute path, WSL UNC path, or Windows path convertible to `/mnt/<drive>`, but it must not override a valid parent rollout path from the current Hook payload.
-- `SubagentStop` may also carry the first independent child transcript path. When a matching pane already exists, the frontend must call `openSubagentTranscript(payload)` and await subscription/initial backfill before `finishSubagentTranscript(payload)`, regardless of CLI source.
+- `SubagentStop` may also carry the first independent child transcript path. It may upgrade an already-materialized pane, or an already-registered pending pane, by calling `openSubagentTranscript(payload, { allowCreate: false })` and awaiting subscription/initial backfill before `finishSubagentTranscript(payload)`, regardless of CLI source. It must never *register* a new pane: CLIs emit `SubagentStop` for internal agents that never write a transcript file, so registering from a stop event produces an empty split pane that lingers for the auto-close delay.
 - Subscribe response fields:
   - `path`: resolved child JSONL path actually tailed by the backend.
   - `initialContent`: existing complete JSONL lines already present before tail startup. The frontend must append this immediately; the backend tail starts after the consumed offset to avoid duplicate output.
+  - `exists`: whether the child JSONL file was present at subscribe time. `read_new_lines` returns nothing for both a missing file and an existing file without a complete line yet, so `exists` is the only way to tell "child started, transcript not flushed" (materialize now, content follows) from "this file will never appear" (stay pending). A missing field from an older backend degrades to `initialContent`-only evidence.
 - `SubagentStart` and `SubagentStop` must be installed/uninstalled together for each source. Claude `PreToolUse`/`PostToolUse` Agent/Task fallback hooks must be installed/uninstalled with the Claude subagent hooks.
 - Stop routing priority: match by `agentId`; if missing, close only when exactly one transcript pane belongs to the parent `tabId`.
 - Codex child completion must not depend exclusively on `SubagentStop`: a complete child rollout JSONL record with `type=event_msg` and `payload.type=task_complete|turn_aborted` is a fallback stop signal for that transcript key. Malformed/incomplete lines are ignored until a later complete append, and repeated Hook/rollout stop signals are idempotent.
@@ -401,8 +404,12 @@ The taskbar sink is independent and consumes only its own master switch plus the
 - WSL Codex discovery receives a config path that is neither Linux absolute, WSL UNC, nor convertible Windows absolute -> return `invalid_wsl_codex_config_dir` and keep the pane pending/degraded.
 - Child transcript already has complete lines at subscribe time -> backend returns them in `initialContent` and starts tailing from that offset; an incomplete final line must wait for completion before emit.
 - Missing or ambiguous stop target -> frontend does nothing; it must not guess and close multiple child panes.
+- `SubagentStop` with no matching pane -> finish only; no pane is created, and any pending registration for that child is dropped together with its content buffer, lifecycle retry and backend tail subscription.
+- Subscribe returns `exists: false` with empty `initialContent` -> keep the pane pending. The first non-empty `appendSubagentTranscript` for that key materializes it; no empty pane is shown in the meantime.
+- Pending pane reaches its TTL, its parent tab closes, or its pane is unsplit -> discard the registration (timer, retry, tail subscription, buffered content) without touching the layout.
+- Derived child subscription throws -> convert to the child lifecycle retry instead of reporting success; the retry stops on subscription, finish, pane close or unsplit.
 - Malformed, incomplete, or non-terminal Codex rollout JSONL -> keep the pane active and wait for a later append or Hook stop.
-- `appendSubagentTranscript` receives an unknown key -> ignore it; multi-window broadcasts must not create stray transcript state.
+- `appendSubagentTranscript` receives an unknown key -> ignore it; multi-window broadcasts must not create stray transcript state. Keys registered as pending panes are known and must be buffered, and a non-empty append for a pending key materializes that pane first.
 - Appended transcript content exceeds the retention cap -> retain the latest tail, increment `truncatedBytes`, emit the existing OOM diagnostic, and increment `resetSeq` so view caches rebuild safely.
 
 ### 5. Good/Base/Bad Cases
@@ -411,7 +418,9 @@ The taskbar sink is independent and consumes only its own master switch plus the
 - Good: Codex `SubagentStart` only has the parent `transcriptPath`, then `SubagentStop` includes `agentTranscriptPath`; frontend upgrades the existing pane, appends subscribe `initialContent`, then marks it ended.
 - Good: Claude `SubagentStart` misses an independent child path, then `SubagentStop` provides `agentTranscriptPath`; frontend upgrades the existing pane before finish instead of ending in degraded state.
 - Good: Claude in WSL emits `ToolStop` with `agentId`, parent `transcriptPath`, UNC `cwd`, and no `wslDistroName`; frontend opens/updates a degraded child pane, derives the distro from `cwd`, and backend subscribes to the derived child path without rendering the parent transcript as child output.
-- Good: Claude emits `SubagentStart` before `agent-<agentId>.jsonl` exists; frontend subscribes to the derived child path immediately and the backend begins emitting complete lines as soon as the file is created.
+- Good: Claude emits `SubagentStart` before `agent-<agentId>.jsonl` exists; frontend subscribes to the derived child path immediately, keeps the pane pending, and the backend begins emitting complete lines as soon as the file is created — the pane materializes on that first content.
+- Good: Claude emits `SubagentStop` for an internal agent that never writes a transcript file; no pane is created and the pending registration is dropped on finish, so nothing flashes on screen.
+- Good: a pending pane's parent tab is closed before the child writes anything; the registration, its retry and its tail subscription are discarded with no layout change.
 - Good: Claude reports a child Worktree as `cwd` while `parentTranscriptPath` points to the real parent session; backend derives the child beside the parent transcript and streams during execution instead of waiting for stop-time backfill.
 - Good: Codex emits `SubagentStart` before the matching rollout exists; lifecycle discovery retries find it during execution and start streaming before `SubagentStop`.
 - Good: a WSL Codex child rollout becomes discoverable more than 15 seconds after `SubagentStart`; lifecycle retry continues at the reduced interval and starts streaming before `SubagentStop`.
@@ -423,6 +432,9 @@ The taskbar sink is independent and consumes only its own master switch plus the
 - Good: a child transcript grows past the rendered row cap; the UI renders the newest rows plus an omitted-count marker instead of thousands of DOM nodes.
 - Good: Claude hook stdin includes `effort.level = "high"`; the bridge emits `reasoningEffort: "high"` and the current terminal's stats card shows the effort even when the JSONL history usage lacks `reasoning_effort`.
 - Bad: `SubagentStop` calls `finishSubagentTranscript` before awaiting the late child transcript subscription; the pane can close with empty output.
+- Bad: creating a split pane from `SubagentStop` / any event that carries an `agentId` but no reachable transcript; CLIs emit those for internal agents, so the user gets an empty child pane that opens and closes by itself.
+- Bad: inserting the pane at lifecycle-event time and filling it later; a never-flushed child file then leaves an empty pane on screen until the auto-close delay.
+- Bad: a failed derived/rollout subscription reported as success; the pane stays degraded with no content source and no retry.
 - Bad: treating `AgentToolStop` as child completion; Claude may emit it while the asynchronous child is still running.
 - Bad: A new hook event is installed but not added to the bridge whitelist; the hook silently posts but the bridge rejects it.
 - Bad: `SubagentStop` has no `agent_id` while multiple child panes share one parent; frontend must not close all of them.
@@ -434,6 +446,8 @@ The taskbar sink is independent and consumes only its own master switch plus the
 
 - Hook install/uninstall tests assert `SubagentStart`/`SubagentStop` and, for Claude, `PreToolUse`/`PostToolUse` Agent tool fallback commands are written and removed for the affected source.
 - Rust unit test: `read_new_lines` returns only complete JSONL lines and the consumed offset used for subscribe `initialContent`.
+- Rust unit test: `transcript_file_exists` reports a missing file and a directory as absent and an existing-but-empty file as present, pinning the subscribe `exists` field the frontend gates pane creation on.
+- Frontend regression test: a lifecycle event whose child transcript never appears registers a pending pane but inserts nothing; a non-empty append materializes it exactly once, and finish/TTL/parent-close discard it without touching the layout.
 - Rust unit test: explicit `/Users/...` transcript paths stay native without `wslDistroName`; explicit `/home/...` paths convert to WSL UNC only when a distro is provided.
 - Rust unit test: parent transcript resolution wins over a child Worktree `cwd`, preserves explicit child path priority, validates the parent session filename, and converts Linux parent paths to WSL UNC.
 - Rust unit test: WSL UNC `cwd` can provide a fallback distro for derived child transcript paths when `wslDistroName` is missing, and explicit `wslDistroName` still takes precedence.

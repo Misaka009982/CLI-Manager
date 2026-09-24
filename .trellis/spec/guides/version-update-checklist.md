@@ -132,8 +132,18 @@ npm run tauri:build:local
 ```
 
 - Expected output path:
-  - `src-tauri/target/release/bundle/nsis/`
-  - `src-tauri/target/release/bundle/msi/`
+  - `src-tauri/target/local/release/bundle/nsis/`
+  - `src-tauri/target/local/release/bundle/msi/`
+
+- `scripts/tauri-build-local.mjs` sets child-only Cargo release overrides: LTO off,
+  opt-level 2, 16 codegen units and incremental compilation. It reuses `tauri-cli.mjs`
+  and all existing frontend/Web/resource build steps. Official release settings stay unchanged.
+- An existing `CARGO_TARGET_DIR` is used as the cache parent, with `/local` appended;
+  target-triple builds add the usual triple directory before `release`.
+- Keep the local cache across builds. Changing compilation settings needs a new initial
+  compilation; do not promise a speedup without timing. Never stop another running build.
+- Regression check: `node --test scripts/tauri-build-local.test.mjs` and
+  `npm run tauri:build:local -- --help` (no build side effects).
 
 - Never use the local unsigned build flow for GitHub releases or any artifact that should be consumed by the in-app updater.
 

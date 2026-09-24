@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Badge, Button, Card, Group, Select, Stack, Switch, Text, TextInput } from "@mantine/core";
-import { Copy, Link2, Play, RefreshCw, Save, Square, Trash2 } from "lucide-react";
+import { Badge, Button, Card, Collapse, Divider, Group, Select, SimpleGrid, Stack, Switch, Text, TextInput, UnstyledButton } from "@mantine/core";
+import { ChevronDown, ChevronUp, Copy, Link2, Play, RefreshCw, Save, Square, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useI18n, type TranslationKey } from "../../../shared/i18n/index";
 import { webDeviceApi, type WebDeviceStatus } from "../../../shared/lib/webDevice";
@@ -9,6 +9,7 @@ import { webServerApi } from "../../../shared/lib/webServer";
 import { WebMobileAccess } from "./WebMobileAccess";
 import { useSettingsStore } from "../../../shared/preferences/settingsStore";
 import { normalizeWebTerminalBatchKiB } from "../../../shared/lib/webTerminalFrames";
+import { pairingRefreshDelay } from "../lib/webPairingLifecycle";
 
 const STATUS_EVENT = "web-device-status-changed";
 
@@ -27,6 +28,7 @@ export function WebDeviceSettingsSection({ onStatusChange }: Props) {
   const [autoStart, setAutoStart] = useState(true);
   const [uploadWallpaper, setUploadWallpaper] = useState(true);
   const [working, setWorking] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const formDirtyRef = useRef(false);
 
   const applyStatus = useCallback((next: WebDeviceStatus) => {
@@ -55,6 +57,13 @@ export function WebDeviceSettingsSection({ onStatusChange }: Props) {
     const unlisten = listen<WebDeviceStatus>(STATUS_EVENT, (event) => applyStatus(event.payload));
     return () => { void unlisten.then((dispose) => dispose()); };
   }, [applyStatus, refresh]);
+
+  useEffect(() => {
+    const delay = pairingRefreshDelay(status?.pairingCode, status?.pairingExpiresAt, Date.now());
+    if (delay === null) return;
+    const timer = window.setTimeout(() => void refresh(), Math.min(delay, 2_147_483_647));
+    return () => window.clearTimeout(timer);
+  }, [refresh, status?.pairingCode, status?.pairingExpiresAt]);
 
   const run = async (key: string, action: () => Promise<WebDeviceStatus>, successKey: TranslationKey) => {
     setWorking(key);
@@ -113,7 +122,7 @@ export function WebDeviceSettingsSection({ onStatusChange }: Props) {
 
   return (
     <Card className="border border-primary/25 bg-primary/5" p="md" radius="lg">
-      <Group justify="space-between" align="flex-start">
+      <Group justify="space-between" align="flex-start" wrap="wrap">
         <div>
           <Group gap="xs"><Link2 size={18} /><Text fw={700}>{t("settings.webDevice.title")}</Text></Group>
           <Text mt={4} size="xs" c="var(--text-muted)">{t("settings.webDevice.description")}</Text>
@@ -123,55 +132,92 @@ export function WebDeviceSettingsSection({ onStatusChange }: Props) {
         </Badge>
       </Group>
 
-      <Stack gap="sm" mt="md">
-        <Select
-          label={t("settings.webDevice.outputBatch")}
-          description={t("settings.webDevice.outputBatchHint")}
-          value={String(batchKiB)}
-          allowDeselect={false}
-          disabled={busy}
-          data={[
-            { value: "96", label: t("settings.webDevice.outputBatchDefault") },
-            { value: "256", label: "256 KiB" },
-            { value: "512", label: "512 KiB" },
-          ]}
-          onChange={(value) => {
-            void useSettingsStore.getState().update("webTerminalBatchKiB", normalizeWebTerminalBatchKiB(Number(value)))
-              .catch((caught) => toast.error(t("settings.webDevice.toast.actionFailed"), { description: String(caught) }));
-          }}
-        />
-        <Button size="xs" variant="subtle" disabled={busy} loading={working === "localServer"} onClick={() => void useLocalServer()}>{t("settings.webDevice.useLocalServer")}</Button>
-        <Switch checked={trustedNetwork} onChange={(event) => { formDirtyRef.current = true; setTrustedNetwork(event.currentTarget.checked); }} label={t("settings.webDevice.trustedNetwork")} description={t("settings.webDevice.trustedNetworkHint")} />
-        <TextInput label={t("settings.webDevice.publicAccessUrl")} description={t("settings.webDevice.publicAccessUrlHint")} placeholder="https://cli.example.com" value={publicAccessUrl} onChange={(event) => { formDirtyRef.current = true; setPublicAccessUrl(event.currentTarget.value); }} />
-        <TextInput label={t("settings.webDevice.serverUrl")} description={t("settings.webDevice.serverUrlHint")} placeholder="https://example.com" value={serverUrl} onChange={(event) => { formDirtyRef.current = true; setServerUrl(event.currentTarget.value); }} />
-        <TextInput label={t("settings.webDevice.deviceName")} placeholder={t("settings.webDevice.defaultName")} value={deviceName} onChange={(event) => { formDirtyRef.current = true; setDeviceName(event.currentTarget.value); }} />
-        <Switch checked={autoStart} onChange={(event) => { formDirtyRef.current = true; setAutoStart(event.currentTarget.checked); }} label={t("settings.webDevice.autoStart")} description={t("settings.webDevice.autoStartHint")} />
-        <Switch checked={uploadWallpaper} onChange={(event) => { formDirtyRef.current = true; setUploadWallpaper(event.currentTarget.checked); }} label={t("settings.webDevice.uploadWallpaper")} description={t("settings.webDevice.uploadWallpaperHint")} />
-        {status?.profile && <Text size="xs" c="var(--text-muted)" style={{ overflowWrap: "anywhere" }}>{t("settings.webDevice.clientId")}: {status.profile.clientId}</Text>}
-        {status?.lastError && <Text size="xs" c="red">{status.lastError}</Text>}
+      <Group gap="xs" mt="md" wrap="wrap">
+        <Button size="xs" color="cliPrimary" leftSection={<Save size={14} />} loading={working === "save"} disabled={busy || !serverUrl.trim()} onClick={() => void save()}>{t("common.save")}</Button>
+        <Button size="xs" variant="light" leftSection={<Play size={14} />} loading={working === "start"} disabled={busy || !status?.configured || !!status?.running} onClick={() => void run("start", webDeviceApi.start, "settings.webDevice.toast.started")}>{t("settings.webDevice.start")}</Button>
+        <Button size="xs" variant="light" color="red" leftSection={<Square size={13} />} loading={working === "stop"} disabled={busy || !status?.running} onClick={() => void run("stop", webDeviceApi.stop, "settings.webDevice.toast.stopped")}>{t("settings.webDevice.stop")}</Button>
+        <Button size="xs" variant="default" leftSection={<RefreshCw size={14} />} loading={working === "restart"} disabled={busy || !status?.configured} onClick={() => void run("restart", webDeviceApi.restart, "settings.webDevice.toast.restarted")}>{t("settings.webDevice.restart")}</Button>
+      </Group>
 
-        {status?.pairingCode && (
-          <Card p="sm" radius="md" className="border border-blue-500/30 bg-blue-500/10">
-            <Group justify="space-between">
-              <div>
-                <Text size="xs" c="var(--text-muted)">{t("settings.webDevice.pairingCode")}</Text>
-                <Text ff="monospace" fw={800} size="xl" style={{ letterSpacing: "0.18em" }}>{status.pairingCode}</Text>
-              </div>
-              <Button size="xs" variant="light" leftSection={<Copy size={14} />} onClick={() => void navigator.clipboard.writeText(status.pairingCode ?? "")}>{t("common.copy")}</Button>
-            </Group>
-          </Card>
-        )}
+      {status?.lastError && <div className="mt-3 rounded-md border border-border/70 bg-surface-container-low px-3 py-2">
+        <Text size="xs" c="red" style={{ overflowWrap: "anywhere" }}>{status.lastError}</Text>
+      </div>}
 
-        <WebMobileAccess serverUrl={status?.profile?.serverUrl ?? ""} publicAccessUrl={status?.profile?.publicAccessUrl ?? ""} trustedNetwork={status?.profile?.trustedNetwork ?? false} paired={Boolean(status?.paired)} />
-        <Group gap="xs">
-          <Button size="xs" color="cliPrimary" leftSection={<Save size={14} />} loading={working === "save"} disabled={busy || !serverUrl.trim()} onClick={() => void save()}>{t("common.save")}</Button>
-          <Button size="xs" variant="light" leftSection={<Play size={14} />} loading={working === "start"} disabled={busy || !status?.configured || !!status?.running} onClick={() => void run("start", webDeviceApi.start, "settings.webDevice.toast.started")}>{t("settings.webDevice.start")}</Button>
-          <Button size="xs" variant="light" color="red" leftSection={<Square size={13} />} loading={working === "stop"} disabled={busy || !status?.running} onClick={() => void run("stop", webDeviceApi.stop, "settings.webDevice.toast.stopped")}>{t("settings.webDevice.stop")}</Button>
-          <Button size="xs" variant="default" leftSection={<RefreshCw size={14} />} loading={working === "restart"} disabled={busy || !status?.configured} onClick={() => void run("restart", webDeviceApi.restart, "settings.webDevice.toast.restarted")}>{t("settings.webDevice.restart")}</Button>
-          <Button size="xs" variant="default" leftSection={<Link2 size={14} />} loading={working === "pair"} disabled={busy || !status?.connected || !!status?.paired} onClick={() => void createPairing()}>{t("settings.webDevice.createPairing")}</Button>
-          <Button size="xs" variant="subtle" color="red" leftSection={<Trash2 size={14} />} loading={working === "clear"} disabled={busy || !status?.configured} onClick={() => void run("clear", webDeviceApi.clearPairing, "settings.webDevice.toast.pairingCleared")}>{t("settings.webDevice.resetDevice")}</Button>
-        </Group>
+      <Divider my="md" />
+      <Stack gap="xs">
+        <Text fw={700} size="sm">{t("settings.webDevice.connectionTitle")}</Text>
+        <Text size="xs" c="var(--text-muted)">{t("settings.webDevice.connectionDescription")}</Text>
       </Stack>
+      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm" mt="sm">
+        <TextInput label={t("settings.webDevice.serverUrl")} description={t("settings.webDevice.serverUrlHint")} placeholder="https://example.com" value={serverUrl} onChange={(event) => { formDirtyRef.current = true; setServerUrl(event.currentTarget.value); }} />
+        <TextInput label={t("settings.webDevice.publicAccessUrl")} description={t("settings.webDevice.publicAccessUrlHint")} placeholder="https://cli.example.com" value={publicAccessUrl} onChange={(event) => { formDirtyRef.current = true; setPublicAccessUrl(event.currentTarget.value); }} />
+      </SimpleGrid>
+      <Button mt="sm" size="xs" variant="subtle" w="fit-content" disabled={busy} loading={working === "localServer"} onClick={() => void useLocalServer()}>{t("settings.webDevice.useLocalServer")}</Button>
+
+      <Divider my="md" />
+      <Stack gap="xs">
+        <Text fw={700} size="sm">{t("settings.webDevice.identityTitle")}</Text>
+        <Text size="xs" c="var(--text-muted)">{t("settings.webDevice.identityDescription")}</Text>
+      </Stack>
+      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm" mt="sm">
+        <TextInput label={t("settings.webDevice.deviceName")} placeholder={t("settings.webDevice.defaultName")} value={deviceName} onChange={(event) => { formDirtyRef.current = true; setDeviceName(event.currentTarget.value); }} />
+        <Switch mt="xs" checked={autoStart} onChange={(event) => { formDirtyRef.current = true; setAutoStart(event.currentTarget.checked); }} label={t("settings.webDevice.autoStart")} description={t("settings.webDevice.autoStartHint")} />
+      </SimpleGrid>
+
+      <Divider my="md" />
+      <UnstyledButton className="w-full rounded-md text-left" onClick={() => setAdvancedOpen((open) => !open)} aria-expanded={advancedOpen}>
+        <Group justify="space-between" wrap="nowrap">
+          <div>
+            <Text fw={700} size="sm">{t("settings.webDevice.advancedTitle")}</Text>
+            <Text size="xs" c="var(--text-muted)">{t("settings.webDevice.advancedDescription")}</Text>
+          </div>
+          {advancedOpen ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
+        </Group>
+      </UnstyledButton>
+      <Collapse expanded={advancedOpen} keepMounted={false}>
+        <Stack gap="sm" mt="sm">
+          <Select
+            label={t("settings.webDevice.outputBatch")}
+            description={t("settings.webDevice.outputBatchHint")}
+            value={String(batchKiB)}
+            allowDeselect={false}
+            disabled={busy}
+            data={[
+              { value: "96", label: t("settings.webDevice.outputBatchDefault") },
+              { value: "256", label: "256 KiB" },
+              { value: "512", label: "512 KiB" },
+            ]}
+            onChange={(value) => {
+              void useSettingsStore.getState().update("webTerminalBatchKiB", normalizeWebTerminalBatchKiB(Number(value)))
+                .catch((caught) => toast.error(t("settings.webDevice.toast.actionFailed"), { description: String(caught) }));
+            }}
+          />
+          <Switch checked={trustedNetwork} onChange={(event) => { formDirtyRef.current = true; setTrustedNetwork(event.currentTarget.checked); }} label={t("settings.webDevice.trustedNetwork")} description={t("settings.webDevice.trustedNetworkHint")} />
+          <Switch checked={uploadWallpaper} onChange={(event) => { formDirtyRef.current = true; setUploadWallpaper(event.currentTarget.checked); }} label={t("settings.webDevice.uploadWallpaper")} description={t("settings.webDevice.uploadWallpaperHint")} />
+        </Stack>
+      </Collapse>
+
+      <Divider my="md" />
+      <Stack gap="xs">
+        <Text fw={700} size="sm">{t("settings.webDevice.pairingTitle")}</Text>
+        <Text size="xs" c="var(--text-muted)">{t("settings.webDevice.pairingDescription")}</Text>
+      </Stack>
+      {status?.pairingCode && (
+        <div className="mt-3 rounded-md border border-blue-500/30 bg-blue-500/10 p-3">
+          <Group justify="space-between" wrap="wrap">
+            <div>
+              <Text size="xs" c="var(--text-muted)">{t("settings.webDevice.pairingCode")}</Text>
+              <Text ff="monospace" fw={800} size="xl" style={{ letterSpacing: "0.18em" }}>{status.pairingCode}</Text>
+            </div>
+            <Button size="xs" variant="light" leftSection={<Copy size={14} />} onClick={() => void navigator.clipboard.writeText(status.pairingCode ?? "")}>{t("common.copy")}</Button>
+          </Group>
+        </div>
+      )}
+      <WebMobileAccess serverUrl={status?.profile?.serverUrl ?? ""} publicAccessUrl={status?.profile?.publicAccessUrl ?? ""} trustedNetwork={status?.profile?.trustedNetwork ?? false} paired={Boolean(status?.paired)} />
+      <Group gap="xs" mt="sm" wrap="wrap">
+        <Button size="xs" variant="default" leftSection={<Link2 size={14} />} loading={working === "pair"} disabled={busy || !status?.connected || !!status?.paired} onClick={() => void createPairing()}>{t("settings.webDevice.createPairing")}</Button>
+        <Button size="xs" variant="subtle" color="red" leftSection={<Trash2 size={14} />} loading={working === "clear"} disabled={busy || !status?.configured} onClick={() => void run("clear", webDeviceApi.clearPairing, "settings.webDevice.toast.pairingCleared")}>{t("settings.webDevice.resetDevice")}</Button>
+      </Group>
     </Card>
   );
 }

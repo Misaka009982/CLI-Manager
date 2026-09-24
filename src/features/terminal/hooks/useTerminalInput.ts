@@ -7,17 +7,16 @@ import {
 import type { IBufferLine, Terminal } from "@xterm/xterm";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  readImage as readClipboardImage,
   readText as readClipboardText,
 } from "@tauri-apps/plugin-clipboard-manager";
+import { readTerminalClipboard, type ClipboardImages } from "../lib/terminalClipboardRead";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
 import { TERMINAL_FILE_PATH_MIME } from "../../files/api/aiPathFormatter";
 import {
   arrayBufferToBase64,
-  createClipboardImageFileName,
-  createClipboardPngFile,
+  CLIPBOARD_IMAGE_MAX_BYTES,
   getClipboardImageFile,
   hasDataTransferType,
 } from "../lib/terminalClipboardImage";
@@ -104,7 +103,9 @@ const remoteAttachmentErrorDescription = (error: unknown) => {
   if (code.includes("attachment_local_file_unavailable")) {
     return translateCurrent("terminal.attachment.localFileUnavailable");
   }
-  if (code.includes("clipboard_image_unsupported")) {
+  if (code.includes("clipboard_busy")) return translateCurrent("terminal.attachment.clipboardBusy");
+  if (code.includes("clipboard_image_read_failed")) return translateCurrent("terminal.attachment.clipboardReadFailed");
+  if (code.includes("clipboard_image_unsupported") || code.includes("unsupported_image")) {
     return translateCurrent("terminal.attachment.imageUnsupported");
   }
   if (code.includes("clipboard_image_tool_unsupported")) {
@@ -1244,27 +1245,13 @@ export function useTerminalInput({
     file: File,
     context: ReturnType<typeof getCurrentPasteContext>,
   ): Promise<string | null> => {
-    const { session } = context;
-
     try {
-      const fileName = createClipboardImageFileName(file);
-      const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
-      if (isSshPasteContext(context)) {
-        if (!session) {
-          throw new Error("ssh_terminal_context_invalid");
-        }
-        const [path] = await sshRemoteAttachFilesForSession(session, [{
-          kind: "data",
-          fileName,
-          dataBase64,
-        }]);
-        return path ?? null;
-      }
-
-      return await invoke<string>("file_attach_data", {
-        fileName,
-        dataBase64,
+      if (file.size > CLIPBOARD_IMAGE_MAX_BYTES) throw new Error("clipboard_image_too_large");
+      const path = await invoke<string>("file_attach_image_data", {
+        dataBase64: arrayBufferToBase64(await file.arrayBuffer()),
       });
+      const paths = await uploadPastedLocalPaths([path], context);
+      return paths[0] ?? null;
     } catch (err) {
       logError("Failed to attach pasted terminal image", { sessionId, err });
       showAttachmentPasteError(err);
@@ -1332,27 +1319,22 @@ export function useTerminalInput({
               terminal.focus();
               return;
             }
-            if (isSshPasteContext(context)) {
-              showAttachmentPasteError(new Error("attachment_local_file_unavailable"));
-              return;
-            }
-            if (text) pasteIntoTerminal(text);
+            const imagePaths = await readNativeImagePaths(context);
+            if (imagePaths.length) pasteIntoTerminal(await formatImagePastedPaths(imagePaths, context));
+            else if (text) pasteIntoTerminal(text);
+            else showAttachmentPasteError(new Error("clipboard_image_unsupported"));
           })
           .catch((err) => {
             logError("Failed to read clipboard file paths", { sessionId, err });
-            if (isSshPasteContext(context)) {
-              showAttachmentPasteError(err);
-            } else if (text) {
-              pasteIntoTerminal(text);
-            }
+            showAttachmentPasteError(err);
           });
         return;
       }
 
-      if (text === undefined) return;
       event.preventDefault();
       event.stopPropagation();
-      pasteIntoTerminal(text);
+      if (text) pasteIntoTerminal(text);
+      else void readClipboardPasteText().then(pasteIntoTerminal);
     };
     pasteTarget.addEventListener("paste", onPaste, pasteListenerOptions);
 
@@ -1441,56 +1423,27 @@ export function useTerminalInput({
     return defaultShell ?? defaultShellForOs(os);
   };
 
-  const readClipboardImageFile = async (): Promise<File | null> => {
-    let image: Awaited<ReturnType<typeof readClipboardImage>>;
-    try {
-      image = await readClipboardImage();
-    } catch {
-      return null;
-    }
-
-    try {
-      const { width, height } = await image.size();
-      return await createClipboardPngFile(await image.rgba(), width, height);
-    } catch (err) {
-      logError("Failed to convert clipboard image", { sessionId, err });
-      showAttachmentPasteError(err);
-      return null;
-    } finally {
-      await image.close().catch(() => {});
-    }
+  // 所有终端入口共用相同的原生读取与失败边界；路径上传仍绑定调用时的会话快照。
+  const clipboardReader = {
+    files: () => invoke<string[]>("clipboard_read_file_paths"),
+    images: () => invoke<ClipboardImages>("clipboard_attach_image_files"),
+    text: readClipboardText,
+  };
+  const readNativeImagePaths = async (context: ReturnType<typeof getCurrentPasteContext>) => {
+    const result = await readTerminalClipboard(clipboardReader, true);
+    return result.kind === "paths" ? uploadPastedLocalPaths(result.paths, context) : [];
   };
 
-  // Ctrl+V / 右键粘贴统一按“文件路径 → 截图位图 → 文本”读取。资源管理器文件使用
-  // 原生 CF_HDROP；截图通过 clipboard-manager 读取 RGBA 后转成 PNG，并复用现有附件保存链路。
+  // Ctrl+V / 右键：复制文件仍插入路径；截图统一走后端 PNG 标准化再上传或转 WSL 路径。
   const readClipboardPasteText = async (): Promise<string> => {
     const context = getCurrentPasteContext();
-    let filePaths: string[] = [];
     try {
-      filePaths = (await invoke<string[]>("clipboard_read_file_paths")).filter(Boolean);
+      const result = await readTerminalClipboard(clipboardReader);
+      if (result.kind === "text") return result.text;
+      return await formatPastedPaths(await uploadPastedLocalPaths(result.paths, context), context);
     } catch (err) {
-      logError("Failed to read clipboard file paths", { sessionId, err });
-    }
-    if (filePaths.length > 0) {
-      try {
-        const attachedPaths = await uploadPastedLocalPaths(filePaths, context);
-        return await formatPastedPaths(attachedPaths, context);
-      } catch (err) {
-        logError("Failed to attach clipboard file paths", { sessionId, err });
-        showAttachmentPasteError(err);
-        return "";
-      }
-    }
-
-    const imageFile = await readClipboardImageFile();
-    if (imageFile) {
-      const path = await savePastedImageForTerminal(imageFile, context);
-      return path ? formatPastedPaths([path], context) : "";
-    }
-
-    try {
-      return await readClipboardText();
-    } catch {
+      logError("Failed to read terminal clipboard", { sessionId, err });
+      showAttachmentPasteError(err);
       return "";
     }
   };
@@ -1498,24 +1451,9 @@ export function useTerminalInput({
   const readClipboardImagePasteText = async (): Promise<string> => {
     const context = getCurrentPasteContext();
     try {
-      const imageAttachments = await invoke<{
-        paths: string[];
-        hadFiles: boolean;
-        rejectedCount: number;
-        rejectionCode?: string | null;
-      }>("clipboard_attach_image_files");
-      if (imageAttachments.paths.length > 0) {
-        const attachedPaths = await uploadPastedLocalPaths(imageAttachments.paths, context);
-        return await formatImagePastedPaths(attachedPaths, context);
-      }
-      if (imageAttachments.hadFiles) {
-        throw new Error(imageAttachments.rejectionCode || "clipboard_image_unsupported");
-      }
-
-      const imageFile = await readClipboardImageFile();
-      if (!imageFile) throw new Error("clipboard_image_unsupported");
-      const path = await savePastedImageForTerminal(imageFile, context);
-      return path ? await formatImagePastedPaths([path], context) : "";
+      const paths = await readNativeImagePaths(context);
+      if (!paths.length) throw new Error("clipboard_image_unsupported");
+      return await formatImagePastedPaths(paths, context);
     } catch (err) {
       logError("Failed to paste clipboard image", { sessionId, err });
       showAttachmentPasteError(err);

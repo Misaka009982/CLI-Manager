@@ -38,7 +38,8 @@ test("row Delete and Ctrl+X operate on the selection, not only the focused row",
   const confirmations = [], clipboard = [];
   const handler = callback("handleFileKeyDown", {
     useFileExplorerStore: { getState: () => state }, isFileActionInput: () => false,
-    setConfirmAction: (action) => confirmations.push(action), setClipboard: (value) => clipboard.push(value),
+    setConfirmAction: (action) => confirmations.push(action),
+    copyFileEntries: (mode, entries) => clipboard.push({ mode, entries }), t: (key) => key,
   });
   handler(keyEvent("Delete"), a);
   handler(keyEvent("x", { ctrlKey: true }), b);
@@ -52,7 +53,7 @@ test("row shortcuts ignore text inputs and cannot mutate SSH or busy projects", 
     const handler = callback("handleFileKeyDown", {
       useFileExplorerStore: { getState: () => ({ project: { environment_type: remote ? "ssh" : "local" }, mutationBusy: busy, selectedEntries: [a] }) },
       isFileActionInput: () => input,
-      setConfirmAction: () => assert.fail("unexpected delete"), setClipboard: () => assert.fail("unexpected clipboard mutation"),
+      setConfirmAction: () => assert.fail("unexpected delete"), copyFileEntries: () => assert.fail("unexpected clipboard mutation"),
     });
     for (const event of [keyEvent("Delete"), keyEvent("x", { ctrlKey: true }), keyEvent("v", { ctrlKey: true })]) {
       handler(event, a);

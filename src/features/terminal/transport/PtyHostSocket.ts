@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { logInfo, logWarn } from "../../../shared/platform/logger";
 import { writeResourceDiagnostic } from "../../../shared/platform/resourceDiagnosticsLog";
+import type { TerminalBinaryFrame } from "../../../shared/types/terminalFrame";
+export type { TerminalBinaryFrame } from "../../../shared/types/terminalFrame";
 
 const BINARY_PROTOCOL_VERSION = 1;
 const BINARY_KIND_OUTPUT = 1;
@@ -46,16 +48,6 @@ interface SocketDisconnectDetails {
   code?: number | null;
   reason?: string | null;
   wasClean?: boolean | null;
-}
-
-export interface TerminalBinaryFrame {
-  kind: "output" | "replay" | "reset";
-  sessionId: string;
-  sequence: number;
-  cols: number;
-  rows: number;
-  data: Uint8Array;
-  replayBatchEnd?: boolean;
 }
 
 export interface TerminalProcessTraits {

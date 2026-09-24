@@ -14,6 +14,7 @@ import { NodeAppearanceIcon } from "../api/NodeAppearanceIcon";
 import { resolveNodeAppearance } from "../api/nodeAppearance";
 import { useTreeActions, worktreeListCollapseId, type TreeActions } from "./TreeContext";
 import { useI18n } from "../../../shared/i18n/index";
+import { toast } from "sonner";
 import { countProjectsInNode } from "../api/projectStore";
 import { resolveCliToolIconKey } from "../../../shared/lib/cliTools";
 import { DND_ACTIVATION_CONSTRAINT } from "../../workspace/api/dragInteraction";
@@ -403,6 +404,45 @@ export function ProjectTree({
     return () => window.cancelAnimationFrame(frame);
   }, [selectedTreeKey]);
 
+  // 「定位位置」：把置顶区里的项目副本定位回主列表的真实位置。
+  // 独立于上面的 selectedTreeKey 副作用——同一项目重复定位时选中键并没有变化，
+  // 依赖值相同就不会重跑，因此改用单调递增的 nonce 驱动。
+  // locateProject 已同批提交「祖先展开 + 切回全部筛选 + 选中」，故此处 commit 后的 DOM 已含目标行。
+  // treeContainerRef 落在列表区内部的 role="tree" 上，天然不会匹配到置顶区的 pin:p:<id> 副本。
+  const locateRequest = actions.locateRequest;
+  const locateProjectId = locateRequest?.projectId ?? null;
+  const locateNonce = locateRequest?.nonce ?? 0;
+  const locateProjectName = locateRequest?.projectName ?? "";
+  useEffect(() => {
+    if (!locateProjectId) return;
+    const targetKey = `p:${locateProjectId}`;
+    let primaryFrame = 0;
+    let retryFrame = 0;
+    const attempt = (isRetry: boolean) => {
+      const targetElement = Array.from(
+        treeContainerRef.current?.querySelectorAll<HTMLElement>("[data-tree-key]") ?? []
+      ).find((node) => node.dataset.treeKey === targetKey);
+      if (targetElement) {
+        targetElement.scrollIntoView({ block: "nearest" });
+        return;
+      }
+      // 首帧未命中可能是同批提交尚未落盘，补一帧再判定，避免误报。
+      if (!isRetry) {
+        retryFrame = window.requestAnimationFrame(() => attempt(true));
+        return;
+      }
+      // 确实不可达：例如残留的搜索词把该项目过滤掉了。提示而不是静默失败。
+      toast.info(t("sidebar.locate.notFound"), {
+        description: t("sidebar.locate.notFoundDescription", { name: locateProjectName }),
+      });
+    };
+    primaryFrame = window.requestAnimationFrame(() => attempt(false));
+    return () => {
+      window.cancelAnimationFrame(primaryFrame);
+      window.cancelAnimationFrame(retryFrame);
+    };
+  }, [locateNonce, locateProjectId, locateProjectName, t]);
+
   const handleTreeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement | null;
     if (
@@ -593,6 +633,26 @@ export function ProjectTree({
     filteredTree.length > 0 || projectScopedTerminalViewEnabled || newGroupParentId === "__root__"
   );
 
+  // 侧栏分区滚动（用户 2026-09-15 决议）：置顶区与项目列表各自独立滚动，
+  // 滚轮由浏览器原生判定作用于指针所在区域，不拦截 wheel 事件。
+  const showPinnedSection = (pinnedFilterActive || !searchActive) && visiblePinnedProjects.length > 0;
+  // 仅当置顶区与项目列表同时存在时才分区：「已置顶」筛选下置顶区独占区域，搜索态下置顶区隐藏。
+  const splitPinnedRegion = !embedded && showPinnedSection && !pinnedFilterActive;
+  const pinnedSection = showPinnedSection ? (
+    <PinnedProjectSection
+      projects={visiblePinnedProjects}
+      density={density}
+    />
+  ) : null;
+  const pinnedEmptyState = pinnedFilterActive && !showPinnedSection ? (
+    <EmptyState
+      icon={<Pin size={40} strokeWidth={1} />}
+      title={t("sidebar.pinned.emptyTitle")}
+      description={t("sidebar.pinned.emptyDescription")}
+      action={onClearProjectFilter ? { label: t("sidebar.tree.openFilterShowAll"), onClick: onClearProjectFilter } : undefined}
+    />
+  ) : null;
+
   if (initialLoading) {
     return (
       <div className="h-full overflow-y-auto overflow-x-hidden px-1.5 pb-2 pt-1">
@@ -654,192 +714,186 @@ export function ProjectTree({
   }
 
   return (
-    <div className={`${embedded ? "" : "flex h-full flex-col overflow-y-auto"} overflow-x-hidden ${density === "compact" ? "px-1 pb-1.5 pt-0.5" : "px-1.5 pb-2 pt-1"}`}>
-      {(pinnedFilterActive || !searchActive) && visiblePinnedProjects.length > 0 && (
-        <PinnedProjectSection
-          projects={visiblePinnedProjects}
-          density={density}
-        />
-      )}
+    <div className={`${embedded ? "" : "flex h-full flex-col overflow-hidden"} overflow-x-hidden ${density === "compact" ? "px-1 pb-1.5 pt-0.5" : "px-1.5 pb-2 pt-1"}`}>
+      {/* 置顶区：独立滚动容器，上限占可用高度 30%，超出部分在此区域内滚动。 */}
+      {splitPinnedRegion && <div className="ui-sidebar-pinned-scroll">{pinnedSection}</div>}
+      {splitPinnedRegion && <div className="ui-sidebar-region-divider" role="separator" />}
 
-      {pinnedFilterActive && visiblePinnedProjects.length === 0 && (
-        <EmptyState
-          icon={<Pin size={40} strokeWidth={1} />}
-          title={t("sidebar.pinned.emptyTitle")}
-          description={t("sidebar.pinned.emptyDescription")}
-          action={onClearProjectFilter ? { label: t("sidebar.tree.openFilterShowAll"), onClick: onClearProjectFilter } : undefined}
-        />
-      )}
+      {/* 列表区：独立滚动容器，分区时至少占 70%；未分区时承载置顶区与列表的全部内容。 */}
+      <div className={embedded ? undefined : "ui-sidebar-main-scroll"}>
+        {!splitPinnedRegion && pinnedSection}
+        {!splitPinnedRegion && pinnedEmptyState}
 
-      {!pinnedFilterActive && newGroupParentId === "__root__" && (
-        <div className="px-2">
-          <NewGroupRow
-            compact={density === "compact"}
-            onCreate={(name, appearance) => onCreateRootGroup(name, appearance)}
-            onCancel={onCancelRootGroup}
-          />
-        </div>
-      )}
-
-      {!pinnedFilterActive && searchOpen && (
-        <div className={`px-2 ${density === "compact" ? "pb-1 pt-0.5" : "pb-1.5 pt-0.5"}`}>
-          <input
-            ref={searchInputRef}
-            value={searchQuery}
-            placeholder={t("sidebar.tree.searchPlaceholder")}
-            aria-label={t("sidebar.tree.searchAria")}
-            className="ui-tree-inline-input ui-focus-ring h-8 w-full px-2 text-xs text-on-surface outline-none"
-            onChange={(event) => {
-              const nextValue = event.currentTarget.value;
-              if (!nextValue.trim()) {
-                closeSearch();
-                return;
-              }
-              setSearchQuery(nextValue);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                closeSearch();
-                return;
-              }
-              if (event.key === "ArrowDown" && visibleNodes.length > 0) {
-                event.preventDefault();
-                const nextNode = searchActive
-                  ? visibleNodes.find((node) => node.kind !== "all-terminals") ?? visibleNodes[0]
-                  : visibleNodes[0];
-                focusTreeItem(nextNode.key);
-              }
-            }}
-          />
-        </div>
-      )}
-
-      {!pinnedFilterActive && (
-      <DndContext
-        sensors={sensors}
-        collisionDetection={treeCollisionDetection}
-        onDragStart={(event: DragStartEvent) => {
-          setActiveId(String(event.active.id));
-        }}
-        onDragCancel={() => {
-          suppressClickAfterDragUntilRef.current = performance.now() + 250;
-          setActiveId(null);
-        }}
-        onDragEnd={(event) => {
-          suppressClickAfterDragUntilRef.current = performance.now() + 250;
-          setActiveId(null);
-          actions.onDragEnd(event);
-        }}
-      >
-        <SortableContext
-          items={filteredRootIds}
-          strategy={verticalListSortingStrategy}
-        >
-          <div
-            ref={treeContainerRef}
-            role="tree"
-            aria-label={t("sidebar.tree.aria")}
-            aria-multiselectable="true"
-            tabIndex={-1}
-            className={`${shouldFillTreeArea ? "min-h-full" : ""} ui-project-tree-root outline-none`}
-            onKeyDown={handleTreeKeyDown}
-            onClickCapture={(event) => {
-              if (performance.now() > suppressClickAfterDragUntilRef.current) return;
-              suppressClickAfterDragUntilRef.current = 0;
-              event.preventDefault();
-              event.stopPropagation();
-            }}
-            onMouseDown={(event) => {
-              if (event.button === 2) return;
-              const target = event.target as HTMLElement | null;
-              if (!target) return;
-              if (target.closest("button, input, textarea, select, a, [contenteditable='true']")) return;
-              focusTreeContainer();
-            }}
-          >
-            {projectScopedTerminalViewEnabled && (
-              <div
-                role="treeitem"
-                data-tree-key="scope:all"
-                aria-level={1}
-                aria-selected={allTerminalsSelected}
-                tabIndex={focusedNodeKey === "scope:all" ? 0 : -1}
-                onFocus={() => setFocusedNodeKey("scope:all")}
-              >
-                <button
-                  type="button"
-                  className={`ui-tree-node ui-tree-project ui-focus-ring flex w-full items-center rounded-xl ${
-                    density === "compact" ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
-                  }`}
-                  data-selected={allTerminalsSelected ? "true" : "false"}
-                  style={{ paddingLeft: density === "compact" ? 6 : 8, paddingRight: density === "compact" ? 8 : 10 }}
-                  onClick={onSelectAllTerminalScope}
-                >
-                  <span className="ui-tree-leading-icon">
-                    <Terminal size={14} strokeWidth={1.5} />
-                  </span>
-                  <span className="truncate font-medium">{t("sidebar.tree.allTerminals")}</span>
-                </button>
-              </div>
-            )}
-            {filteredTree.map((node) => (
-              <TreeNodeItem
-                key={nodeKey(node)}
-                node={node}
-                depth={0}
-                density={density}
-                focusedNodeKey={focusedNodeKey}
-                onFocusNode={setFocusedNodeKey}
-                forceExpanded={searchActive}
-                sortableEnabled={!searchActive && projectFilter === "all"}
-              />
-            ))}
+        {!pinnedFilterActive && newGroupParentId === "__root__" && (
+          <div className="px-2">
+            <NewGroupRow
+              compact={density === "compact"}
+              onCreate={(name, appearance) => onCreateRootGroup(name, appearance)}
+              onCancel={onCancelRootGroup}
+            />
           </div>
-        </SortableContext>
-        <DragOverlay dropAnimation={null}>
-          {activeId ? <DragGhost activeId={activeId} tree={filteredTree} /> : null}
-        </DragOverlay>
-      </DndContext>
-      )}
+        )}
 
-      {searchActive && filteredTree.length === 0 && (
-        <EmptyState
-          icon={<Terminal size={40} strokeWidth={1} />}
-          title={t("sidebar.tree.searchEmptyTitle")}
-          description={t("sidebar.tree.searchEmptyDescription")}
-        />
-      )}
+        {!pinnedFilterActive && searchOpen && (
+          <div className={`px-2 ${density === "compact" ? "pb-1 pt-0.5" : "pb-1.5 pt-0.5"}`}>
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              placeholder={t("sidebar.tree.searchPlaceholder")}
+              aria-label={t("sidebar.tree.searchAria")}
+              className="ui-tree-inline-input ui-focus-ring h-8 w-full px-2 text-xs text-on-surface outline-none"
+              onChange={(event) => {
+                const nextValue = event.currentTarget.value;
+                if (!nextValue.trim()) {
+                  closeSearch();
+                  return;
+                }
+                setSearchQuery(nextValue);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  closeSearch();
+                  return;
+                }
+                if (event.key === "ArrowDown" && visibleNodes.length > 0) {
+                  event.preventDefault();
+                  const nextNode = searchActive
+                    ? visibleNodes.find((node) => node.kind !== "all-terminals") ?? visibleNodes[0]
+                    : visibleNodes[0];
+                  focusTreeItem(nextNode.key);
+                }
+              }}
+            />
+          </div>
+        )}
 
-      {showOpenFilterEmptyState && (
-        <EmptyState
-          icon={<Terminal size={40} strokeWidth={1} />}
-          title={t("sidebar.tree.openFilterEmptyTitle")}
-          description={t("sidebar.tree.openFilterEmptyDescription")}
-          action={onClearProjectFilter ? { label: t("sidebar.tree.openFilterShowAll"), onClick: onClearProjectFilter } : undefined}
-        />
-      )}
+        {!pinnedFilterActive && (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={treeCollisionDetection}
+          onDragStart={(event: DragStartEvent) => {
+            setActiveId(String(event.active.id));
+          }}
+          onDragCancel={() => {
+            suppressClickAfterDragUntilRef.current = performance.now() + 250;
+            setActiveId(null);
+          }}
+          onDragEnd={(event) => {
+            suppressClickAfterDragUntilRef.current = performance.now() + 250;
+            setActiveId(null);
+            actions.onDragEnd(event);
+          }}
+        >
+          <SortableContext
+            items={filteredRootIds}
+            strategy={verticalListSortingStrategy}
+          >
+            <div
+              ref={treeContainerRef}
+              role="tree"
+              aria-label={t("sidebar.tree.aria")}
+              aria-multiselectable="true"
+              tabIndex={-1}
+              className={`${shouldFillTreeArea ? "min-h-full" : ""} ui-project-tree-root outline-none`}
+              onKeyDown={handleTreeKeyDown}
+              onClickCapture={(event) => {
+                if (performance.now() > suppressClickAfterDragUntilRef.current) return;
+                suppressClickAfterDragUntilRef.current = 0;
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onMouseDown={(event) => {
+                if (event.button === 2) return;
+                const target = event.target as HTMLElement | null;
+                if (!target) return;
+                if (target.closest("button, input, textarea, select, a, [contenteditable='true']")) return;
+                focusTreeContainer();
+              }}
+            >
+              {projectScopedTerminalViewEnabled && (
+                <div
+                  role="treeitem"
+                  data-tree-key="scope:all"
+                  aria-level={1}
+                  aria-selected={allTerminalsSelected}
+                  tabIndex={focusedNodeKey === "scope:all" ? 0 : -1}
+                  onFocus={() => setFocusedNodeKey("scope:all")}
+                >
+                  <button
+                    type="button"
+                    className={`ui-tree-node ui-tree-project ui-focus-ring flex w-full items-center rounded-lg ${
+                      density === "compact" ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
+                    }`}
+                    data-selected={allTerminalsSelected ? "true" : "false"}
+                    style={{ paddingLeft: density === "compact" ? 6 : 8, paddingRight: density === "compact" ? 8 : 10 }}
+                    onClick={onSelectAllTerminalScope}
+                  >
+                    <span className="ui-tree-leading-icon">
+                      <Terminal size={14} strokeWidth={1.5} />
+                    </span>
+                    <span className="truncate font-medium">{t("sidebar.tree.allTerminals")}</span>
+                  </button>
+                </div>
+              )}
+              {filteredTree.map((node) => (
+                <TreeNodeItem
+                  key={nodeKey(node)}
+                  node={node}
+                  depth={0}
+                  density={density}
+                  focusedNodeKey={focusedNodeKey}
+                  onFocusNode={setFocusedNodeKey}
+                  forceExpanded={searchActive}
+                  sortableEnabled={!searchActive && projectFilter === "all"}
+                />
+              ))}
+            </div>
+          </SortableContext>
+          <DragOverlay dropAnimation={null}>
+            {activeId ? <DragGhost activeId={activeId} tree={filteredTree} /> : null}
+          </DragOverlay>
+        </DndContext>
+        )}
 
-      {tree.length === 0 && loadError && !searchActive && (
-        <EmptyState
-          icon={<Terminal size={40} strokeWidth={1} />}
-          title={t("sidebar.tree.loadFailed")}
-          description={loadError}
-          action={{ label: t("sidebar.tree.retry"), onClick: onRetry }}
-        />
-      )}
-
-      {showWelcomeEmptyState && (
-        <div className="flex min-h-0 flex-1 items-center">
+        {searchActive && filteredTree.length === 0 && (
           <EmptyState
-            className="w-full"
             icon={<Terminal size={40} strokeWidth={1} />}
-            title={t("sidebar.tree.welcome")}
-            description={t("sidebar.tree.welcomeDescription")}
-            action={{ label: t("sidebar.tree.quickAddProject"), onClick: onQuickAddProject }}
+            title={t("sidebar.tree.searchEmptyTitle")}
+            description={t("sidebar.tree.searchEmptyDescription")}
           />
-        </div>
-      )}
+        )}
+
+        {showOpenFilterEmptyState && (
+          <EmptyState
+            icon={<Terminal size={40} strokeWidth={1} />}
+            title={t("sidebar.tree.openFilterEmptyTitle")}
+            description={t("sidebar.tree.openFilterEmptyDescription")}
+            action={onClearProjectFilter ? { label: t("sidebar.tree.openFilterShowAll"), onClick: onClearProjectFilter } : undefined}
+          />
+        )}
+
+        {tree.length === 0 && loadError && !searchActive && (
+          <EmptyState
+            icon={<Terminal size={40} strokeWidth={1} />}
+            title={t("sidebar.tree.loadFailed")}
+            description={loadError}
+            action={{ label: t("sidebar.tree.retry"), onClick: onRetry }}
+          />
+        )}
+
+        {showWelcomeEmptyState && (
+          <div className="flex min-h-0 flex-1 items-center">
+            <EmptyState
+              className="w-full"
+              icon={<Terminal size={40} strokeWidth={1} />}
+              title={t("sidebar.tree.welcome")}
+              description={t("sidebar.tree.welcomeDescription")}
+              action={{ label: t("sidebar.tree.quickAddProject"), onClick: onQuickAddProject }}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

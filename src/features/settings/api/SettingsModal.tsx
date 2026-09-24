@@ -254,9 +254,13 @@ function isLikelyMacOs() {
  * 因此设置页必须自己判断「Escape 是否已经被上层弹框接管」，否则会连带整个设置页一起关掉。
  */
 function hasOverlayAboveSettings(settingsDialog: HTMLElement | null): boolean {
+  if (!settingsDialog) return false;
   const layers = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
   for (const layer of Array.from(layers)) {
-    if (layer !== settingsDialog) return true;
+    // 如果 layer 不是设置页 dialog 本身，也不是其后代元素，说明是上层弹框
+    if (layer !== settingsDialog && !settingsDialog.contains(layer)) {
+      return true;
+    }
   }
   return false;
 }

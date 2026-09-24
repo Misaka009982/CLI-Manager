@@ -1,4 +1,4 @@
-import { findOscTerminator } from "../../features/terminal/lib/terminalOscParse";
+import { findOscTerminator } from "./terminalOscTerminator";
 
 const MAX_BUFFERED_OSC = 16 * 1024;
 

@@ -464,6 +464,8 @@ export function useAppModel() {
               ...tab,
               status: message.status,
               controlMode: message.controlMode ?? tab.controlMode,
+              cols: message.cols ?? tab.cols,
+              rows: message.rows ?? tab.rows,
             } : tab);
             terminalTabsRef.current = nextTabs;
             setTerminalTabs(nextTabs);

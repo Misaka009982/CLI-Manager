@@ -79,6 +79,9 @@ struct AppendPayload {
 pub struct SubscribeResult {
     pub path: String,
     pub initial_content: String,
+    /// 订阅瞬间子转录文件是否已存在。false 表示 tail 正在等待文件被创建，
+    /// 前端据此区分「子 Agent 已开始但还没写第一行」与「该文件根本不会出现」。
+    pub exists: bool,
 }
 
 /// 持有每个订阅的停止开关（drop/置位即让对应轮询线程退出）。
@@ -114,6 +117,8 @@ impl SubagentTranscriptBridge {
 
         let stop = Arc::new(AtomicBool::new(false));
         let path_buf = PathBuf::from(&path);
+        // read_new_lines 对缺失文件与「存在但无完整行」都返回 None，因此单独探测存在性。
+        let exists = transcript_file_exists(&path_buf);
         let (initial_content, initial_offset) = read_new_lines(&path_buf, 0)
             .map(|(content, offset, _)| (content, offset))
             .unwrap_or_else(|| (String::new(), 0));
@@ -157,6 +162,7 @@ impl SubagentTranscriptBridge {
         Ok(SubscribeResult {
             path,
             initial_content,
+            exists,
         })
     }
 
@@ -250,6 +256,16 @@ fn tail_loop(
         }
         thread::sleep(Duration::from_millis(POLL_MS));
     }
+}
+
+/// 探测转录文件当前是否为已存在的普通文件。
+///
+/// `read_new_lines` 对「文件缺失」与「文件存在但还没有完整行」同样返回 None，
+/// 因此订阅响应必须单独回答存在性：前端据此区分「子 Agent 已启动、转录还没落盘」
+/// （面板照常等内容）与「这个文件根本不会出现」（不为它开空面板）。
+// 目录或元数据探测失败都按不存在处理。
+fn transcript_file_exists(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
 }
 
 /// 从 `offset` 起读取新内容，仅返回到最后一个换行为止的完整行。
@@ -1249,6 +1265,25 @@ mod tests {
             build_wsl_command_args("Ubuntu", &["find", "-name", "agent-*.jsonl"]),
             vec!["-d", "Ubuntu", "--exec", "find", "-name", "agent-*.jsonl",]
         );
+    }
+
+    #[test]
+    // 验证存在性探测能区分「文件缺失」「空文件」与「已写入内容」，且目录不算转录文件。
+    fn transcript_file_exists_distinguishes_missing_empty_and_written() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("agent-missing.jsonl");
+        assert!(!transcript_file_exists(&missing));
+
+        // 空文件必须算「存在」：子 Agent 已开始、只是还没写完第一行。
+        let empty = temp.path().join("agent-empty.jsonl");
+        fs::write(&empty, b"").unwrap();
+        assert!(transcript_file_exists(&empty));
+
+        let written = temp.path().join("agent-written.jsonl");
+        fs::write(&written, b"{\"a\":1}\n").unwrap();
+        assert!(transcript_file_exists(&written));
+
+        assert!(!transcript_file_exists(temp.path()));
     }
 
     #[test]

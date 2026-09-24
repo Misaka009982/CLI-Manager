@@ -160,7 +160,7 @@ export function CommandPalette() {
               cwd: resolveProjectPath(p, groups),
               title: p.name,
               startupCmd: resolveProjectStartupCommand(p, { includeCodexProviderProfile: false }),
-              shell: p.shell || undefined,
+              shell: p.shell || useSettingsStore.getState().defaultShell,
             }]);
             return;
           }

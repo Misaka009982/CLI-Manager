@@ -35,7 +35,9 @@ export const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" i
 
 export function preserveSidebarScrollAfterContextMenu(event: ReactMouseEvent, markInternalScroll?: (until: number) => void) {
   const target = event.currentTarget as HTMLElement | null;
-  const scrollContainer = target?.closest<HTMLElement>(".ui-sidebar-combined-list") ?? null;
+  // 分区滚动后真正的滚动元素是列表区容器（外层 .ui-sidebar-combined-list 的 scrollTop 恒为 0）。
+  // 置顶区有独立滚动，从置顶项右键时 closest 返回 null，正好避免回写置顶区的滚动位置。
+  const scrollContainer = target?.closest<HTMLElement>(".ui-sidebar-main-scroll") ?? null;
   const scrollTop = scrollContainer?.scrollTop ?? null;
   const treeItem = target?.closest<HTMLElement>("[data-tree-key]") ?? null;
   const activeElement = document.activeElement;
@@ -121,6 +123,25 @@ export function filterTreeForOpenTerminals(
     });
   }
   return filtered;
+}
+
+/**
+ * 求某个项目在树中的祖先分组 id 链（由外到内）。
+ * 用于「定位位置」：折叠的分组不会渲染其子节点，必须先展开祖先才能滚动到位。
+ * 返回 null 表示该项目不在树中（已删除、被筛选排除等），调用方据此给出提示。
+ */
+export function collectProjectAncestorGroupIds(nodes: TNode[], projectId: string): string[] | null {
+  const walk = (list: TNode[], ancestors: string[]): string[] | null => {
+    for (const node of list) {
+      if (node.type === "project" && node.project.id === projectId) return ancestors;
+      if (node.type === "group") {
+        const found = walk(node.children, [...ancestors, node.group.id]);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  return walk(nodes, []);
 }
 
 export interface GroupTerminalTargets {

@@ -75,7 +75,10 @@ pub(crate) fn invalidate_history_stats_caches() {
 // 内存索引（HISTORY_SESSION_INDEX）每次 App 启动后为空，首个 history_get_stats 必须
 // 全量解析所有 JSONL（可能上千个），冷启动耗时不可接受。这里把 per-file 解析结果落盘，
 // 重启后载入作为 build_history_index 的 previous，按 fingerprint 仅重解析变更文件。
-pub(super) const HISTORY_INDEX_CACHE_VERSION: u32 = 13;
+// 14：Codex rollout 逐响应 token_usage_record 去重（用量改为只认累计 token_count 差分）。
+// 旧快照里同一个文件的 input/output 被记两次且 cached_input_tokens 未归一化，
+// 而快照复用只比对文件指纹——不改这个版本号，未再写入的旧会话会永远留着翻倍的用量。
+pub(super) const HISTORY_INDEX_CACHE_VERSION: u32 = 14;
 pub(super) const HISTORY_INDEX_CACHE_FILE: &str = "history-index-cache.json";
 
 pub(super) static HISTORY_INDEX_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();

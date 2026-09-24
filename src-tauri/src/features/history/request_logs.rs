@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use tokio::sync::Mutex as AsyncMutex;
 
-const REQUEST_LOG_PARSER_VERSION: i64 = 3;
+// 4：Codex 用量口径变更（逐响应 token_usage_record 去重），旧的已同步行含重复事件，
+// 靠版本失配触发按文件删除重插，否则请求日志会一直显示翻倍的用量。
+const REQUEST_LOG_PARSER_VERSION: i64 = 4;
 const DEFAULT_PAGE_SIZE: u32 = 20;
 const MAX_PAGE_SIZE: u32 = 100;
 const REQUEST_LOG_SOURCES: [&str; 5] = ["claude", "codex", "gemini", "opencode", "grok"];

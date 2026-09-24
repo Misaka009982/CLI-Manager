@@ -120,7 +120,7 @@ async fn install_codex_allows_existing_selected_dir() {
     assert!(hooks_json.contains("--event SubagentStop"));
     assert!(hooks_json.contains("--event ToolStart"));
     assert!(hooks_json.contains("--event ToolStop"));
-    assert!(hooks_json.contains(CODEX_QUESTION_TOOL_NAME));
+    assert!(hooks_json.contains(CODEX_QUESTION_TOOL_MATCHER));
     let hooks: Value = serde_json::from_str(&hooks_json).unwrap();
     let exe = hook_exe_for_dir(&codex_dir).unwrap();
     assert!(registered_exact_command_with_matcher(
@@ -129,7 +129,7 @@ async fn install_codex_allows_existing_selected_dir() {
         "PreToolUse",
         "codex",
         "Notification",
-        CODEX_QUESTION_TOOL_NAME,
+        CODEX_QUESTION_TOOL_MATCHER,
     ));
     assert!(registered_exact_command(
         &hooks,
@@ -297,7 +297,7 @@ async fn local_ccswitch_uninstall_removes_claude_owned_common_hooks() {
 // 验证 PreToolUse 名称映射正确且 matcher 变化会改变信任哈希。
 fn codex_pre_tool_use_trust_hash_includes_matcher() {
     let group = json!({
-        "matcher": CODEX_QUESTION_TOOL_NAME,
+        "matcher": CODEX_QUESTION_TOOL_MATCHER,
         "hooks": [{
             "type": "command",
             "command": "/tmp/cli-manager __hook --source codex --event Notification",
@@ -710,7 +710,7 @@ fn wrong_question_matcher_keeps_local_hook_status_partial() {
         .unwrap()
         .iter_mut()
         .find(|entry| {
-            entry.get("matcher").and_then(Value::as_str) == Some(CODEX_QUESTION_TOOL_NAME)
+            entry.get("matcher").and_then(Value::as_str) == Some(CODEX_QUESTION_TOOL_MATCHER)
         })
         .unwrap();
     codex_question["matcher"] = json!("OtherTool");

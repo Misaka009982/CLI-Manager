@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 const appSource = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
 const sidebarSource = readFileSync(new URL("../src/features/projects/components/SidebarView.tsx", import.meta.url), "utf8");
 const sidebarController = readFileSync(new URL("../src/features/projects/hooks/useSidebarController.tsx", import.meta.url), "utf8");
+const sidebarLayout = readFileSync(new URL("../src/features/projects/hooks/useSidebarLayout.ts", import.meta.url), "utf8");
 const sidebarModel = readFileSync(new URL("../src/features/projects/lib/sidebarModel.ts", import.meta.url), "utf8");
 const headerSource = readFileSync(new URL("../src/features/projects/components/SidebarHeader.tsx", import.meta.url), "utf8");
 const controlsSource = readFileSync(
@@ -30,7 +31,8 @@ test("project sidebar docking is persisted and applied to the main workspace ord
 
 test("right-docked project sidebar keeps its resize affordance facing the terminal", () => {
   assert.match(sidebarModel, /dockSide\?: WorkspaceDockSide/);
-  assert.match(sidebarController, /dockSide === "right" \? window\.innerWidth - clientX : clientX/);
+  assert.match(sidebarController, /useSidebarLayout\(\{ compactMode, dockSide \}\)/);
+  assert.match(sidebarLayout, /dockSide === "right" \? window\.innerWidth - clientX : clientX/);
   assert.match(sidebarSource, /data-sidebar-side=\{dockSide\}/);
   assert.match(sidebarSource, /dockSide === "right" \? "left-0" : "right-0"/);
   assert.match(headerSource, /dockSide: WorkspaceDockSide/);

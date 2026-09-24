@@ -69,7 +69,7 @@ export const webClient = {
     kind: string;
     idempotencyKey: string;
     payload: JsonObject;
-  }) => request<{ operation: Operation }>("/operations", { method: "POST", body: JSON.stringify(input) }),
+  }, signal?: AbortSignal) => request<{ operation: Operation }>("/operations", { method: "POST", body: JSON.stringify(input), signal }),
 };
 
 export function deviceWallpaperUrl(device: Pick<Device, "id" | "wallpaperRevision">): string | null {

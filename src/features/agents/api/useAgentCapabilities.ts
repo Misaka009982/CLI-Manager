@@ -5,6 +5,7 @@ import {
   inferWslDistroName,
   normalizeAgentCapabilityError,
   resolveAgentRuntimeKind,
+  resolveWslCapabilityLocation,
   type AgentCapabilityRequest,
   type AgentCapabilitySnapshot,
 } from "./agentCapabilities";
@@ -76,12 +77,23 @@ export function useAgentCapabilities({
   );
   const cliSessionId = terminalSession?.cliSessionId?.trim() ?? "";
   const environment = terminalSession ? environmentFor(terminalSession, project) : "local";
-  const wslDistroName = environment === "wsl"
-    ? inferWslDistroName(terminalSession?.cwd, projectPath, project?.path, project?.cli_config_root)
+  const wslLocation = environment === "wsl"
+    ? resolveWslCapabilityLocation({
+        hookDistroName: terminalSession?.wslDistroName,
+        sessionCwd: terminalSession?.cwd,
+        projectPath,
+        configRoot: project?.cli_config_root,
+      })
     : null;
+  const wslDistroName = wslLocation?.distroName ?? null;
+  const configuredCwd = projectPath?.trim() || terminalSession?.cwd?.trim() || "";
   const effectiveCwd = environment === "ssh"
     ? (terminalSession?.remotePath?.trim() || project?.remote_path.trim() || "")
-    : (projectPath?.trim() || terminalSession?.cwd?.trim() || "");
+    // WSL 请求必须携带 guest 内路径：盘符项目路径转 /mnt/<drive>/…、去 OSC 主机前缀；
+    // 归一化失败时保留原值，让后端给出明确的 agent_capability_wsl_cwd_invalid。
+    : environment === "wsl"
+      ? (wslLocation?.cwd ?? configuredCwd)
+      : configuredCwd;
   const scopeKey = terminalSession && agent && effectiveCwd
     ? JSON.stringify([
         terminalSession.id,

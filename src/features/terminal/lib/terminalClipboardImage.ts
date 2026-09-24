@@ -1,11 +1,19 @@
 // Clipboard / image helpers for terminal paste. No xterm runtime dependency.
 
-const CLIPBOARD_IMAGE_MAX_PIXELS = 12_000_000;
+const CLIPBOARD_IMAGE_MAX_PIXELS = 40_000_000;
+export const CLIPBOARD_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
 
 export const getClipboardImageFile = (clipboardData: DataTransfer | null) => {
   const items = Array.from(clipboardData?.items ?? []);
-  const imageItem = items.find((item) => item.kind === "file" && item.type.startsWith("image/"));
-  return imageItem?.getAsFile() ?? null;
+  const files = [
+    ...items.filter((item) => item.kind === "file").map((item) => item.getAsFile()),
+    ...Array.from(clipboardData?.files ?? []),
+  ];
+  // 空 MIME 是候选识别，不是信任扩展名；保存前由后端实际解码校验。
+  return files.find((file): file is File => Boolean(file && (
+    file.type.toLowerCase().startsWith("image/")
+    || ((!file.type || file.type === "application/octet-stream") && /\.(a?png|jpe?g|jfif|gif|webp|bmp|dib|tiff?|ico)$/iu.test(file.name))
+  ))) ?? null;
 };
 
 export const getImageFileExtension = (file: File) => {

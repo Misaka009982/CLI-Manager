@@ -4,7 +4,7 @@ import vm from "node:vm";
 import ts from "typescript";
 
 // Exercise the production bridge function without starting the user's desktop.
-const source = await readFile(new URL("../src/hooks/useWebDeviceBridge.ts", import.meta.url), "utf8");
+const source = await readFile(new URL("../src/features/terminal/hooks/useWebDeviceBridge.ts", import.meta.url), "utf8");
 const ast = ts.createSourceFile("bridge.ts", source, ts.ScriptTarget.Latest, true);
 const declaration = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "executeTerminalImageAttachment");
 assert.ok(declaration);

@@ -121,6 +121,25 @@ function find(node, predicate) {
 }
 const element = (tree, type) => find(tree, node => node.type === type);
 const action = (tree, key) => find(tree, node => node.props?.["aria-label"] === `terminal.markdownPreview.${key}`);
+const byClass = (tree, className) => find(tree, node => String(node.props?.className ?? "").includes(className));
+const starButtons = tree => {
+  const found = [];
+  const walk = node => {
+    if (!node || typeof node !== "object") return;
+    if (node.props?.className?.includes("terminal-markdown-preview-answer-star ")) found.push(node);
+    for (const child of node.props?.children ?? []) walk(child);
+  };
+  walk(tree);
+  return found;
+};
+const starLabels = () => ({
+  starAnswer: "terminal.markdownPreview.starAnswer",
+  unstarAnswer: "terminal.markdownPreview.unstarAnswer",
+  starredOnly: "terminal.markdownPreview.starredOnly",
+  showAllAnswers: "terminal.markdownPreview.showAllAnswers",
+  starredFilterActive: "terminal.markdownPreview.starredFilterActive",
+  noStarredAnswers: "terminal.markdownPreview.noStarredAnswers",
+});
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const event = (currentTarget, values = {}) => ({
   currentTarget, target: currentTarget, button: 0, pointerId: 1, clientY: 0,
@@ -207,17 +226,25 @@ test("answer list jump preserves selection and menu state and its fixed action i
   const selected = [];
   const primitives = Object.fromEntries(["Root", "Trigger", "Value", "Icon", "Portal", "Content", "Viewport", "Item", "ItemText", "ItemIndicator"].map(key => [key, key]));
   const h = harness("../src/features/terminal/components/MarkdownPreviewAnswerSelect.tsx", "MarkdownPreviewAnswerSelect", {
-    SelectPrimitive: primitives, ArrowDownToLine: "Icon", Check: "Check", ChevronDown: "ChevronDown",
+    SelectPrimitive: primitives, ArrowDownToLine: "Icon", Check: "Check", ChevronDown: "ChevronDown", Star: "Star",
   });
   const messages = [{ messageIndex: 4 }, { messageIndex: 19 }];
-  const props = { messages, selectedMessageIndex: 4, onSelect: value => selected.push(value), formatOption: message => String(message.messageIndex) };
+  const props = {
+    messages,
+    starredMessageIndexes: new Set(),
+    starLabels: starLabels(),
+    onToggleStar() {},
+    selectedMessageIndex: 4,
+    onSelect: value => selected.push(value),
+    formatOption: message => String(message.messageIndex),
+  };
   h.render(props);
   const viewport = new FakeElement(), button = new FakeElement(), option = new FakeElement();
   option.role = "option"; viewport.option = option;
   element(h.output, "Viewport").props.ref(viewport);
-  element(h.output, "button").props.ref.current = button;
+  byClass(h.output, "terminal-markdown-preview-answer-end").props.ref.current = button;
   h.render();
-  element(h.output, "button").props.onClick();
+  byClass(h.output, "terminal-markdown-preview-answer-end").props.onClick();
   assert.equal(viewport.scrollTop, 800);
   assert.deepEqual(selected, []);
   assert.equal(h.output.props.value, "4");
@@ -230,11 +257,111 @@ test("answer list jump preserves selection and menu state and its fixed action i
   popup.props.onKeyDown(event(button, { key: "Tab", shiftKey: true }));
   assert.equal(option.focused, true);
   const space = event(button, { key: " " });
-  element(h.output, "button").props.onKeyDown(space);
+  byClass(h.output, "terminal-markdown-preview-answer-end").props.onKeyDown(space);
   assert.equal(space.stopped, true);
   assert.equal(space.prevented, undefined, "native keyboard button activation is retained");
   h.output.props.onValueChange("19");
   assert.deepEqual(selected, [19]);
+});
+
+test("row stars toggle without selecting the answer and the filter keeps the trigger honest", () => {
+  const selected = [], toggles = [];
+  const primitives = Object.fromEntries(["Root", "Trigger", "Value", "Icon", "Portal", "Content", "Viewport", "Item", "ItemText", "ItemIndicator"].map(key => [key, key]));
+  const h = harness("../src/features/terminal/components/MarkdownPreviewAnswerSelect.tsx", "MarkdownPreviewAnswerSelect", {
+    SelectPrimitive: primitives, ArrowDownToLine: "Icon", Check: "Check", ChevronDown: "ChevronDown", Star: "Star",
+  });
+  const messages = [{ messageIndex: 4 }, { messageIndex: 19 }, { messageIndex: 25 }];
+  const props = {
+    messages,
+    starredMessageIndexes: new Set([4, 25]),
+    starLabels: starLabels(),
+    onToggleStar: (message, star) => toggles.push([message.messageIndex, star]),
+    selectedMessageIndex: 4,
+    onSelect: value => selected.push(value),
+    formatOption: message => String(message.messageIndex),
+  };
+  h.render(props);
+  assert.deepEqual(starButtons(h.output).map(button => button.props["data-starred"]), ["true", "false", "true"]);
+  assert.equal(starButtons(h.output)[0].props["aria-label"], "terminal.markdownPreview.unstarAnswer");
+  assert.equal(starButtons(h.output)[1].props["aria-label"], "terminal.markdownPreview.starAnswer");
+  // 行内星标嵌在 Radix Item 里：必须吞掉指针/点击事件，否则会顺带选中该回答并关闭菜单。
+  const click = event(starButtons(h.output)[1]);
+  starButtons(h.output)[1].props.onClick(click);
+  assert.equal(click.prevented, true);
+  assert.equal(click.stopped, true);
+  assert.deepEqual(toggles, [[19, true]]);
+  assert.deepEqual(selected, []);
+  assert.equal(toggles.length, 1);
+  const starSpace = event(starButtons(h.output)[1], { key: " " });
+  starButtons(h.output)[1].props.onKeyDown(starSpace);
+  assert.equal(starSpace.stopped, true);
+  assert.equal(starSpace.prevented, undefined);
+
+  // 「只看星标」把所有未标记回答过滤掉：选择器不能回落到第一条星标回答，否则标题与正文指向不同回答。
+  const viewport = new FakeElement();
+  element(h.output, "Viewport").props.ref(viewport);
+  h.render();
+  const filter = () => byClass(h.output, "terminal-markdown-preview-answer-star-filter");
+  assert.equal(filter().props["aria-pressed"], false);
+  filter().props.onClick();
+  h.render();
+  assert.equal(filter().props["aria-pressed"], true);
+  assert.equal(viewport.scrollTop, 0, "list contents are replaced wholesale, so the scroll position resets");
+  assert.deepEqual(starButtons(h.output).map(button => button.props["data-starred"]), ["true", "true"]);
+  // 选中的回答仍在筛选结果里时，选择器继续指向它，占位文案由 Radix 自行决定不渲染。
+  assert.equal(h.output.props.value, "4");
+  filter().props.onClick();
+  h.render();
+  assert.equal(h.output.props.value, "4");
+
+  // 当前回答不在星标集合里时筛选后退化为占位文案，而不是指向别的回答。
+  h.render({ ...props, selectedMessageIndex: 19 });
+  filter().props.onClick();
+  h.render();
+  assert.equal(h.output.props.value, undefined);
+  // value 为空串/undefined 是 Radix 展示 placeholder 的唯一条件：退化为占位文案而不是错指别的回答。
+  assert.equal(element(h.output, "Value").props.placeholder, "terminal.markdownPreview.starredFilterActive");
+  assert.deepEqual(element(h.output, "Viewport").props.children[0].props.children.slice(0, 2)
+    .map(item => item.props.value), ["4", "25"], "filtered-out answers leave no selectable option behind");
+
+  // 一条星标都没有时列表整体为空态，不留下任何可选项。
+  viewport.option = null;
+  h.render({ ...props, starredMessageIndexes: new Set(), selectedMessageIndex: 19 });
+  h.render();
+  assert.equal(byClass(h.output, "terminal-markdown-preview-answer-empty").props.children[0],
+    "terminal.markdownPreview.noStarredAnswers");
+  assert.deepEqual(starButtons(h.output), []);
+  assert.deepEqual(element(h.output, "Viewport").props.children[0].props.children
+    .filter(child => child.props?.value !== undefined), []);
+  assert.equal(h.output.props.value, undefined);
+});
+
+test("a failed star write is surfaced above the transcript instead of failing silently", async () => {
+  let failure = null;
+  const starStore = {
+    bySession: {},
+    get failure() { return failure; },
+    ensureLoaded() {},
+    setStar: async () => {},
+  };
+  const f = previewFixture({ dependencies: { useMessageStarStore: selector => selector(starStore) } });
+  f.requests[0].resolve({ messages: [{ role: "user", content: "q" }, { role: "assistant", content: "a" }] });
+  await settle(); f.h.render();
+  assert.equal(byClass(f.h.output, "terminal-markdown-preview-star-error"), null);
+
+  // 缺表时星标只写日志，用户只会看到“点了没反应”：必须有界面上的失败信号。
+  failure = "no such table: message_stars";
+  f.h.render();
+  const banner = byClass(f.h.output, "terminal-markdown-preview-star-error");
+  // children 在假渲染器里始终是数组，文案是唯一子节点。
+  assert.equal(banner.props.children[0], "terminal.markdownPreview.starUnavailable");
+  assert.equal(banner.props.role, "status");
+  assert.equal(banner.props["aria-live"], "polite");
+
+  // 数据库恢复后提示要能自己消失，不能一直挂在正文上方。
+  failure = null;
+  f.h.render();
+  assert.equal(byClass(f.h.output, "terminal-markdown-preview-star-error"), null);
 });
 
 test("overlay thumb follows viewport geometry, drag bounds, pointer cancellation, and cleanup", () => {
@@ -283,6 +410,14 @@ function previewFixture(overrides = {}) {
     useProjectStore: selector => selector(projects),
     useWorktreeStore: selector => selector(worktrees),
     useMarkdownPreviewScroll: () => previewScroll,
+    useMessageStarStore: selector => selector({
+      bySession: {},
+      failure: null,
+      ensureLoaded() {},
+      setStar: async () => {},
+    }),
+    summarySessionKey: detail => `${detail.source}:${detail.session_id}`,
+    resolveStarredMessageIndexes: () => new Map(),
     useFontSizeControlVisibility: () => ({ fontSizeControlVisible: false, showFontSizeControl() {} }),
     normalizeFontFamilyStack: value => value,
     resolveCliToolHistorySourceId: value => value || null,

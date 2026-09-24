@@ -25,12 +25,23 @@ if ($normalizedVersion -notmatch "^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?
     throw "Invalid release version: $Version"
 }
 
-$mainExecutable = Join-Path $resolvedSourceDir "cli-manager.exe"
-$proxyExecutable = Join-Path $resolvedSourceDir "cli-manager-codex-proxy.exe"
+$executableNames = @(
+    "cli-manager.exe",
+    "cli-manager-codex-proxy.exe",
+    "cli-manager-daemon.exe",
+    "cli-manager-web-daemon.exe"
+)
 $resourcesDir = Join-Path $resolvedSourceDir "resources"
 $petEResourceDir = Join-Path $resourcesDir "pet-e"
-foreach ($requiredPath in @($mainExecutable, $proxyExecutable, $resourcesDir, $petEResourceDir)) {
-    if (-not (Test-Path -LiteralPath $requiredPath)) {
+$webDistDir = Join-Path $resolvedSourceDir "apps/web/dist"
+foreach ($relativePath in ($executableNames + @("apps/web/dist/index.html"))) {
+    $requiredPath = Join-Path $resolvedSourceDir $relativePath
+    if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+        throw "Missing portable package input: $requiredPath"
+    }
+}
+foreach ($requiredPath in @($resourcesDir, $petEResourceDir, (Join-Path $webDistDir "assets"))) {
+    if (-not (Test-Path -LiteralPath $requiredPath -PathType Container)) {
         throw "Missing portable package input: $requiredPath"
     }
 }
@@ -66,9 +77,13 @@ if (Test-Path -LiteralPath $archiveFullPath) {
 }
 
 New-Item -ItemType Directory -Path $stagingFullPath | Out-Null
-Copy-Item -LiteralPath $mainExecutable -Destination (Join-Path $stagingFullPath "cli-manager.exe")
-Copy-Item -LiteralPath $proxyExecutable -Destination (Join-Path $stagingFullPath "cli-manager-codex-proxy.exe")
+foreach ($name in $executableNames) {
+    Copy-Item -LiteralPath (Join-Path $resolvedSourceDir $name) -Destination (Join-Path $stagingFullPath $name)
+}
 Copy-Item -LiteralPath $resourcesDir -Destination (Join-Path $stagingFullPath "resources") -Recurse
+$webDestination = Join-Path $stagingFullPath "apps/web"
+New-Item -ItemType Directory -Path $webDestination -Force | Out-Null
+Copy-Item -LiteralPath $webDistDir -Destination (Join-Path $webDestination "dist") -Recurse
 New-Item -ItemType File -Path (Join-Path $stagingFullPath "portable.flag") | Out-Null
 
 Compress-Archive -LiteralPath $stagingFullPath -DestinationPath $archiveFullPath -CompressionLevel Optimal

@@ -534,7 +534,7 @@ fn resolve_policy(
     if capability_status == "globalOnly" {
         application_status = "globalOnly".to_string();
         reason = Some("extensions_project_grok_global_only".to_string());
-    } else if !invalid_ids.is_empty() {
+    } else if mode == ExtensionPolicyMode::Custom && !invalid_ids.is_empty() {
         application_status = "error".to_string();
         reason = Some(format!(
             "extensions_project_policy_invalid_ids:{}",

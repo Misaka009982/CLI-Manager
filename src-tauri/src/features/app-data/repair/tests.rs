@@ -527,6 +527,65 @@ async fn leaves_empty_or_incompatible_databases_to_standard_migrations() {
     );
 }
 
+#[tokio::test]
+// 验证旧 providers 覆盖表存在时登记已移除的原型迁移，让迁移链能越过 v25。
+async fn registers_removed_provider_prototype_migrations_for_legacy_providers_table() {
+    let mut conn = SqliteConnection::connect(":memory:").await.unwrap();
+    create_migration_table(&mut conn).await;
+    create_providers_drift_table(&mut conn, false).await;
+
+    assert!(reconcile_legacy_provider_prototype_drift(&mut conn)
+        .await
+        .unwrap());
+
+    let legacy_checksum: Vec<u8> = sqlx::query_scalar(
+        "SELECT checksum FROM _sqlx_migrations WHERE version = ?1 AND success = 1",
+    )
+    .bind(25)
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(
+        legacy_checksum,
+        migration_checksum(crate::provider::MIGRATION_LEGACY_PROVIDERS_SQL),
+        "登记的 v25 必须沿用墓碑迁移的 SQL 校验和"
+    );
+    for version in [25, 26] {
+        assert!(
+            binding_migration_registered(&mut conn, version).await,
+            "原型迁移 v{version} 应已登记"
+        );
+    }
+
+    // 两者都已登记后不再重复修复。
+    assert!(!reconcile_legacy_provider_prototype_drift(&mut conn)
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+// 验证原型表已落库或不存在 providers 表时不介入，原型迁移留给标准迁移流程。
+async fn does_not_intervene_for_prototype_or_absent_providers_tables() {
+    let mut prototype_conn = SqliteConnection::connect(":memory:").await.unwrap();
+    create_migration_table(&mut prototype_conn).await;
+    create_providers_drift_table(&mut prototype_conn, true).await;
+    assert!(
+        !reconcile_legacy_provider_prototype_drift(&mut prototype_conn)
+            .await
+            .unwrap()
+    );
+    assert!(!binding_migration_registered(&mut prototype_conn, 25).await);
+
+    let mut missing_conn = SqliteConnection::connect(":memory:").await.unwrap();
+    create_migration_table(&mut missing_conn).await;
+    assert!(
+        !reconcile_legacy_provider_prototype_drift(&mut missing_conn)
+            .await
+            .unwrap()
+    );
+    assert!(!binding_migration_registered(&mut missing_conn, 25).await);
+}
+
 #[test]
 // 验证项目名只在唯一匹配时解析，绝对路径可直接归一化。
 fn resolves_only_unambiguous_local_project_paths() {
@@ -773,6 +832,23 @@ async fn create_ssh_attachment_drift_schema(conn: &mut SqliteConnection, with_co
     conn.execute(
         format!(
             "CREATE TABLE ssh_hosts (id TEXT PRIMARY KEY, name TEXT NOT NULL{attachment_extra})"
+        )
+        .as_str(),
+    )
+    .await
+    .unwrap();
+}
+
+// 创建可选择包含 app_type 列的 providers 漂移测试表；缺少该列即旧版覆盖表。
+async fn create_providers_drift_table(conn: &mut SqliteConnection, with_app_type: bool) {
+    let prototype_extra = if with_app_type {
+        ", app_type TEXT NOT NULL DEFAULT ''"
+    } else {
+        ", category TEXT NOT NULL DEFAULT 'custom'"
+    };
+    conn.execute(
+        format!(
+            "CREATE TABLE providers (id TEXT PRIMARY KEY, name TEXT NOT NULL{prototype_extra})"
         )
         .as_str(),
     )

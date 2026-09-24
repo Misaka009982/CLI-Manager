@@ -19,24 +19,50 @@ import {
   findWorkspanBySession, syncTerminalWorkspanLayout, updateTerminalWorkspan,
 } from "../api/terminalWorkspan";
 import {
-  type TabStatusSources, type SubagentTranscriptSubscribeResult, type PtyStatusPayload,
+  type TabStatusSources, type SubagentTranscriptSubscribeResult, type PtyStatusPayload, type CliHookPayload,
 } from "../types/terminalStoreTypes";
 import { buildWorkspanMirror, persistWorkspanState, isPersistableSession } from "../lib/terminalStoreLayout";
 import {
   hasCodexTerminalEvent, trimOptional, inferWslDistroFromCwd, resolveHookWslDistroName,
   isSameTranscriptPath, hashString, buildSubagentTitle, resolveSubagentTranscriptSource,
   mergeSubagentSource, shouldSubscribeSubagentSource, shouldAttemptDerivedChildTranscript,
-  findSubagentSessionId,
+  findSubagentSessionId, hasSubagentPaneEvidence,
 } from "../lib/subagentTranscriptModel";
 import { isShellRuntimeMonitoringEnabled, HOOK_RUNNING_TIMEOUT_MS } from "../lib/terminalLaunch";
 import {
   SUBAGENT_TRANSCRIPT_MAX_CHARS, SUBAGENT_CLOSE_DELAY_MS, SUBAGENT_CHILD_JSONL_CLOSE_DELAY_MS,
   SUBAGENT_DISCOVERY_INTERVAL_MS, SUBAGENT_DISCOVERY_FAST_WINDOW_MS,
-  SUBAGENT_DISCOVERY_SLOW_INTERVAL_MS, SUBAGENT_DIRECTORY_DISCOVERY_TTL_MS, isCodexGoalTerminalStatus,
+  SUBAGENT_DISCOVERY_SLOW_INTERVAL_MS, SUBAGENT_DIRECTORY_DISCOVERY_TTL_MS, SUBAGENT_PENDING_PANE_TTL_MS,
+  isCodexGoalTerminalStatus,
   resolveCliHookStatus,
   mapShellRuntimeEvent, resolvePrimaryTabId, getTabStatusEntry, getTabStatusDetails,
   buildTabStatusUpdate,
 } from "../lib/terminalStatus";
+
+/** 已登记但尚未把面板插进布局的子 Agent 转录；面板何时落地由流式内容决定。 */
+interface PendingSubagentPane {
+  parentTabId: string;
+  /** 最近一次携带该子 Agent 身份的事件，落地时用来重建标题与 subagent 元数据。 */
+  payload: CliHookPayload;
+  source: SubagentTranscriptSource;
+  agentId: string | null;
+  toolUseId: string | null;
+  /** TTL 兜底定时器：到期仍无内容即丢弃登记。 */
+  expiresTimer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * 子转录订阅结果。
+ *
+ * `subscribed` 与 `hasEvidence` 必须分开：Codex rollout 生命周期重试要的是「订阅是否已建立」，
+ * 而面板落地要的是「现在是否已有可展示内容」。把两者混成一个布尔正是空面板的来源之一。
+ */
+interface ChildSubscribeOutcome {
+  subscribed: boolean;
+  hasEvidence: boolean;
+}
+
+const NO_CHILD_SUBSCRIBE: ChildSubscribeOutcome = { subscribed: false, hasEvidence: false };
 
 export function createTerminalRuntime(
   set: StoreApi<TerminalStore>["setState"],
@@ -72,6 +98,15 @@ export function createTerminalRuntime(
     attemptCount: number;
     lastDelayMs: number;
   }>();
+
+  /**
+   * 已登记但尚未落地的子 Agent 面板。
+   *
+   * 事件到达时只登记 + 订阅，内容先进 `subagentTranscripts` 缓冲；等到文件确实存在
+   * 或首批完整行到达才把面板插进分屏布局（见 `materializeSubagentPane`）。到期仍未等到
+   * 内容则静默丢弃 —— 这正是不再出现空子窗口的关键。
+   */
+  const pendingSubagentPanes = new Map<string, PendingSubagentPane>();
 
   function createPaneId() {
     paneIdSeq += 1;
@@ -128,10 +163,10 @@ export function createTerminalRuntime(
     const runAttempt = () => {
       const store = useTerminalStore.getState();
       const transcript = store.subagentTranscripts[sessionId];
-      if (
-        !store.sessions.some((session) => session.id === sessionId) ||
-        transcript?.source.kind === "child-jsonl"
-      ) {
+      // 待落地面板同样算存活：它还没有 session，但 tail/重试必须继续跑到内容出现或登记过期。
+      const alive = store.sessions.some((session) => session.id === sessionId)
+        || pendingSubagentPanes.has(sessionId);
+      if (!alive || transcript?.source.kind === "child-jsonl") {
         stopSubagentTranscriptRetry(sessionId, "inactive");
         return;
       }
@@ -310,6 +345,159 @@ export function createTerminalRuntime(
     logInfo("[subagent_discovery] started", { parentTabId, cwd, sessionId: parentSessionId, wslDistroName, ttlMs: SUBAGENT_DIRECTORY_DISCOVERY_TTL_MS });
   }
 
+  /**
+   * 释放待落地登记，但保留已建立的订阅、重试与内容缓冲。
+   *
+   * 面板一旦落地就是普通转录面板，内容缓冲必须原样留给 `appendSubagentTranscript`；
+   * 重试也要继续跑到 `source.kind === "child-jsonl"` 为止（它有自己的停止条件）。
+   */
+  function releasePendingSubagentPane(pseudoId: string, reason: string): boolean {
+    const pending = pendingSubagentPanes.get(pseudoId);
+    if (!pending) return false;
+    clearTimeout(pending.expiresTimer);
+    pendingSubagentPanes.delete(pseudoId);
+    logInfo("[subagent_transcript] released pending pane", {
+      pseudoId,
+      reason,
+      event: pending.payload.event,
+      parentTabId: pending.parentTabId,
+      agentId: pending.agentId,
+    });
+    return true;
+  }
+
+  // 丢弃一个从未落地的登记：连内容缓冲、生命周期重试与后端 tail 订阅一起清掉，不触碰任何 UI。
+  function discardPendingSubagentPane(pseudoId: string, reason: string): void {
+    if (!releasePendingSubagentPane(pseudoId, reason)) return;
+    stopSubagentTranscriptRetry(pseudoId, reason);
+    void invoke("subagent_transcript_unsubscribe", { key: pseudoId }).catch((err) => {
+      logError("subagent_transcript_unsubscribe failed while dropping pending pane", { key: pseudoId, err });
+    });
+    set((state) => {
+      if (!(pseudoId in state.subagentTranscripts)) return state;
+      const nextTranscripts = { ...state.subagentTranscripts };
+      delete nextTranscripts[pseudoId];
+      return { subagentTranscripts: nextTranscripts };
+    });
+  }
+
+  // 父 Tab 关闭或取消分屏时，连带丢弃它名下所有尚未落地的子 Agent 面板。
+  function clearPendingSubagentPanesForParent(parentTabId: string): void {
+    for (const [pseudoId, pending] of [...pendingSubagentPanes]) {
+      if (pending.parentTabId === parentTabId) {
+        discardPendingSubagentPane(pseudoId, "parent_closed");
+      }
+    }
+  }
+
+  // 按 agentId 优先、toolUseId 次之匹配待落地面板；两者都缺时沿用「同父唯一」兜底，
+  // 与 findSubagentSessionId 的收紧规则保持一致，避免并发子 Agent 被错误合并。
+  function findPendingSubagentPaneId(payload: CliHookPayload): string | null {
+    const agentId = trimOptional(payload.agentId);
+    const toolUseId = trimOptional(payload.toolUseId);
+    for (const [pseudoId, pending] of pendingSubagentPanes) {
+      if (agentId && pending.agentId === agentId) return pseudoId;
+      if (toolUseId && pending.toolUseId === toolUseId) return pseudoId;
+    }
+    if (agentId || toolUseId) return null;
+
+    const forParent = [...pendingSubagentPanes.entries()]
+      .filter(([, pending]) => pending.parentTabId === payload.tabId);
+    return forParent.length === 1 ? forParent[0][0] : null;
+  }
+
+  /**
+   * 把已登记的子 Agent 面板真正插进分屏布局。
+   *
+   * 只有拿到正向证据（转录文件存在 / 已读到完整行）才调用，因此不会出现空面板。
+   * 落地时重新计算父 pane 与同父已有转录 pane，避开登记到落地之间发生的布局变化。
+   */
+  function materializeSubagentPane(pseudoId: string): boolean {
+    const pending = pendingSubagentPanes.get(pseudoId);
+    if (!pending) return false;
+
+    const state = useTerminalStore.getState();
+    if (state.sessions.some((session) => session.id === pseudoId)) {
+      releasePendingSubagentPane(pseudoId, "already_materialized");
+      return true;
+    }
+    const parentTabId = pending.parentTabId;
+    const parentWorkspan = findWorkspanBySession(state.workspans, parentTabId);
+    const tree = parentWorkspan?.paneTree ?? null;
+    if (!parentWorkspan || !tree) {
+      discardPendingSubagentPane(pseudoId, "parent_tab_gone");
+      return false;
+    }
+
+    const agentType = pending.payload.agentType?.trim() || null;
+    const parentSession = state.sessions.find((session) => session.id === parentTabId);
+    // 登记到落地之间订阅可能已把内容源升级为 child-jsonl（派生/Codex rollout 发现），
+    // 以缓冲里的最新 source 为准，避免落地时把它回退成登记时的降级源。
+    const existingTranscript = state.subagentTranscripts[pseudoId];
+    const materializedSource = existingTranscript?.source ?? pending.source;
+    const existingSubagentCount = state.sessions.filter(
+      (session) => session.kind === "subagent-transcript" && session.subagent?.parentSessionId === parentTabId
+    ).length;
+    const pseudoSession: TerminalSession = {
+      id: pseudoId,
+      title: buildSubagentTitle(parentSession, agentType, existingSubagentCount),
+      kind: "subagent-transcript",
+      subagent: {
+        parentSessionId: parentTabId,
+        agentId: pending.agentId ?? undefined,
+        toolUseId: pending.toolUseId ?? undefined,
+        agentType: agentType ?? undefined,
+        source: materializedSource,
+      },
+    };
+
+    // 并行多子 Agent：同父已有转录面板则作为该 pane 内的 Tab 追加，否则从父 Tab 所在 pane 分屏。
+    const siblingTranscript = state.sessions.find(
+      (session) => session.kind === "subagent-transcript" && session.subagent?.parentSessionId === parentTabId
+    );
+    const existingPane = siblingTranscript ? findPaneLeafBySession(tree, siblingTranscript.id) : null;
+    let nextTree: TerminalPaneNode | null;
+    if (existingPane) {
+      nextTree = addSessionToPaneTree(tree, existingPane.id, pseudoId, createPaneId).tree;
+    } else {
+      const parentPane = findPaneLeafBySession(tree, parentTabId);
+      if (!parentPane) {
+        discardPendingSubagentPane(pseudoId, "parent_pane_missing");
+        return false;
+      }
+      nextTree = splitPaneLeaf(tree, parentPane.id, "horizontal", pseudoId, createPaneId).tree;
+    }
+
+    const newSessions = [...state.sessions, pseudoSession];
+    // 不抢焦点：保留当前 activeSessionId（终端），转录在其分屏 pane 中即时可见。
+    const workspans = updateTerminalWorkspan(state.workspans, parentWorkspan.id, (workspan) => (
+      syncTerminalWorkspanLayout(workspan, nextTree, workspan.activePaneId, workspan.activeSessionId)
+    ));
+    const workspanState = state.activeWorkspanId === parentWorkspan.id
+      ? buildWorkspanMirror(workspans, parentWorkspan.id)
+      : { workspans };
+    set({
+      sessions: newSessions,
+      ...workspanState,
+      subagentTranscripts: {
+        ...state.subagentTranscripts,
+        [pseudoId]: { ...(existingTranscript ?? { content: "", ended: false, resetSeq: 0 }), source: materializedSource },
+      },
+    });
+    releasePendingSubagentPane(pseudoId, "materialized");
+    // 持久化（sessionStore 会过滤掉转录伪会话）。
+    void useSessionStore.getState().saveSessions(newSessions).catch(() => { });
+    persistWorkspanState(workspans, state.activeWorkspanId, newSessions);
+    logInfo("[subagent_transcript] materialized pending pane", {
+      pseudoId,
+      parentTabId,
+      agentId: pending.agentId,
+      sourceKind: materializedSource.kind,
+      appendedWithExistingPane: Boolean(existingPane),
+    });
+    return true;
+  }
+
   function persistSshConnectionStateAfterPtyStatus(sessionId: string, payload: PtyStatusPayload): void {
     if (payload.status !== "exited" && payload.status !== "error") return;
     queueMicrotask(() => {
@@ -408,6 +596,7 @@ export function createTerminalRuntime(
       const cliSessionId = payload.sessionId?.trim();
       const remoteTranscriptRef = payload.environmentType === "ssh" ? payload.remoteTranscriptRef?.trim() : undefined;
       const cliReasoningEffort = payload.reasoningEffort?.trim();
+      const hookWslDistroName = resolveHookWslDistroName(payload);
       let boundNewCliSessionId = false;
       if ((cliSessionId || remoteTranscriptRef || cliReasoningEffort) && get().sessions.some((session) => session.id === tabId)) {
         set((state) => ({
@@ -425,6 +614,10 @@ export function createTerminalRuntime(
                 : {}),
               ...(cliReasoningEffort && session.cliReasoningEffort !== cliReasoningEffort
                 ? { cliReasoningEffort }
+                : {}),
+              // 发行版只在 hook 进程环境里可得（WSL_DISTRO_NAME），落到会话上供能力诊断等请求组装读取。
+              ...(hookWslDistroName && session.wslDistroName !== hookWslDistroName
+                ? { wslDistroName: hookWslDistroName }
                 : {}),
             };
           }),
@@ -542,7 +735,8 @@ export function createTerminalRuntime(
       return tabId;
     },
 
-    openSubagentTranscript: async (payload) => {
+    openSubagentTranscript: async (payload, options) => {
+      const allowCreate = options?.allowCreate ?? true;
       const parentTabId = payload.tabId;
       const sessions = get().sessions;
       // 多窗口隔离：hook 事件广播到所有窗口，仅拥有该 Tab 的窗口处理。
@@ -566,7 +760,10 @@ export function createTerminalRuntime(
       const resolvedWslDistroName = resolveHookWslDistroName(payload);
       const resolvedSource = resolveSubagentTranscriptSource(payload);
       const existingSessionId = findSubagentSessionId(sessions, payload);
-      const pseudoId = existingSessionId ?? createSubagentPaneId(parentTabId, agentId, toolUseId, resolvedSource.kind === "child-jsonl" ? resolvedSource.transcriptPath ?? null : null);
+      // 已登记但未落地的面板复用同一 pseudoId，避免同一子 Agent 登记出多个待落地条目。
+      const pendingSessionId = existingSessionId ? null : findPendingSubagentPaneId(payload);
+      const pseudoId = existingSessionId ?? pendingSessionId
+        ?? createSubagentPaneId(parentTabId, agentId, toolUseId, resolvedSource.kind === "child-jsonl" ? resolvedSource.transcriptPath ?? null : null);
       const previousSource = get().subagentTranscripts[pseudoId]?.source;
       const source = mergeSubagentSource(previousSource, resolvedSource);
       const shouldSubscribe = shouldSubscribeSubagentSource(previousSource, source);
@@ -594,7 +791,7 @@ export function createTerminalRuntime(
         shouldSubscribe,
       });
 
-      const subscribeChild = async () => {
+      const subscribeChild = async (): Promise<ChildSubscribeOutcome> => {
         if (source.kind !== "child-jsonl" || !source.transcriptPath) {
           logWarn("[subagent_transcript] skip full parent transcript tail", {
             event: payload.event,
@@ -605,7 +802,7 @@ export function createTerminalRuntime(
             reason: source.reason,
             wslDistroName: resolvedWslDistroName,
           });
-          return false;
+          return NO_CHILD_SUBSCRIBE;
         }
         try {
           const result = await invoke<SubagentTranscriptSubscribeResult>("subagent_transcript_subscribe", {
@@ -625,15 +822,16 @@ export function createTerminalRuntime(
             pseudoId,
             path: result.path,
             initialBytes: result.initialContent.length,
+            exists: result.exists ?? null,
           });
-          return true;
+          return { subscribed: true, hasEvidence: hasSubagentPaneEvidence(result) };
         } catch (err) {
           logError("subagent_transcript_subscribe failed", { pseudoId, err });
-          return false;
+          return NO_CHILD_SUBSCRIBE;
         }
       };
 
-      const subscribeDerivedChild = async () => {
+      const subscribeDerivedChild = async (): Promise<ChildSubscribeOutcome> => {
         if (!shouldAttemptDerivedChildTranscript(payload, source)) {
           logInfo("[subagent_transcript] derived subscription not attempted", {
             event: payload.event,
@@ -642,7 +840,7 @@ export function createTerminalRuntime(
             sourceKind: source.kind,
             wslDistroName: resolvedWslDistroName,
           });
-          return false;
+          return NO_CHILD_SUBSCRIBE;
         }
         try {
           const result = await invoke<SubagentTranscriptSubscribeResult>("subagent_transcript_subscribe", {
@@ -682,17 +880,20 @@ export function createTerminalRuntime(
             agentId,
             derivedPath: result.path,
             initialBytes: result.initialContent.length,
+            exists: result.exists ?? null,
           });
-          return true;
+          return { subscribed: true, hasEvidence: hasSubagentPaneEvidence(result) };
         } catch (err) {
+          // 不再谎报成功：失败交由 subscribeAvailableChild 转成生命周期重试，
+          // 否则待落地面板会一直停在「没有内容源」的状态直到 TTL 到期。
           logWarn("[subagent_transcript] derived child transcript unavailable", { pseudoId, agentId, err });
-          return true;
+          return NO_CHILD_SUBSCRIBE;
         }
       };
 
-      const subscribeCodexRolloutChild = async () => {
+      const subscribeCodexRolloutChild = async (): Promise<ChildSubscribeOutcome> => {
         if (payload.source !== "codex" || source.kind === "child-jsonl") {
-          return false;
+          return NO_CHILD_SUBSCRIBE;
         }
 
         const parentSessionId = payload.sessionId?.trim();
@@ -705,7 +906,7 @@ export function createTerminalRuntime(
             wslDistroName: resolvedWslDistroName,
             parentTranscriptPath: source.parentTranscriptPath ?? null,
           });
-          return false;
+          return NO_CHILD_SUBSCRIBE;
         }
 
         const retryDiagnostics = subagentTranscriptRetryDiagnostics.get(pseudoId);
@@ -755,7 +956,7 @@ export function createTerminalRuntime(
                 parentTranscriptPath: source.parentTranscriptPath ?? null,
               });
             }
-            return false;
+            return NO_CHILD_SUBSCRIBE;
           }
 
           logInfo("[subagent_transcript] codex rollout discovered path", {
@@ -802,8 +1003,9 @@ export function createTerminalRuntime(
             agentId,
             path: result.path,
             initialBytes: result.initialContent.length,
+            exists: result.exists ?? null,
           });
-          return true;
+          return { subscribed: true, hasEvidence: hasSubagentPaneEvidence(result) };
         } catch (err) {
           if (shouldLogAttempt) {
             logWarn("[subagent_transcript] codex rollout transcript subscribe failed", {
@@ -815,30 +1017,50 @@ export function createTerminalRuntime(
               err,
             });
           }
-          return false;
+          return NO_CHILD_SUBSCRIBE;
         }
       };
 
-      const subscribeAvailableChild = async () => {
+      // 返回「面板现在是否可以落地」：有真实内容/文件才 true，只有订阅没内容时为 false。
+      const subscribeAvailableChild = async (): Promise<boolean> => {
         if (shouldSubscribe) {
-          await subscribeChild();
-          return;
+          return (await subscribeChild()).hasEvidence;
         }
 
-        const codexSubscribed = await subscribeCodexRolloutChild();
+        const codex = await subscribeCodexRolloutChild();
         if (
-          !codexSubscribed &&
+          !codex.subscribed &&
           payload.source === "codex" &&
           payload.event === "SubagentStart" &&
           source.kind !== "child-jsonl" &&
           agentId &&
           payload.sessionId?.trim()
         ) {
-          startSubagentTranscriptRetry(pseudoId, subscribeCodexRolloutChild);
+          startSubagentTranscriptRetry(pseudoId, async () => (await subscribeCodexRolloutChild()).subscribed);
         }
-        if (!codexSubscribed && !(await subscribeDerivedChild()) && source.kind !== "child-jsonl") {
-          await subscribeChild();
+        if (codex.hasEvidence) return true;
+
+        const derived = await subscribeDerivedChild();
+        if (!derived.subscribed) {
+          if (source.kind === "child-jsonl") return false;
+          if (shouldAttemptDerivedChildTranscript(payload, source)) {
+            // 派生订阅失败（例如 WSL 派生目录暂不可达）：转成生命周期重试，
+            // 直到成功、子 Agent 结束或面板关闭，而不是直接放弃成空面板。
+            logWarn("[subagent_transcript] derived subscription failed, retrying", {
+              event: payload.event,
+              pseudoId,
+              agentId,
+              sessionId: payload.sessionId ?? null,
+              sourceKind: source.kind,
+              reason: source.reason ?? null,
+            });
+            startSubagentTranscriptRetry(pseudoId, async () => (await subscribeDerivedChild()).subscribed);
+          } else {
+            await subscribeChild();
+          }
+          return false;
         }
+        return derived.hasEvidence;
       };
 
       // 去重：同一子 Agent 已有面板则更新 source；仅发现/切换 child JSONL 时订阅。
@@ -910,62 +1132,90 @@ export function createTerminalRuntime(
         return;
       }
 
-      const agentType = payload.agentType?.trim() || null;
-      const parentSession = sessions.find((session) => session.id === parentTabId);
-      const existingSubagentCount = sessions.filter(
-        (session) => session.kind === "subagent-transcript" && session.subagent?.parentSessionId === parentTabId
-      ).length;
-      const pseudoSession: TerminalSession = {
-        id: pseudoId,
-        title: buildSubagentTitle(parentSession, agentType, existingSubagentCount),
-        kind: "subagent-transcript",
-        subagent: {
-          parentSessionId: parentTabId,
-          agentId: agentId ?? undefined,
-          toolUseId: toolUseId ?? undefined,
-          agentType: agentType ?? undefined,
-          source,
-        },
-      };
-
-      // 并行多子 Agent：同父已有转录面板则作为该 pane 内的 Tab 追加，避免布局被多 pane 撑爆；
-      // 否则从父 Tab 所在 pane 分屏出新面板。
-      const existingTranscript = sessions.find(
-        (session) => session.kind === "subagent-transcript" && session.subagent?.parentSessionId === parentTabId
-      );
-      const existingPane = existingTranscript ? findPaneLeafBySession(tree, existingTranscript.id) : null;
-      let nextTree: TerminalPaneNode | null;
-      if (existingPane) {
-        nextTree = addSessionToPaneTree(tree, existingPane.id, pseudoId, createPaneId).tree;
-      } else {
-        const parentPane = findPaneLeafBySession(tree, parentTabId);
-        if (!parentPane) return;
-        nextTree = splitPaneLeaf(tree, parentPane.id, "horizontal", pseudoId, createPaneId).tree;
+      const pending = pendingSubagentPanes.get(pseudoId);
+      if (pending) {
+        // 同一子 Agent 的后续事件：刷新身份与内容源，再试一次订阅；仍无内容就继续等。
+        // 停止事件也能走到这里 —— 契约允许 SubagentStop 带来第一个独立的子转录路径，
+        // 此时升级已登记的 pending 面板（拿到内容才落地），但绝不允许它凭空新建。
+        pending.payload = payload;
+        pending.agentId = agentId;
+        pending.toolUseId = toolUseId;
+        pending.source = source;
+        set((state) => ({
+          subagentTranscripts: {
+            ...state.subagentTranscripts,
+            [pseudoId]: { ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false, resetSeq: 0 }), ended: false, source },
+          },
+        }));
+        logInfo("[subagent_transcript] pending pane updated", {
+          event: payload.event,
+          pseudoId,
+          agentId,
+          sourceKind: source.kind,
+        });
+        if (await subscribeAvailableChild()) materializeSubagentPane(pseudoId);
+        return;
       }
 
-      const newSessions = [...sessions, pseudoSession];
-      // 不抢焦点：保留当前 activeSessionId（终端），转录在其分屏 pane 中即时可见。
-      const state = get();
-      const workspans = updateTerminalWorkspan(state.workspans, parentWorkspan.id, (workspan) => (
-        syncTerminalWorkspanLayout(workspan, nextTree, workspan.activePaneId, workspan.activeSessionId)
-      ));
-      const workspanState = state.activeWorkspanId === parentWorkspan.id
-        ? buildWorkspanMirror(workspans, parentWorkspan.id)
-        : { workspans };
-      set({
-        sessions: newSessions,
-        ...workspanState,
-        subagentTranscripts: { ...state.subagentTranscripts, [pseudoId]: { content: "", ended: false, resetSeq: 0, source } },
+      // 停止类事件不得新建面板：它携带的 agent 可能从未有过面板、也永远不会写转录文件
+      // （Claude Code 的内部 helper），凭它登记新面板就是「无故出现空子窗口」。
+      if (!allowCreate) {
+        logInfo("[subagent_transcript] pane creation not allowed for event", {
+          event: payload.event,
+          parentTabId,
+          agentId,
+          toolUseId,
+          sourceKind: source.kind,
+        });
+        return;
+      }
+
+      // 首次见到该子 Agent：只登记 + 订阅，不插布局。面板等首批流式内容（文件创建或
+      // 读到完整行）到达才落地，因此既保住「不等 SubagentStop 就边跑边流」，
+      // 又不会为不会写转录文件的 agent 开出一个空窗口。
+      pendingSubagentPanes.set(pseudoId, {
+        parentTabId,
+        payload,
+        source,
+        agentId,
+        toolUseId,
+        expiresTimer: setTimeout(
+          () => discardPendingSubagentPane(pseudoId, "ttl_expired"),
+          SUBAGENT_PENDING_PANE_TTL_MS
+        ),
       });
-
-      // 持久化（sessionStore 会过滤掉转录伪会话）。
-      void useSessionStore.getState().saveSessions(newSessions).catch(() => { });
-      persistWorkspanState(workspans, state.activeWorkspanId, newSessions);
-
-      await subscribeAvailableChild();
+      set((state) => ({
+        subagentTranscripts: {
+          ...state.subagentTranscripts,
+          [pseudoId]: { ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false, resetSeq: 0 }), ended: false, source },
+        },
+      }));
+      logInfo("[subagent_transcript] pending pane registered", {
+        event: payload.event,
+        pseudoId,
+        parentTabId,
+        agentId,
+        toolUseId,
+        sourceKind: source.kind,
+        ttlMs: SUBAGENT_PENDING_PANE_TTL_MS,
+      });
+      if (await subscribeAvailableChild()) materializeSubagentPane(pseudoId);
     },
 
     finishSubagentTranscript: (payload) => {
+      // 尚未落地的登记直接丢弃：该子 Agent 从头到尾没有产生过可展示内容，
+      // 结束时不补建面板，也不排关闭定时器（没有面板可关）。
+      const pendingId = findPendingSubagentPaneId(payload);
+      if (pendingId) {
+        logInfo("[subagent_transcript] finish dropped pending pane", {
+          tabId: payload.tabId,
+          event: payload.event,
+          agentId: trimOptional(payload.agentId),
+          pendingId,
+        });
+        discardPendingSubagentPane(pendingId, "subagent_finished");
+      }
+
       const sessionId = findSubagentSessionId(get().sessions, payload);
       if (!sessionId) {
         const candidates = get().sessions.filter(
@@ -1036,6 +1286,16 @@ export function createTerminalRuntime(
     },
 
     appendSubagentTranscript: (key, content, reset) => {
+      // 待落地登记：首批流式内容到达才把面板插进布局 —— 「有流结果才出现面板」的落点。
+      // 只发 SubagentStop、从不写转录文件的内部 agent 永远走不到这里，因此不会留下空窗口。
+      if (pendingSubagentPanes.has(key) && content.trim().length > 0) {
+        logInfo("[subagent_transcript] first content arrived, materializing pane", {
+          key,
+          bytes: content.length,
+          reset,
+        });
+        materializeSubagentPane(key);
+      }
       const session = get().sessions.find((candidate) => candidate.id === key);
       const shouldFinish = Boolean(
         session?.kind === "subagent-transcript"
@@ -1119,6 +1379,7 @@ export function createTerminalRuntime(
     createPaneId,
     subagentCloseTimers,
     stopSubagentTranscriptRetry,
+    clearPendingSubagentPanesForParent,
     scheduleSaveActiveId,
   };
 }

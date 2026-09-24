@@ -168,6 +168,18 @@ pub(super) fn extract_codex_token_count(value: &Value) -> Option<CodexCumulative
     })
 }
 
+/// Codex 新版 rollout 除累计的 `token_count` 外，还会为每个响应单独写一条
+/// `token_usage_record`，其 `payload.usage` 与同回合 `token_count` 的 `last_token_usage`
+/// 逐字段相同（同一批 token 的第二种记法），不构成新增用量。
+// 判断是否为 Codex 逐响应重复记账行。
+pub(super) fn is_codex_token_usage_record(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("token_usage_record")
+        && value
+            .get("payload")
+            .and_then(|payload| payload.get("usage"))
+            .is_some_and(Value::is_object)
+}
+
 /// Codex token_count 事件附带的上下文信息：模型窗口大小与最近一次请求的上下文占用。
 // 从 payload.info 提取显式窗口及最近请求的正上下文用量。
 pub(super) fn extract_codex_context_info(value: &Value) -> (Option<u64>, Option<u64>) {

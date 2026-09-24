@@ -181,7 +181,7 @@ export type BrowserMessage =
   | { type: "ready"; latestSequence: number }
   | { type: "event"; sequence: number; occurredAt: number; payload: BrowserEventPayload }
   | { type: "terminal_output"; deviceId: string; sessionId: string; sequence: number; frames: TerminalOutputFrame[] }
-  | { type: "terminal_status"; deviceId: string; sessionId: string; status: string; exitCode?: number; controlMode?: TerminalControlMode }
+  | { type: "terminal_status"; deviceId: string; sessionId: string; status: string; exitCode?: number; controlMode?: TerminalControlMode; cols?: number; rows?: number }
   | { type: "error"; code: string; message: string };
 
 export type TerminalControlMode = "desktop" | "web";
@@ -190,6 +190,8 @@ export type WebTerminalTab = {
   contextKey: string;
   status: string;
   controlMode: TerminalControlMode;
+  cols?: number;
+  rows?: number;
 };
 export type TerminalOutputFrame = {
   sequenceEnd?: boolean;

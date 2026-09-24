@@ -14,6 +14,9 @@ import { useSettingsStore } from "../../../shared/preferences/settingsStore";
 import {
   fetchLatestProjectSessionDetail,
   fetchRemoteLatestProjectSessionDetail,
+  summarySessionKey,
+  useMessageStarStore,
+  type MessageStarRow,
 } from "../../history/index";
 import { useTerminalStore } from "../state";
 import { useWorktreeStore } from "../../projects/api/worktreeStore";
@@ -22,10 +25,18 @@ import { FileText, RefreshCw, X } from "../../../shared/ui/icons";
 import { SessionTranscriptContent } from "../../history/api/SessionTranscriptContent";
 import { FontSizeControl, useFontSizeControlVisibility } from "../../../shared/ui/FontSizeControl";
 import { MarkdownPreviewAnswerSelect, type MarkdownPreviewMessage } from "./MarkdownPreviewAnswerSelect";
+import { resolveStarredMessageIndexes } from "../lib/markdownPreviewStars";
 import { useMarkdownPreviewScroll } from "../hooks/useMarkdownPreviewScroll";
 
 const LOCAL_RETRY_DELAYS_MS = [0, 180, 420];
 type PreviewError = "noSession" | "loadFailed";
+
+/** 星标写入需要的历史会话身份：会话键用于读表，来源与会话 ID 作为诊断列一并落库。 */
+interface PreviewAnswerIdentity {
+  sessionKey: string;
+  source: HistorySource;
+  sessionId: string;
+}
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -123,6 +134,7 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose }: TerminalMa
 
   const [previewMessages, setPreviewMessages] = useState<MarkdownPreviewMessage[]>([]);
   const [selectedMessageIndex, setSelectedMessageIndex] = useState<number | null>(null);
+  const [answerIdentity, setAnswerIdentity] = useState<PreviewAnswerIdentity | null>(null);
   const [fontSize, setFontSize] = useState(uiFontSize);
   const { fontSizeControlVisible, showFontSizeControl } = useFontSizeControlVisibility();
   const [loading, setLoading] = useState(false);
@@ -130,11 +142,26 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose }: TerminalMa
   const remoteContextRef = useRef<SshAgentHistoryContext | null>(null);
   const requestSeqRef = useRef(0);
   const loadedTriggerRef = useRef<string | null>(null);
+  const ensureStarsLoaded = useMessageStarStore((state) => state.ensureLoaded);
+  const setAnswerStar = useMessageStarStore((state) => state.setStar);
+  const starRows = useMessageStarStore((state) => (
+    answerIdentity ? state.bySession[answerIdentity.sessionKey] : undefined
+  ));
+  const starFailure = useMessageStarStore((state) => state.failure);
   const previewSessionKey = JSON.stringify([sessionId, cliSessionId, source, lookupProjectPath, isSshProject]);
   const previewLoadTrigger = `${cliSessionId ?? ""}:${source ?? ""}:${lookupProjectPath}:${hookStatus}:${hookUpdatedAt ?? ""}`;
   const selectedMessage = useMemo(
     () => previewMessages.find((message) => message.messageIndex === selectedMessageIndex) ?? null,
     [previewMessages, selectedMessageIndex],
+  );
+  // 星标行按源消息下标解析回当前列表；对话被回退重写时按时间戳跟随，回答已消失则星标失效。
+  const starredRowsByIndex = useMemo(
+    () => resolveStarredMessageIndexes(previewMessages, starRows),
+    [previewMessages, starRows],
+  );
+  const starredMessageIndexes = useMemo(
+    () => new Set(starredRowsByIndex.keys()),
+    [starredRowsByIndex],
   );
   const content = selectedMessage ? unwrapFencedMarkdown(selectedMessage.content) : null;
   const previewScroll = useMarkdownPreviewScroll({ open, sessionKey: previewSessionKey, selectedMessageIndex, content });
@@ -164,6 +191,7 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose }: TerminalMa
     loadedTriggerRef.current = null;
     setPreviewMessages([]);
     setSelectedMessageIndex(null);
+    setAnswerIdentity(null);
     setLoading(false);
     setError(null);
     return () => {
@@ -172,6 +200,11 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose }: TerminalMa
       remoteContextRef.current = null;
     };
   }, [closeRemoteContext, previewSessionKey]);
+
+  // 星标按会话缓存；同一会话的多个预览面板共用一份已加载结果。
+  useEffect(() => {
+    if (answerIdentity) ensureStarsLoaded(answerIdentity.sessionKey);
+  }, [answerIdentity, ensureStarsLoaded]);
 
   // 只提交仍属于当前绑定会话的结果；迟到的远程上下文必须关闭，不能覆盖新 consumer。
   const loadLatest = useCallback(async (trigger: string) => {
@@ -233,6 +266,11 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose }: TerminalMa
         loadedTriggerRef.current = trigger;
         const nextMessages = selectAssistantMarkdownMessages(detail);
         setPreviewMessages(nextMessages);
+        setAnswerIdentity({
+          sessionKey: summarySessionKey(detail),
+          source: detail.source,
+          sessionId: detail.session_id,
+        });
         setSelectedMessageIndex((current) => {
           if (current !== null && nextMessages.some((message) => message.messageIndex === current)) return current;
           return nextMessages[nextMessages.length - 1]?.messageIndex ?? null;
@@ -267,6 +305,22 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose }: TerminalMa
     previewScroll.requestScrollToBottom(latest.messageIndex);
     setSelectedMessageIndex(latest.messageIndex);
   };
+  // 取消星标必须按已解析到的真实行删除：星标可能因对话回退已跟随到新的回答下标。
+  const toggleAnswerStar = (message: MarkdownPreviewMessage, star: boolean) => {
+    if (!answerIdentity) return;
+    const existing: MessageStarRow | null = starredRowsByIndex.get(message.messageIndex) ?? null;
+    void setAnswerStar(
+      {
+        sessionKey: answerIdentity.sessionKey,
+        messageIndex: message.messageIndex,
+        timestamp: message.timestamp,
+        source: answerIdentity.source,
+        sessionId: answerIdentity.sessionId,
+      },
+      star,
+      existing,
+    );
+  };
 
   if (!open) return null;
 
@@ -280,7 +334,18 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose }: TerminalMa
         <span className="min-w-0 flex-1 truncate text-xs font-semibold">{t("terminal.markdownPreview.title")}</span>
         {previewMessages.length > 0 && (
           <MarkdownPreviewAnswerSelect
+            key={previewSessionKey}
             messages={previewMessages}
+            starredMessageIndexes={starredMessageIndexes}
+            starLabels={{
+              starAnswer: t("terminal.markdownPreview.starAnswer"),
+              unstarAnswer: t("terminal.markdownPreview.unstarAnswer"),
+              starredOnly: t("terminal.markdownPreview.starredOnly"),
+              showAllAnswers: t("terminal.markdownPreview.showAllAnswers"),
+              starredFilterActive: t("terminal.markdownPreview.starredFilterActive"),
+              noStarredAnswers: t("terminal.markdownPreview.noStarredAnswers"),
+            }}
+            onToggleStar={toggleAnswerStar}
             selectedMessageIndex={selectedMessageIndex}
             onSelect={selectAnswer}
             formatOption={(message) => t("terminal.markdownPreview.answerOption", {
@@ -323,10 +388,20 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose }: TerminalMa
           <X size={14} aria-hidden="true" />
         </button>
       </header>
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        {/* 星标写库失败只在日志里，用户看到的是“点了没反应”；这里把失败态摆到正文上方。 */}
+        {starFailure && answerIdentity && (
+          <div
+            className="terminal-markdown-preview-star-error shrink-0 px-3 py-1.5 text-[10px] leading-4"
+            role="status"
+            aria-live="polite"
+          >
+            {t("terminal.markdownPreview.starUnavailable")}
+          </div>
+        )}
         <div
           ref={previewScroll.scrollRef}
-          className="ui-scrollbar ui-focus-ring h-full overflow-auto px-4 py-3"
+          className="ui-scrollbar ui-focus-ring min-h-0 flex-1 overflow-auto px-4 py-3"
           role="region"
           aria-label={t("terminal.markdownPreview.title")}
           tabIndex={content ? 0 : -1}

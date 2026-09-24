@@ -135,6 +135,19 @@ export interface SubagentTranscriptContent {
 export interface SubagentTranscriptSubscribeResult {
   path: string;
   initialContent: string;
+  /** 订阅瞬间子转录文件是否已存在；false 表示 tail 正在等待文件创建。旧后端可能不返回。 */
+  exists?: boolean;
+}
+
+/**
+ * `openSubagentTranscript` 的落地意图。
+ *
+ * 停止类事件（`SubagentStop`）只允许收尾已有面板：它携带的 agent 可能从未有过面板、
+ * 也永远不会写转录文件（Claude Code 的内部 agent），凭它新建面板就是「无故出现空子窗口」。
+ */
+export interface OpenSubagentTranscriptOptions {
+  /** 无既有面板、无待落地登记时是否允许登记新面板；默认 true。 */
+  allowCreate?: boolean;
 }
 
 export interface SplitState {
@@ -253,8 +266,13 @@ export interface TerminalStore {
   getExitTaskSessionIds: (includeFinished?: boolean) => string[];
   hideBackgroundForSession: (sessionId: string) => void;
   showBackgroundForSession: (sessionId: string) => void;
-  /** 收到 CLI SubagentStart：在发起 Tab 所在 pane 分屏出只读转录面板并开始 tail。 */
-  openSubagentTranscript: (payload: CliHookPayload) => Promise<void>;
+  /**
+   * 收到 CLI 子 Agent 生命周期事件：登记待落地面板并开始 tail。
+   *
+   * 面板只在拿到正向证据（转录文件已存在 / 已读到完整行）时才真正插进布局；
+   * 在此之前内容只进 `subagentTranscripts` 缓冲，不产生任何 UI。
+   */
+  openSubagentTranscript: (payload: CliHookPayload, options?: OpenSubagentTranscriptOptions) => Promise<void>;
   /** 收到 CLI SubagentStop：标记完成并延迟关闭对应子 Agent 转录面板。 */
   finishSubagentTranscript: (payload: CliHookPayload) => void;
   /** tail 增量推送：追加（reset=true 时替换）某转录面板内容。 */

@@ -12,6 +12,7 @@ const menuSource = readFileSync(
   "utf8",
 );
 const sidebarSource = readFileSync(new URL("../src/features/projects/hooks/useSidebarController.tsx", import.meta.url), "utf8");
+const sidebarLayoutSource = readFileSync(new URL("../src/features/projects/hooks/useSidebarLayout.ts", import.meta.url), "utf8");
 const terminalTabsSource = readFileSync(new URL("../src/features/terminal/hooks/useTerminalTabsController.tsx", import.meta.url), "utf8");
 const settingsSource = readFileSync(
   new URL("../src/features/settings/components/pages/SidebarSettingsPage.tsx", import.meta.url),
@@ -41,9 +42,10 @@ test("layout controls expose immediate visibility, position, and reset actions",
 });
 
 test("sidebar visibility is reported through the existing local state owner", () => {
-  assert.match(sidebarSource, /notifySidebarStateChange/);
-  assert.match(sidebarSource, /SIDEBAR_EXPAND_REQUEST_EVENT/);
-  assert.match(sidebarSource, /sidebarCollapsedRef\.current/);
+  assert.match(sidebarSource, /useSidebarLayout\(\{ compactMode, dockSide \}\)/);
+  assert.match(sidebarLayoutSource, /notifySidebarStateChange/);
+  assert.match(sidebarLayoutSource, /SIDEBAR_EXPAND_REQUEST_EVENT/);
+  assert.match(sidebarLayoutSource, /sidebarCollapsedRef\.current/);
 });
 
 test("panel actions reveal a hidden auxiliary region before toggling its content", () => {
@@ -59,7 +61,7 @@ test("settings no longer owns a duplicate workspace layout entry", () => {
 
 test("unavailable Workspan tabs cannot trigger a no-op visibility write", () => {
   assert.match(controlsSource, /if \(!workspanEnabled \|\| !hasWorkspanTabs\) return;/);
-  assert.match(controlsSource, /workspanUnavailable/);
+  assert.match(menuSource, /workspanUnavailable/);
   assert.match(i18nSource, /"workspaceLayout\.controls\.workspanUnavailable": "当前没有可用的 Workspan Tab"/);
   assert.match(i18nSource, /"workspaceLayout\.controls\.workspanUnavailable": "No Workspan tabs are currently available"/);
 });

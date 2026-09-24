@@ -54,7 +54,7 @@ import { debugConsoleWarn } from "../shared/platform/debugConsole";
 import { createPerfMarker, logInfo, logWarn } from "../shared/platform/logger";
 import { getContrastRatioFromHex, MIN_APPLY_CONTRAST_RATIO } from "../shared/lib/contrast";
 import { getDb } from "../shared/platform/db";
-import { translateCurrent, useI18n } from "../shared/i18n/index";
+import { translateCurrent, useI18n, type TranslationKey } from "../shared/i18n/index";
 import { getOsPlatform } from "../shared/platform/shell";
 import { normalizeFontFamilyStack } from "../shared/platform/systemFonts";
 import { ALL_TERMINALS_SCOPE } from "../features/terminal/api/terminalScope";
@@ -89,6 +89,7 @@ const COMPACT_WINDOW_WIDTH = 350;
 const WINDOW_MIN_HEIGHT = 600;
 const CLAUDE_QUESTION_TOOL_NAME = "AskUserQuestion";
 const CODEX_QUESTION_TOOL_NAME = "request_user_input";
+const CODEX_ASYNC_QUESTION_TOOL_NAME = "request_user_input_async";
 interface DaemonSessionMeta {
   sessionId: string;
   alive: boolean;
@@ -262,7 +263,8 @@ function isQuestionRequestNotification(payload: CliHookPayload): boolean {
   return (
     payload.event === "Notification" &&
     ((payload.source === "claude" && payload.toolName === CLAUDE_QUESTION_TOOL_NAME) ||
-      (payload.source === "codex" && payload.toolName === CODEX_QUESTION_TOOL_NAME))
+      (payload.source === "codex" && (payload.toolName === CODEX_QUESTION_TOOL_NAME
+        || payload.toolName === CODEX_ASYNC_QUESTION_TOOL_NAME)))
   );
 }
 
@@ -305,6 +307,30 @@ function getCliHookSourceName(payload: CliHookPayload): string {
   return "Claude Code";
 }
 
+// 上游 CLI 自己生成的 Hook message（如 Claude Code 的 "Claude is waiting for your input"）是英文原文，
+// 这里只把已知固定文案映射成本地化文案，未识别的一律原样返回，避免吞掉上游信息。
+const HOOK_MESSAGE_PATTERNS: ReadonlyArray<{ pattern: RegExp; key: TranslationKey }> = [
+  {
+    pattern: /needs your permission to use\s+(.+?)\s*$/i,
+    key: "notifications.hookMessage.needsPermissionToUse",
+  },
+  { pattern: /is waiting for your\b/i, key: "notifications.hookMessage.waitingForInput" },
+  { pattern: /needs your attention\b/i, key: "notifications.hookMessage.needsAttention" },
+];
+
+// 仅 Notification / PermissionRequest 的 message 属于 CLI 生成的通知文案；
+// Stop、StopFailure 等事件的 message 可能承载模型输出，必须保留原文。
+function localizeHookMessage(payload: CliHookPayload): string | null {
+  const raw = payload.message?.trim();
+  if (!raw) return null;
+  if (payload.event !== "Notification" && payload.event !== "PermissionRequest") return raw;
+  for (const { pattern, key } of HOOK_MESSAGE_PATTERNS) {
+    const match = pattern.exec(raw);
+    if (match) return translateCurrent(key, { target: (match[1] ?? "").trim() });
+  }
+  return raw;
+}
+
 function getClaudeHookToastTitle(
   payload: CliHookPayload,
   tabTitle: string,
@@ -314,7 +340,6 @@ function getClaudeHookToastTitle(
   if (isQuestionRequestNotification(payload)) {
     return translateCurrent("notifications.hookToast.title.question", { sourceName });
   }
-  if (payload.title) return payload.title;
   if (payload.event === "Stop") {
     if (decision.goalStatus === "paused" || decision.goalStatus === "blocked") {
       return translateCurrent("notifications.hookToast.title.attention", { sourceName });
@@ -365,7 +390,7 @@ function getSystemNotificationBody(
   decision = resolveCliHookStatus(payload),
 ): string {
   const sourceName = getCliHookSourceName(payload);
-  const detail = payload.message?.trim();
+  const detail = localizeHookMessage(payload);
   const suffix = detail ? `: ${truncateSystemNotificationDetail(detail)}` : "";
 
   if (isQuestionRequestNotification(payload)) {
@@ -523,7 +548,7 @@ function showClaudeHookToast(
   const item: ClaudeHookToastItem = {
     id: createClaudeHookToastId(tabId),
     title: getClaudeHookToastTitle(payload, tabTitle, decision),
-    message: payload.message ?? undefined,
+    message: localizeHookMessage(payload) ?? undefined,
     tabTitle,
     style: getClaudeHookToastStyle(payload, decision),
   };
@@ -947,16 +972,18 @@ function App() {
 
       // SubagentStart / AgentToolStart：开/更新子 Agent 转录分屏，独立于 Tab 状态机与 toast。
       if (supportsLocalSubagentTranscript && (payload.event === "SubagentStart" || payload.event === "AgentToolStart" || isClaudeToolSubagentEvent)) {
-        void useTerminalStore.getState().openSubagentTranscript(payload);
+        void useTerminalStore.getState().openSubagentTranscript(payload, { allowCreate: true });
         return;
       }
       if (supportsLocalSubagentTranscript && payload.event === "AgentToolStop") {
-        void useTerminalStore.getState().openSubagentTranscript(payload);
+        void useTerminalStore.getState().openSubagentTranscript(payload, { allowCreate: true });
         return;
       }
       if (supportsLocalSubagentTranscript && payload.event === "SubagentStop") {
+        // 停止事件只收尾已有面板：Claude Code 会给从未产生转录文件的内部 agent 发 SubagentStop，
+        // 允许它新建面板就是「无故多出一个没有数据的子窗口」。
         if (payload.agentTranscriptPath?.trim() || payload.source === "codex") {
-          void useTerminalStore.getState().openSubagentTranscript(payload).finally(() => {
+          void useTerminalStore.getState().openSubagentTranscript(payload, { allowCreate: false }).finally(() => {
             useTerminalStore.getState().finishSubagentTranscript(payload);
           });
         } else {

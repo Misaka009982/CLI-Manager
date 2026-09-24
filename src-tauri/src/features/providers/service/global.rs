@@ -7,7 +7,7 @@ use materialize::{
     ensure_codex_provider_mapping, json_bytes, parse_json_object, settings_config, toml_document,
 };
 pub(crate) use materialize::{
-    materialize_claude, materialize_codex_auth, materialize_codex_config,
+    is_toml_secret_key, materialize_claude, materialize_codex_auth, materialize_codex_config,
     materialize_grok_global_config,
     project_codex_model,
 };

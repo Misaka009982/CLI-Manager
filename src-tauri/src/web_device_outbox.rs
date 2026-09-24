@@ -256,6 +256,8 @@ mod tests {
                 status: "error".into(),
                 exit_code: None,
                 control_mode: None,
+                cols: None,
+                rows: None,
             })
             .unwrap();
         queue.sent();
@@ -277,6 +279,8 @@ mod tests {
             status: value.into(),
             exit_code: None,
             control_mode: None,
+            cols: None,
+            rows: None,
         };
         queue.push(output("a", 1)).unwrap();
         queue.push(status("running")).unwrap();

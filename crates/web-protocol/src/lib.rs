@@ -328,6 +328,10 @@ pub enum DeviceToServerFrame {
         exit_code: Option<i32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         control_mode: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cols: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows: Option<u16>,
     },
     ConversationEvent {
         event: ConversationEvent,
@@ -473,6 +477,10 @@ pub enum BrowserSocketFrame {
         exit_code: Option<i32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         control_mode: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cols: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows: Option<u16>,
     },
     Ready {
         latest_sequence: i64,
@@ -657,6 +665,30 @@ mod tests {
             serde_json::from_value::<BrowserSocketFrame>(value).unwrap(),
             output
         );
+
+        let status = DeviceToServerFrame::TerminalStatus {
+            session_id: "terminal-1".into(),
+            status: "running".into(),
+            exit_code: None,
+            control_mode: Some("desktop".into()),
+            cols: Some(120),
+            rows: Some(32),
+        };
+        let value = serde_json::to_value(&status).unwrap();
+        assert_eq!(value["cols"], 120);
+        assert_eq!(value["rows"], 32);
+        assert_eq!(serde_json::from_value::<DeviceToServerFrame>(value).unwrap(), status);
+        let legacy = serde_json::json!({
+            "type": "terminal_status",
+            "sessionId": "terminal-1",
+            "status": "running"
+        });
+        let DeviceToServerFrame::TerminalStatus { cols, rows, .. } =
+            serde_json::from_value::<DeviceToServerFrame>(legacy).unwrap()
+        else {
+            panic!("expected terminal status");
+        };
+        assert_eq!((cols, rows), (None, None));
     }
 
     #[test]

@@ -152,7 +152,7 @@ function TreeNodeItemImpl({
         onFocus={() => onFocusNode(treeKey)}
       >
         <div
-          className={`ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-xl cursor-pointer group/item ${
+          className={`ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-lg cursor-pointer group/item ${
             compact ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
           }`}
           data-selected={isSelected || isMultiSelected ? "true" : "false"}
@@ -245,7 +245,7 @@ function TreeNodeItemImpl({
           onFocus={() => onFocusNode(treeKey)}
         >
           <div
-            className={`ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-xl ${
+            className={`ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-lg ${
               compact ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
             }`}
             data-selected={isSelected || isMultiSelected ? "true" : "false"}
@@ -297,7 +297,7 @@ function TreeNodeItemImpl({
           />
         )}
         <div
-          className={`ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-xl cursor-pointer group/item ${
+          className={`ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-lg cursor-pointer group/item ${
             compact ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
           }`}
           data-selected={isSelected || isMultiSelected ? "true" : "false"}
@@ -488,7 +488,7 @@ function TreeNodeItemImpl({
       <div className={`ui-tree-group-shell ${compact ? "my-0.5" : "my-1"}`} style={{ marginLeft: depth === 0 ? 0 : 2 }}>
         <div
           ref={setIntoRef}
-          className={`ui-tree-node ui-tree-group ui-focus-ring flex items-center rounded-xl font-semibold cursor-pointer group/grp ${
+          className={`ui-tree-node ui-tree-group ui-focus-ring flex items-center rounded-lg font-semibold cursor-pointer group/grp ${
             compact ? "gap-1.5 py-1 text-[11px]" : "gap-2 py-1.5 text-[12px]"
           }`}
           data-selected={isSelected || isMultiSelected ? "true" : "false"}

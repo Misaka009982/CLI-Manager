@@ -826,6 +826,22 @@ pub(crate) const MIGRATION_CREATE_EXTENSION_SCOPE_POLICIES_SQL: &str = "
                 CREATE INDEX IF NOT EXISTS idx_extension_scope_policies_revision
                     ON extension_scope_policies(updated_at DESC, revision DESC);
               ";
+
+pub(crate) const MIGRATION_CREATE_MESSAGE_STARS_VERSION: i64 = 41;
+pub(crate) const MIGRATION_CREATE_MESSAGE_STARS_DESCRIPTION: &str = "create_message_stars";
+pub(crate) const MIGRATION_CREATE_MESSAGE_STARS_SQL: &str = "
+                CREATE TABLE IF NOT EXISTS message_stars (
+                    session_key   TEXT NOT NULL,
+                    message_index INTEGER NOT NULL,
+                    timestamp     TEXT,
+                    source        TEXT NOT NULL,
+                    session_id    TEXT NOT NULL,
+                    created_at    INTEGER NOT NULL,
+                    PRIMARY KEY (session_key, message_index)
+                );
+                CREATE INDEX IF NOT EXISTS idx_message_stars_session ON message_stars(session_key);
+                CREATE INDEX IF NOT EXISTS idx_message_stars_created ON message_stars(created_at DESC);
+              ";
 // 按既定版本顺序返回向上迁移注册表，由 SQL 插件在初始化时应用；此函数本身不执行 SQL。
 pub(crate) fn migrations() -> Vec<Migration> {
     vec![
@@ -1171,6 +1187,12 @@ pub(crate) fn migrations() -> Vec<Migration> {
             version: MIGRATION_CREATE_EXTENSION_SCOPE_POLICIES_VERSION,
             description: MIGRATION_CREATE_EXTENSION_SCOPE_POLICIES_DESCRIPTION,
             sql: MIGRATION_CREATE_EXTENSION_SCOPE_POLICIES_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: MIGRATION_CREATE_MESSAGE_STARS_VERSION,
+            description: MIGRATION_CREATE_MESSAGE_STARS_DESCRIPTION,
+            sql: MIGRATION_CREATE_MESSAGE_STARS_SQL,
             kind: MigrationKind::Up,
         },
     ]

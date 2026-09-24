@@ -33,7 +33,11 @@ export interface TreeActions {
   onCancelRename: () => void;
   onProjectRenameConfirm: (id: string, newName: string) => void;
   onCancelProjectRename: () => void;
-  onContextMenuProject: (e: ReactMouseEvent, p: Project) => void;
+  onContextMenuProject: (e: ReactMouseEvent, p: Project, fromPinned?: boolean) => void;
+  /** 「定位位置」：把已置顶项目的副本定位回主列表中的真实位置。 */
+  onLocateProject: (p: Project) => void;
+  /** 最近一次定位请求；nonce 变化即触发重新滚动（同项目重复定位靠它生效）。 */
+  locateRequest: { projectId: string; projectName: string; nonce: number } | null;
   onSelectWorktree: (e: ReactMouseEvent, worktree: WorktreeRecord) => void;
   onOpenWorktree: (project: Project, worktree: WorktreeRecord) => void;
   onContextMenuWorktree: (e: ReactMouseEvent, project: Project, worktree: WorktreeRecord) => void;

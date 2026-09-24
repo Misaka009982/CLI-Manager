@@ -1,4 +1,10 @@
-type DesktopViewport = { visible: () => boolean; restore: () => void };
+export type TerminalViewportSize = { cols: number; rows: number };
+
+type DesktopViewport = {
+  visible: () => boolean;
+  restore: () => void;
+  dimensions: () => TerminalViewportSize | null;
+};
 
 // Register before asynchronous PTY subscription; hidden parsers do not own size.
 const viewports = new Map<string, Map<symbol, DesktopViewport>>();
@@ -16,6 +22,11 @@ export function registerDesktopViewport(sessionId: string, viewport: DesktopView
 
 export function hasVisibleDesktopViewport(sessionId: string): boolean {
   return [...(viewports.get(sessionId)?.values() ?? [])].some((viewport) => viewport.visible());
+}
+
+export function getVisibleDesktopViewportSize(sessionId: string): TerminalViewportSize | null {
+  const viewport = [...(viewports.get(sessionId)?.values() ?? [])].find((entry) => entry.visible());
+  return viewport?.dimensions() ?? null;
 }
 
 export function restoreDesktopViewportSize(sessionId: string): void {

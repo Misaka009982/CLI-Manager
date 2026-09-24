@@ -505,6 +505,8 @@ export interface TerminalSession {
   remoteHandoff?: RemoteHandoffSessionState;
   /** CLI hook 上报的当前 effort，仅用于实时统计展示，不作为历史解析来源。 */
   cliReasoningEffort?: string;
+  /** CLI hook 上报的 WSL 发行版名（WSL_DISTRO_NAME）；用于在终端实际所在发行版内组装能力诊断等请求。 */
+  wslDistroName?: string;
   /** 会话类型；缺省视为 "pty"。"subagent-transcript" 为只读转录伪会话（无 PTY、不持久化）。 */
   kind?: TerminalSessionKind;
   /** 仅 kind="subagent-transcript" 时存在：子 Agent 元数据。 */

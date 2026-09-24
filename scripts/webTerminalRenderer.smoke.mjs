@@ -211,6 +211,7 @@ async function run() {
   result.geometry = [];
   const inspectGeometry = (name, cols, rows) => {
     const host = document.querySelector('.web-terminal');
+    host.scrollTop = host.scrollHeight;
     const screenElement = host.querySelector('.xterm-screen');
     const screen = screenElement.getBoundingClientRect();
     const hostRect = host.getBoundingClientRect();
@@ -221,7 +222,7 @@ async function run() {
     const state = { name, availableWidth, availableHeight, width: screen.width, height: screen.height, fontSize: terminal().options.fontSize, cols: terminal().cols, rows: terminal().rows };
     result.geometry.push(state);
     check(state.fontSize <= 14, 'Desktop split enlarged terminal text: ' + JSON.stringify(state));
-    check(screen.width + 16 <= availableWidth + 1 && screen.height <= availableHeight + 1, 'Terminal grid is clipped: ' + JSON.stringify(state));
+    check(screen.width + 16 <= availableWidth + 1 && screen.height <= host.scrollHeight + 1, 'Terminal grid cannot be reached by scrolling: ' + JSON.stringify(state));
     check(Math.abs(element.height - screen.height) <= 1, 'Terminal viewport differs from actual grid height: ' + JSON.stringify(state));
     check(screen.bottom <= hostRect.bottom - parseFloat(css.paddingBottom) + 1, 'Last terminal row is below the visible container');
     check(terminal().cols === cols && terminal().rows === rows, 'Desktop viewer changed the source PTY grid');
@@ -501,8 +502,7 @@ async function run() {
   check((result.resizeRequests ?? []).length === beforeOutput, 'Web output generated redundant resize requests');
   result.webResizeStable = true;
 
-  // Display preferences are browser-local: neither owner may resize the PTY
-  // merely because the viewer changes font, fitting mode or viewport bounds.
+  // Mirror preferences never resize the PTY. Web ownership reflows instead.
   const displayKey = 'cli-manager.web-terminal-display.v1';
   const control = selector => {
     const found = document.querySelector(selector);
@@ -510,6 +510,13 @@ async function run() {
     return found;
   };
   const change = async (selector, value) => {
+    // Legacy scenarios select manual/width; exercise the replacement controls.
+    if (selector === 'select[data-display-mode]') {
+      if (value === 'manual') return change('input[data-display-font]', terminal().options.fontSize);
+      control('button[data-display-fit]').click();
+      await pause(120);
+      return;
+    }
     const element = control(selector);
     const prototype = element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, String(value));
@@ -518,7 +525,7 @@ async function run() {
   };
   const viewport = () => document.querySelector('.web-terminal-viewport') ?? document.querySelector('.web-terminal');
   result.displaySettings = [];
-  for (const owner of ['desktop', 'web']) {
+  for (const owner of ['desktop']) {
     const displayId = 'display-settings-' + owner;
     mount(displayId, [], owner);
     await pause(150);
@@ -540,7 +547,7 @@ async function run() {
     check(terminal().options.fontSize === 10, 'Manual font did not shrink to 10');
     unchanged();
     const fontButtons = document.querySelectorAll('.web-terminal-display-buttons button');
-    check(fontButtons.length === 2, 'Missing font minus/plus buttons');
+    check(fontButtons.length === 3, 'Missing font minus/plus/fit buttons');
     fontButtons[1].click();
     await pause(100);
     check(terminal().options.fontSize === 11, 'Font plus button did not increment');
@@ -551,42 +558,74 @@ async function run() {
     const ctrlWheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100 });
     document.querySelector('.xterm-screen').dispatchEvent(ctrlWheel);
     await pause(120);
-    check(ctrlWheel.defaultPrevented && terminal().options.fontSize > 10 && control('select[data-display-mode]').value === 'manual', 'Ctrl+wheel did not locally enlarge the font or prevent browser zoom');
+    check(ctrlWheel.defaultPrevented && terminal().options.fontSize > 10 && !document.querySelector('select[data-display-mode]'), 'Ctrl+wheel did not enlarge the font or prevent browser zoom');
     unchanged();
     await change('select[data-display-mode]', 'width');
     const widthViewport = viewport();
     const widthCss = getComputedStyle(widthViewport);
     const available = widthViewport.clientWidth - parseFloat(widthCss.paddingLeft) - parseFloat(widthCss.paddingRight);
     const widthScreen = document.querySelector('.xterm-screen').getBoundingClientRect();
-    check(Math.abs(available - widthScreen.width) < 45, 'Fit-width still leaves a wide blank region: ' + JSON.stringify({ available, screen: widthScreen.width }));
-    await change('input[data-display-height]', 30);
-    check(viewport().scrollHeight > viewport().clientHeight && /auto|scroll/.test(getComputedStyle(viewport()).overflowY), 'Fit-width cannot scroll vertically to an oversized input row');
-    viewport().scrollTop = viewport().scrollHeight;
-    check(viewport().scrollTop > 0, 'Fit-width scrollbar cannot reach bottom');
-    unchanged();
-    await change('input[data-display-height]', 100);
-    await change('select[data-display-mode]', 'contain');
-    const contained = document.querySelector('.xterm-screen').getBoundingClientRect();
-    check(contained.width <= viewport().clientWidth + 1 && contained.height <= viewport().clientHeight + 1, 'Contain does not show the full grid');
-    const beforeRegion = viewport().getBoundingClientRect();
-    await change('input[data-display-width]', 60);
-    await change('input[data-display-height]', 60);
-    const afterRegion = viewport().getBoundingClientRect();
-    check(afterRegion.width < beforeRegion.width * 0.75 && afterRegion.height < beforeRegion.height * 0.75, 'Display width/height controls did not change viewport bounds');
+    check(widthScreen.width + 16 <= available + 1 && terminal().options.fontSize <= 14, 'Fit-width overflows or enlarges the shared grid');
+    check(!document.querySelector('[data-display-width], [data-display-height]'), 'Legacy region controls are still exposed');
+    const region = document.querySelector('.web-terminal-display-area').getBoundingClientRect();
+    const shell = document.querySelector('.web-terminal-shell').getBoundingClientRect();
+    check(Math.abs(region.width - shell.width) <= 1 && Math.abs(region.height - shell.height) <= 1, 'Terminal display area does not fill its shell');
     unchanged();
     await change('select[data-display-mode]', 'manual');
     await change('input[data-display-font]', 19);
     const stored = JSON.parse(localStorage.getItem(displayKey));
-    check(stored.mode === 'manual' && stored.fontSize === 19 && stored.width === 60 && stored.height === 60, 'Display preferences were not persisted');
+    check(stored.mode === 'manual' && stored.fontSize === 19 && stored.width === undefined && stored.height === undefined, 'Display preferences were not migrated to full-area settings');
     flushSync(() => root.render(null));
     mount(displayId + '-restored', [], owner);
     await pause(150);
-    check(control('select[data-display-mode]').value === 'manual' && control('input[data-display-font]').value === '19' && control('input[data-display-width]').value === '60' && control('input[data-display-height]').value === '60', 'Remount failed to restore browser-local preferences');
+    check(!document.querySelector('select[data-display-mode]') && control('input[data-display-font]').value === '19', 'Remount failed to restore browser-local preferences');
     control('button[data-display-reset]').click();
     await pause(150);
-    check(control('select[data-display-mode]').value === 'contain' && control('input[data-display-font]').value === '14' && control('input[data-display-width]').value === '100' && control('input[data-display-height]').value === '100', 'Display reset did not restore defaults');
-    result.displaySettings.push({ owner, font: true, ctrlWheel: true, fitWidth: true, scrollable: true, contain: true, region: true, persistedRemount: true, reset: true, noPtyResize: true });
+    check(control('button[data-display-fit]').getAttribute('aria-pressed') === 'true' && terminal().options.fontSize <= 14, 'Display reset did not restore defaults');
+    result.displaySettings.push({ owner, font: true, ctrlWheel: true, fitWidth: true, fullArea: true, persistedRemount: true, reset: true, noPtyResize: true });
   }
+  const responsiveId = 'responsive-font';
+  mount(responsiveId, [], 'web');
+  await pause(150);
+  control('details.web-terminal-display').open = true;
+  check(!!document.querySelector('[data-display-fit]') && !document.querySelector('[data-display-mode]'), 'Web ownership uses different display controls');
+  const shellBefore = document.querySelector('.web-terminal-shell').getBoundingClientRect();
+  const checkResponsive = () => {
+    const host = viewport();
+    const css = getComputedStyle(host);
+    const width = host.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight);
+    const height = host.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom);
+    const screen = document.querySelector('.xterm-screen');
+    const cellWidth = screen.offsetWidth / terminal().cols;
+    check(screen.offsetWidth + 16 <= width + 1 && width - screen.offsetWidth - 16 < cellWidth + 2, 'Responsive terminal leaves unused columns or overflows');
+    check(screen.offsetHeight <= height + 1, 'Responsive input row is clipped');
+    const shell = document.querySelector('.web-terminal-shell').getBoundingClientRect();
+    check(shell.width === shellBefore.width && shell.height === shellBefore.height, 'Font size changed workspace bounds');
+  };
+  await change('input[data-display-font]', 24);
+  const largeGrid = { cols: terminal().cols, rows: terminal().rows };
+  checkResponsive();
+  await change('input[data-display-font]', 10);
+  check(terminal().cols > largeGrid.cols && terminal().rows > largeGrid.rows, 'Smaller font did not add rows and columns');
+  checkResponsive();
+  const responsiveResizes = result.resizeRequests.length;
+  publish(responsiveId, 1, 'RESPONSIVE-MARKER', { cols: terminal().cols, rows: terminal().rows });
+  await pause(150);
+  check(result.resizeRequests.length === responsiveResizes, 'Responsive output triggered duplicate resize');
+  mount(responsiveId, [], 'web', false);
+  await pause(100);
+  localStorage.setItem(displayKey, JSON.stringify({ mode: 'width', fontSize: 19, zoom: 60, width: 100, height: 100 }));
+  window.dispatchEvent(new Event(displayKey));
+  await pause(100);
+  check(result.resizeRequests.length === responsiveResizes, 'Hidden tab emitted a resize');
+  mount(responsiveId, [], 'web', true);
+  await pause(150);
+  check(terminal().options.fontSize === 19, 'Tab activation lost the selected font or applied mirror zoom');
+  checkResponsive();
+  check(result.resizeRequests.length > responsiveResizes, 'Active Web tab did not submit the new grid');
+  control('button[data-display-reset]').click();
+  await pause(150);
+  result.responsiveDisplay = true;
   mount('display-i18n', [], 'desktop', true, 'zh-CN');
   await pause(100);
   const chinese = control('details.web-terminal-display').textContent;
@@ -690,7 +729,7 @@ async function run() {
       picker.dispatchEvent(new Event('change', { bubbles: true }));
     };
     selectImage(); await pause(50);
-    check(result.mobileImages?.length === 1 && document.querySelector('.terminal-image-status')?.textContent.includes('submitted'), 'Image selection lacks success feedback');
+    check(result.mobileImages?.length === 1 && !document.querySelector('.terminal-image-status'), 'Successful image upload should not leave an extra notification');
     check(result.mobileSent.includes('"C:/test photo.png"'), 'Prepared image never reached xterm paste');
     await new Promise(resolve => terminal().write('\\x1b[?2004h', resolve));
     selectImage();

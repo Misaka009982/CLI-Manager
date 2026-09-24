@@ -378,6 +378,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(normalized.tool_name.as_deref(), Some("request_user_input"));
+        let async_normalized = normalize_hook_input(
+            "Notification",
+            &json!({ "tool_name": "request_user_input_async" }),
+        )
+        .unwrap();
+        assert_eq!(async_normalized.tool_name.as_deref(), Some("request_user_input_async"));
     }
 
     #[test]

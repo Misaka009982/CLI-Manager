@@ -25,7 +25,8 @@ get_app_version() -> AppVersion // distribution = standalone | portable | aur
 - Portable builds still call the signed Tauri updater `check()` API and may show version/date/release notes.
 - Portable builds never call `Update.download()`, `Update.install()`, or `relaunch()` from the updater flow. Their primary action opens the matching GitHub Release page for manual ZIP replacement.
 - Standalone and AUR behavior stays unchanged: standalone downloads/installs/relaunches; AUR skips updater operations and opens the AUR package page.
-- The Windows x64 ZIP contains one `CLI-Manager/` root with `cli-manager.exe`, `cli-manager-codex-proxy.exe`, `portable.flag`, and `resources/`. It must not contain an installer or a user `data-root.json`.
+- The Windows x64 ZIP contains one `CLI-Manager/` root with `cli-manager.exe`, `cli-manager-codex-proxy.exe`, `cli-manager-daemon.exe`, `cli-manager-web-daemon.exe`, `portable.flag`, `resources/`, and `apps/web/dist/` (including `index.html` and `assets/`). It must not contain an installer or a user `data-root.json`.
+- Validate all four executables and the Web entry as files, and `resources/` and Web `assets/` as directories before replacing existing output. Web resources live beside `resources/`, not inside it; preserve the runtime's `apps/web/dist` path.
 - The portable ZIP is uploaded to the same draft GitHub Release but is not referenced from `latest.json`; Tauri installer selection must continue using signed installer artifacts only.
 
 ### 4. Validation & Error Matrix
@@ -49,6 +50,7 @@ get_app_version() -> AppVersion // distribution = standalone | portable | aur
 
 - Type-check updater distribution branches with `npx tsc --noEmit`.
 - Run the portable packaging script against a release directory and inspect ZIP entries.
+- Verify ZIP layout/content and rejection of missing inputs before existing output is changed.
 - Release workflow verification must require `CLI-Manager-V<version>-Windows-x64-portable.zip` before publishing.
 
 ### 7. Wrong vs Correct

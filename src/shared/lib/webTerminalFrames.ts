@@ -1,4 +1,4 @@
-import type { TerminalBinaryFrame } from "../../features/terminal/transport/PtyHostSocket";
+import type { TerminalBinaryFrame } from "../types/terminalFrame";
 
 export type WebTerminalBatchKiB = 96 | 256 | 512;
 

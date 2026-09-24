@@ -60,7 +60,7 @@ export function PinnedProjectSection({ projects, density }: PinnedProjectSection
 
       {!collapsed && (
         <div className="ui-pinned-project-list tree-collapse" role="group" aria-label={t("sidebar.pinned.title")}>
-          <div className={compact ? "ml-2 space-y-0.5 pb-0.5" : "ml-2.5 space-y-0.5 pb-1"}>
+          <div className={compact ? "ml-2 space-y-0.5" : "ml-2.5 space-y-0.5"}>
             {projects.map((project) => (
               <PinnedProjectItem key={"pinned:" + project.id} project={project} density={density} />
             ))}
@@ -113,7 +113,7 @@ function PinnedProjectItem({ project, density }: { project: Project; density: "c
       onPointerDownCapture={preventSecondaryPointerFocus}
     >
       <div
-        className={"ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-xl cursor-pointer group/item " + (
+        className={"ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-lg cursor-pointer group/item " + (
           compact ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
         )}
         data-selected={selected ? "true" : "false"}
@@ -127,7 +127,7 @@ function PinnedProjectItem({ project, density }: { project: Project; density: "c
         }}
         onClick={(event) => actions.onSelectProject(event, project)}
         onDoubleClick={() => actions.onOpenProject(project)}
-        onContextMenu={(event) => actions.onContextMenuProject(event, project)}
+        onContextMenu={(event) => actions.onContextMenuProject(event, project, true)}
       >
         <span className="ui-tree-leading-icon">
           <NodeAppearanceIcon

@@ -5,6 +5,10 @@ use std::path::PathBuf;
 use std::process::Command;
 
 #[cfg(target_os = "windows")]
+#[path = "external_program.rs"]
+mod external_program;
+
+#[cfg(target_os = "windows")]
 use crate::shell_resolver::{resolve_git_bash_exe, GIT_BASH_NOT_FOUND_MESSAGE};
 
 #[derive(serde::Deserialize)]
@@ -65,8 +69,11 @@ fn trimmed_startup_cmd(tab: &ExternalTab) -> Option<&str> {
 }
 
 #[cfg(target_os = "windows")]
-// 向 Windows Terminal 参数追加目录、标题和 shell；启动命令按 cmd、Git Bash、自定义 shell 或其他 shell 分支组装。
+// WSL 独立组装发行版和 Linux 目录；其他 shell 保持既有 Windows Terminal 参数行为。
 fn push_tab_args(args: &mut Vec<String>, tab: &ExternalTab) -> Result<(), String> {
+    if tab.shell.as_deref() == Some("wsl") {
+        return push_wsl_tab_args(args, tab);
+    }
     args.push("new-tab".into());
     if let Some(cwd) = &tab.cwd {
         args.push("-d".into());
@@ -104,6 +111,21 @@ fn push_tab_args(args: &mut Vec<String>, tab: &ExternalTab) -> Result<(), String
         }
     }
     args.push(exe.into());
+    Ok(())
+}
+
+// 目录由 WSL 参数向量传入而非 shell 脚本；仅转义本标签的分号，防止 wt 拆成新命令。
+#[cfg(target_os = "windows")]
+fn push_wsl_tab_args(args: &mut Vec<String>, tab: &ExternalTab) -> Result<(), String> {
+    let mut tab_args = vec![
+        "new-tab".to_string(),
+        "--title".to_string(),
+        tab.title.clone(),
+        "--suppressApplicationTitle".to_string(),
+        "wsl.exe".to_string(),
+    ];
+    tab_args.extend(external_program::wsl_args(tab));
+    args.extend(tab_args.into_iter().map(|arg| arg.replace(';', "\\;")));
     Ok(())
 }
 
@@ -328,7 +350,19 @@ fn open_platform_terminal(tabs: &[ExternalTab]) -> Result<(), String> {
 
 #[tauri::command]
 // 保留历史 IPC 名称，按当前平台分派外部终端启动。
-pub async fn open_windows_terminal(tabs: Vec<ExternalTab>) -> Result<(), String> {
+pub async fn open_windows_terminal(
+    tabs: Vec<ExternalTab>,
+    program: Option<String>,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    if let Some(program) = program
+        .as_deref()
+        .filter(|value| *value != "windows-terminal")
+    {
+        return external_program::open(&tabs, program);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = program;
     open_platform_terminal(&tabs)
 }
 
@@ -455,7 +489,198 @@ pub async fn open_folder_in_explorer(path: String, open_file: Option<bool>) -> R
 
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
-    use super::normalize_windows_explorer_path;
+    use super::{normalize_windows_explorer_path, push_tab_args, shell_exe, ExternalTab};
+
+    // 构造真实 tab 参数而不启动外部窗口，用于对比完整参数向量。
+    fn tab_args(shell: Option<&str>, cwd: Option<&str>, cmd: Option<&str>) -> Vec<String> {
+        let mut args = Vec::new();
+        push_tab_args(
+            &mut args,
+            &ExternalTab {
+                title: "project".into(),
+                cwd: cwd.map(str::to_string),
+                startup_cmd: cmd.map(str::to_string),
+                shell: shell.map(str::to_string),
+            },
+        )
+        .unwrap();
+        args
+    }
+
+    #[test]
+    fn wsl_external_terminal_targets_unc_distribution_and_directory() {
+        for prefix in [
+            r"\\wsl.localhost",
+            r"\\wsl$",
+            r"\\?\UNC\wsl.localhost",
+            r"\\?\UNC\wsl$",
+        ] {
+            let args = tab_args(
+                Some("wsl"),
+                Some(&format!(r"{prefix}\Ubuntu Test\home\dev\my 'project'")),
+                Some("codex --yolo"),
+            );
+            assert_eq!(
+                args,
+                [
+                    "new-tab",
+                    "--title",
+                    "project",
+                    "--suppressApplicationTitle",
+                    "wsl.exe",
+                    "--distribution",
+                    "Ubuntu Test",
+                    "--cd",
+                    "/home/dev/my 'project'",
+                    "--exec",
+                    "bash",
+                    "--login",
+                    "-i",
+                    "-c",
+                    "codex --yolo\nexec bash --login -i",
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn wsl_external_terminal_default_distribution_and_empty_command() {
+        for (cwd, expected) in [
+            (r"D:\my project", "/mnt/d/my project"),
+            ("/home/dev/worktree", "/home/dev/worktree"),
+        ] {
+            let args = tab_args(Some("wsl"), Some(cwd), Some("  "));
+            assert_eq!(
+                args,
+                [
+                    "new-tab",
+                    "--title",
+                    "project",
+                    "--suppressApplicationTitle",
+                    "wsl.exe",
+                    "--cd",
+                    expected
+                ]
+            );
+        }
+        for cwd in [None, Some("  ")] {
+            assert_eq!(
+                tab_args(Some("wsl"), cwd, None),
+                [
+                    "new-tab",
+                    "--title",
+                    "project",
+                    "--suppressApplicationTitle",
+                    "wsl.exe"
+                ]
+            );
+        }
+    }
+
+    #[test]
+    // wt 会还原 \;，再把包含原始引号、分号和注释的命令交给 Bash。
+    fn wsl_external_terminal_preserves_script_and_tab_boundaries() {
+        let cmd = "printf '%s' \"a;b\"; codex --yolo # comment";
+        let mut args = tab_args(Some("wsl"), Some("/home/dev/a;b"), Some(cmd));
+        assert_eq!(args[6], "/home/dev/a\\;b");
+        assert_eq!(
+            args.last().unwrap().replace("\\;", ";"),
+            format!("{cmd}\nexec bash --login -i")
+        );
+        args.push(";".into());
+        args.extend(tab_args(Some("cmd"), None, Some("echo hello")));
+        assert_eq!(args.iter().filter(|arg| arg.as_str() == ";").count(), 1);
+        assert_eq!(
+            args.iter().filter(|arg| arg.as_str() == "new-tab").count(),
+            2
+        );
+    }
+
+    #[test]
+    // 精确锁定非 WSL 分支参数，包括默认值、未知键和无启动命令的行为。
+    fn non_wsl_external_terminal_arguments_remain_unchanged() {
+        for (shell, exe, flags) in [
+            (None, "powershell", vec!["-NoExit", "-Command"]),
+            (
+                Some("powershell"),
+                "powershell",
+                vec!["-NoExit", "-Command"],
+            ),
+            (Some("pwsh"), "pwsh", vec!["-NoExit", "-Command"]),
+            (Some("cmd"), "cmd", vec!["/K"]),
+            (Some("unknown"), "powershell", vec!["-NoExit", "-Command"]),
+            (Some("bash"), "bash", vec!["-Command"]),
+            (Some("zsh"), "zsh", vec!["-Command"]),
+            (Some("fish"), "fish", vec!["-Command"]),
+            (Some("sh"), "sh", vec!["-Command"]),
+        ] {
+            let prefix = vec![
+                "new-tab",
+                "-d",
+                r"C:\my project",
+                "--title",
+                "project",
+                "--suppressApplicationTitle",
+                exe,
+            ];
+            let mut expected = prefix.clone();
+            expected.extend(flags);
+            expected.push("echo hello");
+            assert_eq!(
+                tab_args(shell, Some(r"C:\my project"), Some("echo hello")),
+                expected
+            );
+            assert_eq!(tab_args(shell, Some(r"C:\my project"), None), prefix);
+        }
+    }
+
+    #[test]
+    fn custom_shell_and_git_bash_arguments_remain_unchanged() {
+        let custom = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            tab_args(Some(&custom), None, Some("echo hello")),
+            [
+                "new-tab",
+                "--title",
+                "project",
+                "--suppressApplicationTitle",
+                &custom,
+                "echo hello"
+            ]
+        );
+        // Git Bash 未安装时仍应返回原来的解析错误，不改成 WSL 或 PowerShell。
+        match shell_exe("gitbash") {
+            Ok((exe, _)) => assert_eq!(
+                tab_args(Some("gitbash"), None, Some("echo hello")),
+                [
+                    "new-tab",
+                    "--title",
+                    "project",
+                    "--suppressApplicationTitle",
+                    &exe,
+                    "--login",
+                    "-i",
+                    "-c",
+                    "echo hello; exec bash --login -i"
+                ]
+            ),
+            Err(expected) => {
+                let result = push_tab_args(
+                    &mut Vec::new(),
+                    &ExternalTab {
+                        title: "project".into(),
+                        cwd: None,
+                        startup_cmd: None,
+                        shell: Some("gitbash".into()),
+                    },
+                );
+                assert_eq!(result.unwrap_err(), expected);
+            }
+        }
+    }
 
     #[test]
     // 验证带多余前导斜杠、正斜杠与原生反斜杠的盘符路径归一结果一致。
