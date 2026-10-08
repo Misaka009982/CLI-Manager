@@ -60,6 +60,11 @@ import {
   WORKSPACE_LAYOUT_DEFAULTS,
   type WorkspaceLayoutSettings,
 } from "../lib/workspaceLayout";
+import {
+  DEFAULT_FILE_TREE_SORT,
+  migrateFileTreeSortSettings,
+  type FileTreeSortSettings,
+} from "../lib/fileTreeSort";
 
 export const HISTORY_SMART_TITLE_CUSTOM_PROMPT_MAX_BYTES = 4096;
 
@@ -533,6 +538,8 @@ export interface Settings {
   confirmBeforeClosingTerminalTab: boolean;
   terminalTabHoverInfoEnabled: boolean;
   fileExplorerIgnoredPaths: FileExplorerIgnoredPaths;
+  /** 文件面板文件树的排序偏好（按名称/修改日期 + 升/降序）。 */
+  fileTreeSort: FileTreeSortSettings;
   /** 批量启动分组时，同一分组终端放在同一个 pane 中（多 tab），不同分组创建在不同 pane。默认关闭。 */
   batchLaunchGroupInPane: boolean;
   /** 批量启动分屏方向：vertical（上下分屏） / horizontal（左右分屏）。默认 horizontal。 */
@@ -742,6 +749,7 @@ const DEFAULTS: Settings = {
   confirmBeforeClosingTerminalTab: false,
   terminalTabHoverInfoEnabled: true,
   fileExplorerIgnoredPaths: {},
+  fileTreeSort: { ...DEFAULT_FILE_TREE_SORT },
   batchLaunchGroupInPane: false,
   batchLaunchPaneDirection: "horizontal",
   projectScopedTerminalViewEnabled: false,
@@ -1855,6 +1863,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         ? entries.gitDiffContextLines
         : DEFAULTS.gitDiffContextLines;
     entries.fileExplorerIgnoredPaths = migrateFileExplorerIgnoredPaths(entries.fileExplorerIgnoredPaths);
+    entries.fileTreeSort = migrateFileTreeSortSettings(entries.fileTreeSort);
     entries.batchLaunchGroupInPane =
       typeof entries.batchLaunchGroupInPane === "boolean"
         ? entries.batchLaunchGroupInPane
@@ -1936,7 +1945,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   update: async (key, value) => {
     const nextValue = key === "desktopPetE"
       ? normalizeDesktopPetESettings(value, get().desktopPetE)
-      : value;
+      : key === "fileTreeSort" ? migrateFileTreeSortSettings(value) : value;
     if (
       key === "desktopPet" &&
       (nextValue as DesktopPetSettings).enabled &&

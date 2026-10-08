@@ -41,6 +41,9 @@ import {
   useGitDiffWorkspaceStore,
 } from "../../git/api/gitDiffWorkspaceStore";
 import { useSettingsStore } from "../../../shared/preferences/settingsStore";
+import { updateFileTreeSort } from "../../../shared/preferences/fileTreeSortPreference";
+import { sortFileTreeEntries } from "../../../shared/lib/fileTreeSort";
+import { FileTreeSortMenu } from "../components/FileTreeSortMenu";
 import { useTerminalStore } from "../../terminal/state";
 import { useSshHostStore } from "../../remote/api/sshHostStore";
 import { STATUS_CONFIG } from "../../git/api/GitStatusIcon";
@@ -797,6 +800,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const pasteInto = useFileExplorerStore((s) => s.pasteInto);
   const setClipboard = useFileExplorerStore((s) => s.setClipboard);
   const fileExplorerIgnoredPaths = useSettingsStore((s) => s.fileExplorerIgnoredPaths);
+  const fileTreeSort = useSettingsStore((s) => s.fileTreeSort);
   const updateSetting = useSettingsStore((s) => s.update);
   const [inputAction, setInputAction] = useState<InputAction | null>(null);
   const [inputValue, setInputValue] = useState("");
@@ -896,7 +900,9 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
 
   const hasSearchQuery = Boolean(searchQuery.trim());
 
-  const visibleRows = hasSearchQuery && searchMode === "files" ? searchResults : tree;
+  // 排序只作用于文件树；文件搜索结果沿用后端顺序。
+  const sortedTree = useMemo(() => sortFileTreeEntries(tree, fileTreeSort), [tree, fileTreeSort]);
+  const visibleRows = hasSearchQuery && searchMode === "files" ? searchResults : sortedTree;
   const gitChangeByPath = useMemo(() => new Map(gitChanges.map((change) => [change.path, change])), [gitChanges]);
   const dirtyFilePathList = useMemo(
     () => openFiles.filter((file) => file.content !== file.savedContent).map((file) => file.path),
@@ -1596,6 +1602,11 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
           <Upload size={13} />
         </button>
       )}
+      <FileTreeSortMenu
+        settings={fileTreeSort}
+        onChange={updateFileTreeSort}
+        portalContainer={menuPortalContainer}
+      />
       <button className="ui-file-tooltip ui-icon-action" data-tooltip={t("common.refresh")} aria-label={t("files.refreshList")} onClick={() => void refresh()}>
         <RefreshCw size={13} />
       </button>

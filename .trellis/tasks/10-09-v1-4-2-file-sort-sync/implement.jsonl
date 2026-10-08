@@ -1,0 +1,3 @@
+{"file":".trellis/spec/frontend/file-explorer-batch-contracts.md","reason":"保留选择、展开、搜索、刷新与文件权限不变量"}
+{"file":".trellis/spec/frontend/ai-architecture-contracts.md","reason":"限制共享层依赖与改动范围，不新增架构豁免"}
+{"file":".trellis/tasks/10-09-v1-4-2-file-sort-sync/research/file-sort-review.md","reason":"排序修补前的静态审查证据与验证限制"}

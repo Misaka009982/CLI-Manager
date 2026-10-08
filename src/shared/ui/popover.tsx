@@ -10,11 +10,16 @@ const Popover = PopoverPrimitive.Root;
 const PopoverTrigger = PopoverPrimitive.Trigger;
 const PopoverAnchor = PopoverPrimitive.Anchor;
 
+interface PopoverContentProps
+  extends ComponentPropsWithoutRef<typeof PopoverPrimitive.Content> {
+  portalContainer?: HTMLElement | null;
+}
+
 const PopoverContent = forwardRef<
   ElementRef<typeof PopoverPrimitive.Content>,
-  ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(({ className, align = "start", sideOffset = 6, ...props }, ref) => (
-  <PopoverPrimitive.Portal>
+  PopoverContentProps
+>(({ className, align = "start", sideOffset = 6, portalContainer, ...props }, ref) => (
+  <PopoverPrimitive.Portal container={portalContainer ?? undefined}>
     <PopoverPrimitive.Content
       ref={ref}
       align={align}
