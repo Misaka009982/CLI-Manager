@@ -73,6 +73,7 @@ import {
 import { MemoPaneLeafView } from "../components/PaneLeafView";
 import { useTerminalToolbarRenderer } from "./useTerminalToolbarRenderer";
 import { useScopedTerminalEmptyState } from "./useScopedTerminalEmptyState";
+import { resolveNewTerminalContext } from "../lib/terminalSessionContext";
 
 export function useTerminalTabsController({
   fullscreen = false,
@@ -377,7 +378,7 @@ export function useTerminalTabsController({
     if (activeSession?.kind === "subagent-transcript" && activeSession.subagent) {
       return sessions.find((session) => session.id === activeSession.subagent!.parentSessionId) ?? activeSession;
     }
-    if (activeSession?.kind === "file-editor") {
+    if (activeSession?.kind === "file-editor" || activeSession?.kind === "worktree-conflict") {
       return null;
     }
     return activeSession;
@@ -634,6 +635,10 @@ export function useTerminalTabsController({
   }, [activeWorkspaceTab, historyOpen]);
 
   useEffect(() => {
+    if (activeSession?.kind === "worktree-conflict") setActiveWorkspaceTab("terminal");
+  }, [activeSession?.id, activeSession?.kind]);
+
+  useEffect(() => {
     if (!gitWorkspaceOpen) return;
     closeHistory();
     setActiveWorkspaceTab("terminal");
@@ -717,12 +722,7 @@ export function useTerminalTabsController({
 
   const handleNewTab = useCallback(async () => {
     if (rejectMissingSessionWorktree(activeSession)) return;
-    const newTerminalContext =
-      activeSession?.kind === "subagent-transcript"
-        ? { cwd: undefined, title: "Terminal" }
-        : activeSession?.kind === "file-editor"
-          ? { cwd: activeSession.fileEditor?.projectPath, title: "Terminal" }
-          : { cwd: activeSession?.cwd, title: activeSession?.title ?? "Terminal" };
+    const newTerminalContext = resolveNewTerminalContext(activeSession);
     const activeProject = activeSession?.projectId ? projectById.get(activeSession.projectId) : null;
     if (useExternalTerminal) {
       if (rejectUnsupportedCapability(activeProject, "externalTerminal")) return;
@@ -991,7 +991,7 @@ export function useTerminalTabsController({
 
     const terminalSessionCount = uniqueSessionIds.filter((sessionId) => {
       const session = sessions.find((item) => item.id === sessionId);
-      return session?.kind !== "file-editor";
+      return session?.kind !== "file-editor" && session?.kind !== "worktree-conflict";
     }).length;
 
     if (!shouldConfirmTerminalTabClose(terminalSessionCount)) {

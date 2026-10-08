@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import ts from "typescript";
 import { createHistoryRefresh } from "./historyRefresh.ts";
-import { connectBrowserSocket } from "./webClient.ts";
+const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
+const moduleUrl = (source) => `data:text/javascript,${encodeURIComponent(ts.transpileModule(source, {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+}).outputText)}`;
+const eventsUrl = moduleUrl(read("./fileOperationEvents.ts"));
+const cacheUrl = moduleUrl(read("./projectDirectoryCache.ts"));
+const { subscribeFileOperation } = await import(eventsUrl);
+const { directoryScope, projectDirectoryCache } = await import(cacheUrl);
+const { connectBrowserSocket } = await import(moduleUrl(read("./webClient.ts")
+  .replace('"./fileOperationEvents"', JSON.stringify(eventsUrl))
+  .replace('"./projectDirectoryCache"', JSON.stringify(cacheUrl))));
 
 test("10,000 replay invalidations share one fetch and at most one follow-up", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -128,4 +140,40 @@ test("heartbeat keeps idle connection alive; missing traffic reconnects a half-o
   b.runTimer(1_000);
   assert.equal(b.sockets.length, 2);
   assert.ok(b.sockets[1].url.endsWith("afterSequence=42"));
+});
+
+test("active socket publishes completion before app handling; stale socket cannot complete reads", (t) => {
+  const b = browser(t);
+  const operation = { idempotencyKey: "request", deviceId: "d", kind: "file.list", status: "succeeded", result: [] };
+  const frame = { data: JSON.stringify({ type: "event", sequence: 43, payload: { type: "operation.updated", operation } }) };
+  const received = [];
+  const unsubscribe = subscribeFileOperation("request", "d", "file.list", (value) => received.push(value));
+  t.after(unsubscribe);
+  const stale = b.sockets[0].onmessage;
+  b.win.dispatchEvent(new Event("online"));
+  stale(frame);
+  assert.equal(received.length, 0);
+  b.sockets[1].ready();
+  b.sockets[1].onmessage(frame);
+  assert.equal(received.length, 1);
+  assert.deepEqual(received[0].result, []);
+  assert.equal(b.messages.at(-1).payload.operation.idempotencyKey, "request");
+});
+
+test("ready invalidates cache; replay offline events cannot clear current data; live offline and close clear it", (t) => {
+  const b = browser(t);
+  const scope = directoryScope("d", { projectId: "p", cwd: "C:/p" });
+  const populate = () => projectDirectoryCache.put(scope, "", [], projectDirectoryCache.version);
+  const send = (frame) => b.sockets[0].onmessage({ data: JSON.stringify(frame) });
+  populate();
+  send({ type: "ready", latestSequence: 42 });
+  assert.equal(projectDirectoryCache.get(scope, "").fresh, false);
+  populate();
+  const payload = { type: "device.updated", device: { id: "d", status: "offline" } };
+  send({ type: "event", sequence: 41, payload });
+  assert.equal(projectDirectoryCache.get(scope, "").fresh, true);
+  send({ type: "event", sequence: 43, payload });
+  assert.equal(projectDirectoryCache.get(scope, ""), undefined);
+  populate(); b.connection.close();
+  assert.equal(projectDirectoryCache.get(scope, ""), undefined);
 });

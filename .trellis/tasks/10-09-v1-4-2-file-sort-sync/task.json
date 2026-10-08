@@ -3,7 +3,7 @@
   "name": "v1-4-2-file-sort-sync",
   "title": "检查文件排序并同步 V1.4.2",
   "description": "先补齐文件排序的持久化、交互和回归用例，再用双父 merge 同步 V1.4.2，保留全部 fork 定制，仅静态验证且暂不推送。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "pi",
   "assignee": "pi",
   "createdAt": "2026-10-09",
-  "completedAt": null,
+  "completedAt": "2026-10-09",
   "branch": "integrate/v1.4.2-desktop-pet-e",
   "base_branch": "master",
   "worktree_path": null,
@@ -21,6 +21,12 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "用户已批准创建任务并继续修补与同步。版本 V1.4.2；未运行编译、测试或安装；不得推送。实现与核查由当前会话直接完成。",
-  "meta": {}
+  "notes": "已完成排序修补及 V1.4.2 本地合并的静态核查；运行验证交由用户执行，未运行编译、测试、安装或应用，未推送。集成提交可从本任务路径的 Git 历史查询，详情见 research 中的验证记录。",
+  "meta": {
+    "upstream_version": "V1.4.2",
+    "upstream_commit": "917437d1546c75997f6120339e948305b93907ad",
+    "sorting_commit": "79f9078b",
+    "verification": "static-only",
+    "delivery": "local-merge-no-push"
+  }
 }

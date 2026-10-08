@@ -1,5 +1,97 @@
 # Web three-column layout
 
+## 2026-09-28 follow-up: Web file-tree completion, cache and independent loading
+
+Packaging follow-up approved by user: rebuild Web assets and re-bundle NSIS 1.4.1 only.
+The baseline difference `5887e8ac..64836f5e` is `CHANGELOG.md` only; the existing
+2026-09-23 local Release binaries can be reused. Preserve the previous installer and
+compare all four executable SHA256 hashes before/after bundling. Commit source before
+packaging; record the final artifact after successful verification.
+
+Packaging result (2026-09-28):
+
+- Source committed before packaging as `e42f81ca`.
+- Web build passed; ran `tauri bundle --bundles nsis --config src-tauri/tauri.local.conf.json --ci`
+  with `CARGO_TARGET_DIR=src-tauri/target/local`. One NSIS bundle produced; no Cargo compile/MSI.
+- Installer: `src-tauri/target/local/release/bundle/nsis/CLI-Manager_1.4.1_x64-setup.exe`,
+  29,950,034 bytes, written 2026-09-28 16:51:58 +08:00.
+- Installer SHA256: `D07B6148055312F03B3286CD23E1FEAFFE9B9658F5245855DF324F7E4283CFB8`.
+- Generated NSIS manifest includes final `index-CYxBGQFY.js`, `index-DGGuWXPU.css` and
+  matching `index.html`. All four local Release executable SHA256 hashes are unchanged
+  after bundling (Tauri temporarily sets and then restores the main executable bundle marker).
+- Old installer preserved alongside it as
+  `CLI-Manager_1.4.1_x64-setup-before-web-file-loading-20260928.exe`.
+- No installed app/service was started, stopped or modified; installer runtime acceptance
+  remains manual. No remote push or branch merge performed.
+
+User approved implementation on `fix/web-file-tree-loading`, created from freshly fetched
+`origin/master` (`64836f5e`). Release notes remain 1.4.1. No installer, remote push or merge
+was requested in this implementation turn.
+
+Root cause: the browser awaited polling even though the existing operation WebSocket event
+already contained the result; directory data lived only inside a remounted file panel and
+one busy flag disabled unrelated entries. The change therefore lands in the Web read transport
+and file-panel state owner, not in Rust directory enumeration or the spinner's appearance.
+
+Discovery / impact review:
+
+- `readProjectFiles`: subscribe before POST, match device/kind/idempotency key, race terminal
+  events against polling and abort the losing transport. Polling uses the same operation ID,
+  every 500ms initially / 1s after 3s; missing events never cause a second submission.
+- `connectBrowserSocket` / `request`: publish from the active authenticated socket before app
+  selection filtering, invalidate on ready, ignore replayed offline invalidations, clear on
+  live offline/removal/logout/401/authorization close. HTTP 401 leaves explicit session-expired
+  feedback rather than presenting an empty directory.
+- `projectDirectoryCache`: memory-only LRU, 96 directories and approximate 4MiB string/object
+  budget, fresh for 30s and discarded after 5min on access. Device/project/Worktree/cwd form
+  the scope. An invalidation epoch prevents late writes after cache clearing.
+- `projectDirectorySession` / `ProjectFilesPanel`: cache-backed external state, two active
+  directory reads, per-path dedup/loading/errors, delayed 150ms spinner, local retry, stale
+  contents retained during refresh. Unmount/refresh abort browser requests and clear queued
+  work; completed reads cannot reopen a folder the user has collapsed.
+- Server `handle_operation_update`: confirmed existing events include the stored result.
+- Confirmed unrelated: desktop file explorer, Rust directory enumeration, SSH/WSL transport,
+  PTY/session ownership, terminal sizing/input, hooks, authorization and file path validation.
+  Web SSH browsing retains its existing unsupported feedback.
+- GitNexus MCP is not exposed in this session; use the available codebase-memory index,
+  current source, contracts, focused tests and Git diff as the required fallback. Pre-edit
+  memory impact marked `connectBrowserSocket -> useAppModel` CRITICAL; this was reported
+  before editing and is covered by the existing plus extended socket lifecycle tests.
+
+Scenario matrix: first/cached/stale expansion; empty/failed/slow directory; burst clicks and
+same-directory duplicates; close/reopen sidebar and project/Worktree/device changes;
+collapse during a read; refresh/unmount/React effect cleanup while requests are pending;
+completion before POST response; lost/replayed/wrong-identity notifications; reconnect,
+offline, removal, logout and expired login. Desktop dock/mobile drawer share this code;
+local and WSL paths retain backend validation. Window focus, split panes and hooks do not
+change directory scope or backend execution.
+
+Verification:
+
+- `node --test scripts/webProjectFiles.test.mjs apps/web/src/reconnect.test.mjs`: 26 passed.
+  Tests include actual fake-socket delivery/retirement, early completion, missed-event polling,
+  auth failure, cross-scope isolation, TTL/LRU/size limit, two-read concurrency, retries,
+  cancellation, stale-result rejection, remount reuse and mounted-tree invalidation.
+- `npm run web:typecheck`: passed. `npm run web:build`: passed including TypeScript;
+  existing Vite large-chunk warning remains. Built assets: `index-CYxBGQFY.js` / `index-DGGuWXPU.css`.
+- `npm run check:architecture -- --strict`: 1177 source files, zero files above 2000 lines,
+  zero violations. No dependencies or protocol fields added.
+- Post-edit memory refresh returned `ready`, but a targeted search did not expose the three
+  new, untracked modules; its change detector also listed only tracked edits. Treat the graph
+  as incomplete, not proof of no impact. Current source, `git status` (including new files),
+  TypeScript compilation and behavior tests are the final call-chain verification.
+- Per project quality rules, no CLI-Manager/Tauri/Web service was launched for UI verification.
+  Automated timings are not claimed as measured NetBird/disk performance.
+
+Human acceptance: on PC and phone open an uncached folder, then two other folders rapidly;
+close/reopen the sidebar and switch away/back to the same project within 30s; verify cached
+expansion and independent controls. After 30s, change directory contents and expand again;
+verify background update or use Refresh. Collapse while loading, switch Worktrees, simulate
+disconnect/reconnect and logout/login; confirm no stale/foreign contents. Check existing
+Chinese/English loading, refresh and expired-session feedback. First uncached reads and slow
+disks/network still legitimately show loading. Revert the Web source commit and rebuild the
+Web assets to roll back; no schema/config migration is required.
+
 ## 2026-09-20 follow-up: event-driven file operation pickup
 
 The user approved reopening this Trellis task to remove the visible delay when expanding an uncached Web file-tree directory.

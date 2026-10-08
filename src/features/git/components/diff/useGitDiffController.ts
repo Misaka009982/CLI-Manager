@@ -18,6 +18,7 @@ import type { GitDiffHunkPlacement } from "./reviewNavigation";
 import type { GitDiffViewMode } from "../../../../shared/preferences/settingsStore";
 import { useGitDiffSelection } from "./gitDiffSelection";
 import { useGitDiffParser } from "./useGitDiffParser";
+import { debugConsoleWarn } from "../../../../shared/platform/debugConsole";
 
 interface UseGitDiffControllerOptions {
   target: GitDiffTarget;
@@ -71,7 +72,7 @@ export function useGitDiffController({
     target.projectPath,
     target.status,
   ]);
-  const parseResult = useGitDiffParser(diffText, metadata.byteLength);
+  const parseResult = useGitDiffParser(diffText, metadata.byteLength, debugConsoleWarn);
   const parsed = useMemo<ParsedGitDiff | null>(() => parseResult.file ? {
     file: parseResult.file,
     syntaxHighlight: !parseResult.workerFallback && shouldHighlightGitDiff(metadata),

@@ -11,6 +11,8 @@ import type {
   Pairing,
   WorkspaceSnapshot,
 } from "./domain";
+import { publishFileOperation } from "./fileOperationEvents";
+import { projectDirectoryCache } from "./projectDirectoryCache";
 
 export class ApiError extends Error {
   constructor(
@@ -35,6 +37,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     error?: { code?: string; message?: string };
   };
   if (!response.ok) {
+    if (response.status === 401) projectDirectoryCache.clear(undefined, new Error("session_expired"));
     throw new ApiError(body.error?.code ?? "request_failed", body.error?.message ?? response.statusText, response.status);
   }
   return body;
@@ -52,9 +55,17 @@ export const webClient = {
   conversation: (deviceId: string, sessionId: string) => request<{ events: ConversationEvent[] }>(`/conversations/${encodeURIComponent(sessionId)}?${new URLSearchParams({ deviceId })}`),
   login: (username: string, password: string) =>
     request<AuthStatus>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
-  logout: () => request<{ ok: true }>("/auth/logout", { method: "POST" }),
+  logout: async () => {
+    projectDirectoryCache.clear();
+    try { return await request<{ ok: true }>("/auth/logout", { method: "POST" }); }
+    finally { projectDirectoryCache.clear(); }
+  },
   devices: () => request<{ devices: Device[] }>("/devices"),
-  removeDevice: (deviceId: string) => request<{ ok: true }>(`/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" }),
+  removeDevice: async (deviceId: string) => {
+    const result = await request<{ ok: true }>(`/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+    projectDirectoryCache.clearDevice(deviceId);
+    return result;
+  },
   claimPairing: (code: string) =>
     request<{ pairing: Pairing; device: Device }>("/pairing/claim", {
       method: "POST",
@@ -122,6 +133,7 @@ export function connectBrowserSocket(options: BrowserSocketOptions): BrowserSock
     options.onState("closed");
     if (code === 1008 || code === 4401) {
       stopped = true;
+      projectDirectoryCache.clear();
       options.onUnauthorized();
       return;
     }
@@ -136,6 +148,7 @@ export function connectBrowserSocket(options: BrowserSocketOptions): BrowserSock
     socket = current;
     const active = () => !stopped && socket === current;
     let ready = false;
+    let replayHighWater = 0;
     // A TCP/WebSocket handshake (or missing ready frame) must not strand reconnect.
     connectTimer = window.setTimeout(() => { if (active()) reconnect(); }, 10_000);
     current.onopen = () => {
@@ -153,6 +166,8 @@ export function connectBrowserSocket(options: BrowserSocketOptions): BrowserSock
       if (!message || typeof message !== "object" || !["ready", "heartbeat", "event", "terminal_output", "terminal_status", "error"].includes(message.type)) return;
       if (message.type === "ready") {
         ready = true;
+        replayHighWater = message.latestSequence;
+        projectDirectoryCache.invalidate();
         if (connectTimer !== null) window.clearTimeout(connectTimer);
         connectTimer = null;
         retry = 0;
@@ -162,6 +177,13 @@ export function connectBrowserSocket(options: BrowserSocketOptions): BrowserSock
         idleTimer = window.setTimeout(() => { if (active()) reconnect(); }, 45_000);
       }
       if (message.type === "heartbeat") return;
+      if (message.type === "event" && message.payload?.type === "operation.updated" && message.payload.operation) {
+        publishFileOperation(message.payload.operation);
+      }
+      if (message.type === "event" && message.sequence > replayHighWater
+        && message.payload?.type === "device.updated" && message.payload.device?.status !== "online") {
+        if (message.payload.device?.id) projectDirectoryCache.clearDevice(message.payload.device.id);
+      }
       options.onMessage(message);
     };
     current.onclose = (event) => { if (active()) reconnect(event.code); };
@@ -192,6 +214,7 @@ export function connectBrowserSocket(options: BrowserSocketOptions): BrowserSock
     },
     close: () => {
       stopped = true;
+      projectDirectoryCache.clear();
       window.removeEventListener("online", resume);
       window.removeEventListener("pageshow", resume);
       document.removeEventListener("visibilitychange", resume);

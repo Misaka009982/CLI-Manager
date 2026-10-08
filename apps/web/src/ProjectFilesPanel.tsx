@@ -1,9 +1,11 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowLeft, ChevronDown, ChevronRight, LoaderCircle, RefreshCw, Search, X } from "lucide-react";
 import { getMaterialFileIcon, getMaterialFolderIcon } from "@baybreezy/file-extension-icon";
 import type { Device, ProjectContext } from "./domain";
 import type { TranslationKey } from "./i18n";
 import { parseFileEntries, parseFilePreview, readProjectFiles, type FileEntry, type FileReadKind } from "./projectFiles";
+import { createProjectDirectorySession } from "./projectDirectorySession";
+import { directoryScope } from "./projectDirectoryCache";
 import "./projectFiles.css";
 
 type Props = { device?: Device; context?: ProjectContext; t: (key: TranslationKey) => string; onClose?: () => void };
@@ -14,7 +16,7 @@ export const ProjectFilesPanel = memo(function ProjectFilesPanel({ device, conte
       : !device.capabilities.includes("file.management") ? "capabilityUnavailable" : null;
   return <section className="project-files" aria-label={t("projectFiles")}>
     {unavailable ? <><FileHeading context={context} t={t} onClose={onClose} /><p role="status">{t(unavailable)}</p></> :
-      <FileBrowser key={`${device!.id}:${context!.key}:${context!.projectId}:${context!.worktreeId}:${context!.cwd}`}
+      <FileBrowser key={directoryScope(device!.id, context!)}
         device={device!} context={context!} t={t} onClose={onClose} />}
   </section>;
 });
@@ -33,6 +35,7 @@ function FileHeading({ context, t, onClose, children }: Pick<Props, "context" | 
 
 function fileError(error: unknown, kind: FileReadKind): TranslationKey {
   const code = error instanceof Error ? error.message : "";
+  if (code === "session_expired") return "sessionExpired";
   if (/ssh_project_unsupported/.test(code)) return "filesSshUnsupported";
   if (/file_result_too_large/.test(code) && (kind === "file.list" || kind === "file.search")) return "filesListTooLarge";
   if (/too_large|binary|unsupported|invalid_file_result/.test(code)) return "filesPreviewUnavailable";
@@ -41,7 +44,8 @@ function fileError(error: unknown, kind: FileReadKind): TranslationKey {
 }
 
 function FileBrowser({ device, context, t, onClose }: Required<Pick<Props, "device" | "context" | "t">> & Pick<Props, "onClose">) {
-  const [directories, setDirectories] = useState<Record<string, FileEntry[]>>({});
+  const [directorySession] = useState(() => createProjectDirectorySession(device.id, context));
+  const { directories, pending, loading, errors } = useSyncExternalStore(directorySession.subscribe, directorySession.getSnapshot);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [visibleCount, setVisibleCount] = useState<Record<string, number>>({});
   const [query, setQuery] = useState("");
@@ -50,64 +54,49 @@ function FileBrowser({ device, context, t, onClose }: Required<Pick<Props, "devi
   const [results, setResults] = useState<FileEntry[] | null>(null);
   const [preview, setPreview] = useState<{ path: string; image: boolean; content: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [loadingPath, setLoadingPath] = useState<string | null>(null);
   const [error, setError] = useState<TranslationKey | null>(null);
   const request = useRef<AbortController | null>(null);
   const requestKind = useRef<FileReadKind | null>(null);
-  const loadingIndicatorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const run = async (kind: FileReadKind, path: string) => {
+  const run = async (kind: Exclude<FileReadKind, "file.list">, path: string) => {
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
     requestKind.current = kind;
     setBusy(true);
-    if (loadingIndicatorTimer.current) clearTimeout(loadingIndicatorTimer.current);
-    loadingIndicatorTimer.current = null;
-    setLoadingPath(null);
-    if (kind === "file.list") {
-      loadingIndicatorTimer.current = setTimeout(() => {
-        if (request.current === controller && !controller.signal.aborted) setLoadingPath(path);
-      }, 150);
-    }
     setError(null);
     try {
       const value = await readProjectFiles(device.id, context, kind, path, controller.signal);
       if (controller.signal.aborted) return;
-      if (kind === "file.list") {
-        const entries = parseFileEntries(value);
-        setDirectories((old) => ({ ...old, [path]: entries }));
-        setExpanded((old) => new Set([...old, path]));
-      } else if (kind === "file.search") setResults(parseFileEntries(value));
+      if (kind === "file.search") setResults(parseFileEntries(value));
       else setPreview({ path, image: kind === "file.read_image", content: parseFilePreview(value, kind === "file.read_image") });
     } catch (reason) {
       if (!controller.signal.aborted) setError(fileError(reason, kind));
     } finally {
       if (request.current === controller) {
-        if (loadingIndicatorTimer.current) clearTimeout(loadingIndicatorTimer.current);
-        loadingIndicatorTimer.current = null;
         if (!controller.signal.aborted) setBusy(false);
-        setLoadingPath(null);
       }
     }
   };
 
   useEffect(() => {
-    void run("file.list", "");
+    directorySession.load("");
     return () => {
       request.current?.abort();
-      if (loadingIndicatorTimer.current) clearTimeout(loadingIndicatorTimer.current);
+      directorySession.stop();
     };
     // Identity changes remount this component; do not restart reads on workspace snapshots.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [directorySession]);
 
   const select = (entry: FileEntry) => {
     setSelectedPath(entry.path);
     if (entry.kind === "directory") {
+      request.current?.abort(); setBusy(false); setPreview(null); setError(null);
       if (expanded.has(entry.path)) setExpanded((old) => { const next = new Set(old); next.delete(entry.path); return next; });
-      else if (directories[entry.path]) setExpanded((old) => new Set([...old, entry.path]));
-      else void run("file.list", entry.path);
+      else {
+        setExpanded((old) => new Set([...old, entry.path]));
+        directorySession.load(entry.path);
+      }
     } else {
       setPreview(null);
       void run(/\.(png|jpe?g|gif|webp|bmp|ico|svg)$/i.test(entry.path) ? "file.read_image" : "file.read_text", entry.path);
@@ -117,16 +106,24 @@ function FileBrowser({ device, context, t, onClose }: Required<Pick<Props, "devi
     {entries.slice(0, visibleCount[path] ?? 200).map((entry) => {
       const folder = entry.kind === "directory";
       const open = expanded.has(entry.path) && !ancestors.has(entry.path);
+      const children = directories.get(entry.path);
       return <li key={entry.path}>
-        <button type="button" data-selected={selectedPath === entry.path} disabled={busy && !directories[entry.path]}
+        <button type="button" data-selected={selectedPath === entry.path} aria-busy={folder && pending.has(entry.path)}
+          onPointerEnter={() => { if (folder) directorySession.prefetch(entry.path); }}
+          onFocus={() => { if (folder) directorySession.prefetch(entry.path); }}
+          onPointerLeave={directorySession.cancelPrefetch} onBlur={directorySession.cancelPrefetch}
           title={entry.path} aria-expanded={folder ? open : undefined} onClick={() => select(entry)}>
-          {folder && busy && loadingPath === entry.path ? <LoaderCircle size={14} className="project-files-spinner" /> :
+          {folder && loading.has(entry.path) ? <LoaderCircle size={14} className="project-files-spinner" /> :
             folder ? open ? <ChevronDown size={14} /> : <ChevronRight size={14} /> : <span className="file-indent" />}
           <img src={folder ? getMaterialFolderIcon(entry.name, open) : getMaterialFileIcon(entry.name)} width={16} height={16} alt="" draggable={false} />
           <span>{entry.name}</span>
         </button>
-        {folder && open && directories[entry.path] && (directories[entry.path].length
-          ? renderEntries(directories[entry.path], entry.path, new Set([...ancestors, entry.path])) : <small className="file-empty">{t("filesEmpty")}</small>)}
+        {folder && open && errors.has(entry.path) && <div role="alert" className="file-directory-error">
+          <small>{t(fileError(errors.get(entry.path), "file.list"))}</small>
+          <button type="button" onClick={() => directorySession.load(entry.path)}><RefreshCw size={14} />{t("refresh")}</button>
+        </div>}
+        {folder && open && children && (children.length
+          ? renderEntries(children, entry.path, new Set([...ancestors, entry.path])) : <small className="file-empty">{t("filesEmpty")}</small>)}
       </li>;
     })}
     {entries.length > (visibleCount[path] ?? 200) && <li><button className="project-files-more" type="button"
@@ -141,13 +138,14 @@ function FileBrowser({ device, context, t, onClose }: Required<Pick<Props, "devi
         onClick={() => {
           setSearchOpen(!searchOpen);
           if (searchOpen) {
-            if (requestKind.current === "file.search") { request.current?.abort(); setBusy(false); setLoadingPath(null); }
+            if (requestKind.current === "file.search") { request.current?.abort(); setBusy(false); }
             setQuery(""); setResults(null); setError(null);
           }
         }}><Search size={16} /></button>
       <button className="icon-button" type="button" title={t("refresh")} aria-label={t("refresh")} onClick={() => {
+        request.current?.abort(); setBusy(false); setError(null);
         setQuery(""); setResults(null); setPreview(null); setSelectedPath(null);
-        setDirectories({}); setExpanded(new Set()); setVisibleCount({}); void run("file.list", "");
+        setExpanded(new Set()); setVisibleCount({}); directorySession.refresh();
       }}><RefreshCw size={16} /></button>
     </FileHeading>
     {searchOpen && <form className="project-files-search" onSubmit={(event) => {
@@ -160,15 +158,16 @@ function FileBrowser({ device, context, t, onClose }: Required<Pick<Props, "devi
         onChange={(event) => { setQuery(event.target.value); if (!event.target.value) setResults(null); }} />
       <button className="icon-button" type="submit" disabled={busy || !query.trim()} aria-label={t("filesSearch")}><Search size={17} /></button>
     </form>}
-    {busy && <p role="status">{t("filesLoading")}</p>}
+    {(busy || (loading.has("") && !directories.has(""))) && <p role="status">{t("filesLoading")}</p>}
     {error && <p role="alert">{t(error)}</p>}
-    <div className="project-files-content" aria-busy={busy}>
+    {errors.has("") && <p role="alert">{t(fileError(errors.get(""), "file.list"))}</p>}
+    <div className="project-files-content" aria-busy={busy || pending.size > 0}>
       {preview ? <div className="project-files-preview">
         <button className="secondary-button" type="button" onClick={() => setPreview(null)}><ArrowLeft size={16} />{t("filesBack")}</button>
         <small className="file-preview-path">{preview.path}</small>
         {preview.image ? <img src={preview.content} alt={preview.path} /> : <pre tabIndex={0}>{preview.content}</pre>}
-      </div> : (results ?? directories[""])?.length ? renderEntries(results ?? directories[""] ?? [], results ? "search" : "") :
-        !busy && !error && <p>{t("filesEmpty")}</p>}
+      </div> : (results ?? directories.get(""))?.length ? renderEntries(results ?? directories.get("") ?? [], results ? "search" : "") :
+        !busy && !pending.has("") && !error && !errors.has("") && <p>{t("filesEmpty")}</p>}
     </div>
   </>;
 }

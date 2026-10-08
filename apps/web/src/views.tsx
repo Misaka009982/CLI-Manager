@@ -42,7 +42,7 @@ import type { Device, HistorySessionSummary, JsonObject, Operation, OperationSta
 import type { TranslationKey } from "./i18n";
 import { deviceWallpaperUrl } from "./webClient";
 import { WebTerminal } from "./WebTerminal";
-import { ProjectFilesPanel } from "./ProjectFilesPanel";
+import { ProjectInspector } from "./ProjectInspector";
 import { useFileSidebarLayout } from "./useFileSidebarLayout";
 import { SidebarResizeHandle } from "./SidebarResizeHandle";
 import { ProjectTree } from "./ProjectTree";
@@ -884,7 +884,7 @@ export function Workbench(props: WorkbenchProps) {
         <SidebarResizeHandle side="files" width={fileLayout.files} max={fileLayout.fileMax}
           label={t("resizeFiles")} onResize={fileLayout.resize} />
         <aside className="project-files-dock">
-          <ProjectFilesPanel device={selectedDevice} context={fileContext ?? activeTerminalContext} t={t} onClose={hideFiles} />
+          <ProjectInspector device={selectedDevice} context={fileContext ?? activeTerminalContext} t={t} onClose={hideFiles} />
         </aside>
       </>}
 
@@ -1040,7 +1040,7 @@ export function Workbench(props: WorkbenchProps) {
           hideHeader
           onClose={hideFiles}
         >
-          <ProjectFilesPanel device={selectedDevice} context={fileContext ?? activeTerminalContext} t={t} onClose={hideFiles} />
+          <ProjectInspector device={selectedDevice} context={fileContext ?? activeTerminalContext} t={t} onClose={hideFiles} />
         </OverlayPanel>
       )}
     </div>

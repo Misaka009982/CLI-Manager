@@ -121,6 +121,14 @@ The server also accepts `--bind host:port` and `--port number`. Precedence is co
 
 ### Operations
 
+#### Read-only Web Git panel (1.4.1)
+
+- `git.repositories`, `git.history`, `git.commit_detail`, `git.commit_diff` use `git.management`; they do not require write confirmation. Existing Git writes retain both browser intent and native confirmation.
+- Browser sends registered project/worktree IDs, optional `repository` (root is empty), full commit OIDs/cursor and repository-relative paths. `git.status` / `git.diff` also accept the same optional repository. Desktop resolves nested repositories from bounded discovery, validates canonical context on every read, and never returns absolute repository paths.
+- History uses the existing 50-item cursor page; detail and Diff are fetched only when selected. Rename Diff carries both path and oldPath. No automatic Fetch, mutations, SSH fallback or desktop Git Store changes.
+- Browser renders a complete bounded snapshot text preview, not a second parsed/editable Diff implementation; importing the desktop Viewer would pull desktop settings/terminal-theme dependencies into the standalone Web app. Large/binary Diff is an explicit error, never silently truncated.
+- Directory cache remains memory-only and bounded (96 directories/~4MiB), fresh 30s and retained 10min. Background refresh with existing data and speculative prefetch must not show a loading spinner; failures keep stale data plus explicit error. Hover/focus prefetch is idle-only, 180ms delayed, capped at six directories per mounted panel and never recursive.
+
 ```text
 submitted -> waiting_device | accepted | rejected
 waiting_device -> accepted | rejected

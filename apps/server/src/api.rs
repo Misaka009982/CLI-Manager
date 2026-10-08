@@ -45,6 +45,10 @@ const ENABLED_OPERATION_KINDS: &[&str] = &[
     "file.move",
     "file.delete",
     "git.status",
+    "git.repositories",
+    "git.history",
+    "git.commit_detail",
+    "git.commit_diff",
     "git.branches",
     "git.diff",
     "git.fetch",
@@ -888,5 +892,21 @@ mod tests {
             serde_json::json!({ "projectId": "p", "confirmed": true }),
         ))
         .is_ok());
+    }
+
+    #[test]
+    fn git_history_reads_are_enabled_without_weakening_write_confirmation() {
+        for kind in ["git.repositories", "git.history", "git.commit_detail", "git.commit_diff"] {
+            assert!(validate_operation_request(&request(
+                kind,
+                serde_json::json!({ "projectId": "p", "repository": "nested" }),
+            )).is_ok());
+            assert_eq!(operation_capability(kind), "git.management");
+            assert!(!operation_requires_confirmation(kind));
+        }
+        for kind in ["git.fetch", "git.commit", "git.push", "git.discard"] {
+            assert!(operation_requires_confirmation(kind));
+            assert!(validate_operation_request(&request(kind, serde_json::json!({ "projectId": "p" }))).is_err());
+        }
     }
 }

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { executeWebGitRead, validateWebGitRead, WEB_GIT_READ_KINDS } from "./webGitRead";
 import { useProjectStore } from "../../projects/api/projectStore";
 import { useSettingsStore } from "../../../shared/preferences/settingsStore";
 import { useSshHostStore } from "../../remote/api/sshHostStore";
@@ -14,6 +15,7 @@ import { requestWebDeviceAction, type WebDeviceActionTarget } from "../../../sha
 import { webDeviceApi, type WebDeviceOperation } from "../../../shared/lib/webDevice";
 
 const MANAGEMENT_KINDS = new Set([
+  ...WEB_GIT_READ_KINDS,
   "project.tree.reorder",
   "terminal.attach_image",
   "project.start",
@@ -582,33 +584,10 @@ async function executeFile(operation: WebDeviceOperation, payload: Payload): Pro
 
 async function executeGit(operation: WebDeviceOperation, payload: Payload): Promise<unknown> {
   const { rootPath } = await resolveLocalContext(payload);
+  if (WEB_GIT_READ_KINDS.has(operation.kind)) {
+    return boundedResult(await executeWebGitRead(operation.kind, payload, rootPath), "git_result_too_large", "Git result exceeds Web transfer limit");
+  }
   switch (operation.kind) {
-    case "git.status": {
-      const [changes, branch] = await Promise.all([
-        invoke("git_get_changes", { projectPath: rootPath }),
-        invoke("git_branch_status", { projectPath: rootPath }),
-      ]);
-      return { changes, branch };
-    }
-    case "git.branches": return invoke("git_list_branches", { projectPath: rootPath });
-    case "git.diff": {
-      const whitespace = optionalString(payload, "whitespace", 16) ?? "exact";
-      if (!new Set(["exact", "ignore-eol", "ignore-all"]).has(whitespace)) {
-        managementError("invalid_operation_payload", "invalid diff whitespace mode");
-      }
-      const contextLines = numberValue(payload, "contextLines", 3, 3, 20);
-      if (![3, 10, 20].includes(contextLines)) managementError("invalid_operation_payload", "invalid diff context lines");
-      return boundedResult(
-        await invoke("git_get_file_diff", {
-          projectPath: rootPath,
-          filePath: requiredString(payload, "path"),
-          status: requiredString(payload, "status", 8),
-          options: { whitespace, contextLines },
-        }),
-        "git_result_too_large",
-        "the diff is too large to transfer to the browser",
-      );
-    }
     case "git.fetch": await invoke("git_fetch", { projectPath: rootPath }); break;
     case "git.checkout": await invoke("git_checkout_branch", { projectPath: rootPath, branch: requiredString(payload, "branch", 255), remote: booleanValue(payload, "remote") }); break;
     case "git.create_branch": await invoke("git_create_branch", { projectPath: rootPath, branch: requiredString(payload, "branch", 255) }); break;
@@ -819,18 +798,13 @@ export async function validateWebManagementOperation(operation: WebDeviceOperati
 
   if (operation.kind.startsWith("git.")) {
     await resolveLocalContext(payload);
+    if (WEB_GIT_READ_KINDS.has(operation.kind)) {
+      validateWebGitRead(operation.kind, payload);
+      return;
+    }
     switch (operation.kind) {
       case "git.checkout":
       case "git.create_branch": requiredString(payload, "branch", 255); break;
-      case "git.diff": {
-        requiredString(payload, "path");
-        requiredString(payload, "status", 8);
-        const whitespace = optionalString(payload, "whitespace", 16) ?? "exact";
-        if (!new Set(["exact", "ignore-eol", "ignore-all"]).has(whitespace)) managementError("invalid_operation_payload", "invalid diff whitespace mode");
-        const contextLines = numberValue(payload, "contextLines", 3, 3, 20);
-        if (![3, 10, 20].includes(contextLines)) managementError("invalid_operation_payload", "invalid diff context lines");
-        break;
-      }
       case "git.stage":
       case "git.unstage":
       case "git.delete_untracked": stringArray(payload, "paths"); break;

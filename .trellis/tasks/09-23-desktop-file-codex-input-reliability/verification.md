@@ -1,5 +1,17 @@
 # 1.4.1 分阶段验证
 
+## 2026-09-30 Codex 排队提问快捷键修复
+
+- 安装包：修复提交 `1fbfaf08` 后运行 `npm run tauri:build:local -- --bundles nsis --ci`，退出码 0；桌面及 Web 生产构建、缓存 Rust 编译、NSIS 封装通过。产物 `src-tauri/target/local/release/bundle/nsis/CLI-Manager_1.4.1_x64-setup.exe`，2026-09-30 14:03:37，29,987,198 字节；SHA256 `8A5EC9C773FCE2919DD5FF66DBF1CB1998493BD39BB0789243F494885EEE6FB1`。保留旧包备份，未启动应用或 Web 服务，未推送。
+- 分支：`fix/codex-queued-question-shortcut`，从本地与 origin/master 同步的 `0294a3ba` 创建；沿用 1.4.1，NSIS，提交后打包，不推送。
+- 根因：桌面 xterm 自定义键盘回调无条件将 Shift+Left/Right 改成模拟选区，空输入直接吞键，有输入只发送普通方向键，Codex 无法收到排队提问入口所需的修饰键。
+- 修复落点：`useXTermController` 在现有 Codex 会话/视口识别命中后清理模拟选区并返回 true，由 xterm 原生编码按键；普通 Shell 保留选区逻辑。为避免依赖待回答 Hook 是否及时到达，对 Codex 会话始终保留该原生组合键。
+- 触点核对：桌面自定义键盘回调、Input 选区状态和 onData 转发；会话元数据/手动启动视口检测复用现有实现。Web 自定义回调只拦截剪贴板键、Hook 事件映射、PTY 传输、终端渲染均无须修改。未扩大到 Codex 全选/撤销/鼠标定位。
+- 场景：空输入/已有草稿、左/右方向键、keyup/其他修饰键、普通 Shell；本地/WSL/SSH及恢复会话复用同一键盘入口与会话识别。手动启动 Codex 复用已存在的视口检测；这仍属于现有会话级识别，不新增前台进程生命周期探测。
+- 验证：实际注册键盘回调测试 7 项、异步提问 Hook 测试 1 项、现有会话检测/换行等测试 18 项，共 26 项通过；桌面 TypeScript 与严格架构通过（1190 文件、0 超限/违规），Git diff whitespace 检查通过。
+- GitNexus 工具不可用，按契约、codebase-memory 调用检索和真实源码降级；memory 对 useXTermController 未返回调用者，未把空结果当作无影响证明，实际入口是 XTermView 使用的终端控制器。
+- 人工验收：安装后在 Codex 出现 queued questions 时按 Shift+左方向键，分别检查空输入/已有草稿；普通 Shell 验证 Shift 选区，确认回答后状态正常。按项目规则未启动桌面应用或服务进行自动 UI 测试。
+
 ## 自动检查
 
 - `node --test scripts/fileExplorerBatchStore.test.mjs scripts/fileExplorerMultiSelectUi.test.mjs scripts/fileExplorerPathActions.test.mjs`：53/53 通过，覆盖本机文件发布、应用内快照、系统不可用回退、非法源拒绝、粘贴冲突与项目代际。

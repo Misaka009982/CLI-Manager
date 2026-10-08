@@ -1281,6 +1281,11 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
         !e.metaKey &&
         (e.key === "ArrowLeft" || e.key === "ArrowRight")
       ) {
+        // Codex owns Shift+Left for queued questions; keep its modifier intact.
+        if (isCodexSession(getSessionToolContext(), terminal)) {
+          inputSelection.clearInputSelectionState();
+          return true;
+        }
         e.preventDefault();
         inputSelection.extendKeyboardInputSelection(e.key === "ArrowLeft" ? -1 : 1);
         return false;

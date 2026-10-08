@@ -24,6 +24,7 @@
 .project-files-tree svg, .project-files-tree img, .file-indent { flex-shrink: 0; }
 .file-indent { width: 14px; }
 .file-empty { display: block; padding: 4px 20px; color: var(--muted); }
+.file-directory-error { padding: 4px 20px; color: var(--muted); }
 .file-preview-path { display: block; overflow-wrap: anywhere; margin: 10px 0; }
 .project-files-preview pre { white-space: pre; overflow: auto; font-size: 12px; line-height: 1.6; tab-size: 4; }
 .project-files-preview img { display: block; max-width: 100%; height: auto; }

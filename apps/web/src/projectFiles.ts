@@ -1,6 +1,7 @@
-import type { JsonObject, JsonValue, ProjectContext } from "./domain";
+import type { JsonObject, JsonValue, Operation, ProjectContext } from "./domain";
 import { createRequestId } from "./requestId";
 import { webClient } from "./webClient";
+import { isFileOperationComplete, subscribeFileOperation } from "./fileOperationEvents";
 
 export type FileEntry = { name: string; path: string; kind: "file" | "directory" };
 export type FileReadKind = "file.list" | "file.search" | "file.read_text" | "file.read_image";
@@ -42,25 +43,54 @@ export async function readProjectFiles(
   signal: AbortSignal, client = webClient, timeoutMs = 30_000,
 ): Promise<JsonValue> {
   if (!READ_KINDS.has(kind)) throw new Error("unsupported_operation_kind");
+  return readProjectOperation(deviceId, context, kind,
+    kind === "file.search" ? { query: value } : { path: value }, signal, client, timeoutMs);
+}
+
+// 文件与只读 Git 共用事件优先/轮询恢复链路；身份覆盖调用方参数，禁止传入 cwd。
+export async function readProjectOperation(
+  deviceId: string, context: ProjectContext, kind: string, parameters: JsonObject,
+  signal: AbortSignal, client = webClient, timeoutMs = 30_000,
+): Promise<JsonValue> {
+  if (!READ_KINDS.has(kind) && !["git.repositories", "git.branches", "git.status", "git.diff", "git.history", "git.commit_detail", "git.commit_diff"].includes(kind)) {
+    throw new Error("unsupported_operation_kind");
+  }
   if (!context.projectId) throw new Error("project_not_found");
-  const bounded = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+  const finished = new AbortController();
+  const bounded = AbortSignal.any([signal, finished.signal, AbortSignal.timeout(timeoutMs)]);
   bounded.throwIfAborted();
-  const payload: JsonObject = { projectId: context.projectId };
+  const payload: JsonObject = { ...parameters, projectId: context.projectId };
+  delete payload.cwd;
+  delete payload.rootPath;
+  delete payload.worktreeId;
   if (context.worktreeId) payload.worktreeId = context.worktreeId;
-  if (kind === "file.search") payload.query = value;
-  else payload.path = value;
-  let { operation } = await client.createOperation({ deviceId, kind, payload, idempotencyKey: createRequestId() }, bounded);
-  const startedAt = performance.now();
-  while (true) {
-    bounded.throwIfAborted();
-    if (operation.status === "succeeded") return operation.result;
-    if (["failed", "rejected", "timed_out", "canceled"].includes(operation.status)) {
-      throw new Error(operation.error?.code ?? "file_read_failed");
+  const idempotencyKey = createRequestId();
+  let unsubscribe = () => {};
+  let removeAbort = () => {};
+  const notification = new Promise<Operation>((resolve, reject) => {
+    unsubscribe = subscribeFileOperation(idempotencyKey, deviceId, kind, resolve);
+    const abort = () => reject(bounded.reason);
+    bounded.addEventListener("abort", abort, { once: true });
+    removeAbort = () => bounded.removeEventListener("abort", abort);
+  });
+  const poll = async () => {
+    let { operation } = await client.createOperation({ deviceId, kind, payload, idempotencyKey }, bounded);
+    const startedAt = performance.now();
+    while (!isFileOperationComplete(operation)) {
+      // WebSocket normally completes immediately; polling recovers lost events/reconnects.
+      await delay(bounded, performance.now() - startedAt < 3_000 ? 500 : 1_000);
+      ({ operation } = await client.operation(operation.id, bounded));
     }
-    // Fast initial completion avoids a guaranteed 400 ms pause per folder.
-    // Back off for long-running host operations to bound polling traffic.
-    const elapsed = performance.now() - startedAt;
-    await delay(bounded, elapsed < 1_000 ? 100 : elapsed < 3_000 ? 250 : 500);
-    ({ operation } = await client.operation(operation.id, bounded));
+    return operation;
+  };
+  try {
+    const operation = await Promise.race([notification, poll()]);
+    bounded.throwIfAborted();
+    if (operation.status !== "succeeded") throw new Error(operation.error?.code ?? "file_read_failed");
+    return operation.result;
+  } finally {
+    unsubscribe();
+    removeAbort();
+    finished.abort();
   }
 }

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FileData } from "react-diff-view";
-import { debugConsoleWarn } from "../../../../shared/platform/debugConsole";
 import { shouldParseGitDiffInWorker } from "../../../../shared/lib/gitDiffLimits";
 import {
   parseGitDiffFile,
@@ -14,16 +13,18 @@ interface AsyncParseResult {
   workerFallback: boolean;
 }
 
-function parseWithoutWorker(content: string): FileData | null {
+type ParseWarning = (...args: unknown[]) => void;
+
+function parseWithoutWorker(content: string, onWarning?: ParseWarning): FileData | null {
   try {
     return parseGitDiffFile(content);
   } catch (error) {
-    debugConsoleWarn("[GitDiffViewer] Failed to parse diff:", error);
+    onWarning?.("[GitDiffViewer] Failed to parse diff:", error);
     return null;
   }
 }
 
-export function useGitDiffParser(content: string, byteLength: number) {
+export function useGitDiffParser(content: string, byteLength: number, onWarning?: ParseWarning) {
   const useWorker = shouldParseGitDiffInWorker(byteLength);
   const generationRef = useRef(0);
   const [asyncResult, setAsyncResult] = useState<AsyncParseResult>({
@@ -32,8 +33,8 @@ export function useGitDiffParser(content: string, byteLength: number) {
     workerFallback: false,
   });
   const synchronousFile = useMemo(
-    () => useWorker ? null : parseWithoutWorker(content),
-    [content, useWorker],
+    () => useWorker ? null : parseWithoutWorker(content, onWarning),
+    [content, useWorker, onWarning],
   );
 
   useEffect(() => {
@@ -46,10 +47,10 @@ export function useGitDiffParser(content: string, byteLength: number) {
       if (settled || generationRef.current !== generation) return;
       settled = true;
       worker?.terminate();
-      debugConsoleWarn("[GitDiffViewer] Diff parser worker failed; using main thread:", reason);
+      onWarning?.("[GitDiffViewer] Diff parser worker failed; using main thread:", reason);
       setAsyncResult({
         source: content,
-        file: parseWithoutWorker(content),
+        file: parseWithoutWorker(content, onWarning),
         workerFallback: true,
       });
     };
@@ -83,7 +84,7 @@ export function useGitDiffParser(content: string, byteLength: number) {
       generationRef.current += 1;
       worker?.terminate();
     };
-  }, [content, useWorker]);
+  }, [content, useWorker, onWarning]);
 
   if (!content) return { file: null, parsing: false, workerFallback: false };
   if (!useWorker) return { file: synchronousFile, parsing: false, workerFallback: false };
