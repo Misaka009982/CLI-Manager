@@ -9,6 +9,8 @@ const hookSettings = [
   "../src-tauri/src/features/hooks/settings/mod.rs",
   "../src-tauri/src/features/hooks/settings/json_hooks.rs",
 ].map((path) => readFileSync(new URL(path, import.meta.url), "utf8")).join("\n");
+const completionHooks = readFileSync(new URL("../src-tauri/src/features/hooks/settings/claude_completion.rs", import.meta.url), "utf8");
+const completionReceiver = readFileSync(new URL("../src-tauri/src/features/hooks/desktop_pet_e_completion.rs", import.meta.url), "utf8");
 const proxy = readFileSync(new URL("../src-tauri/src/features/codex-proxy/mod.rs", import.meta.url), "utf8");
 const coordinator = readFileSync(new URL("../src/features/terminal/hooks/useDesktopPetECoordinator.ts", import.meta.url), "utf8");
 const sessionCoordinator = readFileSync(new URL("../src/features/terminal/hooks/useDesktopPetEAgentCoordinator.ts", import.meta.url), "utf8");
@@ -161,6 +163,46 @@ test("question notifications degrade to jump-only without becoming normal notifi
   assert.match(hookClient, /"toolUseId": normalized\.tool_use_id/);
   assert.match(broker, /matches!\(&entry\.state, PendingState::Waiting\)/);
   assert.match(broker, /desktopPetE\.agent\.notificationOnly/);
+});
+
+test("Claude 问答完成回调独立安装，且只在后端清理待处理项", () => {
+  // 同时锁定安装和内部消费；只测 broker 无法发现缺回调或误入子任务界面的回归。
+  const applyClaude = hookSettings.slice(
+    hookSettings.indexOf("fn apply_claude_hook_module"),
+    hookSettings.indexOf("fn remove_claude_hook_module"),
+  );
+  const attention = applyClaude.slice(
+    applyClaude.indexOf("ClaudeHookModule::Attention"),
+    applyClaude.indexOf("ClaudeHookModule::Stop"),
+  );
+  const subagent = applyClaude.slice(applyClaude.indexOf("ClaudeHookModule::Subagent"));
+  assert.match(attention, /install_claude_completion_hooks\(settings, exe\)/);
+  assert.doesNotMatch(subagent, /install_claude_completion_hooks/);
+  assert.match(subagent, /build_command\(exe, "claude", "ToolStop"\)/);
+  assert.match(completionHooks, /\["PostToolUse", "PostToolUseFailure"\]/);
+  assert.match(completionHooks, /build_command\(exe, "claude", DESKTOP_PET_E_COMPLETION_EVENT\)/);
+  assert.match(completionReceiver, /DESKTOP_PET_E_COMPLETION_EVENT: &str = "DesktopPetEComplete"/);
+  assert.match(hookClient, /DESKTOP_PET_E_COMPLETION_EVENT => DESKTOP_PET_E_COMPLETION_EVENT/);
+  assert.match(hookSettings, /attention_hook_installed: registered\("Notification"\)\s*&& registered\("PermissionRequest"\)\s*&& claude_completion_hooks_installed/);
+  const removeClaude = hookSettings.slice(
+    hookSettings.indexOf("fn remove_claude_hook_module"),
+    hookSettings.indexOf("fn apply_codex_hook_module"),
+  );
+  assert.match(removeClaude, /remove_claude_completion_hooks\(settings\)/);
+  assert.doesNotMatch(removeClaude, /\["SubagentStart", "SubagentStop", "PreToolUse", "PostToolUse"\]/);
+  const privateGateStart = hookServer.indexOf("if desktop_pet_e_completion::consume");
+  for (const boundary of ["let expected_auth", "if !is_valid_payload", "let accepted = recent_events"]) {
+    const boundaryIndex = hookServer.indexOf(boundary);
+    assert.ok(boundaryIndex >= 0 && privateGateStart > boundaryIndex);
+  }
+  const privateGate = hookServer.slice(privateGateStart, hookServer.indexOf("legacy_goal::enrich"));
+  assert.match(privateGate, /write_response\(&mut stream, "204 No Content", ""\);\s*return;/);
+  assert.match(completionReceiver, /broker\.observe_hook/);
+  assert.doesNotMatch(completionReceiver, /HookPayloadSink|TcpListener|openSubagentTranscript/);
+  assert.match(completionHooks, /removing_subagent_preserves_attention_and_private_completion/);
+  assert.match(completionHooks, /removing_attention_preserves_only_subagent_lifecycle/);
+  assert.match(completionReceiver, /private_completion_clears_only_the_matching_terminal_question/);
+  assert.match(completionReceiver, /private_completion_does_not_revoke_a_submitted_answer_before_ack/);
 });
 
 test("Codex app-server requests keep native ids and share one synchronized stdin", () => {

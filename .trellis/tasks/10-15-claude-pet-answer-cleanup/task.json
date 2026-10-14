@@ -1,0 +1,33 @@
+{
+  "id": "claude-pet-answer-cleanup",
+  "name": "claude-pet-answer-cleanup",
+  "title": "修复 Claude 终端答后宠物待处理项残留",
+  "description": "修复仅安装 Claude 问答模块时缺少工具完成回调的依赖问题，保留模块卸载隔离及 broker 的精确清除条件。只改 CLI-Manager，V1.4.3，仅静态核查，不修改已安装配置或 rpiv，不推送。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "pi",
+  "assignee": "pi",
+  "createdAt": "2026-10-15",
+  "completedAt": "2026-10-15",
+  "branch": "integrate/v1.4.3-desktop-pet-e",
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "源码和定向静态核查已完成，16 个 Rust 用例及 Node 契约已补充但未运行。普通 ToolStop 会进入子任务 UI 的中间方案已放弃；最终为 Attention 独立注册并后端消费专用事件。未修改已安装配置、rpiv 或 broker；本轮不推送，运行验收待用户。",
+  "meta": {
+    "baselineCommit": "a131b93dd63980c75c9a37d0b0bfdea241ae6514",
+    "version": "V1.4.3",
+    "verification": "static-only",
+    "sourceReady": true,
+    "runtimeValidation": "pending-user",
+    "verificationReport": "research/verification.md"
+  }
+}

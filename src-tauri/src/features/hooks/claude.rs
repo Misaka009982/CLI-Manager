@@ -15,6 +15,10 @@ use crate::desktop_pet_e_agent::{
 };
 use crate::third_party_notification::HookNotificationJob;
 
+#[path = "desktop_pet_e_completion.rs"]
+mod desktop_pet_e_completion;
+pub(crate) use desktop_pet_e_completion::DESKTOP_PET_E_COMPLETION_EVENT;
+
 const REQUEST_PATH: &str = "/api/claude-hook";
 const HOOK_MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_BODY_BYTES: usize = DESKTOP_PET_E_AGENT_MAX_BODY_BYTES;
@@ -632,7 +636,7 @@ pub fn spawn_hook_listener(
 #[path = "legacy_goal.rs"]
 mod legacy_goal;
 
-// 校验及去重后补全旧本机 Codex Stop 的 goal 元数据，再向所有出口分发。
+// 鉴权、校验及去重后先消费宠物完成事件；其余 Hook 补全元数据再向普通出口分发。
 fn handle_stream(
     mut stream: TcpStream,
     sink: HookPayloadSink,
@@ -696,6 +700,10 @@ fn handle_stream(
         .map(|mut recent| recent.accept(payload.remote_event_id.as_deref()))
         .unwrap_or(true);
     if !accepted {
+        write_response(&mut stream, "204 No Content", "");
+        return;
+    }
+    if desktop_pet_e_completion::consume(&payload, &agent_broker) {
         write_response(&mut stream, "204 No Content", "");
         return;
     }
@@ -1031,6 +1039,7 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
                 | "AgentToolStop"
                 | "ToolStart"
                 | "ToolStop"
+                | DESKTOP_PET_E_COMPLETION_EVENT
         ),
         "grok" => matches!(
             payload.event.as_str(),

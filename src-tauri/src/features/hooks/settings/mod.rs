@@ -1,3 +1,8 @@
+mod claude_completion;
+use claude_completion::{
+    claude_completion_hooks_installed, install_claude_completion_hooks,
+    remove_claude_completion_hooks,
+};
 mod codex;
 use codex::{
     codex_cli_manager_hook_state_keys, codex_cli_manager_hooks_trusted,
@@ -54,7 +59,7 @@ const HOOK_COMMAND_MARKER: &str = "__hook";
 const CODEX_COMMON_CONFIG_HOOKS_MARKER: &str = "# CLI-Manager hook protection";
 const CCSWITCH_COMMON_CONFIG_CLAUDE_KEY: &str = "common_config_claude";
 const CCSWITCH_COMMON_CONFIG_CODEX_KEY: &str = "common_config_codex";
-const CLAUDE_HOOK_EVENTS: [&str; 10] = [
+const CLAUDE_HOOK_EVENTS: [&str; 11] = [
     "SessionStart",
     "UserPromptSubmit",
     "Notification",
@@ -65,6 +70,7 @@ const CLAUDE_HOOK_EVENTS: [&str; 10] = [
     "SubagentStop",
     "PreToolUse",
     "PostToolUse",
+    "PostToolUseFailure",
 ];
 const CODEX_HOOK_EVENTS: [&str; 8] = [
     "SessionStart",
@@ -1157,6 +1163,7 @@ fn apply_claude_hook_module(settings: &mut Value, exe: &str, module: ClaudeHookM
                 CLAUDE_QUESTION_TOOL_NAME,
                 build_command(exe, "claude", "Notification"),
             );
+            install_claude_completion_hooks(settings, exe);
         }
         ClaudeHookModule::Stop => {
             add_hook_command(settings, "Stop", build_command(exe, "claude", "Stop"))
@@ -1203,7 +1210,7 @@ fn apply_claude_hook_module(settings: &mut Value, exe: &str, module: ClaudeHookM
     }
 }
 
-// 按模块清理 Claude 托管命令；子 Agent 模块覆盖整个前后工具事件。
+// 按模块定向清理 Claude 命令，问答专用完成回调与子任务生命周期各自保留。
 fn remove_claude_hook_module(settings: &mut Value, module: ClaudeHookModule) {
     match module {
         ClaudeHookModule::SessionStart => {
@@ -1219,16 +1226,19 @@ fn remove_claude_hook_module(settings: &mut Value, module: ClaudeHookModule) {
                 &CLAUDE_LEGACY_SCRIPTS,
             );
             remove_named_hook_command(settings, "PreToolUse", "claude", "Notification");
+            remove_claude_completion_hooks(settings);
         }
         ClaudeHookModule::Stop => remove_hook_commands(settings, &["Stop"], &CLAUDE_LEGACY_SCRIPTS),
         ClaudeHookModule::Failure => {
             remove_hook_commands(settings, &["StopFailure"], &CLAUDE_LEGACY_SCRIPTS)
         }
-        ClaudeHookModule::Subagent => remove_hook_commands(
-            settings,
-            &["SubagentStart", "SubagentStop", "PreToolUse", "PostToolUse"],
-            &CLAUDE_LEGACY_SCRIPTS,
-        ),
+        ClaudeHookModule::Subagent => {
+            remove_hook_commands(settings, &["SubagentStart", "SubagentStop"], &CLAUDE_LEGACY_SCRIPTS);
+            remove_named_hook_command(settings, "PreToolUse", "claude", "AgentToolStart");
+            remove_named_hook_command(settings, "PreToolUse", "claude", "ToolStart");
+            remove_named_hook_command(settings, "PostToolUse", "claude", "AgentToolStop");
+            remove_named_hook_command(settings, "PostToolUse", "claude", "ToolStop");
+        }
     }
 }
 
@@ -1325,22 +1335,7 @@ fn install_claude_hooks(claude_dir: &Path) -> Result<(), String> {
     let mut settings = read_json(&settings_path)?;
     ensure_root_object(&settings, "settings.json")?;
     // 先清掉旧版本注册的条目（含历史 .ps1 命令与本应用 __hook 命令），保证安装即升级
-    remove_hook_commands(
-        &mut settings,
-        &[
-            "SessionStart",
-            "UserPromptSubmit",
-            "Notification",
-            "PermissionRequest",
-            "Stop",
-            "StopFailure",
-            "SubagentStart",
-            "SubagentStop",
-            "PreToolUse",
-            "PostToolUse",
-        ],
-        &CLAUDE_LEGACY_SCRIPTS,
-    );
+    remove_hook_commands(&mut settings, &CLAUDE_HOOK_EVENTS, &CLAUDE_LEGACY_SCRIPTS);
     for module in ALL_CLAUDE_HOOK_MODULES {
         apply_claude_hook_module(&mut settings, &exe, module);
     }
@@ -1367,22 +1362,7 @@ fn uninstall_claude_hooks(claude_dir: &Path) -> Result<(), String> {
     let settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE_NAME);
     let mut settings = read_json(&settings_path)?;
     ensure_root_object(&settings, "settings.json")?;
-    remove_hook_commands(
-        &mut settings,
-        &[
-            "SessionStart",
-            "UserPromptSubmit",
-            "Notification",
-            "PermissionRequest",
-            "Stop",
-            "StopFailure",
-            "SubagentStart",
-            "SubagentStop",
-            "PreToolUse",
-            "PostToolUse",
-        ],
-        &CLAUDE_LEGACY_SCRIPTS,
-    );
+    remove_hook_commands(&mut settings, &CLAUDE_HOOK_EVENTS, &CLAUDE_LEGACY_SCRIPTS);
     write_json(&settings_path, &settings)
 }
 
@@ -1485,7 +1465,7 @@ fn home_dir() -> Option<PathBuf> {
     }
 }
 
-// 检查当前可执行路径对应的 Claude 命令及提问 matcher，汇总模块状态。
+// 检查当前可执行路径对应的 Claude 命令、提问 matcher 和专用完成回调，汇总模块状态。
 fn build_claude_status(claude_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus, String> {
     let Some(claude_dir) = claude_dir else {
         return missing_status();
@@ -1508,6 +1488,7 @@ fn build_claude_status(claude_dir: Option<PathBuf>) -> Result<ToolHookSettingsSt
         running_hook_installed: registered("UserPromptSubmit"),
         attention_hook_installed: registered("Notification")
             && registered("PermissionRequest")
+            && claude_completion_hooks_installed(&settings, exe.as_deref())
             && registered_exact_command_with_matcher(
                 &settings,
                 exe.as_deref(),

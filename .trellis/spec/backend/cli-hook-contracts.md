@@ -76,6 +76,26 @@ match normalize_source(payload.source.as_deref()) {
 }
 ```
 
+## Scenario: Claude 问答完成回调的独立注册与内部消费
+
+### 范围与约定
+
+- 本机/WSL Claude 的 `attention` 独立安装 `PostToolUse` / `PostToolUseFailure`，两者发送 `DesktopPetEComplete`；不依赖安装 `subagent` 才能清除问答待处理项。
+- 安装定义由 `features/hooks/settings/claude_completion.rs` 维护；安装幂等并修复旧路径或错误 matcher，健康检查验证两个原生事件。子任务的 `ToolStop` / `AgentToolStop` 保持原有生命周期用途。
+- 专用事件仅允许 Claude 来源；客户端保持该事件名完成输入归一化，避免 Agent/Task 被普通 ToolStop 过滤。HTTP 入口必须先鉴权、验证和去重，再交给 `features/hooks/desktop_pet_e_completion.rs` 消费。
+- 消费器只向 broker 提交工具结束证据，随后 HTTP 入口返回 204，不再进入普通 Hook sink、子任务分屏或系统/第三方通知。不能把会进入 UI 的 ToolStop 直接当作无副作用的问答完成通道。
+- 问答与子任务使用不同命令，各自定向卸载；不得整段删除 `PreToolUse` / `PostToolUse`。专用完成命令以生成器的完整尾部识别，不用来源或事件子串删除相似命令。
+- 全量安装、卸载和公共配置同步使用同一 `CLAUDE_HOOK_EVENTS` 集合，新增原生事件必须覆盖全部入口。
+- 不扩大 broker 的匹配条件：不得凭开始事件、心跳、普通 PTY 输出或进程存活无条件清空 interactive 项，已提交待确认的答案仍受保护。
+- 更新应用并重新安装问答模块、重开 CLI 会话后验证；本轮不直接修改已安装配置。SSH 安装器仍是独立边界。
+
+### 必须覆盖的回归
+
+- Attention 独立安装、Subagent 独立安装、两种顺序及重复安装；只装问答不注册子任务进度事件。
+- 两种卸载方向、最后清理、旧可执行路径、错误 matcher、相似命令和用户项保留。
+- Claude 专用事件接纳、其他来源拒绝、鉴权/验证/去重先于消费、消费后不继续分发 UI。
+- 问题/Agent/Task 的工具 ID 保留，匹配清理、错会话/错工具 ID 不清理、开始事件不清理、已提交待确认仍可确认。
+
 ## Scenario: Local Hook Retry, Deduplication, And Safe Tab Binding
 
 ### 1. Scope / Trigger

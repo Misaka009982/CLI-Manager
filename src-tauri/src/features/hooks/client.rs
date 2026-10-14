@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::claude_hook::DESKTOP_PET_E_COMPLETION_EVENT;
 use crate::codex_goal::lookup_stop_goal;
 
 const NOTIFY_ATTEMPTS: usize = 2;
@@ -708,6 +709,7 @@ fn diagnostic_event(value: &str) -> &'static str {
         "AgentToolStop" => "AgentToolStop",
         "ToolStart" => "ToolStart",
         "ToolStop" => "ToolStop",
+        DESKTOP_PET_E_COMPLETION_EVENT => DESKTOP_PET_E_COMPLETION_EVENT,
         _ => "unknown",
     }
 }
