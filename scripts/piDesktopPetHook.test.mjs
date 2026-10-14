@@ -15,7 +15,11 @@ const hookServer = readFileSync(new URL("../src-tauri/src/features/hooks/claude.
 test("managed Pi extension is generated from the owned decision template", () => {
   assert.match(hookSettings, /include_str!\("\.\.\/\.\.\/\.\.\/pi_extension_template\.ts"\)/);
   assert.match(template, /__CLI_MANAGER_PI_HOOK__|__PI_MARKER__/);
-  assert.match(template, /CLI_MANAGER_PI_EXTENSION_VERSION:7/);
+  // 与 Rust 升级常量对齐，后续升版不再留下过时的固定版本断言。
+  const version = hookSettings.match(/const PI_EXTENSION_VERSION: u32 = (\d+);/)?.[1];
+  assert.ok(version && Number(version) >= 8, "Pi 模板版本必须包含 WSL 身份升级");
+  assert.match(template, new RegExp(`CLI_MANAGER_PI_EXTENSION_VERSION:${version}\\b`));
+  assert.match(template, /wslDistroName: nonEmpty\(process\.env\.WSL_DISTRO_NAME\)/);
   assert.match(hookSettings, /PI_EXTENSION_VERSION_PREFIX/);
   assert.match(hookSettings, /pi_extension_version\(&content\)\.unwrap_or_default\(\) < PI_EXTENSION_VERSION/);
   assert.match(hookSettings, /managed_legacy_pi_extension_is_upgraded_in_place/);

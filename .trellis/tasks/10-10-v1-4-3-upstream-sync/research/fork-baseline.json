@@ -1,0 +1,699 @@
+{
+  "baselineCommit": "443822a1d4cde86d888c169a94ffadffb82384f7",
+  "mergeBase": "917437d1546c75997f6120339e948305b93907ad",
+  "upstreamCommit": "c07e69eed3842a69ab5e39d10b166bb3a84f6610",
+  "upstreamTag": "V1.4.3",
+  "expectedForkAdaptations": [
+    "src-tauri/src/pi_extension_template.ts",
+    "src-tauri/src/features/hooks/settings/mod.rs",
+    "scripts/piDesktopPetHook.test.mjs"
+  ],
+  "files": [
+    {
+      "path": ".github/workflows/alpha-release.yml",
+      "objectId": "056748374d0303b4a7bc29b51cf72d75dee52364",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "objectId": "70b6238b8972c6b539376432578848686a169218",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": ".gitignore",
+      "objectId": "ddf6ee14da987c994bad3deb5274df65d7fe5fee",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": ".trellis/spec/frontend/file-tree-sort-contracts.md",
+      "objectId": "e2def33e0d8b3272df0999fd1743db12f2efdddf",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": false
+    },
+    {
+      "path": ".trellis/tasks/10-09-v1-4-2-file-sort-sync/check.jsonl",
+      "objectId": "e2e72ca8371fd70cb9cd84deeea1abf9593992b8",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": false
+    },
+    {
+      "path": ".trellis/tasks/10-09-v1-4-2-file-sort-sync/design.md",
+      "objectId": "ced9f48fc33a786142c3dee48dca2de43dca1d20",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": false
+    },
+    {
+      "path": ".trellis/tasks/10-09-v1-4-2-file-sort-sync/implement.jsonl",
+      "objectId": "2be21fadc47c4cde6b28762553f2e1cf318772ad",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": false
+    },
+    {
+      "path": ".trellis/tasks/10-09-v1-4-2-file-sort-sync/implement.md",
+      "objectId": "18e3c3eda9c753defaaf0d90d4b0f07f0fb7d3ef",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": false
+    },
+    {
+      "path": ".trellis/tasks/10-09-v1-4-2-file-sort-sync/prd.md",
+      "objectId": "9610629a493c3cf376fb12365ce4931af48a736a",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": false
+    },
+    {
+      "path": ".trellis/tasks/10-09-v1-4-2-file-sort-sync/research/file-sort-review.md",
+      "objectId": "f603a872aa1e0afc923fd42c5d34c49528f95f5b",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": false
+    },
+    {
+      "path": ".trellis/tasks/10-09-v1-4-2-file-sort-sync/research/file-sort-verification.md",
+      "objectId": "f9ba623e4ec7a8f60840e3751a0817dfff14b30c",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": false
+    },
+    {
+      "path": ".trellis/tasks/10-09-v1-4-2-file-sort-sync/research/v1-4-2-merge-verification.md",
+      "objectId": "52486cad4b834c29a5c6e5748ca711f5b2531aeb",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": false
+    },
+    {
+      "path": ".trellis/tasks/10-09-v1-4-2-file-sort-sync/task.json",
+      "objectId": "b73c9b8a72a44ef2bc5e6f7b0fee0de17977ed42",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": false
+    },
+    {
+      "path": "CHANGELOG.md",
+      "objectId": "a205859f87003cda806251b5aba5b17e0626a6f0",
+      "mode": "100644",
+      "upstreamTouched": true,
+      "productFile": true
+    },
+    {
+      "path": "docs/功能清单.md",
+      "objectId": "9859398cd511dc7f0d5bef83e336c5c24b3973ed",
+      "mode": "100644",
+      "upstreamTouched": true,
+      "productFile": true
+    },
+    {
+      "path": "package.json",
+      "objectId": "51adf7afec3bae76ad6abfe443c46abf0c00d977",
+      "mode": "100644",
+      "upstreamTouched": true,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/LICENSES/README.md",
+      "objectId": "ea8925ba3c664b297256aa7638737ca495d5f644",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/NOTICE.md",
+      "objectId": "cf0dabec96b73aa81722a5b457cf07ae35df68b1",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/package.json",
+      "objectId": "83677b7bcc058e24390a4c84a66be54dd58abed0",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/runtime-manifest.json",
+      "objectId": "a7bb8ff58b131252f2c897bb9fceca7dc874d468",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/scripts/copy-static.mjs",
+      "objectId": "69ce4744f60654397ca7df70dd7e50b2b763f2ab",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/src/bridge/agent-action.ts",
+      "objectId": "2d286d6a3147af0e01c07809bac3ce6577fc49b1",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/src/bridge/protocol.ts",
+      "objectId": "a8135f625d53530802214941e25f9a6c3d661af4",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/src/main.ts",
+      "objectId": "fd1a982080e12927560cafbc6ff74c7a2e7b4883",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/src/preload.cts",
+      "objectId": "a7cfb61694cb6f806ebade4e97068710e3309d6f",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/src/renderer/agent-action.ts",
+      "objectId": "6641c452c9c4c842c0da877256f887bde50bc9f0",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/src/renderer/app.ts",
+      "objectId": "e461b4ef5cea87d39efd8023728f94e6f0171e73",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/src/renderer/global.d.ts",
+      "objectId": "756dd7dbb9e419fa0562a68bf956d950ab5542cd",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/src/renderer/index.html",
+      "objectId": "6d5da790da2a9384f416c7f25c34f87a68220deb",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/src/renderer/styles.css",
+      "objectId": "b391d627148d105c5bf893ec00add0de6a0896c5",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/src/renderer/task-state.ts",
+      "objectId": "341b101de79fe2a1892cee2cbe9544c5eba856f9",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/test/codex-pet.test.mjs",
+      "objectId": "fd043742907822ab3ea76fd6415cc8ce851aad59",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/test/renderer.test.mjs",
+      "objectId": "8fa429ff0421dfb9a73fc424c2b53c25077de895",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/test/security.test.mjs",
+      "objectId": "1a1aec62915cf4f7d1bb5d17eb8d7fe351e343f7",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "pet-e/tsconfig.json",
+      "objectId": "26808cd2b1f21bef50d50d5b587d1a2fb8361e5e",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/desktopPetEActivation.test.mjs",
+      "objectId": "e74abb7ef3ac3e04df94ad552e28387b3513b86b",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/desktopPetEAgentBridge.test.mjs",
+      "objectId": "5362ff3dd06c07482b2d15bd954303fe05d5b9d3",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/desktopPetEIntegration.test.mjs",
+      "objectId": "088a41fe7149a22dbe0e6b50be63bb2d93d8fefb",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/desktopPetEMutualExclusion.test.mjs",
+      "objectId": "05a0b944ca05222460f2e228b77b5049e38f7584",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/desktopPetEProtocol.test.mjs",
+      "objectId": "523ea33416e8d53d9dbb3c4cceee96cabb41171a",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/desktopPetERecovery.test.mjs",
+      "objectId": "2aa3d03ac2ac9b4af72e9cbd07171772111da528",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/desktopPetESettings.test.mjs",
+      "objectId": "71fb1167dc322a769e779cbe30b8791fd93ce2fa",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/desktopPetEState.test.mjs",
+      "objectId": "d89684efd9dc9b009f58b79683bfc0df42b16a8d",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/fileTreeSort.test.mjs",
+      "objectId": "11da0b36f4545867725b97d568b6d83fcf7a2a17",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/grokDesktopPetHook.test.mjs",
+      "objectId": "84b42fc7ff527f738b6093a29d91c2911fe7f4fa",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/package-portable.ps1",
+      "objectId": "0364e92811bafbac3375726eccf45e276f3e3923",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/petEPackage.test.mjs",
+      "objectId": "adec5d1ad35eb66f025ea72b7882ee2bf9014c11",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/piDesktopPetHook.test.mjs",
+      "objectId": "dc82b61a97a73c0c86abdc8b0cc25a4d9fd54c2d",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/prepare-bundle-binaries.mjs",
+      "objectId": "ff088cb4f12ceb728ec82864d96b684faff6c9af",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/prepare-pet-e-runtime.mjs",
+      "objectId": "fe94899318e549f2988de98c43ecd8f54fe67253",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "scripts/verify-pet-e-package.mjs",
+      "objectId": "719087fdfc3c31b7aab71d3b6666a03eade032f2",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/resources/pet-e/README.txt",
+      "objectId": "7b920cfaee06cacf413801efbaf8ec3114e6280c",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/commands/desktop_pet_e.rs",
+      "objectId": "91acdce0a63d91755f580840d70a2a5b55e6dc22",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/commands/desktop_pet_e_agent.rs",
+      "objectId": "0dd943251b34c61f3c0ee8abe38fda3a098fe960",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/commands/mod.rs",
+      "objectId": "d9a33f73ab84eedde6ae01cc096fa0ad07d1c267",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/desktop_pet_e_agent.rs",
+      "objectId": "631102c3be1b774443cba602d117a48ed855bbbb",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/desktop_pet_e_bridge.rs",
+      "objectId": "171a77fd2219f5eb04ffaeea12315fa4a461211b",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/features/codex-proxy/mod.rs",
+      "objectId": "167a805e10256d4e9803491d74a363314c9f23d5",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/features/desktop-pet/commands.rs",
+      "objectId": "06f04406678b9478450a4a4f354b730285c53e03",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/features/hooks/claude.rs",
+      "objectId": "4befbdfd7dc91f995ec0f63b08a588e7f7755aa1",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/features/hooks/client.rs",
+      "objectId": "239f6f387cfdc0bdb578a2c0d90a271977df249a",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/features/hooks/settings/json_hooks.rs",
+      "objectId": "e1a3c6cdba911ee2241029e936f29baefa3a7f4a",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/features/hooks/settings/mod.rs",
+      "objectId": "331e18e41a8ede468a6798744d8a35def45e59fe",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/features/hooks/settings/pi.rs",
+      "objectId": "f1d36db1be9a980c3f8aed1d3a4edeb68abd3bc2",
+      "mode": "100644",
+      "upstreamTouched": true,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/features/hooks/settings/tests.rs",
+      "objectId": "5de4fafc78a914c1da9cd6383f474afee360c853",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/infrastructure/daemon/client.rs",
+      "objectId": "b9a1e0b4c8a4abd4568fa9d4de74da71fa974ad0",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/infrastructure/daemon/server.rs",
+      "objectId": "cef1d1e0694821688feb2cf6be7e9774982c16b1",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/lib.rs",
+      "objectId": "198f08ee714504563cf9e3307380ebead619e5fb",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/pi_extension_template.ts",
+      "objectId": "6b23d7ddbb6940dada549b78fbb3e893e1b70b98",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/src/window_state.rs",
+      "objectId": "196e999eebebed0c55ba0d2e4252d12d057ab03e",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src-tauri/tauri.windows.conf.json",
+      "objectId": "3b42eca265ec683cb9703e55d2832e9f5cf70428",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/app/App.tsx",
+      "objectId": "f5744ff2824a6876e1275c68a87d888e1022bca1",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/desktop-pet/api/useDesktopPetCoordinator.ts",
+      "objectId": "729432b51d3a60f0081395f46ed2a34b2229ffc4",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/files/api/FileExplorerSidebar.tsx",
+      "objectId": "f7f9098b44dec873bca4daf3ee21c741229fc739",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/files/components/FileTreeSortMenu.tsx",
+      "objectId": "58f9c121c79bbe084234709b8b159a6a5fdb98b5",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/settings/api/SettingsModal.tsx",
+      "objectId": "17836e620f081783eff0d57926d01af281bde116",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/settings/components/pages/DesktopPetESettingsPage.tsx",
+      "objectId": "63e25857f851866cc93fd28a21fb54917807b4ad",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/settings/components/pages/DesktopPetSettingsPage.tsx",
+      "objectId": "08f0c39ba264c0f9225d82ff6691b595297b8955",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/sync/lib/syncSettings.ts",
+      "objectId": "e0ce4b48a5141c076c3dc8cc1ddc099a976c491f",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/terminal/api/desktopPetEAgentStore.ts",
+      "objectId": "6ebd53d363731664c3323e2162bc8e105b810280",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/terminal/api/desktopPetERuntimeStore.ts",
+      "objectId": "b55cf7f1e027ccf03218164a4fabdb763c717b30",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/terminal/hooks/useDesktopPetEAgentCoordinator.ts",
+      "objectId": "20f7919197acc3a8a1ff37e70c5d208aff25100b",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/terminal/hooks/useDesktopPetECoordinator.ts",
+      "objectId": "3e2b86fe7f5794bfcd6f9c416f6da6d236f1a5a5",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/terminal/hooks/useTerminalTabsController.tsx",
+      "objectId": "601fd319f9c1cc59cc9fd7f07391ea813e08c4ee",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/terminal/store/terminalStore.ts",
+      "objectId": "6937d83e49e692feff37a6995472614dc5e814ff",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/terminal/transport/PtyHostSocket.ts",
+      "objectId": "d6e6c7e81110faab340f70e7e97843e4fa471f17",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/features/terminal/types/terminalStoreTypes.ts",
+      "objectId": "aa0f6b09999cfbf83228c9117dcf12fff9ba15b8",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/shared/i18n/messages/desktop-pet.en-US.ts",
+      "objectId": "6b840cd08d4b90fe9e8ee5e63683704eda76919c",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/shared/i18n/messages/desktop-pet.zh-CN.ts",
+      "objectId": "8e2195589ce81e2859b2f76508e2a2bae9bc6cee",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/shared/i18n/messages/files.en-US.ts",
+      "objectId": "48128048ff9ca03eda2cbfeddb4a610ca4bd68ab",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/shared/i18n/messages/files.zh-CN.ts",
+      "objectId": "e6af39636d3392ee05e2c565f4d37cfc04dbceb9",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/shared/lib/desktopPetE.ts",
+      "objectId": "16df68ca8fe75e39e90fd2d161cd3f0bde20d4e3",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/shared/lib/desktopPetEState.ts",
+      "objectId": "beb93dc62eb9451fb3f74ef5fa2128111fb55a91",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/shared/lib/desktopPetETransport.ts",
+      "objectId": "4c17f1ccecce3ea553f8af8f3412c3d5c0a9e4ca",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/shared/lib/fileTreeSort.ts",
+      "objectId": "cc09d00e0f358d6528e0a2a6057e78ccae354184",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/shared/preferences/fileTreeSortPreference.ts",
+      "objectId": "2dfd8ba2284c3842839432a897efd42009018fef",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/shared/preferences/settingsStore.ts",
+      "objectId": "d259bfca2245fe1f3919a79607947254e9a3e1d7",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    },
+    {
+      "path": "src/shared/ui/popover.tsx",
+      "objectId": "d07c4dec83ac649a5aaf8f7f29b7e6b6abeb31bb",
+      "mode": "100644",
+      "upstreamTouched": false,
+      "productFile": true
+    }
+  ]
+}

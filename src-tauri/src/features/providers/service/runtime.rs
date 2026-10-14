@@ -561,6 +561,60 @@ mod tests {
     use super::parse_runtime_config;
 
     #[test]
+    // 真实启动解析链保留完整配置，改换子进程密钥变量也不能重建为仅路由字段。
+    fn codex_runtime_profile_keeps_effective_options_and_scoped_credentials() {
+        let settings = serde_json::json!({
+            "auth": { "OPENAI_API_KEY": "test-secret" },
+            "config": r#"
+model = "gpt-test"
+model_provider = "custom"
+model_reasoning_effort = "max"
+service_tier = "fast"
+model_instructions_file = 'C:\prompts\instructions.md'
+model_auto_compact_token_limit = 240000
+[features]
+api_key_model_discovery = true
+fast_mode = true
+[model_providers.custom]
+base_url = "https://example.test/v1"
+model_catalog_url = "https://example.test/v1/models"
+request_max_retries = 8
+"#,
+        });
+        let runtime = parse_runtime_config("provider", &settings.to_string()).unwrap();
+        let scoped = runtime
+            .profile
+            .with_env_key("CLI_MANAGER_PROVIDER_KEY")
+            .unwrap();
+        let actual: toml::Value = toml::from_str(&scoped.profile_text).unwrap();
+        let mut expected: toml::Value =
+            toml::from_str(settings["config"].as_str().unwrap()).unwrap();
+        let provider = expected["model_providers"]["custom"].as_table_mut().unwrap();
+        provider.insert("name".to_string(), "CLI-Manager".into());
+        provider.insert("env_key".to_string(), "CLI_MANAGER_PROVIDER_KEY".into());
+        assert_eq!(actual, expected);
+        assert!(!scoped.profile_text.contains("test-secret"));
+    }
+
+    #[test]
+    // 经真实运行配置解析与密钥重绑定后仍不能携带供应商旧状态栏。
+    fn codex_runtime_profile_inherits_home_statusline() {
+        let settings = serde_json::json!({
+            "base_url": "https://example.test/v1",
+            "auth": {"OPENAI_API_KEY": "test-secret"},
+            "config": "model_reasoning_effort='max'\nservice_tier='fast'\n[tui]\nstatus_line=['total-input-tokens']\ntheme='theme'\n",
+        });
+        let runtime = parse_runtime_config("provider", &settings.to_string()).unwrap();
+        let profile = runtime.profile.with_env_key("CLI_MANAGER_PROVIDER_KEY").unwrap();
+        let actual: toml::Value = toml::from_str(&profile.profile_text).unwrap();
+        assert!(actual["tui"].get("status_line").is_none());
+        assert_eq!(actual["tui"]["theme"].as_str(), Some("theme"));
+        assert_eq!(actual["model_reasoning_effort"].as_str(), Some("max"));
+        assert_eq!(actual["service_tier"].as_str(), Some("fast"));
+        assert!(!profile.profile_text.contains("test-secret"));
+    }
+
+    #[test]
     // 验证环境对象优先提供端点和模型、复用配置中的变量名，并确认此样例生成配置不含密钥。
     fn parses_projected_codex_runtime_fields() {
         let settings = r#"{

@@ -1,0 +1,29 @@
+{
+  "id": "v1-4-3-upstream-sync",
+  "name": "v1-4-3-upstream-sync",
+  "title": "同步 V1.4.3 并保留 fork 功能",
+  "description": "双父 merge 同步 V1.4.3，保留宠物E、窗口状态记忆、文件排序和发布流程；仅静态核查，本地提交后暂不推送。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "pi",
+  "assignee": "pi",
+  "createdAt": "2026-10-10",
+  "completedAt": null,
+  "branch": "integrate/v1.4.3-desktop-pet-e",
+  "base_branch": "master",
+  "worktree_path": "D:/Project/pi-pet/CLI-Manager/.worktrees/ship-desktop-pet-e-master",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "静态核查已完成；不运行编译或测试、不推送。问答兼容另建任务，不混入本轮合并。",
+  "meta": {
+    "verification": ".trellis/tasks/10-10-v1-4-3-upstream-sync/research/v1-4-3-merge-verification.md",
+    "verificationMode": "static-only"
+  }
+}
