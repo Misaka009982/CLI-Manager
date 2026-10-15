@@ -190,6 +190,7 @@ export const en: Record<keyof typeof zh, string> = {
   "desktopPetE.renderer.open": "Open",
   "desktopPetE.renderer.clear": "Clear",
   "desktopPetE.renderer.terminal": "Terminal",
+  "desktopPetE.renderer.answerInTerminal": "Please answer in the terminal",
   "desktopPetE.renderer.submit": "Submit",
   "desktopPetE.renderer.retry": "Retry",
   "desktopPetE.renderer.submitting": "Submitting",

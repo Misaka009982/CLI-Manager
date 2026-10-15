@@ -188,6 +188,7 @@ export const zh = {
   "desktopPetE.renderer.open": "打开",
   "desktopPetE.renderer.clear": "清除",
   "desktopPetE.renderer.terminal": "终端",
+  "desktopPetE.renderer.answerInTerminal": "请在终端作答",
   "desktopPetE.renderer.submit": "提交",
   "desktopPetE.renderer.retry": "重试",
   "desktopPetE.renderer.submitting": "提交中",

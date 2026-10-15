@@ -1,0 +1,33 @@
+{
+  "id": "pi-pet-prompt-status",
+  "name": "pi-pet-prompt-status",
+  "title": "修复 Pi 问卷的宠物四色灯等待状态",
+  "description": "仅在 CLI-Manager 接入 Pi 公开对话框生命周期，显示只读黄色等待状态，答后和会话结束时清理；不依赖通知开关、不改变可代答请求、不修改 rpiv；静态核查后提交推送。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "pi",
+  "assignee": "pi",
+  "createdAt": "2026-10-15",
+  "completedAt": "2026-10-15",
+  "branch": "integrate/v1.4.3-desktop-pet-e",
+  "base_branch": "master",
+  "worktree_path": "D:/Project/pi-pet/CLI-Manager/.worktrees/ship-desktop-pet-e-master",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "src-tauri/src/features/hooks/desktop_pet_e_ui_prompt.rs",
+    "src-tauri/src/pi_extension_template.ts",
+    "src/shared/lib/desktopPetETerminalPrompt.ts",
+    "src/features/terminal/hooks/useDesktopPetETerminalPrompts.ts",
+    "scripts/desktopPetETerminalPrompt.test.mjs",
+    "pet-e/docs/pi-terminal-prompt.md"
+  ],
+  "notes": "已完成实现与静态核查，按用户要求以外挂为主，上游仅保留薄接口。未执行编译、测试或实机验收；见 verification.md。代码完成不表示已经发布，提交及推送结果以 Git 记录为准。保留旧 Pi 方案文档和 rpiv 现场。",
+  "meta": {}
+}

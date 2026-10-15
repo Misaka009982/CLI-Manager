@@ -44,6 +44,7 @@ import type { CliHookPayload } from "../types/terminalStoreTypes";
 import { useDesktopPetERuntimeStore } from "../api/desktopPetERuntimeStore";
 import { useDesktopPetEAgentStore } from "../api/desktopPetEAgentStore";
 import { findPaneLeafBySession } from "../api/terminalPaneTree";
+import { useDesktopPetETerminalPrompts } from "./useDesktopPetETerminalPrompts";
 
 interface UseDesktopPetECoordinatorOptions {
   appReady: boolean;
@@ -187,6 +188,7 @@ export function useDesktopPetECoordinator({
   onActivateSessionRef.current = onActivateSession;
 
   const tracking = appReady && settingsLoaded && settings.enabled;
+  const terminalPrompts = useDesktopPetETerminalPrompts(tracking);
   const visible = tracking && !(settings.autoHideFullscreen && terminalFullscreen);
   const selectedPet = useMemo(() => {
     const preferredId = settings.petId ?? existingDesktopPetId;
@@ -241,6 +243,7 @@ export function useDesktopPetECoordinator({
     ptyOutputActivityAt,
     backgroundTasks,
     pendingActions,
+    terminalPrompts,
   }), [
     activeSessionId,
     activityExpiryRevision,
@@ -256,6 +259,7 @@ export function useDesktopPetECoordinator({
     tabNotifications,
     tabStatusDetails,
     targetBySessionId,
+    terminalPrompts,
   ]);
 
   const liveSessionIds = useMemo(() => new Set([
@@ -361,6 +365,7 @@ export function useDesktopPetECoordinator({
       "desktopPetE.renderer.open": t("desktopPetE.renderer.open"),
       "desktopPetE.renderer.clear": t("desktopPetE.renderer.clear"),
       "desktopPetE.renderer.terminal": t("desktopPetE.renderer.terminal"),
+      "desktopPetE.renderer.answerInTerminal": t("desktopPetE.renderer.answerInTerminal"),
       "desktopPetE.renderer.submit": t("desktopPetE.renderer.submit"),
       "desktopPetE.renderer.retry": t("desktopPetE.renderer.retry"),
       "desktopPetE.renderer.submitting": t("desktopPetE.renderer.submitting"),

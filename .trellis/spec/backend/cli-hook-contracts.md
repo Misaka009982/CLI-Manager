@@ -991,6 +991,8 @@ Exact ownership prevents upgrades or uninstalls from deleting third-party and ot
 
 ## Scenario: Pi Agent Extension Hook Bridge
 
+> fork 的只读等待实现、上游薄接点清单及 v9 / 2 秒超时差异见 [Pi 等待外挂契约](../../../pet-e/docs/pi-terminal-prompt.md)。以下保留原有安装契约。
+
 ### 1. Scope / Trigger
 
 - Trigger: Pi Agent uses auto-discovered TypeScript Extensions instead of Claude/Codex shell hook configuration.

@@ -17,7 +17,7 @@ test("managed Pi extension is generated from the owned decision template", () =>
   assert.match(template, /__CLI_MANAGER_PI_HOOK__|__PI_MARKER__/);
   // 与 Rust 升级常量对齐，后续升版不再留下过时的固定版本断言。
   const version = hookSettings.match(/const PI_EXTENSION_VERSION: u32 = (\d+);/)?.[1];
-  assert.ok(version && Number(version) >= 8, "Pi 模板版本必须包含 WSL 身份升级");
+  assert.ok(version && Number(version) >= 9, "Pi 模板版本必须包含 WSL 身份与只读等待升级");
   assert.match(template, new RegExp(`CLI_MANAGER_PI_EXTENSION_VERSION:${version}\\b`));
   assert.match(template, /wslDistroName: nonEmpty\(process\.env\.WSL_DISTRO_NAME\)/);
   assert.match(hookSettings, /PI_EXTENSION_VERSION_PREFIX/);
@@ -65,7 +65,8 @@ test("pet and Pi terminal race for the same decision and cancel the loser", () =
 
 test("third-party Pi dialogs are answerable from the pet and fall back to a notification", () => {
   // permission-gate 等扩展直接调 ctx.ui：select / confirm / input 的选项会搬到宠物端与终端竞速，
-  // 走 pendingAction 通道（不受「通知提醒」开关影响）；editor / custom 搬不过去，仍靠官方事件镜像成提醒。
+  // 走 pendingAction 通道（不受「通知提醒」开关影响）；editor / custom 由官方事件
+  // 同时提供独立只读等待和可选普通通知，不伪装成宠物可回答的问题。
   assert.match(template, /pi\.on\("ui_prompt_start"/);
   assert.match(template, /pi\.on\("ui_prompt_end"/);
   assert.match(template, /registerPromptEvents\(pi\)/);
@@ -95,6 +96,31 @@ test("third-party Pi dialogs are answerable from the pet and fall back to a noti
   assert.match(template, /heartbeatRunning/);
   assert.match(template, /suspendHeartbeatForLifecycle\(\)/);
   assert.match(hookServer, /"SessionStart" \| "UserPromptSubmit" \| "Notification" \| "Stop" \| "StopFailure"/);
+});
+
+test("正式 UI 等待独立续报并在生命周期边界收尾", () => {
+  const publisher = template.slice(template.indexOf("async function postTerminalPrompt"), template.indexOf("function registerPromptEvents"));
+  assert.match(template, /TERMINAL_PROMPT_INTERVAL_MS = 5_000/);
+  assert.match(publisher, /event: "DesktopPetEUiPrompt"/);
+  assert.match(publisher, /sessionId: span\.sessionId/);
+  assert.match(publisher, /sequence: \+\+terminalPromptSequence/);
+  assert.match(publisher, /remoteEventId: crypto\.randomUUID\(\)/);
+  assert.match(publisher, /if \(terminalPromptSpan === span\) void postTerminalPrompt\(span, true\)/);
+  assert.match(publisher, /terminalPromptSpan = null;[\s\S]*postTerminalPrompt\(span, false\)/);
+  assert.doesNotMatch(publisher, /pi-decision\/open|requestDecision\(/);
+  const events = template.slice(template.indexOf("function registerPromptEvents"), template.indexOf("export default function"));
+  assert.ok(events.indexOf("beginTerminalPrompt(event.kind") < events.indexOf("ENABLED.running && ownDialogs === 0"));
+  assert.match(events, /ctx\.mode !== "tui"/);
+  assert.match(events, /pi\.on\("ui_prompt_end"[\s\S]*endOfficialPrompt\(\)/);
+  for (const event of ["session_start", "agent_settled", "session_shutdown"]) {
+    const start = template.indexOf(`pi.on("${event}"`);
+    assert.ok(start >= 0);
+    const end = template.indexOf("\n  pi.on(", start + 1);
+    const handler = template.slice(start, end < 0 ? template.length : end);
+    assert.match(handler, /suspendHeartbeatForLifecycle\(\);\s*endOfficialPrompt\(\);/);
+  }
+  assert.match(template, /if \(mirroredDialogs > 0 \|\| officialSpanMirrored\) return;/);
+  assert.match(template, /mirroredDialogs === 0 && !officialSpanMirrored && ENABLED.running && heartbeatRunning[\s\S]*postHook\("UserPromptSubmit", null, true\);\s*startHeartbeat\(\);/);
 });
 
 test("questions preserve ordered groups and keep native TUI fallback", () => {

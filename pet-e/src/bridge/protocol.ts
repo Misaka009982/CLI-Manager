@@ -102,6 +102,14 @@ export interface DesktopPetEPendingAction {
   error?: string | null;
 }
 
+// 只读等待不含答案或提交能力；租期与传输游标只留在主窗口，不进入快照。
+export interface DesktopPetETerminalPrompt {
+  id: string;
+  kind: "select" | "confirm" | "input" | "editor" | "custom";
+  title?: string | null;
+  startedAt: number;
+}
+
 export interface DesktopPetETask {
   id: string;
   sessionId: string;
@@ -117,6 +125,7 @@ export interface DesktopPetETask {
   updatedAt: number;
   viewedAt?: number | null;
   pendingAction?: DesktopPetEPendingAction | null;
+  terminalPrompt?: DesktopPetETerminalPrompt | null;
 }
 
 export interface DesktopPetEColorCounts {

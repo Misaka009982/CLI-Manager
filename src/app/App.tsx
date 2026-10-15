@@ -44,6 +44,7 @@ import { useKeyboardShortcuts } from "../features/workspace/api/useKeyboardShort
 import { useDesktopPetCoordinator } from "../features/desktop-pet/api/useDesktopPetCoordinator";
 import { useDesktopPetEAgentCoordinator } from "../features/terminal/hooks/useDesktopPetEAgentCoordinator";
 import { useDesktopPetECoordinator } from "../features/terminal/hooks/useDesktopPetECoordinator";
+import { isDesktopPetEUiPromptEvent, type DesktopPetEUiPromptEvent } from "../shared/lib/desktopPetETerminalPrompt";
 import { useWebDeviceBridge } from "../features/terminal/hooks/useWebDeviceBridge";
 import { useRemoteHandoffCoordinator } from "../features/remote/api/useRemoteHandoffCoordinator";
 import { useUpdateStore } from "../features/settings/api/updateStore";
@@ -961,8 +962,10 @@ function App() {
 
   useEffect(() => {
     if (!IN_TAURI) return;
-    const unlistenHook = listen<CliHookPayload>("claude-hook-notification", (event) => {
+    const unlistenHook = listen<CliHookPayload | DesktopPetEUiPromptEvent>("claude-hook-notification", (event) => {
       const payload = event.payload;
+      // 外挂先排除只读等待，普通 Hook 的类型、状态和 Replay 路径保持原样。
+      if (isDesktopPetEUiPromptEvent(payload)) return;
       const decision = resolveCliHookStatus(payload);
       void useReplayStore.getState().recordCliHookEvent(payload);
       const isClaudeToolSubagentEvent =

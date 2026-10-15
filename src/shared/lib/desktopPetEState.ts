@@ -18,7 +18,9 @@ import {
   type DesktopPetEPendingAction,
   type DesktopPetESnapshot,
   type DesktopPetETask,
+  type DesktopPetETerminalPrompt,
 } from "./desktopPetE";
+import { desktopPetETerminalPromptScopeKey } from "./desktopPetETerminalPrompt";
 
 export type DesktopPetERawStatus = "none" | "running" | "attention" | "done" | "failed";
 
@@ -42,6 +44,7 @@ export interface DesktopPetETaskCandidate {
   updatedAt: number;
   active?: boolean;
   pendingAction?: DesktopPetEPendingAction | null;
+  terminalPrompt?: DesktopPetETerminalPrompt | null;
 }
 
 export interface DesktopPetEAuthoritativeInput {
@@ -61,6 +64,7 @@ export interface DesktopPetEAuthoritativeInput {
   ptyOutputActivityAt: Record<string, number>;
   backgroundTasks: BackgroundPetTask[];
   pendingActions?: ReadonlyMap<string, DesktopPetEPendingAction>;
+  terminalPrompts?: ReadonlyMap<string, DesktopPetETerminalPrompt>;
   viewedTerminalTaskIds?: ReadonlySet<string>;
   clearedTaskIds?: ReadonlySet<string>;
   notification?: DesktopPetENotification | null;
@@ -142,6 +146,20 @@ function resolveSessionProject(
   return session?.projectId ? projectById.get(session.projectId) ?? null : null;
 }
 
+// 只在存活本机/WSL PTY 上投影；专用事件不能重新绑定 CLI 身份或落到最近会话。
+function resolveTerminalPrompt(
+  input: DesktopPetEAuthoritativeInput,
+  session: TerminalSession | undefined,
+  project: Project | null,
+  source: DesktopPetEAgentSource,
+  alive: boolean,
+): DesktopPetETerminalPrompt | null {
+  if (!session || !alive || source !== "pi" || !session.cliSessionId?.trim()
+    || (session.kind && session.kind !== "pty") || session.environmentType === "ssh"
+    || session.sshHostId || project?.environment_type === "ssh" || session.remoteHandoff) return null;
+  return input.terminalPrompts?.get(desktopPetETerminalPromptScopeKey(session.id, session.cliSessionId)) ?? null;
+}
+
 export function deriveDesktopPetECandidates(
   input: DesktopPetEAuthoritativeInput,
 ): DesktopPetETaskCandidate[] {
@@ -164,12 +182,14 @@ export function deriveDesktopPetECandidates(
       now,
     });
     const pendingAction = input.pendingActions?.get(session.id) ?? null;
-    const status = resolved.status === "none" && input.sessionStatuses[session.id] === "error"
-      ? "failed"
-      : resolved.status;
-    if (status === "none" && !pendingAction) continue;
-    const target = input.targetBySessionId?.get(session.id) ?? null;
     const source = resolveDesktopPetEAgentSource(resolveDesktopPetECliTool(session, project));
+    const terminalPrompt = resolveTerminalPrompt(input, session, project, source,
+      input.sessionStatuses[session.id] === "running" && backgroundBySession.get(session.id)?.alive !== false);
+    const status = terminalPrompt ? "attention"
+      : resolved.status === "none" && input.sessionStatuses[session.id] === "error"
+        ? "failed" : resolved.status;
+    if (status === "none" && !pendingAction && !terminalPrompt) continue;
+    const target = input.targetBySessionId?.get(session.id) ?? null;
     const statusUpdatedAt = input.sessionStatusUpdatedAt?.[session.id] ?? now;
     candidates.push({
       sessionId: session.id,
@@ -184,11 +204,13 @@ export function deriveDesktopPetECandidates(
       status,
       updatedAt: pendingAction
         ? Math.max(now, resolved.updatedAt)
-        : status !== resolved.status
-          ? Math.max(statusUpdatedAt, resolved.updatedAt)
-          : resolved.updatedAt,
+        : terminalPrompt ? terminalPrompt.startedAt
+          : status !== resolved.status
+            ? Math.max(statusUpdatedAt, resolved.updatedAt)
+            : resolved.updatedAt,
       active: session.id === input.activeSessionId,
       pendingAction,
+      terminalPrompt,
     });
   }
 
@@ -200,6 +222,7 @@ export function deriveDesktopPetECandidates(
     if (!shouldIncludeAgentTerminal(session, project, false)) continue;
     const pendingAction = input.pendingActions?.get(task.sessionId) ?? null;
     const source = resolveDesktopPetEAgentSource(resolveDesktopPetECliTool(session, project));
+    const terminalPrompt = resolveTerminalPrompt(input, session, project, source, task.alive);
     candidates.push({
       sessionId: task.sessionId,
       source,
@@ -210,10 +233,11 @@ export function deriveDesktopPetECandidates(
       paneId: null,
       daemonOnly: true,
       sessionAlive: true,
-      status: pendingAction ? "attention" : resolveDaemonTaskStatus(task),
-      updatedAt: pendingAction ? now : resolveDaemonTaskUpdatedAt(task, now),
+      status: pendingAction || terminalPrompt ? "attention" : resolveDaemonTaskStatus(task),
+      updatedAt: pendingAction ? now : terminalPrompt ? terminalPrompt.startedAt : resolveDaemonTaskUpdatedAt(task, now),
       active: false,
       pendingAction,
+      terminalPrompt,
     });
   }
 
@@ -230,9 +254,9 @@ export function mergeDesktopPetECandidatesWithHistory(
     previousTerminalStates.map((candidate) => [candidate.sessionId, candidate]),
   );
   const effectiveCurrent = current.flatMap((candidate) => {
-    if (candidate.pendingAction || candidate.status !== "attention") return [candidate];
+    if (candidate.pendingAction || candidate.terminalPrompt || candidate.status !== "attention") return [candidate];
     const previous = previousBySession.get(candidate.sessionId);
-    if (!previous || previous.pendingAction || previous.status === "attention") return [];
+    if (!previous || previous.pendingAction || previous.terminalPrompt || previous.status === "attention") return [];
     return [{
       ...candidate,
       status: previous.status,
@@ -242,7 +266,7 @@ export function mergeDesktopPetECandidatesWithHistory(
 
   const retained = new Map<string, DesktopPetETaskCandidate>();
   for (const candidate of previousTerminalStates) {
-    if (candidate.pendingAction || (candidate.status !== "done" && candidate.status !== "failed")) continue;
+    if (candidate.pendingAction || candidate.terminalPrompt || (candidate.status !== "done" && candidate.status !== "failed")) continue;
     const alive = liveSessionIds.has(candidate.sessionId);
     // 会话关闭后只再保留 TTL 时长：首次观测到关闭时记下 endedAt，超时就不再展示。
     // 会话被恢复（又变回 alive）时清掉 endedAt，下次关闭重新计时。
@@ -257,7 +281,7 @@ export function mergeDesktopPetECandidatesWithHistory(
 
   for (const candidate of effectiveCurrent) {
     retained.delete(candidate.sessionId);
-    if (!candidate.pendingAction && (candidate.status === "done" || candidate.status === "failed")) {
+    if (!candidate.pendingAction && !candidate.terminalPrompt && (candidate.status === "done" || candidate.status === "failed")) {
       retained.set(candidate.sessionId, candidate);
     }
   }
@@ -279,7 +303,7 @@ export function desktopPetETaskId(
 }
 
 export function classifyDesktopPetETask(candidate: DesktopPetETaskCandidate): DesktopPetEColor | null {
-  if (candidate.pendingAction) return "yellow";
+  if (candidate.pendingAction || candidate.terminalPrompt) return "yellow";
   if (candidate.status === "failed") return "red";
   if (candidate.status === "running") return "green";
   if (candidate.status === "done") return "blue";
@@ -298,7 +322,8 @@ function normalizeCandidate(
   const updatedAt = normalizeTimestamp(candidate.updatedAt, generatedAt);
   const pendingActionId = candidate.pendingAction?.id ?? null;
   return {
-    id: desktopPetETaskId(sessionId, pendingActionId, `${color}:${updatedAt}`),
+    id: desktopPetETaskId(sessionId, pendingActionId,
+      candidate.terminalPrompt ? `prompt:${candidate.terminalPrompt.id}` : `${color}:${updatedAt}`),
     sessionId,
     source,
     agentLabel: normalizeText(candidate.agentLabel, SOURCE_LABELS[source], 40),
@@ -312,6 +337,7 @@ function normalizeCandidate(
     updatedAt,
     viewedAt: null,
     pendingAction: candidate.pendingAction ?? null,
+    ...(candidate.terminalPrompt ? { terminalPrompt: candidate.terminalPrompt } : {}),
   };
 }
 
@@ -352,6 +378,11 @@ export function resolveDesktopPetECliLabel(
   };
 }
 
+// 同会话优先保留真实答题，其次只读等待，普通状态的新时间戳不能抢掉交互。
+function interactionPriority(task: DesktopPetETask | undefined): number {
+  return task?.pendingAction ? 2 : task?.terminalPrompt ? 1 : 0;
+}
+
 export function deriveDesktopPetESnapshot(
   input: DesktopPetEStateInput,
   activeSessionId?: string | null,
@@ -369,9 +400,10 @@ export function deriveDesktopPetESnapshot(
 
     const existing = latestBySession.get(task.sessionId);
     const shouldReplace = !existing
-      || (Boolean(task.pendingAction) && !existing.pendingAction)
-      || task.updatedAt > existing.updatedAt
-      || (task.updatedAt === existing.updatedAt && taskPriority(task) > taskPriority(existing));
+      || interactionPriority(task) > interactionPriority(existing)
+      || (interactionPriority(task) === interactionPriority(existing)
+        && (task.updatedAt > existing.updatedAt
+          || (task.updatedAt === existing.updatedAt && taskPriority(task) > taskPriority(existing))));
     if (shouldReplace) latestBySession.set(task.sessionId, task);
   }
 

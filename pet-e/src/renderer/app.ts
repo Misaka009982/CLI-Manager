@@ -278,6 +278,8 @@ function taskMarkup(task: DesktopPetETask): string {
     ? label("desktopPetE.renderer.respond")
     : canOpenTask(task) ? label("desktopPetE.renderer.open") : canClearTask(task) ? label("desktopPetE.renderer.clear") : "";
   const actionDetails = [
+    ...(!task.pendingAction && task.terminalPrompt
+      ? [label("desktopPetE.renderer.answerInTerminal"), task.terminalPrompt.title] : []),
     task.pendingAction?.message,
     task.pendingAction?.adapterReason ? label(task.pendingAction.adapterReason) : null,
   ].filter((value): value is string => Boolean(value));

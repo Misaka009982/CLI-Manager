@@ -25,13 +25,21 @@ writeFileSync(join(tempDir, "desktopPetStatus.mjs"), [
   "}",
 ].join("\n"), "utf8");
 
+const promptSource = readFileSync(new URL("../src/shared/lib/desktopPetETerminalPrompt.ts", import.meta.url), "utf8");
+writeFileSync(join(tempDir, "desktopPetETerminalPrompt.mjs"), ts.transpileModule(promptSource, {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+  fileName: "desktopPetETerminalPrompt.ts",
+}).outputText, "utf8");
+const promptState = await import(pathToFileURL(join(tempDir, "desktopPetETerminalPrompt.mjs")).href);
+
 const stateSource = readFileSync(new URL("../src/shared/lib/desktopPetEState.ts", import.meta.url), "utf8");
 const stateOutput = ts.transpileModule(stateSource, {
   compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
   fileName: "desktopPetEState.ts",
 }).outputText
-  .replace('from "./agentTerminal"', 'from "./agentTerminal.mjs"')
-  .replace('from "./desktopPetStatus"', 'from "./desktopPetStatus.mjs"')
+  .replace('from "../../features/agents/api/agentTerminal"', 'from "./agentTerminal.mjs"')
+  .replace('from "../../features/desktop-pet/lib/desktopPetStatus"', 'from "./desktopPetStatus.mjs"')
+  .replace('from "./desktopPetETerminalPrompt"', 'from "./desktopPetETerminalPrompt.mjs"')
   .replace('from "./desktopPetE"', 'from "./desktopPetE.mjs"');
 writeFileSync(join(tempDir, "desktopPetEState.mjs"), stateOutput, "utf8");
 const state = await import(pathToFileURL(join(tempDir, "desktopPetEState.mjs")).href);
@@ -228,4 +236,105 @@ test("snapshot acceptance rejects old instances and non-increasing revisions", (
   assert.equal(state.shouldAcceptDesktopPetESnapshot(current, { ...current, revision: 5 }), false);
   assert.equal(state.shouldAcceptDesktopPetESnapshot(current, { ...current, generation: 1, revision: 99 }), false);
   assert.equal(state.shouldAcceptDesktopPetESnapshot(current, { ...current, instanceId: "old" }), false);
+});
+
+const terminalPrompt = { id: "prompt-1", kind: "custom", title: "选择方案", startedAt: 1_000 };
+const piSession = { id: "tab-1", title: "Pi", kind: "pty", cliTool: "pi", cliSessionId: "pi-1" };
+
+// 只提供正式身份与独立状态，不设置通知、代答偏好或任何 broker 请求。
+function piInput(overrides = {}) {
+  return {
+    instanceId: "frontend-1", generation: 1, revision: 0, generatedAt: 10_000,
+    sessions: [piSession], persistedSessions: [], projects: [], activeSessionId: null,
+    sessionStatuses: { "tab-1": "running" }, tabNotifications: {}, tabStatusDetails: {},
+    ptyOutputActivityAt: {}, backgroundTasks: [],
+    terminalPrompts: new Map([[promptState.desktopPetETerminalPromptScopeKey("tab-1", "pi-1"), terminalPrompt]]),
+    ...overrides,
+  };
+}
+
+test("只读等待可独立计入黄灯，任务身份与开始时间保持稳定", () => {
+  const first = state.deriveDesktopPetECandidates(piInput());
+  const second = state.deriveDesktopPetECandidates(piInput({ generatedAt: 20_000 }));
+  const task = snapshot(first).tasks[0];
+  assert.equal(task.color, "yellow");
+  assert.equal(task.pendingAction, null);
+  assert.equal(task.terminalPrompt, terminalPrompt);
+  assert.equal(task.id, snapshot(second).tasks[0].id);
+  assert.equal(task.updatedAt, 1_000);
+  assert.deepEqual(snapshot(first).counts, { green: 0, yellow: 1, red: 0, blue: 0 });
+  assert.equal(snapshot(first, { viewedTerminalTaskIds: new Set([task.id]) }).tasks.length, 1);
+});
+
+test("只读等待要求精确 Pi 身份与存活 PTY，不投影到 SSH 或其他面板", () => {
+  for (const session of [
+    { ...piSession, cliSessionId: "pi-other" }, { ...piSession, cliSessionId: undefined },
+    { ...piSession, cliTool: "claude" }, { ...piSession, environmentType: "ssh" },
+    { ...piSession, sshHostId: "host" }, { ...piSession, kind: "file-editor" },
+    { ...piSession, kind: "subagent-transcript" }, { ...piSession, remoteHandoff: {} },
+  ]) {
+    const result = snapshot(state.deriveDesktopPetECandidates(piInput({ sessions: [session] })));
+    assert.equal(result.counts.yellow, 0);
+    assert.ok(result.tasks.every((task) => !task.terminalPrompt));
+  }
+  for (const status of ["exited", "error", undefined]) {
+    const result = snapshot(state.deriveDesktopPetECandidates(piInput({ sessionStatuses: { "tab-1": status } })));
+    assert.equal(result.counts.yellow, 0);
+  }
+  const sshProject = piInput({ sessions: [{ ...piSession, projectId: "project" }], projects: [{ id: "project", environment_type: "ssh" }] });
+  assert.equal(snapshot(state.deriveDesktopPetECandidates(sshProject)).counts.yellow, 0);
+  const deadDaemon = piInput({ backgroundTasks: [{ sessionId: "tab-1", alive: false, createdAtMs: 0 }] });
+  assert.equal(snapshot(state.deriveDesktopPetECandidates(deadDaemon)).counts.yellow, 0);
+});
+
+test("后台和 WSL 会话使用原有返回会话定位，同一会话不重复计数", () => {
+  const backgroundTask = { sessionId: "tab-1", alive: true, createdAtMs: 0, taskStatus: "running" };
+  const input = piInput({
+    sessions: [], persistedSessions: [{ ...piSession, environmentType: "wsl", wslDistroName: "Ubuntu" }],
+    backgroundTasks: [backgroundTask],
+  });
+  const background = snapshot(state.deriveDesktopPetECandidates(input));
+  assert.equal(background.counts.yellow, 1);
+  assert.equal(background.tasks[0].daemonOnly, true);
+  assert.equal(background.tasks[0].sessionAlive, true);
+  assert.equal(snapshot(state.deriveDesktopPetECandidates({ ...input, backgroundTasks: [{ ...backgroundTask, alive: false }] })).counts.yellow, 0);
+  const open = snapshot(state.deriveDesktopPetECandidates({ ...input, sessions: [piSession] }));
+  assert.equal(open.tasks.length, 1);
+  assert.equal(open.tasks[0].daemonOnly, false);
+});
+
+test("真实待答和提交中请求优先于只读等待及更新的普通状态", () => {
+  const pendingAction = {
+    id: "question-1", kind: "question", requestGeneration: 1,
+    adapterMode: "interactive", submitting: true,
+  };
+  const candidates = state.deriveDesktopPetECandidates(piInput({ pendingActions: new Map([["tab-1", pendingAction]]) }));
+  const combined = snapshot(candidates);
+  assert.equal(combined.tasks.length, 1);
+  assert.equal(combined.tasks[0].pendingAction, pendingAction);
+  assert.equal(combined.tasks[0].terminalPrompt, terminalPrompt);
+  const real = candidate("same", "attention", 100, { pendingAction });
+  const readonly = candidate("same", "attention", 200, { terminalPrompt });
+  const running = candidate("same", "running", 300);
+  for (const ordered of [[real, readonly, running], [running, readonly, real], [readonly, real, running]]) {
+    const result = snapshot(ordered);
+    assert.equal(result.tasks.length, 1);
+    assert.equal(result.tasks[0].pendingAction, pendingAction);
+    assert.equal(result.tasks[0].pendingAction.submitting, true);
+  }
+});
+
+test("结束或消失的只读等待不进入红蓝历史，也不复用为普通通知黄灯", () => {
+  for (const status of ["attention", "done", "failed"]) {
+    const previous = [candidate("session", status, 100, { terminalPrompt })];
+    assert.deepEqual(state.mergeDesktopPetECandidatesWithHistory(previous, [], new Set()), []);
+    const merged = state.mergeDesktopPetECandidatesWithHistory(previous, [candidate("session", "attention", 200)], new Set(["session"]));
+    assert.equal(snapshot(merged).tasks.length, 0);
+  }
+  const resumed = state.mergeDesktopPetECandidatesWithHistory(
+    [candidate("session", "attention", 100, { terminalPrompt })],
+    [candidate("session", "running", 200)], new Set(["session"]),
+  );
+  assert.equal(snapshot(resumed).tasks[0].color, "green");
+  assert.equal(snapshot(resumed).tasks[0].terminalPrompt, undefined);
 });

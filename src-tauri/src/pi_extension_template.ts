@@ -1,5 +1,5 @@
 // __PI_MARKER__
-// CLI_MANAGER_PI_EXTENSION_VERSION:8
+// CLI_MANAGER_PI_EXTENSION_VERSION:9
 // 由 CLI-Manager 管理，请勿手动修改；如需恢复，请在 Hook 设置中重新安装。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -17,6 +17,7 @@ const POLL_INTERVAL_MS = 750;
 const UNAVAILABLE_GRACE_MS = 2_500;
 const REQUEST_TIMEOUT_MS = 2_000;
 const HEARTBEAT_INTERVAL_MS = 20_000;
+const TERMINAL_PROMPT_INTERVAL_MS = 5_000;
 
 type DecisionKind = "question" | "questionnaire" | "permission";
 type NotifyEvent = "SessionStart" | "UserPromptSubmit" | "Notification" | "Stop" | "StopFailure";
@@ -183,6 +184,7 @@ async function cancelPendingDecisions(): Promise<void> {
 function startHeartbeat(): void {
   stopHeartbeat();
   heartbeatRunning = true;
+  if (mirroredDialogs > 0 || officialSpanMirrored) return;
   heartbeatTimer = setInterval(() => void postHook("UserPromptSubmit", null, true), HEARTBEAT_INTERVAL_MS);
 }
 
@@ -1030,16 +1032,16 @@ function loadDecisionBridges(pi: ExtensionAPI, loaded: Set<string>): void {
   }
 }
 
-// 第三方 Pi 扩展（permission-gate、dirty-repo-guard 等）直接调 ctx.ui.select/confirm/input，
-// 这类对话框不经过 CLI-Manager 的决策桥接，宠物端无法代答。这里把它们镜像成一条宠物端通知，
-// 让用户知道「终端里有对话框在等你」，而回答仍然只在终端内完成。
+// 第三方 Pi 扩展（permission-gate、dirty-repo-guard 等）的标准 select/confirm/input
+// 经包装层与宠物端竞速；自绘界面只由正式生命周期报告只读等待。通知为兼容保留，
+// 可独立关闭，不决定四色灯状态。
 //
 // ctx.ui 是 Pi 在 bindExtensions 时创建、由所有扩展共享的同一个对象（runner.uiContext），
 // 因此改写它的方法即可覆盖其他扩展；Pi 自己的 project trust 提示用的是另一个对象，不受影响。
 // 每次 session_start 都会重新绑定 uiContext，所以安装动作也放在 session_start 里并做幂等标记。
 // Pi 0.84.4 起提供官方的 ui_prompt_start / ui_prompt_end 事件，覆盖 select/confirm/input/
-// editor/custom 且嵌套对话框已被 Pi 合并成一个外层等待区间，是首选来源。老版本 Pi 没有这两个
-// 事件，所以仍保留改写 ctx.ui 的兜底补丁；官方事件一旦到达就永久接管，补丁不再发通知。
+// editor/custom 且嵌套对话框已被 Pi 合并成一个外层等待区间。标准控件的包装层始终
+// 保留代答；老版本没有正式事件时，不推断自绘界面的等待状态。
 type DialogKind = "select" | "confirm" | "input";
 // 官方事件还会带 editor / custom，兜底补丁覆盖不到这两种。
 type PromptKind = DialogKind | "editor" | "custom";
@@ -1079,7 +1081,10 @@ function beginMirroredDialog(): void {
 function endMirroredDialog(): void {
   mirroredDialogs = Math.max(0, mirroredDialogs - 1);
   // 仅在 agent 仍在跑（心跳本来就该开着）时恢复，避免在 agent 已结束后重新点亮运行状态。
-  if (mirroredDialogs === 0 && ENABLED.running && heartbeatRunning) startHeartbeat();
+  if (mirroredDialogs === 0 && !officialSpanMirrored && ENABLED.running && heartbeatRunning) {
+    void postHook("UserPromptSubmit", null, true);
+    startHeartbeat();
+  }
 }
 
 // 本扩展自己发起的对话框数量。官方事件里拿不到 opts 上的 skip 标记，只能靠这个计数
@@ -1267,23 +1272,91 @@ function installDialogMirror(ctx: ExtensionContext): void {
   ui[DIALOG_MIRROR_INSTALLED] = true;
 }
 
-// 官方事件通道：只负责补丁覆盖不到的 editor / custom（select / confirm / input 已在包装层
-// 把 ownDialogs 抬起来，这里会直接跳过）。Pi 已把嵌套对话框合并成一个外层区间，
-// 所以用一个布尔量记住「这个区间是否已镜像」，结束时据此配平，而不是在结束时重新判断
-// ownDialogs（那个计数可能已被别处的对话框改动，会导致心跳挂起后无法恢复）。
+// 官方事件覆盖所有外层 UI 等待，包括本扩展自己的界面；只读状态与真实代答独立。
+// 布尔量配平心跳，不在结束时重查 ownDialogs，避免计数变化导致永久挂起。
 let officialSpanMirrored = false;
+interface TerminalPromptSpan {
+  id: string;
+  sessionId: string;
+  kind: PromptKind;
+  title: string | null;
+}
+let terminalPromptSpan: TerminalPromptSpan | null = null;
+let terminalPromptTimer: ReturnType<typeof setInterval> | null = null;
+let terminalPromptSequence = 0;
+
+// 每份报告独立去重，序号在发出前分配；抓住区间身份，不读可变的 activeSessionId。
+async function postTerminalPrompt(span: TerminalPromptSpan, active: boolean): Promise<void> {
+  const target = bridgeTarget();
+  if (!target || terminalPromptSequence >= Number.MAX_SAFE_INTEGER) return;
+  await postJson("/api/claude-hook", {
+    tabId: target.tabId,
+    source: "pi",
+    event: "DesktopPetEUiPrompt",
+    sessionId: span.sessionId,
+    cwd: process.cwd(),
+    wslDistroName: nonEmpty(process.env.WSL_DISTRO_NAME),
+    timestamp: new Date(nextEventTimestampMs()).toISOString(),
+    remoteEventId: crypto.randomUUID(),
+    terminalPrompt: {
+      instanceId: sourceInstanceId,
+      id: span.id,
+      sequence: ++terminalPromptSequence,
+      active,
+      kind: span.kind,
+      title: span.title,
+    },
+  });
+}
+
+// 清理先于任何异步请求；迟到的续报保留旧序号，不能复活已结束区间。
+function endTerminalPrompt(): void {
+  if (terminalPromptTimer) clearInterval(terminalPromptTimer);
+  terminalPromptTimer = null;
+  const span = terminalPromptSpan;
+  terminalPromptSpan = null;
+  if (span) void postTerminalPrompt(span, false);
+}
+
+// 续报只更新租期，不改变区间 ID、标题或开始时间；不借用答题 broker。
+function beginTerminalPrompt(kind: PromptKind, title: unknown, ctx: ExtensionContext): void {
+  endTerminalPrompt();
+  const currentSessionId = sessionId(ctx);
+  if (!currentSessionId || !bridgeTarget()) return;
+  const text = (nonEmpty(title) ?? "").replace(/\s+/g, " ").replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  const span: TerminalPromptSpan = {
+    id: crypto.randomUUID(),
+    sessionId: currentSessionId,
+    kind,
+    title: Array.from(text).slice(0, 512).join("") || null,
+  };
+  terminalPromptSpan = span;
+  void postTerminalPrompt(span, true);
+  terminalPromptTimer = setInterval(() => {
+    if (terminalPromptSpan === span) void postTerminalPrompt(span, true);
+  }, TERMINAL_PROMPT_INTERVAL_MS);
+}
+
+// 生命周期结束先挂起工作心跳，再经此入口配平官方等待计数。
+function endOfficialPrompt(): void {
+  if (!officialSpanMirrored) return;
+  officialSpanMirrored = false;
+  endTerminalPrompt();
+  endMirroredDialog();
+}
 
 function registerPromptEvents(pi: ExtensionAPI): void {
-  pi.on("ui_prompt_start", async (event) => {
-    if (!ENABLED.running || ownDialogs > 0) return;
+  pi.on("ui_prompt_start", async (event, ctx) => {
+    if (ctx.mode !== "tui" || officialSpanMirrored) return;
     officialSpanMirrored = true;
     beginMirroredDialog();
-    void postHook("Notification", dialogNotice(event.kind, event.title));
+    beginTerminalPrompt(event.kind, event.title, ctx);
+    if (ENABLED.running && ownDialogs === 0) {
+      void postHook("Notification", dialogNotice(event.kind, event.title));
+    }
   });
   pi.on("ui_prompt_end", async () => {
-    if (!officialSpanMirrored) return;
-    officialSpanMirrored = false;
-    endMirroredDialog();
+    endOfficialPrompt();
   });
 }
 
@@ -1295,6 +1368,7 @@ export default function cliManagerHook(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     suspendHeartbeatForLifecycle();
+    endOfficialPrompt();
     await cancelPendingDecisions();
     loadDecisionBridges(pi, loadedDecisionBridges);
     // 会话/reload 边界上不可能有对话框还开着，顺手清掉计数，避免异常路径漏配平后长期失衡。
@@ -1310,7 +1384,7 @@ export default function cliManagerHook(pi: ExtensionAPI) {
     activeSessionId = sessionId(ctx);
     failureMessage = null;
     if (ENABLED.running) {
-      void postHook("UserPromptSubmit");
+      if (mirroredDialogs === 0 && !officialSpanMirrored) void postHook("UserPromptSubmit");
       startHeartbeat();
     } else {
       suspendHeartbeatForLifecycle();
@@ -1327,6 +1401,7 @@ export default function cliManagerHook(pi: ExtensionAPI) {
 
   pi.on("agent_settled", async () => {
     suspendHeartbeatForLifecycle();
+    endOfficialPrompt();
     if (ENABLED.stop) {
       void postHook(failureMessage ? "StopFailure" : "Stop", failureMessage);
     }
@@ -1335,6 +1410,7 @@ export default function cliManagerHook(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     suspendHeartbeatForLifecycle();
+    endOfficialPrompt();
     await cancelPendingDecisions();
     activeSessionId = null;
     failureMessage = null;

@@ -34,6 +34,20 @@ test("renderer preserves drafts and exposes retry after a rejected action", () =
   assert.match(source, /desktopPetE\.renderer\.optional/);
 });
 
+test("只读等待仅显示终端作答说明并沿用打开会话入口", () => {
+  const source = read("../src/renderer/app.ts");
+  const task = source.slice(source.indexOf("function taskMarkup"), source.indexOf("function toolbarMarkup"));
+  assert.match(task, /!task\.pendingAction && task\.terminalPrompt/);
+  assert.match(task, /desktopPetE\.renderer\.answerInTerminal/);
+  assert.match(task, /task\.terminalPrompt\.title/);
+  assert.match(task, /escapeText\(actionDetail\)/);
+  assert.match(task, /task\.pendingAction\?\.adapterMode === "interactive"/);
+  assert.match(task, /canOpenTask\(task\) \? "open"/);
+  assert.doesNotMatch(task, /data-command="submit"|textarea|type="radio"/);
+  const panel = source.slice(source.indexOf("function actionPanelMarkup"), source.indexOf("function approvalMarkup"));
+  assert.match(panel, /if \(!task \|\| !action \|\| action\.adapterMode !== "interactive"\) return ""/);
+});
+
 test("renderer uses the strict CSP-compatible sprite class contract", () => {
   const app = read("../src/renderer/app.ts");
   const html = read("../src/renderer/index.html");

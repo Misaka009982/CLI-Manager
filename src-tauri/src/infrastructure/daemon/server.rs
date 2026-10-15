@@ -1025,6 +1025,10 @@ impl DaemonServer {
         let dispatcher = DispatcherHandle::start("daemon");
         let handoff_notifier = RemoteHandoffNotifier::start();
         let delivery_sink: HookPayloadSink = Arc::new(move |payload| {
+            // 外挂消费专用状态；上游仅保留广播接点。
+            if payload.dispatch_desktop_pet_e_ui_prompt(|value| hook_host.broadcast_hook(value)) {
+                return;
+            }
             // 仅当没有已连接的前端客户端时（app 已彻底退到后台，例如托盘退出后
             // 转入后台继续执行）才拉起 app 处理审批或回答。app 正在运行时，事件会通过
             // 下方 broadcast_hook 送达前端，由前端决定是否通知/切换，绝不在此

@@ -19,6 +19,10 @@ use crate::third_party_notification::HookNotificationJob;
 mod desktop_pet_e_completion;
 pub(crate) use desktop_pet_e_completion::DESKTOP_PET_E_COMPLETION_EVENT;
 
+#[path = "desktop_pet_e_ui_prompt.rs"]
+mod desktop_pet_e_ui_prompt;
+use desktop_pet_e_ui_prompt::{DesktopPetEUiPrompt, DESKTOP_PET_E_UI_PROMPT_EVENT};
+
 const REQUEST_PATH: &str = "/api/claude-hook";
 const HOOK_MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_BODY_BYTES: usize = DESKTOP_PET_E_AGENT_MAX_BODY_BYTES;
@@ -98,6 +102,8 @@ struct ClaudeHookRequest {
     remote_sequence: Option<u64>,
     #[serde(default)]
     hook_input: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminal_prompt: Option<DesktopPetEUiPrompt>,
 }
 
 #[derive(Clone, Serialize)]
@@ -132,6 +138,8 @@ pub struct ClaudeHookPayload {
     remote_agent_transcript_ref: Option<String>,
     remote_event_id: Option<String>,
     remote_sequence: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminal_prompt: Option<DesktopPetEUiPrompt>,
 }
 
 impl ClaudeHookPayload {
@@ -603,7 +611,9 @@ pub fn approval_aware_hook_sink(delivery: HookPayloadSink) -> HookPayloadSink {
         warn!("approval arbiter worker failed to start; approvals will be delivered immediately");
         return delivery;
     }
-    Arc::new(move |payload| arbiter.submit(payload))
+    Arc::new(move |payload| {
+        desktop_pet_e_ui_prompt::route(payload, &delivery, |payload| arbiter.submit(payload));
+    })
 }
 
 /// 在给定 listener 上跑 hook HTTP 服务：解析/鉴权/校验后把 payload 交给 sink。
@@ -786,6 +796,7 @@ fn handle_stream(
         remote_agent_transcript_ref: payload.remote_agent_transcript_ref,
         remote_event_id: payload.remote_event_id,
         remote_sequence: payload.remote_sequence,
+        terminal_prompt: payload.terminal_prompt,
     };
 
     sink(payload);
@@ -797,6 +808,10 @@ fn handle_stream(
 pub fn remote_hook_payload_from_spool(
     value: &serde_json::Value,
 ) -> Result<ClaudeHookPayload, String> {
+    // 本轮仅允许本机 Pi 正式 UI 生命周期，SSH spool 不得夹带只读状态。
+    if value.get("terminalPrompt").is_some() {
+        return Err("remote_hook_payload_invalid".to_string());
+    }
     for key in [
         "tabId",
         "source",
@@ -878,6 +893,7 @@ pub fn remote_hook_payload_from_spool(
         remote_event_id: string("eventId"),
         remote_sequence: value.get("sequence").and_then(serde_json::Value::as_u64),
         hook_input: None,
+        terminal_prompt: None,
     };
     if !is_valid_payload(&request) {
         return Err("remote_hook_payload_invalid".to_string());
@@ -912,6 +928,7 @@ pub fn remote_hook_payload_from_spool(
         remote_agent_transcript_ref: request.remote_agent_transcript_ref,
         remote_event_id: request.remote_event_id,
         remote_sequence: request.remote_sequence,
+        terminal_prompt: None,
     })
 }
 
@@ -997,6 +1014,9 @@ fn find_header_end(buffer: &[u8]) -> Option<usize> {
 
 // 验证标签与可选事件 ID 长度，并按来源白名单检查事件名称。
 fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
+    if !desktop_pet_e_ui_prompt::is_valid(payload) {
+        return false;
+    }
     let tab_id = payload.tab_id.trim();
     if tab_id.is_empty() || tab_id.len() > 128 {
         return false;
@@ -1087,6 +1107,7 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
             // Notification：Pi 扩展把第三方扩展的 ctx.ui 对话框镜像成一条提醒，
             // 让宠物端知道「终端里有对话框在等你」，回答仍在终端内完成。
             "SessionStart" | "UserPromptSubmit" | "Notification" | "Stop" | "StopFailure"
+                | DESKTOP_PET_E_UI_PROMPT_EVENT
         ),
         "opencode" => matches!(
             payload.event.as_str(),
@@ -1496,6 +1517,7 @@ mod approval_tests {
             remote_agent_transcript_ref: None,
             remote_event_id: Some(uuid::Uuid::new_v4().to_string()),
             remote_sequence: None,
+            terminal_prompt: None,
         }
     }
 
