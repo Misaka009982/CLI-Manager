@@ -289,7 +289,9 @@ function getClaudeHookToastStyle(
     if (decision.goalStatus === "budgetLimited" || decision.goalStatus === "usageLimited") {
       return { variant: "failed", icon: CircleAlert, eyebrow: translateCurrent("notifications.hookToast.failed"), actionLabel: translateCurrent("notifications.hookToast.view") };
     }
-    return { variant: "finished", icon: CircleCheck, eyebrow: translateCurrent("notifications.hookToast.finished"), actionLabel: translateCurrent("notifications.hookToast.view") };
+    // Pi settle 只表明本轮结束，不承诺整个后台工作流完成。
+    const eyebrow = translateCurrent(payload.source === "pi" ? "notifications.hookToast.piRunEnded" : "notifications.hookToast.finished");
+    return { variant: "finished", icon: CircleCheck, eyebrow, actionLabel: translateCurrent("notifications.hookToast.view") };
   }
   if (payload.event === "StopFailure") {
     return { variant: "failed", icon: CircleAlert, eyebrow: translateCurrent("notifications.hookToast.failed"), actionLabel: translateCurrent("notifications.hookToast.view") };
@@ -349,7 +351,7 @@ function getClaudeHookToastTitle(
     if (decision.goalStatus === "budgetLimited" || decision.goalStatus === "usageLimited") {
       return translateCurrent("notifications.hookToast.title.failed", { tabTitle });
     }
-    return translateCurrent("notifications.hookToast.title.finished", { tabTitle });
+    return translateCurrent(payload.source === "pi" ? "notifications.hookToast.title.piRunEnded" : "notifications.hookToast.title.finished", { tabTitle });
   }
   if (payload.event === "StopFailure") return translateCurrent("notifications.hookToast.title.failed", { tabTitle });
   if (payload.event === "PermissionRequest") return translateCurrent("notifications.hookToast.title.approval", { sourceName });
@@ -407,7 +409,7 @@ function getSystemNotificationBody(
       if (decision.goalStatus === "budgetLimited" || decision.goalStatus === "usageLimited") {
         return translateCurrent("notifications.system.stopFailure", { sourceName, projectName, suffix });
       }
-      return translateCurrent("notifications.system.stop", { sourceName, projectName, suffix });
+      return translateCurrent(payload.source === "pi" ? "notifications.system.piRunEnded" : "notifications.system.stop", { sourceName, projectName, suffix });
     case "StopFailure":
       return translateCurrent("notifications.system.stopFailure", { sourceName, projectName, suffix });
     case "PermissionRequest":

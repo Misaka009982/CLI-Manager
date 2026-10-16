@@ -3,6 +3,7 @@ import { applyTerminalDisplay } from "./terminalLayout";
 import { createTerminalInputFollow, revealTerminalCell } from "./terminalCursorView";
 import { translate, type TranslationKey } from "./i18n";
 import { installTerminalQueryPolicy } from "../../../src/shared/lib/terminalQueryPolicy";
+import { installTerminalUnicode } from "../../../src/shared/lib/terminalUnicode";
 import { createTerminalColorQueryFilter } from "../../../src/shared/lib/terminalColorQueryFilter";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -157,7 +158,7 @@ export function WebTerminal({ sessionId, active, status, stream, controlMode, de
     const container = containerRef.current;
     if (!container) return;
     const terminal = new Terminal({
-      allowProposedApi: false,
+      allowProposedApi: true,
       convertEol: false,
       cursorBlink: false,
       cursorStyle: "bar",
@@ -171,6 +172,7 @@ export function WebTerminal({ sessionId, active, status, stream, controlMode, de
         ? { background: "#0b0d10", foreground: "#e7ebf0", cursor: "#f4f6f8", selectionBackground: "#315b7d99" }
         : { background: "#111418", foreground: "#edf1f5", cursor: "#ffffff", selectionBackground: "#3d709999" },
     });
+    installTerminalUnicode(terminal);
     terminal.open(container);
     terminal.attachCustomKeyEventHandler((event) => {
       // Let the browser dispatch copy/paste; do not send clipboard shortcuts to the PTY.

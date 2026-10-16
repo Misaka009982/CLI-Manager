@@ -1,3 +1,4 @@
+import { TerminalLayoutLockMenu, TerminalLayoutLockIndicator } from "../api/TerminalLayoutLockControls";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
@@ -106,6 +107,7 @@ export function PaneTabBar({
 }: PaneTabBarProps) {
   const { t } = useI18n();
   const workspanEnabled = useSettingsStore((s) => s.workspanEnabled);
+  const topTabBarVisible = useSettingsStore((s) => s.workspaceLayout.workspanTabBarVisible);
   const { setNodeRef, isOver } = useDroppable({ id: `${PANE_DROP_PREFIX}${pane.id}` });
   const tabMenuTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
   const tabMenuForeground = normalizeTabMenuHex(tabMenuTheme.foreground, resolvedTheme === "dark" ? "#d8dee9" : "#1e293b");
@@ -328,6 +330,7 @@ export function PaneTabBar({
   }, [activePaneTabId, paneSessionIds.length, scrollActivePaneTabIntoView]);
 
   return (
+    <TerminalLayoutLockMenu style={tabMenuStyle}>
     <div
       ref={setNodeRef}
       className={`ui-terminal-chrome ${variant === "global" ? "ui-terminal-global-chrome" : "ui-terminal-pane-chrome"} relative flex h-10 shrink-0 items-center`}
@@ -533,6 +536,9 @@ export function PaneTabBar({
           </Popover>
         </>
       )}
+      {(!workspanEnabled || !topTabBarVisible)
+        && (isPaneFullscreen || pane.sessionIds.includes(activeSessionId ?? ""))
+        && <TerminalLayoutLockIndicator />}
       {variant === "pane" && (
         <div className="ui-terminal-actions flex shrink-0 items-center">
           {!isSubagentTranscript && isWorkspanSplit && activePaneTabId && (
@@ -573,5 +579,6 @@ export function PaneTabBar({
         </div>
       )}
     </div>
+    </TerminalLayoutLockMenu>
   );
 }

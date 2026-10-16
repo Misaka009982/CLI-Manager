@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 131
-- **Last Active**: 2026-10-09
+- **Total Sessions**: 136
+- **Last Active**: 2026-10-16
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~61 | Active |
+| `journal-3.md` | ~181 | Active |
 | `journal-2.md` | ~1975 | Archived |
 | `journal-1.md` | ~2014 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,11 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 136 | 2026-10-16 | 终端字素宽度与 Pi 滚动条验证（#285/#286） | `b77fc5e7` | `master` |
+| 135 | 2026-10-16 | PR #284 多行启动命令 P2 修复 | `900deab0` | `pr-284-review-fixes` |
+| 134 | 2026-10-16 | Pi Hook 运行结束边界修复验收与提交 | `3d323958` | `master` |
+| 133 | 2026-10-13 | 终端布局锁定与验收修正（#278） | `8d500f01` | `master` |
+| 132 | 2026-10-12 | 修复 Esc 焦点边框与远程连接设置退出 | 同本提交 | `master` |
 | 131 | 2026-10-09 | 修复 Codex Hook 串终端与实时统计 | `d1c0689e` | `master` |
 | 130 | 2026-10-08 | V1.4.2 历史删除补齐与编译告警清理 | `14e9de2e`, `70ea97ea` | `master` |
 | 129 | 2026-10-08 | Codex Shift 方向键修复与项目菜单图标 | `b7eb8008`, `1f7b5020` | `master` |

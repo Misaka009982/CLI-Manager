@@ -98,10 +98,11 @@ function formatPreviewMessageTime(timestamp: string | null, language: AppLanguag
 interface TerminalMarkdownPreviewProps {
   sessionId: string;
   open: boolean;
+  isVisible: boolean;
   onClose: () => void;
 }
 
-export function TerminalMarkdownPreview({ sessionId, open, onClose }: TerminalMarkdownPreviewProps) {
+export function TerminalMarkdownPreview({ sessionId, open, isVisible, onClose }: TerminalMarkdownPreviewProps) {
   const { language, t } = useI18n();
   const { tone: terminalCodeTheme, panelStyle: terminalPreviewStyle } = useTerminalPreviewTheme();
   const uiFontFamily = useSettingsStore((state) => state.uiFontFamily);
@@ -164,7 +165,7 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose }: TerminalMa
     [starredRowsByIndex],
   );
   const content = selectedMessage ? unwrapFencedMarkdown(selectedMessage.content) : null;
-  const previewScroll = useMarkdownPreviewScroll({ open, sessionKey: previewSessionKey, selectedMessageIndex, content });
+  const previewScroll = useMarkdownPreviewScroll({ open: open && isVisible, sessionKey: previewSessionKey, selectedMessageIndex, content });
   useEffect(() => setFontSize(uiFontSize), [uiFontSize]);
 
   const handlePreviewWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
@@ -200,6 +201,25 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose }: TerminalMa
       remoteContextRef.current = null;
     };
   }, [closeRemoteContext, previewSessionKey]);
+
+  // A closed preview must not retain every assistant answer. Hidden tabs retain
+  // their current view, but stop requesting full transcripts until visible again.
+  useEffect(() => {
+    if (!open || !isVisible) {
+      loadedTriggerRef.current = null;
+      setLoading(false);
+    }
+    if (!open) {
+      setPreviewMessages([]);
+      setAnswerIdentity(null);
+      setError(null);
+    }
+    return () => {
+      requestSeqRef.current += 1;
+      closeRemoteContext(remoteContextRef.current);
+      remoteContextRef.current = null;
+    };
+  }, [closeRemoteContext, open, isVisible]);
 
   // 星标按会话缓存；同一会话的多个预览面板共用一份已加载结果。
   useEffect(() => {
@@ -287,12 +307,10 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose }: TerminalMa
   }, [cliSessionId, closeRemoteContext, isSshProject, lookupProjectPath, project, session?.remoteTranscriptRef, source]);
 
   useEffect(() => {
-    if (!source) return;
-    const completed = hookStatus === "done" || hookStatus === "failed";
-    if (!open && !completed) return;
+    if (!source || !open || !isVisible) return;
     if (loadedTriggerRef.current === previewLoadTrigger) return;
     void loadLatest(previewLoadTrigger);
-  }, [hookStatus, loadLatest, open, previewLoadTrigger, source]);
+  }, [hookStatus, loadLatest, open, isVisible, previewLoadTrigger, source]);
 
   // 手动选择取消尚未提交的跳转；最新回答使用源消息坐标，不把列表序号当 messageIndex。
   const selectAnswer = (messageIndex: number) => {

@@ -18,9 +18,17 @@ use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+
+// A single index is shared by background sync and interactive statistics.
+static HISTORY_INDEX_REFRESH_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+#[path = "tests/index_memory.rs"]
+mod memory_tests;
 
 // 惰性初始化并返回会话项目元数据缓存锁。
 pub(super) fn get_project_cache() -> &'static Mutex<SessionProjectCache> {
@@ -136,11 +144,10 @@ pub(super) fn set_persisted_generation(roots_key: &str, generation: u64) {
 // 读取并校验持久化索引版本与根目录键，返回标为过期的可复用快照。
 pub(super) fn load_persisted_history_index(roots: &HistoryRoots) -> Option<HistorySessionIndex> {
     let path = history_index_cache_file()?;
-    let bytes = {
+    let persisted: PersistedHistoryIndex = {
         let _guard = history_index_disk_lock().lock().ok()?;
-        std::fs::read(&path).ok()?
+        read_persisted_index(&path)?
     };
-    let persisted: PersistedHistoryIndex = serde_json::from_slice(&bytes).ok()?;
     if persisted.version != HISTORY_INDEX_CACHE_VERSION {
         return None;
     }
@@ -159,6 +166,25 @@ pub(super) fn load_persisted_history_index(roots: &HistoryRoots) -> Option<Histo
     })
 }
 
+fn read_persisted_index(path: &Path) -> Option<PersistedHistoryIndex> {
+    serde_json::from_reader(BufReader::new(std::fs::File::open(path).ok()?)).ok()
+}
+
+fn write_persisted_index(path: &Path, persisted: &PersistedHistoryIndex) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    let result = (|| {
+        let mut writer = BufWriter::new(std::fs::File::create(&tmp)?);
+        serde_json::to_writer(&mut writer, persisted).map_err(std::io::Error::other)?;
+        writer.flush()?;
+        drop(writer);
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 // generation 未变时跳过，否则以临时文件写入并重命名发布派生索引。
 pub(super) fn save_persisted_history_index(index: &HistorySessionIndex) {
     let Some(path) = history_index_cache_file() else {
@@ -175,9 +201,6 @@ pub(super) fn save_persisted_history_index(index: &HistorySessionIndex) {
         generation: index.generation,
         entries: index.entries.clone(),
     };
-    let Ok(bytes) = serde_json::to_vec(&persisted) else {
-        return;
-    };
     let Ok(_guard) = history_index_disk_lock().lock() else {
         return;
     };
@@ -185,11 +208,8 @@ pub(super) fn save_persisted_history_index(index: &HistorySessionIndex) {
         let _ = std::fs::create_dir_all(parent);
     }
     // 临时文件 + rename，避免崩溃时残留半截损坏文件。
-    let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, &bytes).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+    if write_persisted_index(&path, &persisted).is_ok() {
         set_persisted_generation(&roots_key, index.generation);
-    } else {
-        let _ = std::fs::remove_file(&tmp);
     }
 }
 
@@ -214,6 +234,9 @@ pub(super) fn refresh_history_index_snapshot(
     roots: &HistoryRoots,
     force: bool,
 ) -> HistorySessionIndex {
+    let _refresh = HISTORY_INDEX_REFRESH_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let now = now_millis();
     if !force {
         if let Ok(index) = get_history_index().read() {
@@ -327,6 +350,7 @@ pub(super) fn build_history_index(
         let worker_count = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4)
+            .min(4)
             .min(pending.len());
         let next_job = AtomicUsize::new(0);
         let scanned: Mutex<Vec<(usize, HistoryIndexEntry)>> =
@@ -564,7 +588,7 @@ pub(super) fn build_session_computation(
         title,
         message_count: summary_scan.message_count,
         branch: summary_scan.branch,
-        stats,
+        stats: Arc::new(stats),
     };
     if let Some(metadata) = cursor_metadata {
         apply_cursor_metadata_to_computation(&mut computed, &metadata);
@@ -639,10 +663,10 @@ pub(super) fn apply_grok_summary_metadata(path: &Path, computed: &mut CachedSess
         &[&["current_model_id"], &["model"], &["selectedModel"]],
     ) {
         if computed.stats.current_model.is_none() {
-            computed.stats.current_model = Some(model.clone());
+            Arc::make_mut(&mut computed.stats).current_model = Some(model.clone());
         }
         if computed.stats.dominant_model.is_none() {
-            computed.stats.dominant_model = Some(model);
+            Arc::make_mut(&mut computed.stats).dominant_model = Some(model);
         }
     }
 }

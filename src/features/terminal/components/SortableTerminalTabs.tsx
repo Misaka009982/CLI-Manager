@@ -1,3 +1,5 @@
+import { useLockedLayoutDrag } from "../hooks/useLockedLayoutDrag";
+import { TerminalLayoutLockMenuItem } from "../api/TerminalLayoutLockControls";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -66,8 +68,10 @@ export function SortableTab({
   menuStyle,
 }: SortableTabProps) {
   const { t } = useI18n();
+  const { locked, onPointerDownCapture } = useLockedLayoutDrag();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
+    disabled: locked,
     data: {
       type: "session",
       paneId,
@@ -114,9 +118,9 @@ export function SortableTab({
 
   const horizontalTransform = transform ? { ...transform, y: 0 } : transform;
   const style = {
-    transform: isDragging ? undefined : CSS.Transform.toString(horizontalTransform),
+    transform: isDragging || locked ? undefined : CSS.Transform.toString(horizontalTransform),
     transition: isDragging ? undefined : transition,
-    opacity: isDragging ? 0.45 : 1,
+    opacity: isDragging && !locked ? 0.45 : 1,
     zIndex: isDragging ? 10 : undefined,
   };
 
@@ -153,12 +157,17 @@ export function SortableTab({
           onPointerEnter={scheduleHoverCard}
           onPointerLeave={scheduleHideHoverCard}
           onContextMenu={(event) => {
+            // 标签拥有完整菜单，禁止冒泡到仅提供布局锁开关的空白区菜单。
+            event.stopPropagation();
             hideHoverCard();
             contextMenuPointRef.current = { x: event.clientX, y: event.clientY };
           }}
           aria-selected={isActive}
           {...attributes}
           {...listeners}
+          onPointerDownCapture={onPointerDownCapture}
+          role="tab"
+          aria-disabled={undefined}
         >
           <span
             className="ui-tab-runtime-dot w-2 h-2 rounded-full shrink-0"
@@ -270,7 +279,10 @@ export function SortableTab({
           </button>
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent className={menuClassName} style={menuStyle}>{menuContent(getTabAnchor)}</ContextMenuContent>
+      <ContextMenuContent className={menuClassName} style={menuStyle}>
+        {menuContent(getTabAnchor)}
+        <TerminalLayoutLockMenuItem />
+      </ContextMenuContent>
       </ContextMenu>
       {terminalTabHoverInfoEnabled && hoverCardPosition && !isEditing && !isDragging && (
         <Portal>
@@ -313,10 +325,11 @@ export function SortableWorkspanTab({
   menuStyle?: CSSProperties;
 }) {
   const { t } = useI18n();
+  const { locked, onPointerDownCapture } = useLockedLayoutDrag();
   const sortableId = `${WORKSPAN_DRAG_PREFIX}${workspan.id}`;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: sortableId,
-    disabled: dragDisabled,
+    disabled: dragDisabled || locked,
     data: {
       type: "workspan",
       workspanId: workspan.id,
@@ -339,12 +352,12 @@ export function SortableWorkspanTab({
   } = useTerminalTabHoverCard(tabElementRef, editing || isDragging || !hoverInfo);
   const horizontalTransform = transform ? { ...transform, y: 0 } : transform;
   const style: CSSProperties = {
-    transform: isDragging ? undefined : CSS.Transform.toString(horizontalTransform),
+    transform: isDragging || locked ? undefined : CSS.Transform.toString(horizontalTransform),
     transition: isDragging ? undefined : transition,
-    opacity: isDragging ? 0.45 : 1,
+    opacity: isDragging && !locked ? 0.45 : 1,
     zIndex: isDragging ? 10 : undefined,
   };
-  const sortableAttributes = { ...attributes, role: "tab" as const, "aria-selected": isActive };
+  const sortableAttributes = { ...attributes, role: "tab" as const, "aria-selected": isActive, "aria-disabled": dragDisabled || undefined };
 
   useEffect(() => {
     if (!editing) return;
@@ -400,11 +413,14 @@ export function SortableWorkspanTab({
               startRename();
             }}
             onContextMenu={(event) => {
+              // 锁定只禁用拖动；标签菜单仍由当前标签处理。
+              event.stopPropagation();
               hideHoverCard();
               contextMenuPointRef.current = { x: event.clientX, y: event.clientY };
             }}
             {...sortableAttributes}
             {...listeners}
+            onPointerDownCapture={onPointerDownCapture}
           >
             <span
               className="ui-tab-runtime-dot h-2 w-2 shrink-0 rounded-full"
@@ -466,6 +482,7 @@ export function SortableWorkspanTab({
         </ContextMenuTrigger>
         <ContextMenuContent className="terminal-skin" style={menuStyle}>
           {menuContent(getTabAnchor, startRename)}
+          <TerminalLayoutLockMenuItem />
         </ContextMenuContent>
       </ContextMenu>
       {terminalTabHoverInfoEnabled && hoverInfo && hoverCardPosition && !editing && !isDragging && (

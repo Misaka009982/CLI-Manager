@@ -144,6 +144,32 @@ function isCodexCommandToken(token: CliArgToken): boolean {
     || executable === "codex.bat";
 }
 
+/** Read the real launch profile, not profile-looking text inside a prompt/config value. */
+export function extractCodexProfileName(command: string): string | null {
+  const tokens = tokenizeCliArgs(command);
+  const executableIndex = tokens[0]?.raw === "&" ? 1 : 0;
+  const executable = tokens[executableIndex];
+  if (!executable || (!isCodexCommandToken(executable)
+    && !/(^|[/\\])codex\.ps1$/i.test(unquoteCliArg(executable)))) return null;
+  let profile: string | null = null;
+  for (let index = executableIndex + 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.raw === "--" || /^[;&|]/.test(token.raw)) break;
+    const name = optionName(token);
+    if (name === "--profile" || name === "-p") {
+      const equals = token.raw.indexOf("=");
+      const value = equals >= 0 ? token.raw.slice(equals + 1) : tokens[++index]?.raw ?? "";
+      profile = unquoteCliArg({ raw: value, normalized: value.toLowerCase() });
+    } else if (token.raw.startsWith("-p") && !token.raw.startsWith("--") && token.raw.length > 2) {
+      const value = token.raw.slice(2);
+      profile = unquoteCliArg({ raw: value, normalized: value.toLowerCase() });
+    } else if (takesSeparateOptionValue(token)) {
+      index += 1;
+    }
+  }
+  return profile;
+}
+
 export function detectCodexLaunchSessionSelection(
   command: string | null | undefined,
 ): CodexLaunchSessionSelection {

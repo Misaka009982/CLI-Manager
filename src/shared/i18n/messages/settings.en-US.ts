@@ -1,6 +1,14 @@
 import type { zh } from "./settings.zh-CN";
 
 export const en: Record<keyof typeof zh, string> = {
+  "settings.hooks.codex.profileNameInvalid": "The current terminal has an invalid Codex profile name.",
+  "settings.hooks.codex.profileMissing": "The current terminal profile file is missing. Check the config directory or create a new terminal.",
+  "settings.hooks.codex.configInvalid": "Codex config could not be parsed. The original file was not changed.",
+  "settings.hooks.codex.effectiveScope": "Inspected effective config",
+  "settings.hooks.codex.checkUnavailable": "Not checked or check failed",
+  "settings.hooks.codex.pendingReview": "Codex review required",
+  "settings.hooks.codex.reviewHint": "Hooks are installed, but this config has unconfirmed, changed, or disabled hooks. Review them with /hooks in this Codex terminal; reinstalling does not grant trust.",
+
   "settings.terminal.externalProgram": "External terminal program",
   "settings.terminal.externalProgramDescription": "Choose the program that opens external windows; the project Shell determines the command environment. Applies to external mode and Open External Terminal. Windows may host the window in its default terminal.",
   "settings.terminal.externalOpenFailed": "Unable to open external terminal",
@@ -423,7 +431,9 @@ export const en: Record<keyof typeof zh, string> = {
   "settings.dataStorage.useWithoutMigration": "Use Without Migration",
   "settings.dataStorage.migrateAndRestart": "Migrate Data and Relaunch",
   "settings.dataStorage.switching": "Preparing switch...",
-  "settings.dataStorage.error.tasksActive": "A terminal or background task is still running. Finish all tasks and try again.",
+  "settings.dataStorage.error.tasksActive": "A terminal, remote service, QR authorization, or another background task is still running. Stop all of them and try again.",
+  "settings.dataStorage.error.runtimeSocket": "The remote communication endpoint could not be confirmed as stopped. Fully stop the related services and try again; the original data directory remains unchanged.",
+  "settings.dataStorage.error.migrationLink": "Migration found a symbolic link or unsupported reparse point. The original data directory remains unchanged. Check: {path}",
   "settings.dataStorage.error.targetNotEmpty": "The target directory is not empty, so automatic migration is unavailable.",
   "settings.dataStorage.error.targetNotWritable": "The target directory is not writable. Choose another directory.",
   "settings.dataStorage.error.pathOverlap": "The old and new data directories cannot contain one another.",

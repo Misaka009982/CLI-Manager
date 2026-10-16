@@ -1,6 +1,7 @@
 import { useTerminalStore } from "../state";
 import { useSessionStore } from "./sessionStore";
 import { logError } from "../../../shared/platform/logger";
+import type { Terminal } from "@xterm/xterm";
 
 /**
  * 工作区终端 scrollback 的定时节流落盘。
@@ -22,14 +23,56 @@ const SNAPSHOT_MAX_LINES = 2000;
 
 interface SnapshotSource {
   /** 返回当前终端画面的完整序列化文本（含 scrollback）。 */
-  serialize: () => string | Promise<string>;
+  serialize: (signal: AbortSignal) => string | Promise<string>;
   checkpoint?: (serialized: string) => Promise<void>;
+  lifetime: AbortController;
   /** 自上次落盘后是否收到过新 PTY 输出。 */
   dirty: boolean;
 }
 
 const sources = new Map<string, SnapshotSource>();
 let timer: ReturnType<typeof setInterval> | null = null;
+let flushInFlight: Promise<void> | null = null;
+let forceFlushPending = false;
+
+/** Disposing xterm can discard its write callbacks; cancellation must release the flush queue. */
+export function serializeTerminalAfterWrite(
+  terminal: Pick<Terminal, "write">,
+  serialize: () => string,
+  signal: AbortSignal,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(new Error("Terminal snapshot source disposed"));
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      terminal.write("", () => {
+        signal.removeEventListener("abort", abort);
+        if (signal.aborted) return;
+        try {
+          resolve(serialize());
+        } catch (error) {
+          reject(error);
+        }
+      });
+    } catch (error) {
+      signal.removeEventListener("abort", abort);
+      reject(error);
+    }
+  });
+}
+
+export function terminalSnapshotDiagnostics() {
+  return {
+    sources: sources.size,
+    dirtySources: [...sources.values()].filter((source) => source.dirty).length,
+    flushing: flushInFlight !== null,
+    forceFlushPending,
+  };
+}
 
 /** 只保留文本尾部最多 maxLines 行，避免快照无限增长。 */
 function trimToTailLines(text: string, maxLines: number): string {
@@ -53,12 +96,16 @@ function trimToTailLines(text: string, maxLines: number): string {
  */
 export function registerTerminalSnapshotSource(
   sessionId: string,
-  serialize: () => string | Promise<string>,
+  serialize: (signal: AbortSignal) => string | Promise<string>,
   checkpoint?: (serialized: string) => Promise<void>,
 ): () => void {
-  sources.set(sessionId, { serialize, checkpoint, dirty: false });
+  sources.get(sessionId)?.lifetime.abort();
+  const source = { serialize, checkpoint, dirty: false, lifetime: new AbortController() };
+  sources.set(sessionId, source);
   ensureTimerRunning();
   return () => {
+    source.lifetime.abort();
+    if (sources.get(sessionId) !== source) return;
     sources.delete(sessionId);
     if (sources.size === 0) stopTimer();
   };
@@ -102,39 +149,73 @@ export async function flushTerminalSnapshotsNow(): Promise<void> {
 /**
  * @param force true 时忽略 dirty 序列化全部来源（退出用）；false 时只序列化脏来源（节流用）。
  */
-async function flushSnapshots(force: boolean): Promise<void> {
+function flushSnapshots(force: boolean): Promise<void> {
+  if (flushInFlight) {
+    if (force) forceFlushPending = true;
+    return flushInFlight;
+  }
+  // Timer ticks share one flight. Exit/handoff requests during a flight require
+  // one fresh forced pass after it, rather than overlapping full serializations.
+  const flight = Promise.resolve().then(async () => {
+    try {
+      let forcePass = force || forceFlushPending;
+      do {
+        forceFlushPending = false;
+        await flushSnapshotPass(forcePass);
+        forcePass = forceFlushPending;
+      } while (forcePass);
+    } finally {
+      // Clear in the same continuation as the last pending-force check: an
+      // outer .finally() leaves a microtask gap where a forced request is lost.
+      flushInFlight = null;
+    }
+  });
+  flushInFlight = flight;
+  return flight;
+}
+
+async function flushSnapshotPass(force: boolean): Promise<void> {
   const store = useTerminalStore.getState();
-  let anyUpdated = false;
+  const updated = new Map<string, SnapshotSource>();
 
   for (const [sessionId, source] of sources) {
     if (!force && !source.dirty) continue;
     source.dirty = false;
     try {
-      const serialized = await source.serialize();
+      const serialized = await source.serialize(source.lifetime.signal);
+      if (sources.get(sessionId) !== source) continue;
       if (source.checkpoint) {
         try {
           await source.checkpoint(serialized);
         } catch (err) {
-          source.dirty = true;
-          logError("Failed to upload terminal checkpoint", { sessionId, err });
+          if (sources.get(sessionId) === source) {
+            source.dirty = true;
+            logError("Failed to upload terminal checkpoint", { sessionId, err });
+          }
         }
       }
+      if (sources.get(sessionId) !== source) continue;
       const snapshot = trimToTailLines(serialized, SNAPSHOT_MAX_LINES);
       store.updateSessionTerminalSnapshot(sessionId, snapshot);
-      anyUpdated = true;
+      updated.set(sessionId, source);
     } catch (err) {
       // 单个终端序列化失败不应拖垮整轮落盘；标回脏，下轮重试。
-      source.dirty = true;
-      logError("Failed to serialize terminal snapshot for throttled persistence", { sessionId, err });
+      if (sources.get(sessionId) === source && !source.lifetime.signal.aborted) {
+        source.dirty = true;
+        logError("Failed to serialize terminal snapshot for throttled persistence", { sessionId, err });
+      }
     }
   }
 
-  if (!anyUpdated) return;
+  if (updated.size === 0) return;
 
   try {
     // updateSessionTerminalSnapshot 只改内存，这里统一把最新 sessions 落盘。
     await useSessionStore.getState().saveSessions(useTerminalStore.getState().sessions);
   } catch (err) {
+    for (const [sessionId, source] of updated) {
+      if (sources.get(sessionId) === source) source.dirty = true;
+    }
     logError("Failed to persist throttled terminal snapshots", { err });
   }
 }

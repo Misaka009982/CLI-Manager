@@ -597,15 +597,31 @@ async fn sync_request_logs_with_connection(
     .await
     .map_err(|err| format!("request_logs_scan_join_failed: {err}"))?;
 
-    let mut documents: Vec<RequestLogDocument> = index
+    let sync_state = load_sync_state(conn).await?;
+    let mut current_paths = HashSet::new();
+    let mut scanned_files = 0u64;
+    let mut needs_sync = |path: String, fingerprint: SessionFileFingerprint| {
+        scanned_files += 1;
+        let changed = force
+            || sync_state.get(&path)
+                .map(|state| !fingerprint_matches(*state, fingerprint))
+                .unwrap_or(true);
+        current_paths.insert(path);
+        changed
+    };
+    // Filter fingerprints before cloning usage events or resolving project metadata.
+    let changed_entries: Vec<_> = index
         .entries
         .into_iter()
         .filter(|entry| request_log_source_allowed(&entry.file_ref.source))
-        .map(document_from_entry)
+        .filter(|entry| needs_sync(path_to_key(&entry.file_ref.path), entry.fingerprint))
         .collect();
+    let mut changed_opencode = Vec::new();
     match opencode_catalog_sessions().await {
         Ok(Some(sessions)) => {
-            documents.extend(sessions.into_iter().map(document_from_opencode));
+            changed_opencode.extend(sessions.into_iter().filter(|parsed| {
+                needs_sync(path_to_key(&parsed.file_ref.path), parsed.fingerprint)
+            }));
         }
         Ok(None) => {
             cleanup_sources.remove("opencode");
@@ -617,11 +633,6 @@ async fn sync_request_logs_with_connection(
     }
 
     let synced_at_ms = now_millis();
-    let sync_state = load_sync_state(conn).await?;
-    let current_paths: HashSet<String> = documents
-        .iter()
-        .map(|document| document.file_path.clone())
-        .collect();
     let stale_paths: Vec<String> = sync_state
         .iter()
         .filter(|(path, state)| {
@@ -629,24 +640,15 @@ async fn sync_request_logs_with_connection(
         })
         .map(|(path, _)| path.clone())
         .collect();
-    let scanned_files = documents.len() as u64;
-    let changed_documents: Vec<RequestLogDocument> = documents
-        .into_iter()
-        .filter(|entry| {
-            let file_path = &entry.file_path;
-            force
-                || sync_state
-                    .get(file_path)
-                    .map(|state| !fingerprint_matches(*state, entry.fingerprint))
-                    .unwrap_or(true)
-        })
-        .collect();
-
-    let changed_files = changed_documents.len() as u64;
+    let changed_files = (changed_entries.len() + changed_opencode.len()) as u64;
+    // Keep only one materialized document alive while writing changed files.
+    let changed_documents = changed_entries.into_iter()
+        .map(document_from_entry)
+        .chain(changed_opencode.into_iter().map(document_from_opencode));
     let mut written_rows = 0u64;
     let mut failed_files = 0u64;
-    for document in &changed_documents {
-        match replace_document(conn, document, synced_at_ms).await {
+    for document in changed_documents {
+        match replace_document(conn, &document, synced_at_ms).await {
             Ok(count) => {
                 written_rows = written_rows.saturating_add(count);
                 crate::usage::reconcile_route_attribution_for_session_with_connection(

@@ -91,8 +91,8 @@ test("file-only, directory-based, database, and snapshot deletion do not remove 
   assert.deepEqual([...historyDeletedSessionKeys(snapshot, [snapshot, child])], [snapshot.sessionKey]);
 });
 
-test("Claude/Codex remove only actual adjacent subagents, preserving other roots and metadata-only children", () => {
-  for (const source of ["claude", "codex"]) {
+test("Claude removes only actual adjacent subagents, preserving other roots and metadata-only children", () => {
+  for (const source of ["claude"]) {
     const parent = session(source);
     const path = `C:/history/${source}/parent/subagents/agent-child.jsonl`;
     const child = session(source, "child", { file_path: path, parent_session_id: "parent" });
@@ -135,7 +135,7 @@ test("batch planning merges covered subagents but never silently skips an inelig
 test("mixed-source execution preflights every selection before any deletion", async () => {
   const selected = allSources.map((source) => session(source));
   const calls = [];
-  const result = await executeHistoryDeletion(selected.map((item) => item.sessionKey), () => selected, async (key) => calls.push(key));
+  const result = await executeHistoryDeletion(selected.map((item) => item.sessionKey), () => selected, async (key) => { calls.push(key); });
   assert.equal(result.error, null);
   assert.equal(result.deletedCount, 12);
   assert.deepEqual(calls, selected.map((item) => item.sessionKey));
@@ -182,8 +182,14 @@ function storeActionFactory() {
 
 const createStoreAction = storeActionFactory();
 
+// 搜索身份只包含真实命中所需字段，避免依赖不存在的列表分页。
+function searchHit(item) {
+  const { source, session_id, project_key, file_path, sessionKey, read_only, session_ref } = item;
+  return { source, session_id, project_key, file_path, sessionKey, read_only, session_ref };
+}
+
 // 记录真实 action 的边界调用顺序，并允许模拟 IPC 失败。
-function storeHarness(sessions, invokeError = null) {
+function storeHarness(sessions, invokeError = null, deletedPaths = null) {
   const events = [];
   const first = sessions[0];
   const state = {
@@ -192,7 +198,7 @@ function storeHarness(sessions, invokeError = null) {
     generatedTitleMap: Object.fromEntries(sessions.map((item) => [item.sessionKey, { title: "generated" }])),
     activeSessionKey: first?.sessionKey ?? null,
     activeSession: first ?? null,
-    searchHits: sessions.map((item) => ({ sessionKey: item.sessionKey })),
+    searchHits: sessions.map(searchHit),
     focusedMessageIndex: 3,
     openSession: async (key) => {
       events.push(["open", key]);
@@ -205,6 +211,7 @@ function storeHarness(sessions, invokeError = null) {
     async (command, args) => {
       events.push(["invoke", command, args]);
       if (invokeError) throw invokeError;
+      return deletedPaths;
     },
     async () => ({ claudeConfigDir: "C:/fixture/.claude" }),
     async () => ({ execute: async (query, args) => events.push(["sql", query, args]) }),
@@ -233,7 +240,7 @@ test("Store removes only the deleted source row and metadata after successful IP
     assert.ok(state.generatedTitleMap[child.sessionKey]);
     assert.equal(state.activeSessionKey, child.sessionKey);
     assert.equal(state.activeSession, child);
-    assert.deepEqual(state.searchHits, [child, other].map((item) => ({ sessionKey: item.sessionKey })));
+    assert.deepEqual(state.searchHits, [child, other].map(searchHit));
     assert.deepEqual(events.filter(([kind]) => kind === "sql").map((event) => event[2]), [[target.sessionKey], [target.sessionKey]]);
     assert.deepEqual(events.filter(([kind]) => kind === "snapshot"), [["snapshot", target.sessionKey]]);
   }
@@ -275,9 +282,13 @@ test("snapshot deletion bypasses IPC and never cascades to original-source child
 });
 
 test("deletion errors expose matching Chinese and English messages", () => {
+  assert.ok(zh["history.confirmDeleteCodexMessage"].includes("子代理"));
+  assert.ok(en["history.confirmDeleteCodexMessage"].includes("subagents"));
   for (const code of [
     "history_remote_read_only", "unsupported_history_mutation_source", "history_subagent_mutation_not_allowed",
     "history_session_not_found", "history_source_manual_recovery_required",
+    "history_codex_deletion_ambiguous", "history_codex_deletion_metadata_invalid",
+    "history_codex_deletion_inventory_incomplete",
   ]) {
     const key = historyDeletionErrorKey(new Error(code));
     assert.ok(key);
@@ -286,4 +297,112 @@ test("deletion errors expose matching Chinese and English messages", () => {
     assert.notEqual(zh[key], en[key]);
   }
   assert.equal(historyDeletionErrorKey("failedRolledBack: denied"), null);
+});
+
+test("Codex rollout children and forks can be independently deleted regardless of visible parents", () => {
+  for (const parent of ["missing", "hidden", "parent"]) {
+    assert.equal(getHistoryDeletionBlockReason(session("codex", "child", { parent_session_id: parent })), null);
+  }
+  assert.equal(getHistoryDeletionBlockReason(session("codex", "fork", { parent_session_id: "parent" })), null);
+  assert.equal(getHistoryDeletionBlockReason(session("codex", "child", {
+    parent_session_id: "parent", read_only: true,
+  })), "history_remote_read_only");
+  assert.equal(getHistoryDeletionBlockReason(session("codex", "child", {
+    file_path: "C:/history/parent/subagents/agent-child.jsonl",
+  })), "history_subagent_mutation_not_allowed");
+});
+
+test("Codex cleanup uses actual normalized paths, not project, parent ID, or adjacent directory guesses", () => {
+  const parent = session("codex");
+  const child = session("codex", "child", { parent_session_id: "parent", project_key: "another-project" });
+  const grandchild = session("codex", "grandchild", { parent_session_id: "child" });
+  const preserve = [
+    session("codex", "fork", { parent_session_id: "parent" }),
+    session("codex", "other-root", { file_path: `D:${child.file_path.slice(2)}`, parent_session_id: "parent" }),
+    session("codex", "remote", { file_path: child.file_path, session_ref: { transportKind: "ssh" } }),
+    session("codex", "readonly", { file_path: child.file_path, read_only: true }),
+    session("codex", "snapshot", { file_path: child.file_path, favoriteSnapshot: true }),
+    session("pi", "other-source", { file_path: child.file_path }),
+  ];
+  const rows = [parent, child, grandchild, ...preserve];
+  assert.deepEqual([...historyDeletedSessionKeys(parent, rows)], [parent.sessionKey]);
+  const paths = [parent.file_path, `\\\\?\\${child.file_path.replaceAll("/", "\\").toUpperCase()}`, grandchild.file_path];
+  assert.deepEqual([...historyDeletedSessionKeys(parent, rows, paths)], [parent.sessionKey, child.sessionKey, grandchild.sessionKey]);
+});
+
+test("Store cleans returned Codex children while retaining forks, remote rows and independent snapshots", async () => {
+  const parent = session("codex");
+  const child = session("codex", "child", { parent_session_id: "parent", project_key: "other" });
+  const fork = session("codex", "fork", { parent_session_id: "parent" });
+  const snapshot = session("codex", "snapshot", { file_path: child.file_path, favoriteSnapshot: true });
+  const remote = session("codex", "remote", { file_path: child.file_path, session_ref: { transportKind: "ssh" } });
+  const { action, state, events } = storeHarness([parent, child, fork, snapshot, remote], null, [parent.file_path, child.file_path]);
+  assert.deepEqual(await action(parent.sessionKey), [parent.sessionKey, child.sessionKey]);
+  assert.deepEqual(state.sessions, [fork, snapshot, remote]);
+  assert.deepEqual(state.searchHits, [fork, snapshot, remote].map(searchHit));
+  assert.equal(state.metaMap[child.sessionKey], undefined);
+  assert.equal(state.generatedTitleMap[child.sessionKey], undefined);
+  assert.ok(state.metaMap[fork.sessionKey]);
+  assert.equal(events.filter(([kind]) => kind === "invoke").length, 1);
+});
+
+test("Codex batch merges only actual covered keys and preserves selected forks in either selection order", async () => {
+  for (const childrenFirst of [false, true]) {
+    const parent = session("codex");
+    const child = session("codex", "child", { parent_session_id: "parent" });
+    const fork = session("codex", "fork", { parent_session_id: "parent" });
+    let current = [parent, child, fork];
+    const selected = childrenFirst ? [child, parent, fork] : [parent, child, fork];
+    const plan = planHistoryDeletion(selected);
+    assert.equal(plan.blockedReason, null);
+    assert.equal(plan.sessionKeys.length, 3);
+    const calls = [];
+    const result = await executeHistoryDeletion(plan.sessionKeys, () => current, async (key) => {
+      calls.push(key);
+      assert.ok(current.some((item) => item.sessionKey === key));
+      const covered = key === parent.sessionKey ? [parent.sessionKey, child.sessionKey] : [key];
+      current = current.filter((item) => !covered.includes(item.sessionKey));
+      return covered;
+    });
+    assert.equal(result.error, null);
+    assert.equal(result.deletedCount, 3);
+    assert.deepEqual(calls, childrenFirst ? selected.map((item) => item.sessionKey) : [parent.sessionKey, fork.sessionKey]);
+    assert.deepEqual(current, []);
+  }
+});
+
+test("Codex batch does not treat an independently vanished child or an IPC failure as a successful cascade", async () => {
+  const parent = session("codex");
+  const child = session("codex", "child", { parent_session_id: "parent" });
+  let current = [parent, child];
+  const calls = [];
+  const result = await executeHistoryDeletion([parent.sessionKey, child.sessionKey], () => current, async (key) => {
+    calls.push(key);
+    assertHistorySessionDeletable(current.find((item) => item.sessionKey === key));
+    current = [];
+    return [key];
+  });
+  assert.equal(result.deletedCount, 1);
+  assert.match(String(result.error), /history_session_not_found/);
+  assert.equal(calls.length, 2);
+  const failure = new Error("history_codex_deletion_ambiguous");
+  const harness = storeHarness([parent, child], failure);
+  await assert.rejects(harness.action(parent.sessionKey), (err) => err === failure);
+  assert.deepEqual(harness.state.sessions, [parent, child]);
+  assert.deepEqual(harness.events.map(([kind]) => kind), ["invoke"]);
+});
+
+test("Codex actual-path cleanup also removes search-only descendants outside the current list page", async () => {
+  const parent = session("codex");
+  const child = session("codex", "child", { parent_session_id: "parent", project_key: "other-project" });
+  const fork = session("codex", "fork", { parent_session_id: "parent" });
+  const harness = storeHarness([parent, fork], null, [parent.file_path, child.file_path]);
+  harness.state.searchHits.push(searchHit(child));
+  harness.state.metaMap[child.sessionKey] = { starred: false };
+  harness.state.generatedTitleMap[child.sessionKey] = { title: "child title" };
+  assert.deepEqual(await harness.action(parent.sessionKey), [parent.sessionKey, child.sessionKey]);
+  assert.deepEqual(harness.state.sessions, [fork]);
+  assert.deepEqual(harness.state.searchHits, [searchHit(fork)]);
+  assert.equal(harness.state.metaMap[child.sessionKey], undefined);
+  assert.equal(harness.state.generatedTitleMap[child.sessionKey], undefined);
 });

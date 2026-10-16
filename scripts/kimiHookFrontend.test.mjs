@@ -39,9 +39,10 @@ test("Kimi 审批结束与中断形成静默状态闭环", () => {
 
 test("Kimi Subagent 不进入本地 transcript split 特殊分支", () => {
   const appSource = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
-  assert.match(appSource, /event\.payload\.source !== "kimi"/);
-  assert.match(appSource, /event\.payload\.event !== "PermissionResult"/);
-  assert.match(appSource, /event\.payload\.event !== "Interrupt"/);
+  // App 已先提取 payload；仍验证真实来源与事件过滤，不绑定旧的局部变量写法。
+  assert.match(appSource, /payload\.source !== "kimi"/);
+  assert.match(appSource, /payload\.event !== "PermissionResult"/);
+  assert.match(appSource, /payload\.event !== "Interrupt"/);
 });
 
 test("Kimi bridge 设置默认启用且配置目录保持本机私有", () => {

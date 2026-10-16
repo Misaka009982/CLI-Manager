@@ -16,6 +16,16 @@
 
 ### 3. Contracts
 
+- Legacy statistics-index snapshots share immutable `CachedSessionComputation.stats`
+  through `Arc`; metadata changes must not deep-copy usage events. Mutating stats
+  requires copy-on-write. JSON cache schema/version and external DTOs stay unchanged.
+- Read/write the legacy JSON cache using buffered streams, never a full-file byte
+  buffer; publish only after successful serialization and flush. Failed writes keep
+  the previous cache. Shared-index refresh holds one mutex and rechecks TTL inside
+  it; parallel parsing is capped at four workers.
+- Background request-log sync filters fingerprints before document materialization
+  and writes one changed document at a time. Unchanged files still participate in
+  missing-file detection; inaccessible sources must not purge stored logs.
 - The catalog DB is derived and rebuildable; never store it in `cli-manager.db` or treat it as user-authored data.
 - List requests query cached summaries first and schedule fingerprint-based background refresh. Catalog collection includes local/WSL Kimi Code `sessions/<workDirKey>/<sessionId>/agents/main/wire.jsonl` using the same `HistoryRoots.kimi_config_dir` / `$KIMI_CODE_HOME` / `~/.kimi-code` resolution as the disk collectors; nested `agents/agent-*` wires stay out of the catalog.
 - Exact Codex UUID queries (`source=codex`, `limit=1`, `offset=0`) take the direct rollout path before opening or refreshing the catalog. Enumerate filenames only under the resolved Codex sessions root, match `rollout-*-<sessionId>.jsonl`, and parse only matching candidates. Local enumeration does not follow links; WSL uses the existing guest `find` boundary. Verify metadata identity and optional project path, reject ambiguous matches, and preserve the thread-name overlay. Missing/deleted files return no match even if the catalog is dirty or stale; never substitute a recent neighbor session. Text search, other sources, and pagination keep their existing catalog semantics.
@@ -482,7 +492,7 @@ let plan = build_file_restore_plan(&file_ref.path, &backups_dir, Some(&file_ref.
 
 ### 2. Signatures
 
-- IPC remains `history_delete_session(file_path, claude_config_dir, codex_config_dir, grok_session_root, kimi_config_dir, source, project_key) -> Result<(), String>`.
+- IPC parameters remain `history_delete_session(file_path, claude_config_dir, codex_config_dir, grok_session_root, kimi_config_dir, source, project_key)`. V1.4.3 returns `Result<Option<Vec<String>>, String>`: Codex actual deleted paths, other sources null.
 - `scope::validate_session_file_ref_for_deletion(...) -> Result<SessionFileRef, String>` reuses ordinary source validation except for Cline's existing multiple roots.
 - `deletion::delete_session_file_with_backup_root(file_ref, backups_dir) -> Result<usize, String>` accepts exactly one validated ordinary transcript.
 - `deletion::delete_session_files_with_backup_root(file_ref, paths, backups_dir)` owns backup/delete/rollback for an explicit path list; existing tree deletion still discovers and orders its own targets.
@@ -501,7 +511,7 @@ let plan = build_file_restore_plan(&file_ref.path, &backups_dir, Some(&file_ref.
 
 - The seven sources never call `collect_subtask_session_file_refs` to choose deletion targets. Keep their parent directories, adjacent `subagents`, companion files, third-party shared indexes, and databases.
 - Keep deletion capability metadata aligned in both `features/history/sources.rs` (`history_sources_list_descriptors`) and `src/shared/lib/historySources.ts`: the twelve existing sources explicitly support deletion, while generic reader templates retain planned deletion. Other capability fields do not change with this feature.
-- Claude/Codex keep their existing adjacent-subagent file-tree deletion; Kimi keeps its session directory/index tombstone handling, Grok its session-directory handling, and OpenCode its target-session SQLite transaction.
+- Claude keeps adjacent-subagent file-tree deletion; Codex uses the V1.4.3 raw thread_spawn deletion contract below. Kimi keeps its session directory/index tombstone handling, Grok its session-directory handling, and OpenCode its target-session SQLite transaction.
 - Cline canonicalizes each root from `resolve_cline_history_roots()` separately. A requested file must lie within one actual root and match a current source/project/path candidate; their common parent is not a trusted scope. Other mutation validators and source discovery locations do not expand.
 - Every file snapshot reserves an exclusive mutation directory with a UUID suffix before writing its `files/` artifact and `manifest.json`. Identical timestamp/operation/file-stem prefixes cannot share a manifest. Manifest schema, old backup discovery, and retention rules remain unchanged.
 - Check source manual-recovery locks before deletion. Back up all explicit targets before removing any; on an I/O failure copy previously removed targets back from their exact snapshots. A restore failure retains the existing manual-recovery error/lock behavior.
@@ -558,7 +568,7 @@ if is_single_file_delete_source(&source) {
 
 ### 2. Signatures
 
-- Tauri command remains `history_delete_session(file_path, claude_config_dir, codex_config_dir, grok_session_root, source, project_key) -> Result<(), String>`.
+- Tauri deletion parameters remain stable; V1.4.3 wraps successful OpenCode deletion as `Ok(None)` in `Result<Option<Vec<String>>, String>`.
 - OpenCode internal mutation path remains `delete_opencode_session_from_locator(file_path)` followed by `delete_opencode_session_from_database(db_path, session_id)`.
 - The OpenCode locator format is `<default-opencode-db>#session=<session-id>`.
 
@@ -569,7 +579,7 @@ if is_single_file_delete_source(&source) {
 - Open the existing database for write with `create_if_missing(false)`, validate the `session`, `message`, and `part` tables, then use bound parameters in one transaction.
 - Delete rows in dependency order: `part.session_id`, `message.session_id`, then `session.id`. Exactly one target `session` row must be affected; otherwise roll back and return `session_file_not_indexed`.
 - Commit before calling `invalidate_history_caches()`. A failed validation, query, rollback, or commit must leave cache invalidation and the selected session's persisted rows untouched.
-- Claude/Codex retain their file-tree backup/delete behavior; do not route OpenCode through `validate_session_file_ref`, `delete_session_tree`, or file backup snapshots.
+- Claude/Codex retain file backup/delete behavior (Codex raw thread_spawn scope from V1.4.3); do not route OpenCode through `validate_session_file_ref`, `delete_session_tree`, or file backup snapshots.
 
 ### 4. Validation & Error Matrix
 
@@ -664,3 +674,25 @@ invalidate_history_caches(); // only after commit
 - Sanitizer/protocol tests for controls, bidi/invisible characters, CJK/emoji, tools, malformed/empty response, bounded output, and finish-reason classification (blocked vs tolerated per protocol).
 - Auth-scheme tests covering both Claude key fields and the OpenAI-compatible protocols.
 - Targeted Rust tests plus `cargo check`; verify no secret/prompt/raw response reaches frontend state or logs.
+
+## Scenario: Codex standalone and cascading subagent deletion (V1.4.3)
+
+### Scope and signatures
+
+- `history_delete_session` preserves its IPC name/arguments and source/identity/root validation, but returns `Result<Option<Vec<String>>, String>`: Codex actual canonical deletion targets on success, null for other sources.
+- `codex_deletion::collect_codex_deletion_paths(file_ref, history_root)` verifies the selected UUID/filename and collects explicit descendants in children-before-parent order.
+- `delete_codex_session_with_backup_root` reuses `delete_session_files_with_backup_root`; complete-set backups precede any removal, failures restore exact previously removed targets and preserve the recovery-lock behavior.
+
+### Contracts and safety matrix
+
+- Local/WSL Codex ordinary rollout subagents and ordinary forks may be independently deleted, even if their parent is absent or hidden by filtering/pagination. Project cwd existence does not grant or deny deletion.
+- Discover relationships from raw `session_meta.payload.source.subagent.thread_spawn`, including `parent_thread_id`/`parentThreadId`; generic parent IDs and `forked_from_id` do not prove cascading ownership.
+- Enumerate only ordinary rollout files in the configured Codex sessions root without catalog/TTL assumptions. Host enumeration rejects symlink/reparse traversal; WSL uses guest `find -type f` with NUL-separated paths and propagates failure. Canonical candidates must remain in that same root.
+- Read at most 32 header lines / 1 MiB per candidate, not transcript messages. Support `id` and `session_id` header identities, validate UUID and filename suffix. Read/inventory limit errors fail before backup/delete. Unrelated malformed metadata is not treated as a child.
+- Duplicate selected/descendant UUIDs, relationship cycles, invalid selected metadata and path escapes fail before mutations. Unrelated forks, other parents/siblings/roots, shared indexes and Codex state DB remain unchanged.
+- Preserve manual-recovery checks at the IPC entry and existing process guards on backup restore. Do not add a source-wide running-process guard to explicit deletion.
+- Clear derived caches only after success; return actual paths rather than guessing affected frontend rows. SSH remains read-only. Editing/conversion/subagent detail semantics do not change.
+
+### Required verification
+
+Isolated temporary fixtures cover missing/existing parent, cross-date/cwd/nested subagents, normal forks/generic parent fields, other roots, duplicate UUIDs/cycles, bounded/mismatched/compatible headers, directory links, backup creation failure and Windows locked-parent rollback. Frontend tests cover real Store cleanup (including search-only descendants), readonly/snapshot preservation, batch preflight/coverage/partial failure and bilingual diagnostics. Human WSL/UI acceptance is separate from automated fixture tests.

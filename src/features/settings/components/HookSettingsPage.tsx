@@ -1,3 +1,6 @@
+import { useActiveCodexHookProfile } from "../../terminal/api/codexHookProfile";
+import { useHookStatusRequest } from "../api/useHookStatusRequest";
+import { CodexHookScopeStatus } from "./CodexHookScopeStatus";
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -16,7 +19,7 @@ import { useI18n } from "../../../shared/i18n/index";
 import { ThirdPartyNotificationSection } from "./ThirdPartyNotificationSection";
 import {
   type HookTool, type HookModule, type HookSettingsStatus, pickText, isWindowsPlatform,
-  type NotificationSoundStatus, getNotificationSoundFileName, getNotificationSoundErrorCode,
+  type NotificationSoundStatus, getNotificationSoundFileName, getNotificationSoundErrorDescription,
 } from "../lib/hookSettingsModel";
 import { PathRow, HookCard, StatusPill, SettingsSwitchRow, CollapsibleHookSection } from "./HookSettingsControls";
 
@@ -29,7 +32,6 @@ export function HookSettingsPage() {
   const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
   const piHookConfigDir = useSettingsStore((s) => s.piHookConfigDir);
   const grokHookConfigDir = useSettingsStore((s) => s.grokHookConfigDir);
-  const [status, setStatus] = useState<HookSettingsStatus | null>(null);
   const [selectedDir, setSelectedDir] = useState<string | null>(claudeHookConfigDir);
   const [codexSelectedDir, setCodexSelectedDir] = useState<string | null>(codexHookConfigDir);
   const [kimiSelectedDir, setKimiSelectedDir] = useState<string | null>(kimiHookConfigDir);
@@ -136,24 +138,13 @@ export function HookSettingsPage() {
   const piSelectedDirArg = useMemo(() => piSelectedDir ?? undefined, [piSelectedDir]);
   const grokSelectedDirArg = useMemo(() => grokSelectedDir ?? undefined, [grokSelectedDir]);
 
-  const getNotificationSoundErrorDescription = (error: unknown) => {
-    switch (getNotificationSoundErrorCode(error)) {
-      case "notification_sound_format_unsupported":
-      case "notification_sound_invalid_wave":
-        return t("settings.hooks.systemNotifications.sound.invalidFormat");
-      case "notification_sound_unavailable":
-      case "notification_sound_not_file":
-        return t("settings.hooks.systemNotifications.sound.unavailable");
-      case "notification_sound_too_large":
-        return t("settings.hooks.systemNotifications.sound.tooLarge");
-      case "notification_sound_path_empty":
-      case "notification_sound_path_contains_nul":
-      case "notification_sound_path_too_long":
-        return t("settings.hooks.systemNotifications.sound.invalidPath");
-      default:
-        return t("settings.hooks.systemNotifications.sound.operationFailed");
-    }
-  };
+  const codexProfileName = useActiveCodexHookProfile();
+  const { status, invokeStatus } = useHookStatusRequest({
+    selectedDir: claudeHookConfigDir ?? undefined, codexSelectedDir: codexHookConfigDir ?? undefined,
+    kimiSelectedDir: kimiHookConfigDir ?? undefined, piSelectedDir: piHookConfigDir ?? undefined,
+    grokSelectedDir: grokHookConfigDir ?? undefined, codexProfileName,
+    ccSwitchDbPath: ccSwitchDbPath ?? undefined,
+  });
 
   const refreshStatus = async (
     dir = selectedDirArg,
@@ -164,7 +155,7 @@ export function HookSettingsPage() {
   ) => {
     setLoading(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_get_status", {
+      const nextStatus = await invokeStatus("hook_settings_get_status", {
         selectedDir: dir,
         codexSelectedDir: codexDir,
         kimiSelectedDir: kimiDir,
@@ -173,7 +164,7 @@ export function HookSettingsPage() {
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
         autoRepair: claudeHookBridgeEnabled && claudeHookAutoRepairKnownInstalled,
       });
-      setStatus(nextStatus);
+      if (!nextStatus) return;
       // Keep resolved native directories in status only. Persisting an
       // automatic fallback here would turn it into an explicit override.
       if (nextStatus.pi.configDir) {
@@ -196,8 +187,9 @@ export function HookSettingsPage() {
   };
 
   useEffect(() => {
-    void refreshStatus();
-  }, []);
+    void refreshStatus(claudeHookConfigDir ?? undefined, codexHookConfigDir ?? undefined,
+      piHookConfigDir ?? undefined, grokHookConfigDir ?? undefined, kimiHookConfigDir ?? undefined);
+  }, [invokeStatus]);
 
   const handleSelectNotificationSound = async () => {
     setNotificationSoundBusy("select");
@@ -216,7 +208,7 @@ export function HookSettingsPage() {
       toast.success(t("settings.hooks.systemNotifications.sound.saved"));
     } catch (error) {
       toast.error(t("settings.hooks.systemNotifications.sound.saveFailed"), {
-        description: getNotificationSoundErrorDescription(error),
+        description: getNotificationSoundErrorDescription(error, t),
       });
     } finally {
       setNotificationSoundBusy(null);
@@ -232,7 +224,7 @@ export function HookSettingsPage() {
     } catch (error) {
       setNotificationSoundStatus("invalid");
       toast.error(t("settings.hooks.systemNotifications.sound.previewFailed"), {
-        description: getNotificationSoundErrorDescription(error),
+        description: getNotificationSoundErrorDescription(error, t),
       });
     } finally {
       setNotificationSoundBusy(null);
@@ -247,7 +239,7 @@ export function HookSettingsPage() {
       toast.success(t("settings.hooks.systemNotifications.sound.cleared"));
     } catch (error) {
       toast.error(t("settings.hooks.systemNotifications.sound.clearFailed"), {
-        description: getNotificationSoundErrorDescription(error),
+        description: getNotificationSoundErrorDescription(error, t),
       });
     } finally {
       setNotificationSoundBusy(null);
@@ -329,7 +321,7 @@ export function HookSettingsPage() {
   const handleClaudeInstall = async () => {
     setClaudeWorking(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_install", {
+      const nextStatus = await invokeStatus("hook_settings_install", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
         kimiSelectedDir: kimiSelectedDirArg,
@@ -337,7 +329,7 @@ export function HookSettingsPage() {
         grokSelectedDir: grokSelectedDirArg,
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
-      setStatus(nextStatus);
+      if (!nextStatus) return;
       await updateSetting("claudeHookAutoRepairKnownInstalled", true);
       await updateSetting("claudeHookAutoRepairNoticeShown", false);
       toast.success(text("Claude Hook 已安装", "Claude Hook installed"));
@@ -351,7 +343,7 @@ export function HookSettingsPage() {
   const handleClaudeUninstall = async () => {
     setClaudeWorking(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_uninstall", {
+      const nextStatus = await invokeStatus("hook_settings_uninstall", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
         kimiSelectedDir: kimiSelectedDirArg,
@@ -359,7 +351,7 @@ export function HookSettingsPage() {
         grokSelectedDir: grokSelectedDirArg,
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
-      setStatus(nextStatus);
+      if (!nextStatus) return;
       await updateSetting("claudeHookAutoRepairKnownInstalled", false);
       await updateSetting("claudeHookAutoRepairNoticeShown", false);
       toast.success(text("Claude Hook 已删除", "Claude Hook removed"));
@@ -373,7 +365,7 @@ export function HookSettingsPage() {
   const handleCodexInstall = async () => {
     setCodexWorking(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_install_codex", {
+      const nextStatus = await invokeStatus("hook_settings_install_codex", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
         kimiSelectedDir: kimiSelectedDirArg,
@@ -381,7 +373,7 @@ export function HookSettingsPage() {
         grokSelectedDir: grokSelectedDirArg,
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
-      setStatus(nextStatus);
+      if (!nextStatus) return;
       toast.success(text("Codex Hook 已安装", "Codex Hook installed"));
     } catch (error) {
       toast.error(text("安装 Codex Hook 失败", "Failed to install Codex Hook"), { description: getErrorMessage(error) });
@@ -393,7 +385,7 @@ export function HookSettingsPage() {
   const handleCodexUninstall = async () => {
     setCodexWorking(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_uninstall_codex", {
+      const nextStatus = await invokeStatus("hook_settings_uninstall_codex", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
         kimiSelectedDir: kimiSelectedDirArg,
@@ -401,7 +393,7 @@ export function HookSettingsPage() {
         grokSelectedDir: grokSelectedDirArg,
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
-      setStatus(nextStatus);
+      if (!nextStatus) return;
       toast.success(text("Codex Hook 已删除", "Codex Hook removed"));
     } catch (error) {
       toast.error(text("删除 Codex Hook 失败", "Failed to remove Codex Hook"), { description: getErrorMessage(error) });
@@ -413,7 +405,7 @@ export function HookSettingsPage() {
   const handleKimiInstall = async () => {
     setKimiWorking(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_install_kimi", {
+      const nextStatus = await invokeStatus("hook_settings_install_kimi", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
         kimiSelectedDir: kimiSelectedDirArg,
@@ -421,7 +413,7 @@ export function HookSettingsPage() {
         grokSelectedDir: grokSelectedDirArg,
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
-      setStatus(nextStatus);
+      if (!nextStatus) return;
       toast.success(text("Kimi Code Hook 已安装", "Kimi Code Hook installed"), {
         description: text("新会话会自动生效；活动中的 Kimi TUI 请执行 /reload。", "New sessions pick it up automatically; run /reload in active Kimi TUI sessions."),
       });
@@ -435,7 +427,7 @@ export function HookSettingsPage() {
   const handleKimiUninstall = async () => {
     setKimiWorking(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_uninstall_kimi", {
+      const nextStatus = await invokeStatus("hook_settings_uninstall_kimi", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
         kimiSelectedDir: kimiSelectedDirArg,
@@ -443,7 +435,7 @@ export function HookSettingsPage() {
         grokSelectedDir: grokSelectedDirArg,
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
-      setStatus(nextStatus);
+      if (!nextStatus) return;
       toast.success(text("Kimi Code Hook 已删除", "Kimi Code Hook removed"));
     } catch (error) {
       toast.error(text("删除 Kimi Code Hook 失败", "Failed to remove Kimi Code Hook"), { description: getKimiHookErrorMessage(error, t) });
@@ -469,14 +461,14 @@ export function HookSettingsPage() {
   const handlePiInstall = async () => {
     setPiWorking(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_install_pi", {
+      const nextStatus = await invokeStatus("hook_settings_install_pi", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
         kimiSelectedDir: kimiSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
       });
-      setStatus(nextStatus);
+      if (!nextStatus) return;
       if (nextStatus.pi.configDir) setPiSelectedDir(nextStatus.pi.configDir);
       toast.success(text("Pi Hook 已安装", "Pi Hook installed"));
     } catch (error) {
@@ -491,14 +483,14 @@ export function HookSettingsPage() {
   const handlePiUninstall = async () => {
     setPiWorking(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_uninstall_pi", {
+      const nextStatus = await invokeStatus("hook_settings_uninstall_pi", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
         kimiSelectedDir: kimiSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
       });
-      setStatus(nextStatus);
+      if (!nextStatus) return;
       if (nextStatus.pi.configDir) setPiSelectedDir(nextStatus.pi.configDir);
       toast.success(text("Pi Hook 已删除", "Pi Hook removed"));
     } catch (error) {
@@ -532,14 +524,14 @@ export function HookSettingsPage() {
   const handleGrokInstall = async () => {
     setGrokWorking(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_install_grok", {
+      const nextStatus = await invokeStatus("hook_settings_install_grok", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
         kimiSelectedDir: kimiSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
       });
-      setStatus(nextStatus);
+      if (!nextStatus) return;
       const hooksFile = nextStatus.grok.configPath?.trim();
       const configFile = nextStatus.grok.featureConfigPath?.trim();
       toast.success(text("Grok Hook 已安装", "Grok Hook installed"), {
@@ -565,14 +557,14 @@ export function HookSettingsPage() {
   const handleGrokUninstall = async () => {
     setGrokWorking(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_uninstall_grok", {
+      const nextStatus = await invokeStatus("hook_settings_uninstall_grok", {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
         kimiSelectedDir: kimiSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
       });
-      setStatus(nextStatus);
+      if (!nextStatus) return;
       toast.success(text("Grok Hook 已删除", "Grok Hook removed"));
     } catch (error) {
       toast.error(text("删除 Grok Hook 失败", "Failed to remove Grok Hook"), { description: getErrorMessage(error) });
@@ -582,7 +574,6 @@ export function HookSettingsPage() {
   };
 
   const syncStatusAfterMutation = (nextStatus: HookSettingsStatus) => {
-    setStatus(nextStatus);
     if (nextStatus.pi.configDir) setPiSelectedDir(nextStatus.pi.configDir);
   };
 
@@ -617,7 +608,7 @@ export function HookSettingsPage() {
 
     setWorking(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>(command, {
+      const nextStatus = await invokeStatus(command, {
         selectedDir: selectedDirArg,
         codexSelectedDir: codexSelectedDirArg,
         kimiSelectedDir: kimiSelectedDirArg,
@@ -626,6 +617,7 @@ export function HookSettingsPage() {
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
         module,
       });
+      if (!nextStatus) return;
       syncStatusAfterMutation(nextStatus);
       if (tool === "claude") {
         await updateSetting("claudeHookAutoRepairKnownInstalled", false);
@@ -1237,6 +1229,7 @@ export function HookSettingsPage() {
         right={<StatusPill status={codexStatus} />}
       >
         <Stack gap="lg">
+          <CodexHookScopeStatus status={codex} />
           {codexHookBridgeEnabled && (
             <>
               <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="md">

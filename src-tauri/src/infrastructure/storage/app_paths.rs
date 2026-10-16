@@ -9,6 +9,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, Runtime};
 use uuid::Uuid;
 
+#[path = "app_paths/runtime_socket.rs"]
+mod runtime_socket;
+
 const APP_HOME_DIR_NAME: &str = ".cli-manager";
 const PORTABLE_FLAG_FILE_NAME: &str = "portable.flag";
 const PORTABLE_DATA_DIR_NAME: &str = "data";
@@ -584,9 +587,9 @@ fn validate_active_data_dir(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-// 递归复制普通文件和目录到新目标，拒绝检测到的链接/重解析点及特殊节点；不删除源数据。
+// 复制普通数据，仅跳过已停止的固定运行套接字；其余链接/重解析点及特殊节点仍拒绝。
 // 中途失败可能留下部分目标树，统一清理由迁移调用方负责。
-fn copy_directory_recursive(source: &Path, target: &Path) -> Result<(), String> {
+fn copy_directory_recursive(source_root: &Path, source: &Path, target: &Path) -> Result<(), String> {
     if path_is_symlink_or_reparse(source)? {
         return Err(format!(
             "data_storage_migration_symlink_rejected: {}",
@@ -603,6 +606,9 @@ fn copy_directory_recursive(source: &Path, target: &Path) -> Result<(), String> 
     {
         let entry = entry.map_err(|err| format!("data_storage_migration_read_failed: {err}"))?;
         let source_path = entry.path();
+        if runtime_socket::should_skip_runtime_socket(source_root, &source_path)? {
+            continue;
+        }
         if path_is_symlink_or_reparse(&source_path)? {
             return Err(format!(
                 "data_storage_migration_symlink_rejected: {}",
@@ -614,7 +620,7 @@ fn copy_directory_recursive(source: &Path, target: &Path) -> Result<(), String> 
             .file_type()
             .map_err(|err| format!("data_storage_migration_metadata_failed: {err}"))?;
         if file_type.is_dir() {
-            copy_directory_recursive(&source_path, &target_path)?;
+            copy_directory_recursive(source_root, &source_path, &target_path)?;
         } else if file_type.is_file() {
             fs::copy(&source_path, &target_path)
                 .map_err(|err| format!("data_storage_migration_copy_failed: {err}"))?;
@@ -666,7 +672,7 @@ fn migrate_data_root(source: &Path, target: &Path) -> Result<(), String> {
 
     let temp = migration_temp_dir(target)?;
     let result = (|| {
-        copy_directory_recursive(source, &temp)?;
+        copy_directory_recursive(source, source, &temp)?;
         if target.exists() {
             if !directory_is_empty(target)? {
                 return Err("data_storage_target_not_empty".to_string());

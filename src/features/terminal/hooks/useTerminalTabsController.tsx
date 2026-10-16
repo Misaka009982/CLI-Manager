@@ -1,3 +1,5 @@
+import { useClearDragOnLayoutLock } from "./useLockedLayoutDrag";
+import { guardTerminalLayoutChange, isTerminalLayoutLocked } from "../api/terminalLayoutLock";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/shallow";
 import { invoke } from "@tauri-apps/api/core";
@@ -1440,6 +1442,7 @@ export function useTerminalTabsController({
   }, [activeSession, activeWorktree?.path, closeGitWorkspace, closeHistory, historyOpen, openHistory, projects, rejectUnsupportedCapability, terminalSidePanelSingleOpen]);
 
   const handleOpenSplitPicker = useCallback((sessionId: string, direction: TerminalPaneSplitDirection, anchor?: SplitPickerAnchor) => {
+    if (guardTerminalLayoutChange()) return;
     clearSplitPickerOpenSchedule();
     const rawX = anchor ? ("right" in anchor ? anchor.right : anchor.x) : window.innerWidth - 24;
     const rawY = anchor ? ("bottom" in anchor ? anchor.bottom : anchor.y) : 56;
@@ -1513,6 +1516,7 @@ export function useTerminalTabsController({
     }
   }, [clearWorkspanDragHoverActivation, hideWorkspanDetachPreview, updateActiveDropPreview, updateWorkspanTabOverflow]);
 
+  useClearDragOnLayoutLock(clearDragState);
   const handleDragStart = useCallback((event: DragStartEvent) => {
     clearWorkspanDragHoverActivation();
     hideWorkspanDetachPreview();
@@ -1527,7 +1531,7 @@ export function useTerminalTabsController({
   }, [clearWorkspanDragHoverActivation, hideWorkspanDetachPreview, scopedSessionIds, workspans]);
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
-    if (!event.over) {
+    if (!event.over || isTerminalLayoutLocked()) {
       clearWorkspanDragHoverActivation();
       updateActiveDropPreview(null);
       hideWorkspanDetachPreview();
@@ -1595,7 +1599,7 @@ export function useTerminalTabsController({
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
     clearDragState();
-    if (!over) return;
+    if (guardTerminalLayoutChange() || !over) return;
 
     const activeId = String(active.id);
     const overId = String(over.id);
@@ -1849,7 +1853,7 @@ export function useTerminalTabsController({
         onInstallWorktreeDeps={handleInstallWorktreeDeps}
         onDiscardWorktree={handlePaneDiscardWorktree}
         onOpenWorktreeDirectory={handleOpenWorktreeDirectory}
-        hideTabBar={workspanEnabled && layoutPanes.length <= 1 && visiblePaneSessionCount <= 1}
+        hideTabBar={workspanEnabled && workspanTabBarVisible && layoutPanes.length <= 1 && visiblePaneSessionCount <= 1}
       />
     );
   }, [
@@ -1890,6 +1894,7 @@ export function useTerminalTabsController({
     sessions,
     worktrees,
     workspanEnabled,
+    workspanTabBarVisible,
     showBackgroundForSession,
     tabNotifications,
     terminalThemeBackground,

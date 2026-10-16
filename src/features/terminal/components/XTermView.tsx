@@ -237,6 +237,7 @@ export function XTermView({
           <TerminalMarkdownPreview
             sessionId={sessionId}
             open={markdownPreviewOpen}
+            isVisible={isVisible}
             onClose={() => setMarkdownPreviewOpen(false)}
           />
         </div>

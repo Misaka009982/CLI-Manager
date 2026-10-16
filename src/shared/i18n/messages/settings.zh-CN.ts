@@ -1,4 +1,12 @@
 export const zh = {
+  "settings.hooks.codex.profileNameInvalid": "当前终端的 Codex profile 名称无效，无法检查。",
+  "settings.hooks.codex.profileMissing": "当前终端的 Codex profile 文件不存在，请确认配置目录或重新创建终端。",
+  "settings.hooks.codex.configInvalid": "Codex 配置无法解析；检查失败，不会改写原文件。",
+  "settings.hooks.codex.effectiveScope": "当前检查的有效配置",
+  "settings.hooks.codex.checkUnavailable": "尚未检查或检查失败",
+  "settings.hooks.codex.pendingReview": "待 Codex 审核",
+  "settings.hooks.codex.reviewHint": "Hook 已安装，但当前配置仍有未确认、已变更或禁用的 Hook。请在此 Codex 终端中通过 /hooks 查看并审核；重新安装不会代替确认。",
+
   "settings.terminal.externalProgram": "外部终端程序",
   "settings.terminal.externalProgramDescription": "选择打开外部窗口的程序，项目 Shell 决定命令运行环境。适用于外部终端开关和“打开外部终端”操作；Windows 可能使用系统默认终端承载窗口。",
   "settings.terminal.externalOpenFailed": "无法打开外部终端",
@@ -407,7 +415,9 @@ export const zh = {
   "settings.dataStorage.useWithoutMigration": "不迁移，直接重启",
   "settings.dataStorage.migrateAndRestart": "迁移数据并重启",
   "settings.dataStorage.switching": "正在准备切换...",
-  "settings.dataStorage.error.tasksActive": "仍有终端或后台任务在运行，请全部结束后重试。",
+  "settings.dataStorage.error.tasksActive": "仍有终端、远程服务或扫码授权等后台任务在运行，请全部停止后重试。",
+  "settings.dataStorage.error.runtimeSocket": "无法确认远程通信端点已停止，请完全关闭相关服务后重试；原数据目录保持不变。",
+  "settings.dataStorage.error.migrationLink": "迁移中发现符号链接或不支持的重解析点，已保留原数据目录。请检查：{path}",
   "settings.dataStorage.error.targetNotEmpty": "目标目录已有内容，不能自动迁移。",
   "settings.dataStorage.error.targetNotWritable": "目标目录不可写，请选择其他目录。",
   "settings.dataStorage.error.pathOverlap": "新旧数据目录不能互为父目录或子目录。",

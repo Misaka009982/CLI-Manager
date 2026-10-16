@@ -353,10 +353,12 @@ fn message_from_job(job: HookNotificationJob) -> Option<HookNotificationMessage>
         })
         .unwrap_or_else(|| "Unknown Project".to_string());
     let time = local_time_text(job.timestamp.as_deref());
+    let pi_run_ended =
+        (job.source == "pi" && job.event == "Stop").then(super::pi_text::current_run_ended_label);
     let event_label = match goal_status {
         Some(CodexGoalStatus::Paused | CodexGoalStatus::Blocked) => "🔔 需要关注",
         Some(CodexGoalStatus::BudgetLimited | CodexGoalStatus::UsageLimited) => "❌ 执行错误",
-        _ => event_label(&job.event),
+        _ => pi_run_ended.unwrap_or_else(|| event_label(&job.event)),
     };
     let summary = match goal_status {
         Some(CodexGoalStatus::Paused | CodexGoalStatus::Blocked) => {
@@ -365,7 +367,10 @@ fn message_from_job(job: HookNotificationJob) -> Option<HookNotificationMessage>
         Some(CodexGoalStatus::BudgetLimited | CodexGoalStatus::UsageLimited) => {
             format!("{source} - {project} 执行失败")
         }
-        _ => event_summary(&job.event, &source, &project),
+        _ => match pi_run_ended {
+            Some(label) => format!("{source} - {project} {label}"),
+            None => event_summary(&job.event, &source, &project),
+        },
     };
     let title = format!("CLI-Manager {event_label}");
     let body = format!(
@@ -458,6 +463,27 @@ fn event_summary(event: &str, source: &str, project: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pi_stop_uses_run_ended_text_and_interrupt_stays_silent() {
+        let mut job = HookNotificationJob {
+            source: "pi".into(),
+            event: "Stop".into(),
+            session_id: Some("root".into()),
+            goal_id: None,
+            goal_status: None,
+            cwd: None,
+            project: Some("demo".into()),
+            timestamp: None,
+        };
+        let message = message_from_job(job.clone()).unwrap();
+        let label = super::super::pi_text::current_run_ended_label();
+        assert!(message.title.contains(label));
+        assert!(message.body.contains(label));
+        assert!(!message.title.contains("已完成"));
+        job.event = "Interrupt".into();
+        assert!(message_from_job(job).is_none());
+    }
 
     #[cfg(windows)]
     #[test]

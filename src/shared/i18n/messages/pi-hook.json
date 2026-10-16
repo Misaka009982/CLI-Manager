@@ -1,0 +1,17 @@
+{
+  "zh-CN": {
+    "notifications.hookToast.piRunEnded": "本轮运行已结束",
+    "notifications.hookToast.title.piRunEnded": "{tabTitle} 本轮运行已结束",
+    "notifications.system.piRunEnded": "⏹ {sourceName} - {projectName} 本轮运行已结束{suffix}"
+  },
+  "en-US": {
+    "notifications.hookToast.piRunEnded": "Run ended",
+    "notifications.hookToast.title.piRunEnded": "{tabTitle} run ended",
+    "notifications.system.piRunEnded": "⏹ {sourceName} - {projectName} run ended{suffix}"
+  },
+  "zh-TW": {
+    "notifications.hookToast.piRunEnded": "本輪執行已結束",
+    "notifications.hookToast.title.piRunEnded": "{tabTitle} 本輪執行已結束",
+    "notifications.system.piRunEnded": "⏹ {sourceName} - {projectName} 本輪執行已結束{suffix}"
+  }
+}

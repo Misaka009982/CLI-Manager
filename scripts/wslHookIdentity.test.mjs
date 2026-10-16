@@ -16,6 +16,7 @@ function loadPlugin(source, distro) {
       return { Type: { Object: schema, Array: schema, String: schema, Boolean: schema, Optional: schema } };
     }
     if (name === "@earendil-works/pi-tui") return {};
+    if (name === "node:crypto") return { randomUUID };
     throw new Error(`未声明的插件测试依赖：${name}`);
   };
   const code = ts.transpileModule(source, {
@@ -29,6 +30,7 @@ function loadPlugin(source, distro) {
     setInterval: () => 1,
     clearInterval: () => {},
     process: {
+      pid: 100,
       env: {
         CLI_MANAGER_TAB_ID: "wsl-tab",
         CLI_MANAGER_NOTIFY_PORT: "12345",
@@ -73,9 +75,12 @@ for (const [label, distro, expected] of [
       getAllTools: () => [],
     });
     for (const event of ["session_start", "agent_start", "agent_settled"]) {
-      await handlers.get(event)({}, { sessionManager: { getSessionId: () => "pi-session" } });
+      await handlers.get(event)({}, {
+        sessionManager: { getSessionId: () => "pi-session" },
+        isIdle: () => true, hasPendingMessages: () => false,
+      });
     }
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 15));
     assert.deepEqual(payloads.map((p) => p.event), ["SessionStart", "UserPromptSubmit", "Stop"]);
     for (const payload of payloads) {
       assert.equal(payload.wslDistroName, expected);

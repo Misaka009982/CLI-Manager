@@ -25,10 +25,11 @@ Read the domain contract that owns the code being changed; do not load every gui
 | [Type Safety](./type-safety.md) | Stable entry for type validation and owning contracts | Active |
 | [History Session Contracts](./history-session-contracts.md) | History favorites, metadata, and snapshot fallback contracts | Active |
 | [Workspace Session Restore Contracts](./workspace-session-restore-contracts.md) | 关闭后恢复工作区终端会话：TUI 走 resume、shell 贴 scrollback、节流落盘与启动问询 | Active |
+| [Startup Command Text Contracts](./startup-command-text-contracts.md) | 多行命令、转义/引号边界、本地与 SSH 共同准备及真实行为回归 | Active |
 | [Background Task Continuation Contracts](./background-task-continuation-contracts.md) | 运行任务退出守卫、daemon 后台继续、托盘最小化与通知边界 | Active |
 | [Terminal Output Scheduling Contracts](../backend/terminal-output-scheduling-contracts.md) | Daemon live-frame budget and frontend cross-terminal xterm scheduling contract | Active |
 | [Statusline Editor Contracts](./statusline-editor-contracts.md) | Claude/Codex 独立编辑状态、共享终端主题预览与响应式布局 | Active |
-| [Terminal Font / External Program Contracts](./terminal-font-external-program-contracts.md) | 用户字体优先、历史回退兼容、外部程序持久化与跨 Shell 启动 | Active |
+| [Terminal Font / External Program Contracts](./terminal-font-external-program-contracts.md) | 用户字体优先、两端 Unicode 字素占格与构建回退、外部程序持久化与跨 Shell 启动 | Active |
 | [Web UI Visual Guidelines](./web-ui-visual-guidelines.md) | macOS-inspired frosted-glass, clean white visual language and surface rules | Active |
 | [Git Diff Viewer Contracts](./git-diff-viewer-contracts.md) | Shared snapshot/live data sources, target identity, and viewer responsibility boundaries | Active |
 | [Git Changes Performance Contracts](./git-changes-performance-contracts.md) | 大规模变更树虚拟化、Worker/分批构造、目录完整操作与刷新合并 | Active |

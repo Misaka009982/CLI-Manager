@@ -1,5 +1,6 @@
 use crate::app_paths::{self, DataStorageInspection, DataStorageStatus};
 use crate::daemon::client::DaemonBridge;
+use crate::commands::cc_connect::CcConnectManager;
 
 #[tauri::command]
 // 返回当前数据根与引导配置状态，不在查询时执行待切换或迁移。
@@ -13,15 +14,17 @@ pub fn app_inspect_data_dir(target_dir: String) -> Result<DataStorageInspection,
     app_paths::inspect_data_storage_target(&target_dir)
 }
 
-#[tauri::command]
-// 先验证目标，再拒绝已连接 daemon 的存活会话并请求空闲退出，最后写入下次启动的切换意图。
+// 持有远程服务空闲锁，验证目标并拒绝 daemon 存活会话，最后写入下次启动的切换意图。
 // 不直接迁移数据或切换当前根；未取得 daemon 客户端时跳过会话查询，不主动关闭运行任务。
+#[tauri::command]
 pub async fn app_prepare_data_dir_switch(
     daemon_bridge: tauri::State<'_, DaemonBridge>,
+    remote_manager: tauri::State<'_, CcConnectManager>,
     target_mode: String,
     target_dir: Option<String>,
     migrate: bool,
 ) -> Result<String, String> {
+    let _remote_idle = remote_manager.data_storage_idle_guard()?;
     app_paths::validate_data_storage_switch(target_mode.trim(), target_dir.as_deref(), migrate)?;
     if let Some(client) = daemon_bridge.get() {
         let sessions = client.list()?;

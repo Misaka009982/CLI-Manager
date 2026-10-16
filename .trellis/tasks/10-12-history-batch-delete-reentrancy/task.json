@@ -1,0 +1,32 @@
+{
+  "id": "history-batch-delete-reentrancy",
+  "name": "history-batch-delete-reentrancy",
+  "title": "历史批量删除防重复执行",
+  "description": "Prevent overlapping history deletion batches and misleading missing-session errors",
+  "status": "in_progress",
+  "dev_type": "frontend",
+  "scope": "history",
+  "package": null,
+  "priority": "P2",
+  "creator": "codex",
+  "assignee": "codex",
+  "createdAt": "2026-10-12",
+  "completedAt": null,
+  "branch": "fix/history-batch-delete-reentrancy",
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": "0b07979e00d92291a7c09d1cabf79354d713be4a",
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "User approved the diagnosed fix, new task and 1.4.3 NSIS. Fix committed before packaging; build and artifact verification passed. Awaiting user installation acceptance; no push or installation performed.",
+  "meta": {
+    "installerVersion": "1.4.3",
+    "installerPath": "src-tauri/target/local/release/bundle/nsis/CLI-Manager_1.4.3_x64-setup.exe",
+    "installerSha256": "777935BDC733251E80178517900B207AE032F025A62D3EB8408F7A5C4D67CE3A",
+    "installerSizeBytes": 30210162,
+    "installerBuiltAt": "2026-10-12T14:23:16+08:00"
+  }
+}

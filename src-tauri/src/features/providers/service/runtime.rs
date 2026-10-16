@@ -258,14 +258,14 @@ fn set_profile_env_key(
     Ok(())
 }
 
-// 创建目标目录并直接写入或覆盖命名配置文件；不是原子替换，配置名和内容由调用方提供。
+// 写入同名生成 profile，但保留 Codex 已保存的 Hook 确认/禁用状态，不导入供应商信任。
 pub(crate) fn write_codex_profile_to_dir(
     codex_dir: &Path,
     profile: &CodexProviderProfile,
 ) -> Result<(), String> {
     fs::create_dir_all(codex_dir).map_err(|err| format!("profile_write_failed: {err}"))?;
-    fs::write(
-        codex_dir.join(format!("{}.config.toml", profile.profile_name)),
+    super::codex_profile::write_preserving_hook_state(
+        &codex_dir.join(format!("{}.config.toml", profile.profile_name)),
         &profile.profile_text,
     )
     .map_err(|err| format!("profile_write_failed: {err}"))

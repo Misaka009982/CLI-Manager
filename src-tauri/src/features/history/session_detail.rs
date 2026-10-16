@@ -559,7 +559,7 @@ pub(super) fn merge_session_detail_parts(
             title: parent_title,
             message_count: messages.len(),
             branch,
-            stats: merged_stats,
+            stats: merged_stats.into(),
         },
         cwd,
         messages,

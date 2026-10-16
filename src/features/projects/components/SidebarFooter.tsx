@@ -1,5 +1,7 @@
+import { useActiveCodexHookProfile } from "../../terminal/api/codexHookProfile";
+import { useHookStatusRequest } from "../../settings/api/useHookStatusRequest";
+import { codexHookNeedsReview, type CodexHookReadiness } from "../../settings/api/codexHookStatus";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { BarChart3, Handshake, Settings } from "../../../shared/ui/icons";
 import { SyncStatusIndicator } from "./SyncStatusIndicator";
@@ -12,7 +14,7 @@ type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled
 type HookLightStatus = "missing" | "partial" | "installed";
 type HookTool = "claude" | "codex" | "kimi" | "pi" | "grok";
 
-interface ToolHookSettingsStatus {
+interface ToolHookSettingsStatus extends CodexHookReadiness {
   configDir: string | null;
   status: HookInstallStatus;
 }
@@ -77,7 +79,6 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
   const claudeHookAutoRepairKnownInstalled = useSettingsStore((s) => s.claudeHookAutoRepairKnownInstalled);
   const claudeHookAutoRepairNoticeShown = useSettingsStore((s) => s.claudeHookAutoRepairNoticeShown);
   const updateSetting = useSettingsStore((s) => s.update);
-  const [status, setStatus] = useState<HookSettingsStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState(false);
 
@@ -86,6 +87,12 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
   const kimiSelectedDir = useMemo(() => trimDir(kimiHookConfigDir), [kimiHookConfigDir]);
   const piSelectedDir = useMemo(() => trimDir(piHookConfigDir), [piHookConfigDir]);
   const grokSelectedDir = useMemo(() => trimDir(grokHookConfigDir), [grokHookConfigDir]);
+  const codexProfileName = useActiveCodexHookProfile();
+  const { status, invokeStatus } = useHookStatusRequest({
+    selectedDir, codexSelectedDir, kimiSelectedDir, piSelectedDir, grokSelectedDir,
+    codexProfileName, ccSwitchDbPath: ccSwitchDbPath ?? undefined,
+  });
+  const pendingReview = codexHookBridgeEnabled && codexHookNeedsReview(status?.codex);
   const enabledTools = useMemo<Record<HookTool, boolean>>(
     () => ({
       claude: claudeHookBridgeEnabled,
@@ -103,7 +110,7 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
   const refreshStatus = useCallback(async () => {
     setLoading(true);
     try {
-      const nextStatus = await invoke<HookSettingsStatus>("hook_settings_get_status", {
+      const nextStatus = await invokeStatus("hook_settings_get_status", {
         selectedDir,
         codexSelectedDir,
         kimiSelectedDir,
@@ -112,7 +119,7 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
         autoRepair: claudeHookBridgeEnabled && claudeHookAutoRepairKnownInstalled,
       });
-      setStatus(nextStatus);
+      if (!nextStatus) return;
       if (nextStatus.claudeAutoRepaired && !claudeHookAutoRepairNoticeShown) {
         toast.info("Claude Hook 已自动恢复", {
           description: "检测到 Hook 被外部工具覆盖，已重新写入全局 Hook 配置。",
@@ -125,6 +132,7 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
       setLoading(false);
     }
   }, [
+    invokeStatus,
     claudeHookBridgeEnabled,
     claudeHookAutoRepairKnownInstalled,
     claudeHookAutoRepairNoticeShown,
@@ -163,26 +171,26 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       };
       if (tools.includes("claude")) {
-        await invoke<HookSettingsStatus>("hook_settings_uninstall", dirs);
-        await invoke<HookSettingsStatus>("hook_settings_install", dirs);
+        await invokeStatus("hook_settings_uninstall", dirs);
+        await invokeStatus("hook_settings_install", dirs);
         await updateSetting("claudeHookAutoRepairKnownInstalled", true);
         await updateSetting("claudeHookAutoRepairNoticeShown", false);
       }
       if (tools.includes("codex")) {
-        await invoke<HookSettingsStatus>("hook_settings_uninstall_codex", dirs);
-        await invoke<HookSettingsStatus>("hook_settings_install_codex", dirs);
+        await invokeStatus("hook_settings_uninstall_codex", dirs);
+        await invokeStatus("hook_settings_install_codex", dirs);
       }
       if (tools.includes("kimi")) {
-        await invoke<HookSettingsStatus>("hook_settings_uninstall_kimi", dirs);
-        await invoke<HookSettingsStatus>("hook_settings_install_kimi", dirs);
+        await invokeStatus("hook_settings_uninstall_kimi", dirs);
+        await invokeStatus("hook_settings_install_kimi", dirs);
       }
       if (tools.includes("pi")) {
-        await invoke<HookSettingsStatus>("hook_settings_uninstall_pi", dirs);
-        await invoke<HookSettingsStatus>("hook_settings_install_pi", dirs);
+        await invokeStatus("hook_settings_uninstall_pi", dirs);
+        await invokeStatus("hook_settings_install_pi", dirs);
       }
       if (tools.includes("grok")) {
-        await invoke<HookSettingsStatus>("hook_settings_uninstall_grok", dirs);
-        await invoke<HookSettingsStatus>("hook_settings_install_grok", dirs);
+        await invokeStatus("hook_settings_uninstall_grok", dirs);
+        await invokeStatus("hook_settings_install_grok", dirs);
       }
       await refreshStatus();
       toast.success(t("sidebar.hook.reinstalled"));
@@ -208,13 +216,18 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
     void reinstallHooks();
   };
 
-  const title = allBridgesDisabled
+  const statusTitle = allBridgesDisabled
     ? t("sidebar.hook.disabled")
-    : lightStatus === "installed"
+    : pendingReview
+      ? t("settings.hooks.codex.reviewHint")
+      : lightStatus === "installed"
       ? t("sidebar.hook.ok")
       : lightStatus === "partial"
         ? t("sidebar.hook.partial")
         : t("sidebar.hook.missing");
+  const title = status?.codex.effectiveConfigPath && codexHookBridgeEnabled
+    ? `${statusTitle}\n${t("settings.hooks.codex.effectiveScope")}: ${status.codex.effectiveConfigPath}`
+    : statusTitle;
 
   return (
     <button

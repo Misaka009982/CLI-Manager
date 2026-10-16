@@ -1,4 +1,9 @@
 export const zh = {
+  "terminal.layoutLock.lock": "锁定终端布局",
+  "terminal.layoutLock.unlockLayout": "解锁终端布局",
+  "terminal.layoutLock.blocked": "布局已锁定",
+  "terminal.layoutLock.unlock": "解锁",
+  "terminal.layoutLock.unlockHint": "布局已锁定，点击解锁",
 
   "termStats.screenshot": "复制完整统计长图",
   "termStats.screenshotBusy": "正在生成统计长图…",

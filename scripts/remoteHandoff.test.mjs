@@ -9,6 +9,13 @@ import ts from "typescript";
 const tempDir = mkdtempSync(join(tmpdir(), "cli-manager-remote-handoff-"));
 process.on("exit", () => rmSync(tempDir, { recursive: true, force: true }));
 
+// agentCapabilities now uses the shared WSL path helpers; compile its real
+// dependency alongside it so this isolated runner can resolve the import.
+const wslPathsSource = readFileSync(new URL("../src/shared/lib/wslPaths.ts", import.meta.url), "utf8");
+writeFileSync(join(tempDir, "wslPaths.mjs"), ts.transpileModule(wslPathsSource, {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+}).outputText, "utf8");
+
 const capabilitiesSource = readFileSync(
   new URL("../src/features/agents/api/agentCapabilities.ts", import.meta.url),
   "utf8",
@@ -19,7 +26,7 @@ const capabilitiesOutput = ts.transpileModule(capabilitiesSource, {
     target: ts.ScriptTarget.ES2022,
   },
   fileName: "agentCapabilities.ts",
-}).outputText;
+}).outputText.replace('from "../../../shared/lib/wslPaths";', 'from "./wslPaths.mjs";');
 writeFileSync(join(tempDir, "agentCapabilities.mjs"), capabilitiesOutput, "utf8");
 
 const source = readFileSync(new URL("../src/features/remote/api/remoteHandoff.ts", import.meta.url), "utf8");

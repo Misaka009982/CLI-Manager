@@ -744,7 +744,7 @@ fn cursor_metadata_updates_computation_without_overriding_real_title() {
         title: "session-a".to_string(),
         message_count: 0,
         branch: None,
-        stats: SessionStatsScan::default(),
+        stats: SessionStatsScan::default().into(),
     };
     apply_cursor_metadata_to_computation(&mut fallback_title, &metadata);
     assert_eq!(fallback_title.title, "Cursor DB title");

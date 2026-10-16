@@ -58,6 +58,11 @@ function harness(file, name, dependencies = {}) {
   });
   return {
     get output() { return output; },
+    get retainedAnswerChars() {
+      return slots.reduce((total, slot) => total + (Array.isArray(slot.value)
+        ? slot.value.reduce((sum, item) => sum + (typeof item?.content === "string" ? item.content.length : 0), 0)
+        : 0), 0);
+    },
     render(nextProps = props) {
       props = nextProps;
       for (let pass = 0; pass < 30; pass += 1) {
@@ -429,7 +434,7 @@ function previewFixture(overrides = {}) {
     SessionTranscriptContent: "Transcript", MarkdownPreviewAnswerSelect: "AnswerSelect", FontSizeControl: "FontSize",
     ...overrides.dependencies,
   });
-  h.render({ sessionId: "view", open: true, onClose() {} });
+  h.render({ sessionId: "view", open: true, isVisible: true, onClose() {}, ...overrides.props });
   return { h, terminal, requests, jumps, closes };
 }
 
@@ -491,4 +496,89 @@ test("a superseded SSH context is closed before any transcript read and cannot r
   assert.equal(element(f.h.output, "Transcript").props.content, "new-consumer");
   f.h.unmount();
   assert.equal(f.closes.at(-1).args.consumerId, "new-consumer");
+});
+
+test("closed previews do not prefetch full transcripts on done/failed hooks", () => {
+  const f = previewFixture({ props: { open: false } });
+  for (const hook of ["running", "done", "failed", "done"]) {
+    f.terminal.tabStatuses.view = { hook, hookUpdatedAt: Date.now() };
+    f.h.render();
+  }
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.h.retainedAnswerChars, 0);
+  assert.equal(f.h.output, null);
+  f.h.unmount();
+});
+
+test("closing releases large answers, reopening reloads and preserves the chosen answer", async () => {
+  const f = previewFixture();
+  const messages = [{ role: "assistant", content: "a".repeat(1_000_000) }, { role: "assistant", content: "last" }];
+  f.requests[0].resolve({ messages }); await settle(); f.h.render();
+  element(f.h.output, "AnswerSelect").props.onSelect(0); f.h.render();
+  assert.ok(f.h.retainedAnswerChars >= 1_000_000);
+  const props = { sessionId: "view", open: false, isVisible: true, onClose() {} };
+  f.h.render(props);
+  assert.equal(f.h.retainedAnswerChars, 0);
+  f.h.render({ ...props, open: true });
+  assert.equal(f.requests.length, 2);
+  f.requests[1].resolve({ messages }); await settle(); f.h.render();
+  assert.equal(element(f.h.output, "AnswerSelect").props.selectedMessageIndex, 0);
+  f.h.unmount();
+});
+
+test("closing during a load rejects the late answer without retaining it", async () => {
+  const f = previewFixture();
+  f.h.render({ sessionId: "view", open: false, isVisible: true, onClose() {} });
+  f.requests[0].resolve({ messages: [{ role: "assistant", content: "late".repeat(100_000) }] });
+  await settle(); f.h.render();
+  assert.equal(f.h.retainedAnswerChars, 0);
+  assert.equal(f.requests.length, 1);
+  f.h.unmount();
+});
+
+test("hidden preview skips refreshes and reloads latest data when visible", async () => {
+  const f = previewFixture({ props: { isVisible: false } });
+  f.terminal.tabStatuses.view = { hook: "done", hookUpdatedAt: 1 };
+  f.h.render();
+  assert.equal(f.requests.length, 0);
+  const props = { sessionId: "view", open: true, isVisible: true, onClose() {} };
+  f.h.render(props);
+  f.requests[0].resolve({ messages: [{ role: "assistant", content: "before" }] });
+  await settle(); f.h.render();
+  f.h.render({ ...props, isVisible: false });
+  f.terminal.tabStatuses.view = { hook: "done", hookUpdatedAt: 2 };
+  f.h.render();
+  assert.equal(f.requests.length, 1);
+  f.h.render(props);
+  assert.equal(f.requests.length, 2);
+  f.requests[1].resolve({ messages: [{ role: "assistant", content: "after" }] });
+  await settle(); f.h.render();
+  assert.equal(element(f.h.output, "Transcript").props.content, "after");
+  f.h.unmount();
+});
+
+test("closing during SSH context creation releases the late consumer without reading history", async () => {
+  const builds = [], reads = [];
+  const f = previewFixture({
+    setup({ terminal, projects }) {
+      terminal.sessions[0].projectId = "remote";
+      projects.projects = [{ id: "remote", environment_type: "ssh", remote_path: "/project" }];
+    },
+    dependencies: {
+      buildSshAgentHistoryContext: () => new Promise(resolve => builds.push(resolve)),
+      fetchRemoteLatestProjectSessionDetail: async context => { reads.push(context); return { context, result: null }; },
+    },
+  });
+  f.h.render({ sessionId: "view", open: false, isVisible: true, onClose() {} });
+  builds[0]({ consumerId: "late", hostId: "host", launch: { projectId: "remote" } });
+  await settle(); f.h.render();
+  assert.equal(reads.length, 0);
+  assert.equal(f.closes.at(-1).args.consumerId, "late");
+  assert.equal(f.h.retainedAnswerChars, 0);
+  f.h.unmount();
+});
+
+test("terminal view passes real pane visibility to the preview", () => {
+  const view = readFileSync(new URL("../src/features/terminal/components/XTermView.tsx", import.meta.url), "utf8");
+  assert.match(view, /<TerminalMarkdownPreview[\s\S]*?isVisible=\{isVisible\}/);
 });

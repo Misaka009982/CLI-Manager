@@ -12,19 +12,21 @@
 - Shared policy: `src/features/history/lib/historyDeletion.ts`.
 - `getHistoryDeletionBlockReason(session)` returns a stable rejection code or `null`; `assertHistorySessionDeletable` also rejects missing rows.
 - `planHistoryDeletion(selected)` returns `{ sessionKeys, blockedReason }`.
-- `executeHistoryDeletion(keys, getSessions, deleteSession)` returns `{ deletedCount, error }` after whole-batch preflight and sequential execution.
-- `historyDeletedSessionKeys(target, sessions)` identifies the application rows actually removed by the source operation.
+- `executeHistoryDeletion(keys, getSessions, deleteSession)` returns `{ deletedCount, error }` after whole-batch preflight and sequential execution. Store deletion returns actual covered keys; only these may skip a later selected operation.
+- Production confirmations call Store `deleteSessions(keys)`, which synchronously acquires the non-persistent `deletingSessions` flag before its first await and releases it in `finally`. `null` means another queue owns execution; this call performed no deletion and must not show a success/error notification.
+- `historyDeletedSessionKeys(target, sessions, deletedPaths?)` identifies the application rows actually removed by the source operation. Codex success returns canonical deleted paths from IPC; other sources retain null.
 
 ### 3. Contracts
 
 - Each of the twelve existing sources explicitly declares supported deletion in `historySources.ts`, matching the backend `history_sources_list_descriptors` registry in `features/history/sources.rs`. Shared reader templates must not automatically grant future readers write permission. Do not change editing/conversion capabilities with deletion support.
 - List controls, single/bulk request handlers, confirmation execution, and Store use the same policy. SSH or `read_only` rejects before snapshot handling; a local favorite snapshot only deletes saved application data and never invokes source deletion.
-- Preserve independent-subagent restrictions. A batch may merge a selected child only when a selected eligible parent's actual backend deletion covers its file. Any other ineligible selected row blocks the entire batch; never silently omit it and report complete success.
+- Preserve path-based Claude and other-source independent-subagent restrictions. V1.4.3 local Codex ordinary rollout children/forks are independently deletable, irrespective of parent visibility/existence. A batch may merge a selected child only when the actual source deletion covers its file. Any ineligible selected row blocks the entire batch.
 - Recheck every queued key against current Store state before starting a batch. During execution Store checks again; missing rows are errors, not successful no-ops. Real I/O failures stop the queue and report only completed calls.
-- Pi/Gemini/Copilot/Antigravity/Kiro/Cursor/Cline, Kimi/Grok, OpenCode, and snapshots remove only their selected application row. Only the existing Claude/Codex tree path clears actual adjacent `subagents/agent-*.jsonl` rows, with matching source/project. Parent metadata alone does not prove a file was deleted.
+- Pi/Gemini/Copilot/Antigravity/Kiro/Cursor/Cline, Kimi/Grok, OpenCode, and snapshots remove only their selected application row. Claude clears actual adjacent `subagents/agent-*.jsonl` rows with matching source/project. Codex clears only returned physical paths across date/project directories, excluding remote/read-only/snapshot rows. Parent metadata alone never proves a file was deleted.
 - File comparisons normalize Windows prefixes and WSL host/distro aliases, preserving Linux path case. Other roots/projects, remote rows, and independent snapshot rows must survive cleanup.
 - Invoke `history_delete_session` before deleting `session_meta`, generated titles, and favorite snapshots; source failure leaves these and list/detail/search state unchanged. Keep existing star/edit-audit retention.
 - Confirmation copy distinguishes original records from saved snapshots. Disabled reasons and known mutation errors resolve through the history zh-CN/en-US dictionaries; other I/O diagnostics remain available.
+- Single/bulk request and confirmation callbacks synchronously read current Store execution state; rendered `disabled` alone does not prevent same-turn reentry. Lock ownership outlives HistoryWorkspace remounts. List row/bulk/context-menu deletion consume that state. The history confirmation passes optional `ConfirmDialog.pending`; while pending, actions and Escape/outside dismissal are disabled, and the original queue alone emits the final result. Other dialog callers default to existing behavior. Do not convert genuine missing-session errors into success to mask concurrent execution.
 
 ### 4. Validation & Error Matrix
 
@@ -35,9 +37,12 @@
 | SSH/read-only, including a read-only snapshot | No source or metadata deletion |
 | Local saved snapshot | Application cleanup without source IPC |
 | Selected covered Claude/Codex parent and child | One parent operation; clean actual covered rows |
-| Child with only metadata parent or a file-only parent | Reject separate deletion; do not claim it was removed with the parent |
+| Local Codex rollout child/fork with metadata parent | Permit confirmed deletion; cleanup only actual returned files |
+| Other-source child with only metadata parent or a file-only parent | Reject separate deletion; do not claim it was removed with the parent |
 | A queued row vanishes/becomes read-only before confirmation | Preflight fails before any operation |
 | Second operation fails after one success | Stop; report `1/total` and retain failed/unattempted rows |
+| Repeated confirm/Enter, single versus bulk, or remounted confirmation while deleting | One Store-owned queue; duplicate call returns null without notification; finally releases lock |
+| Pending deletion dialog receives cancel/Escape/outside interaction | No fake cancellation; keep waiting for the unique queue's final result |
 
 ### 5. Good / Base / Bad Cases
 
@@ -48,6 +53,7 @@
 ### 6. Tests Required
 
 - `scripts/historyDeletion.test.mjs` executes shared policy and the real Store action with mocked IPC/database boundaries: all source capabilities, snapshots/read-only, batch preflight/partial failure, file-scope cleanup, WSL comparison, bilingual errors, success cleanup and failure preservation.
+- `scripts/historyDeletionConcurrency.test.mjs` executes the real Store coordinator, Workspace callbacks and shared dialog JSX in memory: original duplicate-confirm repro, same-turn and remounted calls, partial failure/retry, real missing rows, pending dismissal/default compatibility and production wiring.
 - Run relevant history regression scripts, `npx tsc --noEmit`, and standalone `npm run check:architecture -- --strict`.
 - Human desktop validation: delete test sessions for all seven sources and refresh, check mixed-source batches and subagents, switch zh-CN/en-US, retain 24-hour time. AI must not start CLI-Manager/Tauri for UI verification.
 

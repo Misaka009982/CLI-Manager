@@ -2,6 +2,7 @@ import { useTerminalStore } from "../state";
 import { terminalProcessManager } from "./TerminalProcessManager";
 import { ptyHostSocket } from "../transport/PtyHostSocket";
 import { writeResourceDiagnostic } from "../../../shared/platform/resourceDiagnosticsLog";
+import { terminalSnapshotDiagnostics } from "./sessionSnapshotPersistence";
 
 const RUNTIME_DIAGNOSTIC_INTERVAL_MS = 30_000;
 
@@ -52,7 +53,9 @@ function collectWebviewSnapshot(): Record<string, unknown> {
       daemonAttachPendingSessions: state.daemonAttachPendingSessionIds.size,
       subagentTranscripts: Object.keys(state.subagentTranscripts).length,
       subagentTranscriptChars,
+      persistedSnapshotChars: state.sessions.reduce((total, session) => total + (session.initialTerminalOutput?.length ?? 0), 0),
     },
+    snapshots: terminalSnapshotDiagnostics(),
     processManager: terminalProcessManager.diagnosticsSnapshot(),
     ptyHost: ptyHostSocket.diagnosticsSnapshot(),
   };

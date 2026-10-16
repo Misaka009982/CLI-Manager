@@ -435,7 +435,7 @@ fn apply_grok_summary_metadata_fills_list_fields() {
         title: "g2".to_string(),
         message_count: 0,
         branch: None,
-        stats: SessionStatsScan::default(),
+        stats: SessionStatsScan::default().into(),
     };
     apply_grok_summary_metadata(&updates, &mut computed);
     assert_eq!(computed.title, "Grok titled session");

@@ -144,6 +144,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
   const shellFieldId = useId();
   const envVarsFieldId = useId();
   const envVarsHelpId = useId();
+  const startupCmdFieldId = useId();
   const worktreeDepsPromptFieldId = useId();
   const sshHostFieldId = useId();
   const remotePathFieldId = useId();
@@ -866,7 +867,13 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
               </div>}
 
               {cliTool.trim() === "" && (
-                <Field label={t("configModal.startupCommand")} value={startupCmd} onChange={setStartupCmd} placeholder="npm run dev" />
+                <FieldTextarea
+                  id={startupCmdFieldId}
+                  label={t("configModal.startupCommand")}
+                  value={startupCmd}
+                  onChange={setStartupCmd}
+                  placeholder="npm run dev"
+                />
               )}
               <div>
                 <div className="mb-1.5 flex items-center gap-1">
@@ -1660,6 +1667,41 @@ function Field({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         className="text-sm"
+      />
+    </div>
+  );
+}
+
+// 多行字段：与 Field 同构，但底层用 Textarea 保留换行——HTML input 的 value 不允许换行，
+// 会把多行启动命令在进入 state 前就压成一行。
+function FieldTextarea({
+  id,
+  label,
+  value,
+  onChange,
+  placeholder,
+  rows = 3,
+}: {
+  id?: string;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  rows?: number;
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="ui-config-form-label">
+        {label}
+      </label>
+      <Textarea
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        rows={rows}
+        spellCheck={false}
+        className="min-h-20 resize-y font-mono text-sm leading-5"
       />
     </div>
   );

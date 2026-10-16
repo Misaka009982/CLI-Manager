@@ -1,3 +1,4 @@
+import { TerminalLayoutLockMenu, TerminalLayoutLockIndicator } from "../../terminal/api/TerminalLayoutLockControls";
 import type { CSSProperties, ReactNode, RefObject } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
@@ -74,6 +75,7 @@ export function WorkspanTabBar({
   const hiddenModels = models.filter(({ workspan }) => hiddenIds.has(workspan.id));
 
   return (
+    <TerminalLayoutLockMenu style={menuStyle}>
     <div
       ref={tabBarRef}
       className="ui-terminal-pane-chrome ui-workspan-tabbar relative flex h-9 shrink-0 items-center px-1"
@@ -104,6 +106,7 @@ export function WorkspanTabBar({
         </SortableContext>
         <WorkspanTabbarEndDropTarget disabled={hasScopedTerminalFilter} />
       </div>
+      <TerminalLayoutLockIndicator />
       {overflow.isOverflowing && (
         <Popover open={listOpen} onOpenChange={onToggleList}>
           <PopoverTrigger asChild>
@@ -180,5 +183,6 @@ export function WorkspanTabBar({
         </Popover>
       )}
     </div>
+    </TerminalLayoutLockMenu>
   );
 }

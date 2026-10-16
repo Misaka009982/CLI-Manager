@@ -588,8 +588,8 @@ Claude: PreToolUse matcher=AskUserQuestion -> event=Notification
 - The bridge event remains `Notification`; `toolName` must survive normalization and transport so the frontend can distinguish a question request from an ordinary notification.
 - The Claude Attention module requires both `Notification(permission_prompt|idle_prompt)` and `PreToolUse(AskUserQuestion)`. The Codex Attention module requires both `PermissionRequest` and `PreToolUse(request_user_input)`.
 - Full install, module install, uninstall, status inspection, cc-switch common config, WSL commands, and SSH Agent templates must agree on these entries. Uninstall removes only the CLI-Manager-owned question command and preserves Claude `ToolStart` and sub-agent entries that share `PreToolUse`.
-- Codex maps the native event to trust-state name `pre_tool_use`; the exact matcher participates in `trusted_hash`. Trust-only repair is allowed only after every required event exists.
-- Codex trust-state table keys must be compared by parsed TOML value, not by source quoting. Literal keys such as `[hooks.state.'C:\Users\...']` and escaped basic keys such as `[hooks.state."C:\\Users\\..."]` are equivalent; merge must replace the existing CLI-Manager block instead of creating a duplicate table. Status inspection may collapse equivalent duplicate blocks for current CLI-Manager Hook keys before parsing the full config, while preserving unrelated state.
+- Codex maps the native event to trust-state name `pre_tool_use`; the exact matcher participates in `trusted_hash`. Status inspection never fabricates trust or re-enables a disabled Hook; new/changed definitions require Codex review.
+- Codex trust-state table keys must be compared by parsed TOML value, not by source quoting. Literal keys such as `[hooks.state.'C:\Users\...']` and escaped basic keys such as `[hooks.state."C:\\Users\\..."]` are equivalent; merge must replace the existing CLI-Manager block instead of creating a duplicate table. Only explicit installation may collapse equivalent current CLI-Manager duplicate blocks, preserving the final saved state and unrelated entries; status inspection is read-only.
 - Missing or wrong matchers make an old installation partial/outdated. Status inspection must not silently install the missing event.
 - `Notification + source/toolName` selects the localized “selection or answer required” toast and system-notification copy before using the generic bridge title. Existing attention state, focus suppression, background override, target activation, and third-party notification settings remain authoritative.
 - When no frontend client is connected, an exact question request shares the existing `PermissionRequest` daemon activation path so a background task can ask for user input. Ordinary `Notification` events must not launch the app.
@@ -601,22 +601,22 @@ Claude: PreToolUse matcher=AskUserQuestion -> event=Notification
 | Exact Codex/Claude question matcher | Emit one `Notification` with the matching `toolName`. |
 | Ordinary tool or wrong matcher | No question-request notification. |
 | Old install lacks the question entry | Report partial/outdated; reinstall upgrades it. |
-| Codex question trust is missing/stale | Repair only when the event set and feature flag are complete. |
-| Equivalent literal/basic keys duplicate a current CLI-Manager trust table | Keep the last block, remove only earlier equivalent CLI-Manager blocks, then parse and re-check the full config. |
+| Codex question trust is missing/stale/disabled | Keep partial status and saved state; review/enable is a user decision in Codex. |
+| Equivalent literal/basic keys duplicate a current CLI-Manager trust table | Query preserves bytes and reports parse error; explicit installation keeps the last block and removes only earlier owned duplicates. |
 | Duplicate or invalid unrelated trust table | Preserve the file and return the parse error; do not rewrite user-owned state. |
 | Attention module uninstall | Remove approval/attention plus the owned question entry; preserve unrelated hooks. |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: a background Codex terminal requests one choice; the system notification says it is waiting for a selection or answer and opens the owning terminal when clicked.
-- Good: Codex previously wrote a literal Windows-path trust key and CLI-Manager wrote the equivalent escaped basic key; status inspection collapses the owned duplicate and keeps unrelated project/user state.
+- Good: Codex previously wrote a literal Windows-path trust key and CLI-Manager wrote the equivalent escaped basic key; explicit installation collapses the owned duplicate, while ordinary status checks never rewrite config.
 - Base: Claude `permission_prompt` and Codex `PermissionRequest` keep their existing approval behavior.
 - Bad: registering a catch-all `PreToolUse` command causes every tool call to look like a question, removing all Claude `PreToolUse` entries during Attention uninstall, or comparing raw TOML header text and appending an equivalent duplicate key.
 
 ### 6. Tests Required
 
 - Local Rust tests cover exact matcher install/status/uninstall, Claude common-config completeness, Codex `pre_tool_use` trust hash, and Codex `Notification` admission with unknown-event rejection.
-- Local Rust tests cover literal/basic TOML trust-key normalization, merge replacement, and status recovery from an already duplicated CLI-Manager state table.
+- Local Rust tests cover literal/basic TOML trust-key normalization, merge replacement, explicit recovery of owned duplicate tables and read-only status checks for missing/stale/disabled trust.
 - SSH Agent tests cover managed entry counts, exact matcher merge/removal, and Codex runtime `Notification` admission.
 - Hook-schema tests preserve the question `toolName`; TypeScript type-check covers localized frontend recognition.
 
@@ -839,7 +839,17 @@ interface HookSettingsStatus {
   native paths otherwise). Database access follows only the DB path: native DBs use sqlx;
   WSL DB reads/writes are routed through the named distro and must never use UNC direct writes.
 - `autoRepair: true` means "the user previously installed Claude Hook"; if CLI-Manager-owned hooks are missing or partial, backend may reinstall them and return `claudeAutoRepaired: true`.
-- Local Codex status inspection may automatically rebuild only the current user-level CLI-Manager `[hooks.state.*]` trust blocks when every required Hook event and `[features].hooks` are already present. It must not install missing events or modify unrelated trust blocks.
+- Local Codex status inspection is read-only even with `autoRepair: true` (that option is Claude-only). It must not generate hashes, enable Hooks, install missing events or repair duplicate TOML. Explicit installation may deduplicate owned keys but never fabricates trust. Compatibility common sync copies only saved hashes matching the actual current definition and preserves `enabled=false`; a missing/stale hash with an explicit disable copies only the disable, never a fabricated/new trust hash.
+- Terminal launch prepares the current instance's bridge environment whenever a configurable bridge is enabled, regardless of missing/partial/pending-trust installation health, without querying or repairing shared installation files. This neither changes installation status nor authorizes Hook execution; Codex continues to enforce trust/disabled state, and the same process can deliver events after the user reviews it. With all configurable bridges disabled, only an independently installed OpenCode plugin may enable the environment.
+
+### Codex profile effective trust (2026-10-15)
+
+- All eleven aggregate status/install/uninstall commands accept optional `codexProfileName`. Omission keeps global-only inspection. Validate a 1–128 character ASCII alphanumeric/underscore/hyphen basename; a requested missing/invalid file is an error, never a global-green fallback.
+- Inspect `config.toml` overlaid recursively by `<profile>.config.toml`, including `[features].hooks` and each saved `[hooks.state]` decision. `featureConfigPath` remains the installation/base path; new `effectiveConfigPath` identifies the inspected layer, and `hooksTrusted` exposes the actual exact-hash/disabled result. Existing status enum remains compatible (`partialInstalled` while review is pending).
+- Sidebar/settings derive context from the active local PTY's actual startup `--profile` (including resume and combined project profiles), not the provider selection. SSH/WSL/transcript sessions do not contribute a Windows profile. Responses are context/sequence guarded; failures clear stale success. Pending review polls only while visible, every ten seconds, without Claude auto-repair or overlapping requests; focus/visibility also refresh read-only.
+- Regenerating a same-name generated provider profile preserves only that file's already-saved `hooks.state`, unchanged (including stale hashes and `enabled=false`). Drop trust supplied by new generated input; do not copy user decisions into global/other profiles. Both scope launch and cc-connect runtime call the same staged writer. Reject corrupt/nonregular existing files; stage/sync then recheck original bytes before replacement. This is not cross-process compare-and-swap: an external write in the final check/rename interval remains a documented limitation.
+- Status never installs/reviews hooks. Installation still owns base Hook definitions/features and common-config sync still reads base saved decisions only. A new isolated project snapshot/profile or a changed definition can still require the user's review. Do not substitute auto-trust, force-green, global rewrites, or broad CLI overrides.
+- Regression: `scripts/codexProfileHookTrust.test.mjs`, Rust `provider::codex_profile::tests`, and `hook_settings::tests::profile_tests`. Official trust semantics: https://learn.chatgpt.com/docs/hooks (definitions are trusted by exact hash; `/hooks` controls review).
 
 ### 4. Validation & Error Matrix
 
@@ -856,7 +866,7 @@ interface HookSettingsStatus {
 | Existing `common_config_codex` row with `NULL` value | treat as missing config; write minimal `[features]\nhooks = true` TOML |
 | Current Codex `config.toml` has trusted CLI-Manager `hooks.state` entries | copy those state blocks into `common_config_codex` with CLI-Manager marker comments |
 | Current Codex `config.toml` has unrelated or project-local `.codex/hooks.json` state | do not copy into `common_config_codex` |
-| Complete Codex Hook with missing, disabled, or stale CLI-Manager trust state | rebuild the owned trust blocks and return `installed` after re-checking |
+| Complete Codex Hook with missing, disabled, or stale CLI-Manager trust state | remain `partialInstalled`; query changes no bytes and does not grant trust |
 | Codex Hook missing any required event or feature flag | keep `partialInstalled`; do not fabricate trust state |
 | SQLite open/query/write failure | `syncFailed` with stable `db_*`/`db_write_failed` message |
 | Existing non-CLI-Manager hooks | preserved on install, reinstall, and uninstall |
@@ -866,7 +876,7 @@ interface HookSettingsStatus {
 - Good: User selected a moved cc-switch DB in Settings -> Provider; Hook install syncs the relevant `common_config_<tool>` key at that exact path and returns `synced`.
 - Good: `common_config_codex` contains top-level Codex keys plus `[projects.'\\?\F:\idea-work\business-center']`, `[windows]`, and `[tui]`; Hook install preserves all existing lines and inserts `[features].hooks = true` before the first table.
 - Good: Codex has already trusted CLI-Manager entries in user-level `~/.codex/config.toml`; Hook install copies only those current `~/.codex/hooks.json:<event>:<entry>:<hook>` state blocks into `common_config_codex`.
-- Good: every required Codex Hook exists but one owned trust hash is stale; status inspection replaces only CLI-Manager state blocks and preserves user-owned state.
+- Good: every required Codex Hook exists but one owned trust hash is stale; status inspection preserves it and reports partial, leaving review to Codex.
 - Base: cc-switch is not installed; Hook install still writes normal CLI settings and returns `notDetected`.
 - Base: Codex hooks are installed but no trust hash exists yet; common-config sync still writes `[features].hooks = true` and does not fabricate `trusted_hash` values.
 - Base: user previously installed Hook, cc-switch rewrites `settings.json`, and startup calls status with `autoRepair: true`; backend restores missing hooks and frontend shows one lightweight notice.
@@ -881,7 +891,7 @@ interface HookSettingsStatus {
 - Rust unit tests for Claude common-config merge preserving existing fields and non-CLI-Manager hooks, and Codex TOML common-config preserving existing fields while enabling `[features].hooks`.
 - Rust regression tests for Codex common-config with the real cc-switch `settings(key TEXT PRIMARY KEY, value TEXT)` shape, including nullable `value` and Windows project table keys.
 - Rust regression tests for copying only current user-level CLI-Manager Codex `hooks.state` blocks into `common_config_codex`, replacing stale marker-owned hashes, and excluding project-local `.codex/hooks.json` state.
-- Rust regression tests for trust repair covering missing, disabled, and stale hashes; assert unrelated state is preserved and missing required events remain `partialInstalled` without repair.
+- Rust regression tests for read-only inspection covering missing, disabled, stale and duplicate hashes; explicit duplicate repair preserves the last state, common sync copies only actual confirmations and disabled state. Missing events remain `partialInstalled`.
 - Rust unit tests for strip/uninstall preserving non-CLI-Manager hooks.
 - Rust SQLite regression tests must cover full uninstall and module uninstall separately: the former removes all owned entries, while the latter keeps the remaining local CLI-Manager Hook entries and preserves user-owned content.
 - Rust regression test that Claude common-config status requires every installed event, including Claude `Notification`; Codex common-config status requires `[features].hooks = true`.
@@ -1006,10 +1016,13 @@ hook_settings_uninstall_pi({ selectedDir, codexSelectedDir, piSelectedDir, ccSwi
 
 Pi extension path: ~/.pi/agent/extensions/cli-manager-hook.ts
 Pi source: pi
-Pi events: SessionStart | UserPromptSubmit | Stop
+Pi events: SessionStart | UserPromptSubmit | Stop | Interrupt | StopFailure
 Stable conflict error: pi_extension_conflict
-Generated lifecycle reporter: postHookEvent(event, sessionId) -> Promise<void>
+Generated lifecycle reporter: postHookEvent(event) -> Promise<void>
 Generated reporter deadline: HOOK_TIMEOUT_MS = 1_000
+Root owner environment: CLI_MANAGER_PI_OWNER = JSON({ tabId, pid })
+Modern Pi HTTP metadata: pi = { instanceId, instanceStartedAt, sequence, runId }
+HTTP deduplication: remoteEventId = `${instanceId}:${sequence}`, remoteSequence = sequence
 ```
 
 ### 3. Contracts
@@ -1019,7 +1032,15 @@ Generated reporter deadline: HOOK_TIMEOUT_MS = 1_000
 - Uninstall may remove only a marker-owned file.
 - Required Pi modules are session start, running, stop, and the built-in Extension loading mechanism. Pi has no attention, failure, or sub-agent module requirement.
 - Full Pi installation reports `installed`; any non-empty strict subset reports `partialInstalled`; no modules reports `notInstalled`.
-- `session_start` maps to one `SessionStart`, `agent_start` maps to one `UserPromptSubmit`, and `agent_settled` maps to one `Stop`. Do not also map `before_agent_start` to `UserPromptSubmit`, because one Pi run emits both lifecycle events.
+- `session_start` binds the root session. `before_agent_start` tracks a new session-level run locally; `agent_start` reports `UserPromptSubmit` at most once per such run. Never send running from both events. Internal retries/compaction may emit multiple low-level starts.
+- `agent_settled` reports the final current-run result: `aborted` takes precedence as `Interrupt`, the latest completed assistant error maps to `StopFailure`, otherwise `Stop` means only "run ended". Intermediate failures must be replaced by a successful retry result; never send final failure from `agent_end`.
+- The extension template lives in `settings/pi_extension.ts` and is included by Rust with explicit module-placeholder replacement. Lifecycle/identity listeners remain enabled in stop-only installations; module switches control outward reports, not ownership tracking.
+- The root extension reserves a process-local lease at factory initialization, before `session_start`, and writes `CLI_MANAGER_PI_OWNER` for child inheritance. A different inherited PID for the same Tab or an already-owned same-process SDK runtime cannot report. The owner marker is not an authentication credential. `new`/`resume`/`fork` keep the lease; `reload`/`quit` release it. Instance identity and sequence survive reload within that process.
+- Completion candidates are dispatched asynchronously and invalidated by observed new runs, session changes or shutdown; `isIdle`/pending-message checks are supplementary. Pi 1.2.0 can defer new requests from settle handlers until after dispatch; no fixed delay or idle check proves an arbitrary third-party workflow has finished. Do not use private Pi fields or call command-only `waitForIdle` from lifecycle handlers.
+- Before every HTTP sink side effect, `PiHookAdmission` validates monotonic instance/run/sequence, same-run session identity and one terminal event per run. Hold the admission lock through Pi sink delivery so concurrently accepted requests cannot be delivered in reverse order. The bounded cache stores at most 1024 Tabs and evicts the oldest accepted timestamp.
+- Modern metadata is optional for wire compatibility. Legacy no-metadata Pi requests are admitted only for Tabs not yet claimed by modern Pi metadata. A newer root instance may replace an older one; retired instances cannot reclaim it while retained. Bridge restart/cache eviction resets retained admission history. Other CLI event semantics do not change.
+- Shared `pi-hook.json` translations provide Pi run-ended text to frontend and third-party formatting. Third-party explicit `en-US`/`zh-CN`/`zh-TW` uses saved settings; `auto` retains its existing Chinese default. `Interrupt` is state cleanup only and must not create taskbar/system/toast/third-party completion notifications.
+- Existing installed or running extensions require explicit Pi Hook reinstall and reload/restart to use the new producer. Updating only the application does not establish the new producer's identity guarantees. Native SSH Agent Hook installation currently supports Claude/Codex/Kimi, not Pi.
 - The extension reads `CLI_MANAGER_TAB_ID`, `CLI_MANAGER_NOTIFY_PORT`, and `CLI_MANAGER_NOTIFY_TOKEN` from its PTY environment and silently skips reporting if any are missing.
 - Pi lifecycle handlers must detach bridge delivery with `void postHookEvent(...)`; they must never `await` a loopback HTTP request, because Pi awaits extension handlers before continuing the agent lifecycle.
 - `postHookEvent` is best-effort and owns a bounded `AbortController` timeout of `HOOK_TIMEOUT_MS`. Timeout, connection failure, or abort is swallowed after cleanup and cannot delay terminal input, agent start, or settle.
@@ -1037,6 +1058,11 @@ Generated reporter deadline: HOOK_TIMEOUT_MS = 1_000
 | Hook callback environment is incomplete | Extension returns without throwing or interrupting Pi. |
 | Loopback bridge is slow, unreachable, or times out | Return from the Pi event handler immediately; abort the detached request within `HOOK_TIMEOUT_MS` and swallow its failure. |
 | Full three-module install | Return `installed`, allowing PTY callback environment injection. |
+| Child process inherits parent owner / same-process SDK child starts first | No top-level Hook requests; do not bind child session to parent Tab. |
+| Duplicate terminal event / old sequence / older run / retired instance | Respond 204 without invoking any sink. |
+| Malformed modern Pi metadata / metadata on another source | Respond 400; do not deliver. |
+| Escape or abort / final error / error followed by successful retry | Interrupt / StopFailure / Stop respectively; no premature success or failure. |
+| Session switch / reload / stop-only installation | Keep valid root binding and monotonic delivery; do not permanently mute later runs. |
 
 ### 5. Good/Base/Bad Cases
 
@@ -1055,12 +1081,16 @@ Generated reporter deadline: HOOK_TIMEOUT_MS = 1_000
 
 ### 6. Tests Required
 
-- Rust: full install reports `HookInstallStatus::Installed`, contains `session_start`, `agent_start`, and `agent_settled`, and does not contain `before_agent_start`.
+- Rust: full install reports `HookInstallStatus::Installed`, contains the lifecycle listeners, and has exactly one outward `UserPromptSubmit` call despite local `before_agent_start` tracking.
 - Rust: one selected module reports `HookInstallStatus::PartialInstalled`.
 - Rust: install against an unowned same-name extension returns `pi_extension_conflict` and preserves exact content.
 - Rust: install then uninstall removes the marker-owned extension.
 - Rust: generated Pi extension source uses `void postHookEvent` for every lifecycle mapping, contains `AbortController` and `HOOK_TIMEOUT_MS = 1_000`, and contains no `await postHookEvent`.
 - TypeScript: type-check after frontend status or localized error handling changes.
+- Node: `piHookLifecycle.test.mjs` executes the generated template; cover nested process/SDK isolation including early SDK startup, duplicate/new runs, abort/failure/retry result, busy/pending work, reload/switch/stop-only, incomplete env and network timeout. `PI_HOOK_BASELINE=1` intentionally demonstrates failures against the old HEAD template before this fix.
+- Optional SDK integration: install `@earendil-works/pi-coding-agent@1.2.0` in an isolated directory and set `PI_SDK_DIR` for `piHookSdk.test.mjs`; no user config or real model requests. Verify tool cycles, retry, compaction, queued follow-up, before-settle continuation, deferred new runs and final result classification. Missing SDK is reported as skipped, never as an executed integration pass.
+- Rust: admission and real loopback HTTP tests verify that rejected requests cause zero sink calls, cancellation/failure pass the Pi whitelist, newer runs work and non-Pi/legacy compatibility remains. Third-party formatter tests verify shared run-ended text and silent Interrupt.
+- Frontend: `piHookNotification.test.mjs` executes App formatters in both languages; WSL identity and existing Kimi/OpenCode/Tab-binding regressions remain passing.
 - Manual: verify Hook settings in `zh-CN`, `zh-TW`, and `en-US`, then start one Pi run and confirm exactly one running transition.
 
 ### 7. Wrong vs Correct
@@ -1097,7 +1127,9 @@ pi.on("agent_start", reportRunning);
 
 ```typescript
 pi.on("agent_start", (_event, ctx) => {
-  void postHookEvent("UserPromptSubmit", readSessionId(ctx));
+  if (!owns(ctx) || runtime.reportedRunning) return;
+  runtime.reportedRunning = true;
+  void postHookEvent("UserPromptSubmit");
 });
 ```
 

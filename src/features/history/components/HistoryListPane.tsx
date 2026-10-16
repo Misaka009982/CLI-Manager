@@ -78,6 +78,7 @@ interface HistoryListPaneProps {
   selectionMode: boolean;
   selectedCount: number;
   deletionPlan: HistoryDeletionPlan;
+  deletingSessions: boolean;
   allVisibleSelected: boolean;
   selectedSessionKeys: Set<string>;
   smartTitleInFlightSessionKeys: ReadonlySet<string>;
@@ -358,6 +359,7 @@ export function HistoryListPane({
   selectionMode,
   selectedCount,
   deletionPlan,
+  deletingSessions,
   allVisibleSelected,
   selectedSessionKeys,
   smartTitleInFlightSessionKeys,
@@ -991,7 +993,7 @@ export function HistoryListPane({
               <button
                 type="button"
                 onClick={onDeleteSelected}
-                disabled={deletionPlan.sessionKeys.length === 0 || deletionPlan.blockedReason !== null}
+                disabled={deletingSessions || deletionPlan.sessionKeys.length === 0 || deletionPlan.blockedReason !== null}
                 title={bulkDeletionErrorKey ? t(bulkDeletionErrorKey) : undefined}
                 className="ui-btn ui-btn-destructive min-w-0 flex-1 px-1.5 py-0.5 text-[10px]"
               >
@@ -1274,7 +1276,7 @@ export function HistoryListPane({
                             onDeleteSession(row.item);
                           }}
                           onKeyDown={(event) => event.stopPropagation()}
-                          disabled={deletionBlockReason !== null}
+                          disabled={deletingSessions || deletionBlockReason !== null}
                           className="ui-history-row-delete relative z-10 disabled:cursor-not-allowed disabled:opacity-40"
                           aria-label={t("history.deleteSessionNamed", { title: sessionDisplayTitle })}
                           title={deletionErrorKey ? t(deletionErrorKey) : t("history.deleteSession")}
@@ -1360,7 +1362,7 @@ export function HistoryListPane({
                 </span>
               </button>
             ) : null}
-            <button className="context-menu-item danger" role="menuitem" onClick={handleContextMenuDelete}>
+            <button className="context-menu-item danger" role="menuitem" disabled={deletingSessions} onClick={handleContextMenuDelete}>
               <Trash2 size={13} aria-hidden="true" />
               <span>{t("common.delete")}</span>
             </button>

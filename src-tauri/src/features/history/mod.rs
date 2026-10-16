@@ -93,6 +93,7 @@ use conversion::{
 };
 mod deletion;
 use deletion::{delete_session_file, is_single_file_delete_source};
+mod codex_deletion;
 mod roots;
 use roots::{
     apply_codex_thread_name, codex_thread_name_index, list_subagent_transcript_files,
@@ -571,8 +572,8 @@ pub async fn history_convert_session(
     Ok(result)
 }
 
+// 校验来源及写入锁后删除；Codex 返回实际后代路径，其余来源保留 null 返回语义。
 #[tauri::command]
-// 校验来源及写入锁后删除对应原生会话，并使历史索引失效。
 pub async fn history_delete_session(
     file_path: String,
     claude_config_dir: Option<String>,
@@ -581,10 +582,12 @@ pub async fn history_delete_session(
     kimi_config_dir: Option<String>,
     source: String,
     project_key: String,
-) -> Result<(), String> {
+) -> Result<Option<Vec<String>>, String> {
     let source = source.trim().to_lowercase();
     if source == "opencode" {
-        return delete_opencode_session_from_locator(&file_path).await;
+        return delete_opencode_session_from_locator(&file_path)
+            .await
+            .map(|_| None);
     }
     tokio::task::spawn_blocking(move || {
         let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root)
@@ -597,6 +600,15 @@ pub async fn history_delete_session(
         let file_ref =
             validate_session_file_ref_for_deletion(&file_path, &source, &project_key, &roots)?;
         ensure_source_mutation_unlocked(&source)?;
+        if source == "codex" {
+            let deleted_paths = codex_deletion::delete_codex_session_with_backup_root(
+                &file_ref,
+                &resolve_codex_history_root(&roots),
+                &super::history_backup::default_backup_root()?,
+            )?;
+            invalidate_history_caches();
+            return Ok(Some(deleted_paths));
+        }
         if source == "kimi" {
             kimi::delete_kimi_session_tree(&file_ref, &kimi::resolve_kimi_history_root(&roots))?;
         } else if source == "grok" {
@@ -607,7 +619,7 @@ pub async fn history_delete_session(
             delete_session_tree(&file_ref)?;
         }
         invalidate_history_caches();
-        Ok(())
+        Ok(None)
     })
     .await
     .map_err(|err| err.to_string())?

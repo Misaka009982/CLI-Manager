@@ -3,6 +3,12 @@
   box-shadow: 0 0 0 2px var(--interactive-focus-ring);
 }
 
+/* 页面外壳保留程序化焦点，不将 Esc 切换出的浏览器原生轮廓绘制为整页边框。 */
+#main-content:focus,
+.ui-workspace-settings-dialog:focus {
+  outline: none;
+}
+
 :where(
   button,
   [role="button"],

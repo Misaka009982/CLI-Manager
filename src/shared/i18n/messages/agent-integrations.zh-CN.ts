@@ -1,4 +1,7 @@
+import piHookMessages from "./pi-hook.json";
+
 export const zh = {
+  ...piHookMessages["zh-CN"],
   "remoteHandoff.toast.lockedSession": "此会话正在远程托管，请先解除托管。",
   "remoteHandoff.toast.started": "会话已交给远程平台托管",
   "remoteHandoff.toast.startFailed": "远程托管失败",

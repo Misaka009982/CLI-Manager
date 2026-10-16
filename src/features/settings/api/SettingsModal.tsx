@@ -251,14 +251,22 @@ function isLikelyMacOs() {
  *
  * Mantine `Modal`（`role="dialog"` + `aria-modal`）与 Radix `Dialog` 都在捕获阶段处理 Escape，
  * 早于设置页挂在 document 上的冒泡监听；两者都不会 stopPropagation，
- * 因此设置页必须自己判断「Escape 是否已经被上层弹框接管」，否则会连带整个设置页一起关掉。
+ * keepMounted 的隐藏抽屉不拥有 Escape；事件路径仍保留已在捕获阶段关闭的弹框，
+ * 因此即使关闭动画为零，也不能让同一次 Escape 连带关掉设置页。
  */
-function hasOverlayAboveSettings(settingsDialog: HTMLElement | null): boolean {
+function hasOverlayAboveSettings(settingsDialog: HTMLElement | null, event: KeyboardEvent): boolean {
   if (!settingsDialog) return false;
-  const layers = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+  const selector = '[role="dialog"], [role="alertdialog"]';
+  if (event.composedPath().some((node) =>
+    node instanceof HTMLElement && node !== settingsDialog && node.matches(selector),
+  )) return true;
+
+  const layers = document.querySelectorAll<HTMLElement>(selector);
   for (const layer of Array.from(layers)) {
-    // 如果 layer 不是设置页 dialog 本身，也不是其后代元素，说明是上层弹框
-    if (layer !== settingsDialog && !settingsDialog.contains(layer)) {
+    if (layer === settingsDialog || layer.contains(settingsDialog)) continue;
+    // 布局矩形同时排除自身或祖先 display:none；透明的退出动画仍保留弹层归属。
+    const { visibility } = window.getComputedStyle(layer);
+    if (layer.getClientRects().length > 0 && visibility !== "hidden" && visibility !== "collapse") {
       return true;
     }
   }
@@ -316,9 +324,10 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
   useEffect(() => {
     if (!mounted || closing) return;
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.isComposing) return;
+      // 长按 Esc 不能在子窗关闭后继续穿透；下一次独立按键才属于设置页。
+      if (event.key !== "Escape" || event.repeat || event.isComposing || event.defaultPrevented) return;
       // 上层还有弹框（供应商维护、SSH 主机维护、插件安装等）时，Escape 归它处理，设置页不参与
-      if (hasOverlayAboveSettings(dialogRef.current)) return;
+      if (hasOverlayAboveSettings(dialogRef.current, event)) return;
       event.preventDefault();
       requestClose("escape");
     };

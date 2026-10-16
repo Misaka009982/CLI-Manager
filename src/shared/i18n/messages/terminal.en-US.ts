@@ -1,6 +1,11 @@
 import type { zh } from "./terminal.zh-CN";
 
 export const en: Record<keyof typeof zh, string> = {
+  "terminal.layoutLock.lock": "Lock terminal layout",
+  "terminal.layoutLock.unlockLayout": "Unlock terminal layout",
+  "terminal.layoutLock.blocked": "Layout is locked",
+  "terminal.layoutLock.unlock": "Unlock",
+  "terminal.layoutLock.unlockHint": "Layout is locked. Click to unlock",
 
   "termStats.screenshot": "Copy full statistics as image",
   "termStats.screenshotBusy": "Creating statistics image…",

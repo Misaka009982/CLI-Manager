@@ -227,6 +227,30 @@ impl CcConnectManager {
         Self::default()
     }
 
+    // 保持操作锁至切换请求落盘；启动、受管进程或授权状态未清理时拒绝，不停止用户任务。
+    pub(crate) fn data_storage_idle_guard(&self) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+        let operation = self
+            .operation
+            .try_lock()
+            .map_err(|_| "data_storage_tasks_active".to_string())?;
+        let process = self
+            .process
+            .lock()
+            .map_err(|_| "data_storage_tasks_active".to_string())?;
+        if process.starting || process.process.is_some() {
+            return Err("data_storage_tasks_active".to_string());
+        }
+        drop(process);
+        let authorization = self
+            .weixin_authorization
+            .lock()
+            .map_err(|_| "data_storage_tasks_active".to_string())?;
+        if matches!(authorization.as_ref(), Some(WeixinAuthorizationState::Running(_))) {
+            return Err("data_storage_tasks_active".to_string());
+        }
+        Ok(operation)
+    }
+
     // 按需创建轮转日志写入器并缓存在共享槽位。
     fn ensure_log_writer(&self) -> Result<(), String> {
         let mut writer = self

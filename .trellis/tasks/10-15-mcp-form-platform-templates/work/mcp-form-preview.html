@@ -1,0 +1,152 @@
+<div id="mcp-form-preview" class="viz-dotted-background" aria-label="MCP 通用表单设计">
+  <section class="mcp-window" aria-label="添加 MCP">
+    <header class="mcp-header"><div><span class="mcp-eyebrow">CLI-MANAGER / MCP</span><h2>添加 MCP</h2></div><span class="mcp-caption">配置工具连接</span></header>
+    <div class="mcp-body">
+      <section class="mcp-section" aria-label="配置模板">
+        <div class="mcp-section-heading"><label for="mcp-template">配置模板</label><span class="mcp-caption">可选 · 所有字段均可编辑</span></div>
+        <select id="mcp-template">
+          <option value="custom">通用</option>
+          <option value="baizhi">百智</option>
+          <option value="modelscope">魔搭</option>
+          <option value="smithery">Smithery</option>
+          <option value="composio">Composio</option>
+        </select>
+        <div class="mcp-template-info" hidden><span data-description></span><a data-docs target="_blank" rel="noopener noreferrer">接入说明 ↗</a></div>
+        <div class="mcp-undo" hidden><span>已应用模板</span><button type="button" data-action="undo">撤销</button></div>
+      </section>
+      <div class="mcp-field"><label for="mcp-name">名称 <span class="mcp-required">*</span></label><input id="mcp-name" data-field="name" placeholder="例如 my-mcp" autocomplete="off" spellcheck="false"></div>
+      <section class="mcp-section" aria-label="连接配置">
+        <div class="mcp-section-heading"><span>连接配置</span><div class="mcp-segment" role="group" aria-label="编辑方式"><button type="button" data-view="form" aria-pressed="true">表单</button><button type="button" data-view="json" aria-pressed="false">JSON</button></div></div>
+        <div data-form-view>
+          <div class="mcp-field"><span id="mcp-transport-label">连接方式</span><div class="mcp-segment mcp-transport" role="group" aria-labelledby="mcp-transport-label"><button type="button" data-transport="stdio" aria-pressed="true">本地命令 <span class="mcp-caption">stdio</span></button><button type="button" data-transport="http" aria-pressed="false">HTTP</button><button type="button" data-transport="sse" aria-pressed="false">SSE</button></div></div>
+          <div data-stdio>
+            <div class="mcp-field"><label for="mcp-command">命令 <span class="mcp-required">*</span></label><input id="mcp-command" data-field="command" placeholder="例如 npx、uvx 或程序路径" autocomplete="off" spellcheck="false"><span class="mcp-caption">只填写程序，启动参数在下方逐项添加。</span></div>
+            <div class="mcp-field"><div class="mcp-row-heading"><span>参数</span><span class="mcp-caption">按显示顺序传入</span></div><div data-rows="args"></div><button type="button" class="mcp-add" data-add="args">＋ 添加参数</button></div>
+            <div class="mcp-field"><span>环境变量</span><div data-rows="env"></div><button type="button" class="mcp-add" data-add="env">＋ 添加环境变量</button></div>
+            <div class="mcp-field"><label for="mcp-cwd">工作目录 <span class="mcp-caption">可选</span></label><input id="mcp-cwd" data-field="cwd" placeholder="留空使用默认工作目录" autocomplete="off" spellcheck="false"></div>
+          </div>
+          <div data-network hidden>
+            <div class="mcp-field"><label for="mcp-url">服务地址 <span class="mcp-required">*</span></label><input id="mcp-url" data-field="url" placeholder="https://your-server.example/mcp" autocomplete="off" spellcheck="false"></div>
+            <div class="mcp-field"><div class="mcp-row-heading"><span>请求头</span><span class="mcp-caption">名称支持自动补全</span></div><div data-rows="headers"></div><button type="button" class="mcp-add" data-add="headers">＋ 添加请求头</button></div>
+          </div>
+        </div>
+        <div data-json-view hidden><label for="mcp-json" class="mcp-caption">单个 MCP 服务配置</label><textarea id="mcp-json" spellcheck="false" aria-label="MCP JSON 配置"></textarea></div>
+      </section>
+      <div class="mcp-message" role="status" aria-live="polite" hidden></div>
+    </div>
+    <footer class="mcp-footer"><span class="mcp-caption">添加后，在列表选择 CLI 并保存配置</span><div><button type="button" data-action="cancel">取消</button><button type="button" class="mcp-primary" data-action="save">添加</button></div></footer>
+  </section>
+</div>
+<style>
+#mcp-form-preview{--mcp-bg:light-dark(#ffffff,#24283b);--mcp-input:light-dark(#f9f9fb,#1a1b26);--mcp-fg:light-dark(#2e3336,#c0caf5);--mcp-muted:light-dark(#5b6063,#bec8ef);--mcp-line:light-dark(#d9dde3,#414964);--mcp-accent:light-dark(#c46a2d,#7aa2f7);--mcp-on-accent:light-dark(#ffffff,#101827);--mcp-soft:light-dark(#f8eee5,#303b58);--mcp-error:light-dark(#b42318,#ff9999);--mcp-gap:18px;padding:16px 10px;box-sizing:border-box;font-family:system-ui,'Segoe UI','Microsoft YaHei',sans-serif;font-size:14px;color:var(--mcp-fg)}
+#mcp-form-preview *{box-sizing:border-box}
+#mcp-form-preview [hidden]{display:none!important}
+#mcp-form-preview .mcp-window{max-width:760px;margin:auto;border:1px solid var(--mcp-line);border-radius:14px;background:var(--mcp-bg);box-shadow:0 10px 35px light-dark(#14202c12,#00000033);overflow:visible}
+#mcp-form-preview .mcp-header{padding:20px 22px 16px;border-bottom:1px solid var(--mcp-line);display:flex;justify-content:space-between;align-items:center;gap:12px}
+#mcp-form-preview h2{font-size:19px;font-weight:600;line-height:1.4;margin:4px 0 0}
+#mcp-form-preview .mcp-eyebrow{font-size:10px;letter-spacing:.09em;color:var(--mcp-muted)}
+#mcp-form-preview .mcp-caption{font-size:12px;color:var(--mcp-muted);font-weight:400;line-height:1.5}
+#mcp-form-preview .mcp-body{padding:20px 22px;display:flex;flex-direction:column;gap:var(--mcp-gap)}
+#mcp-form-preview .mcp-section{display:flex;flex-direction:column;gap:12px}
+#mcp-form-preview .mcp-section-heading,#mcp-form-preview .mcp-row-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+#mcp-form-preview .mcp-section-heading>span:first-child,#mcp-form-preview .mcp-section-heading>label{font-weight:600}
+#mcp-form-preview button{font:inherit;font-size:13px;border:1px solid var(--mcp-line);background:var(--mcp-bg);color:var(--mcp-fg);border-radius:7px;min-height:32px;padding:5px 12px;transition:background-color 140ms,border-color 140ms}
+#mcp-form-preview button:hover{background:var(--mcp-input)}
+#mcp-form-preview button[aria-pressed=true]{border-color:var(--mcp-accent);background:var(--mcp-soft);color:var(--mcp-fg);box-shadow:inset 0 0 0 .5px var(--mcp-accent)}
+#mcp-form-preview .mcp-field{display:flex;flex-direction:column;gap:7px;margin:0 0 var(--mcp-gap)}
+#mcp-form-preview .mcp-body>.mcp-field,#mcp-form-preview [data-stdio]>.mcp-field:last-child,#mcp-form-preview [data-network]>.mcp-field:last-child{margin-bottom:0}
+#mcp-form-preview input,#mcp-form-preview textarea{display:block;width:100%;min-width:0;font:13px/1.5 Consolas,'SFMono-Regular','Microsoft YaHei',monospace;color:var(--mcp-fg);background:var(--mcp-input);border:1px solid var(--mcp-line);border-radius:7px;padding:8px 10px;min-height:36px}
+#mcp-form-preview select{display:block;width:100%;min-width:0;font:inherit;color:var(--mcp-fg);background:var(--mcp-input);border:1px solid var(--mcp-line);border-radius:7px;padding:8px 10px;min-height:36px}
+#mcp-form-preview option{color:var(--mcp-fg);background:var(--mcp-bg)}
+#mcp-form-preview input::placeholder,#mcp-form-preview textarea::placeholder{color:var(--mcp-muted);opacity:.85}
+#mcp-form-preview input:focus-visible,#mcp-form-preview textarea:focus-visible,#mcp-form-preview select:focus-visible,#mcp-form-preview button:focus-visible,#mcp-form-preview a:focus-visible{outline:2px solid var(--mcp-accent);outline-offset:2px}
+#mcp-form-preview .mcp-required{color:var(--mcp-error)}
+#mcp-form-preview .mcp-segment{display:inline-flex;align-self:flex-start;border-radius:8px;background:var(--mcp-input);padding:3px;gap:2px}
+#mcp-form-preview .mcp-segment button{border-color:transparent;min-height:28px;padding:4px 11px;background:transparent;box-shadow:none}
+#mcp-form-preview .mcp-segment button[aria-pressed=true]{background:var(--mcp-bg);border-color:var(--mcp-line);box-shadow:0 1px 3px light-dark(#00000010,#00000033)}
+#mcp-form-preview .mcp-segment .mcp-caption{margin-left:4px}
+#mcp-form-preview .mcp-add{align-self:flex-start;padding:2px 0;min-height:27px;border:0;color:var(--mcp-muted);background:transparent}
+#mcp-form-preview .mcp-add:hover{color:var(--mcp-accent);background:transparent}
+#mcp-form-preview [data-rows]{display:flex;flex-direction:column;gap:8px}
+#mcp-form-preview [data-rows]:empty{display:none}
+#mcp-form-preview .mcp-row{display:grid;grid-template-columns:minmax(0,1fr) 30px;align-items:start;gap:8px}
+#mcp-form-preview .mcp-pair{grid-template-columns:minmax(130px,.8fr) minmax(0,1.5fr) 30px}
+#mcp-form-preview .mcp-remove{padding:3px;border:0;font-size:20px;min-height:36px;background:transparent;color:var(--mcp-muted)}
+#mcp-form-preview .mcp-remove:hover{color:var(--mcp-error)}
+#mcp-form-preview .mcp-key-wrap{position:relative;min-width:0}
+#mcp-form-preview .mcp-suggestions{position:absolute;z-index:50;top:calc(100% + 5px);left:0;width:max(100%,245px);max-width:min(360px,75vw);padding:5px;background:var(--mcp-bg);border:1px solid var(--mcp-line);border-radius:9px;box-shadow:0 8px 22px light-dark(#14202c24,#00000060)}
+#mcp-form-preview .mcp-suggestions button{display:block;width:100%;text-align:left;border:0;padding:8px;white-space:normal}
+#mcp-form-preview .mcp-suggestions button[aria-selected=true]{background:var(--mcp-soft)}
+#mcp-form-preview .mcp-suggestions small{display:block;color:var(--mcp-muted);font-size:11px;margin-top:2px}
+#mcp-form-preview .mcp-template-info{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:8px;background:var(--mcp-input);font-size:12px;line-height:1.6;color:var(--mcp-muted)}
+#mcp-form-preview a,#mcp-form-preview .mcp-undo button{color:var(--mcp-accent);white-space:nowrap}
+#mcp-form-preview .mcp-undo{font-size:12px;display:flex;gap:8px;align-items:center;color:var(--mcp-muted)}
+#mcp-form-preview .mcp-undo button{border:0;padding:0 5px;min-height:22px;background:transparent}
+#mcp-form-preview textarea{min-height:330px;resize:vertical;white-space:pre;tab-size:2;margin-top:8px}
+#mcp-form-preview .mcp-message{padding:10px 12px;border:1px solid var(--mcp-line);border-radius:8px;font-size:12px;background:var(--mcp-input);line-height:1.6}
+#mcp-form-preview .mcp-message[data-error=true]{color:var(--mcp-error);border-color:var(--mcp-error)}
+#mcp-form-preview .mcp-footer{border-top:1px solid var(--mcp-line);padding:14px 22px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+#mcp-form-preview .mcp-footer>div{display:flex;gap:8px;margin-left:auto}
+#mcp-form-preview .mcp-primary{background:var(--mcp-accent);color:var(--mcp-on-accent);border-color:var(--mcp-accent);min-width:72px}
+#mcp-form-preview .mcp-primary:hover{background:var(--mcp-accent);filter:brightness(1.06)}
+@media(max-width:560px){#mcp-form-preview{padding:8px 0}#mcp-form-preview .mcp-header,#mcp-form-preview .mcp-body,#mcp-form-preview .mcp-footer{padding:16px}#mcp-form-preview .mcp-pair{grid-template-columns:minmax(0,1fr) 30px}#mcp-form-preview .mcp-pair .mcp-key-wrap{grid-column:1;grid-row:1}#mcp-form-preview .mcp-pair>input{grid-column:1;grid-row:2}#mcp-form-preview .mcp-pair>.mcp-remove{grid-column:2;grid-row:1 / span 2}#mcp-form-preview .mcp-header>.mcp-caption{display:none}#mcp-form-preview .mcp-template-info{flex-direction:column}#mcp-form-preview .mcp-footer>.mcp-caption{max-width:100%}}
+@media(prefers-reduced-motion:reduce){#mcp-form-preview button{transition:none}}
+</style>
+<script>
+(() => {
+  const root = document.getElementById('mcp-form-preview');
+  const $ = selector => root.querySelector(selector);
+  const clone = value => JSON.parse(JSON.stringify(value));
+  let serial = 0;
+  const row = (key='', value='') => ({id:'row-'+(++serial),key,value});
+  const blank = () => ({name:'',transport:'stdio',command:'',args:[],env:[],cwd:'',url:'',headers:[],extras:{}});
+  let draft = blank(), activeTemplate = 'custom', view = 'form', previous = null, caches = {};
+  const templates = {
+    custom:{name:'',description:'',url:'',docs:''},
+    baizhi:{name:'baizhi',description:'固定服务地址已填好，在 Authorization 值中填写 Bearer 和自己的 API Key。',url:'https://agent-toolkit.app.baizhi.cloud/mcp',docs:'https://github.com/chaitin/baizhi-agent-toolkit'},
+    modelscope:{name:'modelscope-mcp',description:'粘贴所选服务页面提供的实际 MCP 地址，鉴权按该服务要求填写。',url:'',docs:'https://modelscope.cn/mcp'},
+    smithery:{name:'smithery',description:'填写已配置连接的 namespace MCP 地址；按目标 CLI 的提示完成授权。',url:'',docs:'https://smithery.ai/docs/use/connect'},
+    composio:{name:'composio',description:'使用 Connect 入口，后续在支持的 CLI 中完成账号和应用授权。',url:'https://connect.composio.dev/mcp',docs:'https://docs.composio.dev/docs/composio-connect'}
+  };
+  const names = {
+    env:[['HTTP_PROXY','HTTP 代理地址'],['HTTPS_PROXY','HTTPS 代理地址'],['NO_PROXY','不经过代理的地址列表']],
+    headers:[['Authorization','身份认证信息，具体格式由服务决定'],['Accept','客户端接受的响应类型'],['Content-Type','请求内容类型'],['X-API-Key','API 密钥，仅适用于支持它的服务']]
+  };
+  const settings = {appearance:'system',density:'compact'};
+  const appearance = () => {root.style.colorScheme=settings.appearance==='system'?'inherit':settings.appearance;root.style.setProperty('--mcp-gap',settings.density==='compact'?'18px':'24px');};
+  function remember() {if(window.openai?.setWidgetState) window.openai.setWidgetState({modelContent:{template:activeTemplate,transport:draft.transport},privateContent:{appearance:settings.appearance,density:settings.density}}).catch(()=>{});}
+  function message(text='', error=false) {const el=$('.mcp-message');el.textContent=text;el.hidden=!text;el.dataset.error=String(error);el.setAttribute('role',error?'alert':'status');}
+  function pack() {
+    const result={...draft.extras};
+    for(const name of ['command','args','cwd','url','type','headers','env']) delete result[name];
+    const map=items => Object.fromEntries(items.filter(item=>item.key).map(item=>[item.key,item.value]));
+    if(draft.transport==='stdio'){result.command=draft.command;if(draft.args.length)result.args=draft.args.map(item=>item.value);if(draft.env.length)result.env=map(draft.env);if(draft.cwd)result.cwd=draft.cwd;}
+    else {result.type=draft.transport;result.url=draft.url;if(draft.headers.length)result.headers=map(draft.headers);if(draft.env.length)result.env=map(draft.env);}
+    return {mcpServers:{[draft.name||'my-mcp']:result}};
+  }
+  function pairsValid(){for(const group of ['env','headers']){const seen=new Set();for(const item of draft[group]){if(!item.key&&item.value){message('请先填写键值行的名称。',true);return false;}if(!item.key)continue;const key=group==='headers'?item.key.toLowerCase():item.key;if(seen.has(key)){message('存在重复名称：'+item.key,true);return false;}seen.add(key);}}return true;}
+  function readJson(){try{const data=JSON.parse($('#mcp-json').value);const entries=Object.entries(data.mcpServers||{});if(entries.length!==1||Object.keys(data).length!==1)throw Error();const [name,value]=entries[0];if(!value||Array.isArray(value)||typeof value!=='object')throw Error();if(value.args&&!Array.isArray(value.args))throw Error();const pairs=value=>Object.entries(value||{}).map(([key,v])=>{if(typeof v!=='string')throw Error();return row(key,v);});const next=blank();Object.assign(next,{name,transport:value.type==='sse'?'sse':value.url?'http':'stdio',command:value.command||'',cwd:value.cwd||'',url:value.url||'',args:(value.args||[]).map(v=>{if(typeof v!=='string')throw Error();return row('',v);}),env:pairs(value.env),headers:pairs(value.headers),extras:value});draft=next;return true;}catch{message('请保留一个有效的 mcpServers 服务条目。当前 JSON 已保留。',true);return false;}}
+  function chooseTemplate(id, undoable=true){if(view==='json'&&!readJson())return; if(id==='custom'){activeTemplate=id;render();remember();return;}if(undoable)previous={draft:clone(draft),template:activeTemplate,caches:clone(caches)};const oldDefault=templates[activeTemplate].name;const chosenName=draft.name&&draft.name!==oldDefault?draft.name:templates[id].name;activeTemplate=id;draft=blank();Object.assign(draft,{name:chosenName,transport:'http',url:templates[id].url});if(id==='baizhi')draft.headers=[row('Authorization','')];caches={};message();render();remember();}
+  function closeSuggestions(){root.querySelectorAll('.mcp-suggestions').forEach(el=>el.remove());root.querySelectorAll('[role=combobox]').forEach(el=>{el.setAttribute('aria-expanded','false');el.removeAttribute('aria-activedescendant');});}
+  function addSuggestions(input,wrap,group,item){
+    input.setAttribute('role','combobox');input.setAttribute('aria-autocomplete','list');input.setAttribute('aria-expanded','false');let found=[],highlight=-1,menu=null;
+    const select=index=>{if(!found[index])return;item.key=found[index][0];input.value=item.key;closeSuggestions();input.focus();};
+    const show=()=>{closeSuggestions();const q=input.value.toLowerCase();const used=draft[group].filter(r=>r.id!==item.id).map(r=>group==='headers'?r.key.toLowerCase():r.key);found=names[group].filter(([name])=>name.toLowerCase().includes(q)&&!used.includes(group==='headers'?name.toLowerCase():name)).sort((a,b)=>Number(b[0].toLowerCase().startsWith(q))-Number(a[0].toLowerCase().startsWith(q))).slice(0,6);if(!found.length)return;highlight=-1;menu=document.createElement('div');menu.className='mcp-suggestions';menu.id='suggest-'+item.id;menu.setAttribute('role','listbox');input.setAttribute('aria-controls',menu.id);input.setAttribute('aria-expanded','true');found.forEach(([name,description],i)=>{const button=document.createElement('button');button.type='button';button.id=menu.id+'-'+i;button.setAttribute('role','option');button.setAttribute('aria-selected','false');const title=document.createElement('span');title.textContent=name;const hint=document.createElement('small');hint.textContent=description;button.append(title,hint);button.addEventListener('mousedown',e=>e.preventDefault());button.addEventListener('click',()=>select(i));menu.append(button);});wrap.append(menu);};
+    input.addEventListener('focus',show);input.addEventListener('input',show);input.addEventListener('blur',()=>setTimeout(closeSuggestions,100));
+    input.addEventListener('keydown',event=>{if(event.isComposing)return;if(event.key==='Escape'||event.key==='Tab'){closeSuggestions();if(event.key==='Escape'){event.preventDefault();event.stopPropagation();}return;}if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();if(!menu?.isConnected)show();if(!found.length)return;highlight=(highlight+(event.key==='ArrowDown'?1:-1)+found.length)%found.length;menu.querySelectorAll('button').forEach((button,i)=>button.setAttribute('aria-selected',String(i===highlight)));input.setAttribute('aria-activedescendant',menu.id+'-'+highlight);}if(event.key==='Enter'&&menu?.isConnected){event.preventDefault();event.stopPropagation();if(highlight>=0)select(highlight);}});
+  }
+  function renderRows(group){const host=$('[data-rows="'+group+'"]');host.replaceChildren();draft[group].forEach((item,index)=>{const el=document.createElement('div');el.className='mcp-row'+(group==='args'?'':' mcp-pair');if(group!=='args'){const wrap=document.createElement('div');wrap.className='mcp-key-wrap';const key=document.createElement('input');key.value=item.key;key.placeholder='名称';key.setAttribute('aria-label',(group==='env'?'环境变量':'请求头')+'名称 '+(index+1));key.autocomplete='off';key.spellcheck=false;key.addEventListener('input',()=>item.key=key.value);wrap.append(key);addSuggestions(key,wrap,group,item);el.append(wrap);}const value=document.createElement('input');value.value=item.value;value.placeholder=group==='args'?'例如 --port 或 3000':group==='headers'&&item.key==='Authorization'&&activeTemplate==='baizhi'?'Bearer <你的 API Key>':'值';value.setAttribute('aria-label',(group==='args'?'参数':group==='env'?'环境变量值':'请求头值')+' '+(index+1));value.autocomplete='off';value.spellcheck=false;value.addEventListener('input',()=>item.value=value.value);el.append(value);const remove=document.createElement('button');remove.type='button';remove.className='mcp-remove';remove.textContent='×';remove.setAttribute('aria-label','删除'+(group==='args'?'参数':group==='env'?'环境变量':'请求头')+' '+(index+1));remove.addEventListener('click',()=>{draft[group].splice(index,1);renderRows(group);const inputs=host.querySelectorAll('input');(inputs[Math.min(index*(group==='args'?1:2),inputs.length-1)]||$('[data-add="'+group+'"]')).focus();});el.append(remove);host.append(el);});}
+  function render(){closeSuggestions();root.querySelectorAll('[data-field]').forEach(input=>input.value=draft[input.dataset.field]);$('#mcp-template').value=activeTemplate;root.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));root.querySelectorAll('[data-transport]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.transport===draft.transport)));$('[data-form-view]').hidden=view!=='form';$('[data-json-view]').hidden=view!=='json';$('[data-stdio]').hidden=draft.transport!=='stdio';$('[data-network]').hidden=draft.transport==='stdio';$('.mcp-template-info').hidden=activeTemplate==='custom';$('[data-description]').textContent=templates[activeTemplate].description;$('[data-docs]').href=templates[activeTemplate].docs;$('.mcp-undo').hidden=!previous;for(const group of ['args','env','headers'])renderRows(group);if(view==='json')$('#mcp-json').value=JSON.stringify(pack(),null,2);root.querySelectorAll('button,a,select').forEach(el=>el.classList.add('cursor-interaction'));}
+  root.querySelectorAll('[data-field]').forEach(input=>input.addEventListener('input',()=>draft[input.dataset.field]=input.value));
+  $('#mcp-template').addEventListener('change',event=>{chooseTemplate(event.currentTarget.value);$('#mcp-template').value=activeTemplate;});
+  root.querySelectorAll('[data-add]').forEach(button=>button.addEventListener('click',()=>{const group=button.dataset.add;draft[group].push(row());renderRows(group);const rows=$('[data-rows="'+group+'"]').children;rows[rows.length-1].querySelector('input').focus();}));
+  root.querySelectorAll('[data-transport]').forEach(button=>button.addEventListener('click',()=>{const next=button.dataset.transport;if(next===draft.transport)return;caches[draft.transport]=clone(draft);const name=draft.name;draft=caches[next]?clone(caches[next]):{...blank(),transport:next};draft.name=name;message();render();remember();}));
+  root.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{const next=button.dataset.view;if(view===next)return;if(next==='json'&&!pairsValid())return;if(next==='form'&&!readJson())return;view=next;$('#mcp-name').readOnly=view==='json';message();render();}));
+  $('[data-action="undo"]').addEventListener('click',()=>{if(!previous)return;draft=previous.draft;activeTemplate=previous.template;caches=previous.caches;previous=null;message();render();remember();});
+  $('[data-action="cancel"]').addEventListener('click',()=>{draft=blank();activeTemplate='custom';view='form';$('#mcp-name').readOnly=false;previous=null;caches={};render();message('已取消本次填写，可重新试用表单。');});
+  $('[data-action="save"]').addEventListener('click',()=>{if(view==='json'&&!readJson())return;if(!pairsValid())return;const field=!draft.name.trim()?'name':draft.transport==='stdio'&&!draft.command.trim()?'command':draft.transport!=='stdio'&&!draft.url.trim()?'url':null;if(field){message('请填写'+({name:'名称',command:'命令',url:'服务地址'})[field]+'。',true);if(view==='form')$('[data-field="'+field+'"]').focus();return;}if(draft.transport!=='stdio'){try{const url=new URL(draft.url);if(!['http:','https:'].includes(url.protocol))throw Error();}catch{message('请填写有效的 HTTP 或 HTTPS 服务地址。',true);return;}}if(activeTemplate==='baizhi'&&draft.transport!=='stdio'&&!draft.headers.some(r=>r.key.toLowerCase()==='authorization'&&/^Bearer\s+\S+/i.test(r.value))){message('请填写 Authorization，格式为 Bearer 加你的 API Key。',true);return;}message('配置检查通过。此设计预览不会连接服务或保存配置。');remember();});
+  function restore(saved){if(!saved)return;const p=saved.privateContent||{};if(['system','light','dark'].includes(p.appearance))settings.appearance=p.appearance;if(['compact','comfortable'].includes(p.density))settings.density=p.density;appearance();}
+  restore(window.openai?.widgetState);window.addEventListener('openai:set_globals',event=>restore(event.detail?.globals?.widgetState));appearance();render();
+  if(globalThis.Tweak){const tweak=new Tweak({container:root,onChange:()=>{appearance();remember();}});tweak.addSelect(settings,'appearance',{label:'外观',options:[{label:'跟随系统',value:'system'},{label:'浅色',value:'light'},{label:'深色',value:'dark'}]});tweak.addSelect(settings,'density',{label:'表单间距',options:[{label:'紧凑',value:'compact'},{label:'舒适',value:'comfortable'}]});}
+})();
+</script>

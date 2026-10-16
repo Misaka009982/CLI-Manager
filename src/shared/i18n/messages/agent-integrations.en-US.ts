@@ -1,6 +1,8 @@
 import type { zh } from "./agent-integrations.zh-CN";
+import piHookMessages from "./pi-hook.json";
 
 export const en: Record<keyof typeof zh, string> = {
+  ...piHookMessages["en-US"],
   "remoteHandoff.toast.lockedSession": "This session is remotely managed. Cancel the handoff first.",
   "remoteHandoff.toast.started": "Session handed off to the remote platform",
   "remoteHandoff.toast.startFailed": "Remote handoff failed",

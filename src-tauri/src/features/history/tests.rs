@@ -23,6 +23,7 @@ mod fixtures;
 use fixtures::*;
 mod conversion;
 mod deletion;
+mod codex_deletion;
 mod grok;
 mod kimi_source;
 mod opencode;

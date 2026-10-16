@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct HistoryRoots {
@@ -131,7 +131,7 @@ pub(super) struct CachedSessionComputation {
     pub(super) title: String,
     pub(super) message_count: usize,
     pub(super) branch: Option<String>,
-    pub(super) stats: SessionStatsScan,
+    pub(super) stats: Arc<SessionStatsScan>,
 }
 
 pub(super) struct SessionDetailParts {

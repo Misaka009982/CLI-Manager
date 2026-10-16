@@ -1,4 +1,4 @@
-import { pickByLanguage, type AppLanguage } from "../../../shared/i18n/index";
+import { pickByLanguage, type AppLanguage, type TranslationKey } from "../../../shared/i18n/index";
 
 export type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled" | "installed" | "unsupported";
 
@@ -11,6 +11,8 @@ export interface ToolHookSettingsStatus {
   hooksDir: string | null;
   configPath: string | null;
   featureConfigPath: string | null;
+  effectiveConfigPath?: string | null;
+  hooksTrusted?: boolean;
   status: HookInstallStatus;
   attentionScriptInstalled: boolean;
   finishedScriptInstalled: boolean;
@@ -72,4 +74,23 @@ export function getNotificationSoundErrorCode(error: unknown): string {
 
 export function formatPath(value: string | null, language: AppLanguage): string {
   return value && value.trim() ? value : pickText(language, "未选择", "Not selected");
+}
+
+export function getNotificationSoundErrorDescription(error: unknown, t: (key: TranslationKey) => string): string {
+  switch (getNotificationSoundErrorCode(error)) {
+    case "notification_sound_format_unsupported":
+    case "notification_sound_invalid_wave":
+      return t("settings.hooks.systemNotifications.sound.invalidFormat");
+    case "notification_sound_unavailable":
+    case "notification_sound_not_file":
+      return t("settings.hooks.systemNotifications.sound.unavailable");
+    case "notification_sound_too_large":
+      return t("settings.hooks.systemNotifications.sound.tooLarge");
+    case "notification_sound_path_empty":
+    case "notification_sound_path_contains_nul":
+    case "notification_sound_path_too_long":
+      return t("settings.hooks.systemNotifications.sound.invalidPath");
+    default:
+      return t("settings.hooks.systemNotifications.sound.operationFailed");
+  }
 }

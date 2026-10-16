@@ -1,3 +1,4 @@
+import { useSettingsStore } from "../../../shared/preferences/settingsStore";
 import { type CSSProperties } from "react";
 import { DragOverlay, useDndContext } from "@dnd-kit/core";
 import { type TabNotificationState } from "../state";
@@ -70,6 +71,7 @@ export function TerminalTabDragOverlay({
   themeTone: "light" | "dark";
 }) {
   const { active } = useDndContext();
+  const locked = useSettingsStore((s) => s.terminalLayoutLocked);
   const dragData = active?.data.current as TerminalDragOverlayData | undefined;
   const overlay = dragData?.overlay;
 
@@ -80,7 +82,7 @@ export function TerminalTabDragOverlay({
         dropAnimation={null}
         style={style}
       >
-        {overlay ? (
+        {overlay && !locked ? (
           <div className="ui-terminal-well ui-terminal-drag-overlay-theme" data-terminal-theme-tone={themeTone}>
             <div className="ui-terminal-pane-chrome ui-terminal-drag-overlay-chrome">
               <DragOverlayTab

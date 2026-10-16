@@ -1,5 +1,5 @@
 // __PI_MARKER__
-// CLI_MANAGER_PI_EXTENSION_VERSION:9
+// CLI_MANAGER_PI_EXTENSION_VERSION:10
 // 由 CLI-Manager 管理，请勿手动修改；如需恢复，请在 Hook 设置中重新安装。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -7,6 +7,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 // 终端一侧的问题界面要自绘才能展示每个选项的说明，ctx.ui.select 只接受字符串数组。
 import { Editor, Key, matchesKey, Text, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { randomUUID } from "node:crypto";
 
 const ENABLED = {
   sessionStart: __PI_SESSION_START__,
@@ -20,7 +21,15 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 const TERMINAL_PROMPT_INTERVAL_MS = 5_000;
 
 type DecisionKind = "question" | "questionnaire" | "permission";
-type NotifyEvent = "SessionStart" | "UserPromptSubmit" | "Notification" | "Stop" | "StopFailure";
+type NotifyEvent = "SessionStart" | "UserPromptSubmit" | "Notification" | "Stop" | "Interrupt" | "StopFailure";
+type RunOutcome = "ended" | "aborted" | "error";
+// 上报身份：实例、代际与单调序号，供后端接纳门拦截重复、迟到与已退役实例。
+interface PiBridgeIdentity {
+  instanceId: string;
+  instanceStartedAt: number;
+  sequence: number;
+  runId: number;
+}
 
 interface DecisionQuestion {
   id: string;
@@ -76,12 +85,32 @@ const QuestionnaireParams = Type.Object({
   ),
 });
 
-const sourceInstanceId = crypto.randomUUID();
+// 问答 broker 用的稳定实例标识；与后端 Pi 上报身份分开维护。
+const sourceInstanceId = randomUUID();
+// 根 Pi 写入可继承的 owner；嵌套 SDK 子进程不得接管父 Tab。不是鉴权凭据。
+const PI_OWNER_ENV = "CLI_MANAGER_PI_OWNER";
+// 同一进程内跨 reload 共享；只有持租约的根 Pi 扩展可以上报。
+interface PiBridgeState {
+  tabId: string;
+  instanceId: string;
+  instanceStartedAt: number;
+  sequence: number;
+  runId: number;
+  sessionId: string | null;
+  lease: symbol | null;
+  active: boolean;
+  reportedRunning: boolean;
+  ended: boolean;
+  outcome: RunOutcome;
+}
+const bridgeHost = globalThis as typeof globalThis & { __cliManagerPiBridge?: PiBridgeState };
 const pendingDecisions = new Map<string, string | null>();
-let activeSessionId: string | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let failureMessage: string | null = null;
 let lastEventTimestampMs = 0;
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
+// 当前持租约的实例；身份、代际与结束标记都从这里读写。
+let runtime: PiBridgeState | null = null;
 
 function nonEmpty(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -91,6 +120,62 @@ function nextEventTimestampMs(): number {
   const now = Date.now();
   lastEventTimestampMs = Math.max(now, lastEventTimestampMs + 1);
   return lastEventTimestampMs;
+}
+
+function bridgeInstanceId(): string {
+  return runtime?.instanceId ?? sourceInstanceId;
+}
+
+function bridgeSessionId(): string | null {
+  return runtime?.sessionId ?? null;
+}
+
+// 序号与代际在发出前从原状态读出并回写；同运行内单调，新代际自增 runId。
+function nextPiIdentity(): PiBridgeIdentity {
+  const state = runtime;
+  if (!state) {
+    return { instanceId: sourceInstanceId, instanceStartedAt: Date.now(), sequence: 1, runId: 0 };
+  }
+  state.sequence += 1;
+  return {
+    instanceId: state.instanceId,
+    instanceStartedAt: state.instanceStartedAt,
+    sequence: state.sequence,
+    runId: state.runId,
+  };
+}
+
+function cancelSettlement(): void {
+  if (settleTimer !== null) clearTimeout(settleTimer);
+  settleTimer = null;
+}
+
+// 嵌套子进程继承父 Tab 环境时不得重复上报，否则会与父实例争抢同一终端身份。
+function isInheritedChildProcess(tabId: string): boolean {
+  const inherited = process.env[PI_OWNER_ENV];
+  if (!inherited) return false;
+  try {
+    const owner = JSON.parse(inherited) as { tabId?: string; pid?: number };
+    return owner.tabId === tabId && owner.pid !== process.pid;
+  } catch {
+    return true;
+  }
+}
+
+// 只接收当前根 Pi 会话的事件；同进程 SDK 子会话不得替父区分内上报。
+function owns(ctx: ExtensionContext): boolean {
+  return runtime !== null && runtime.sessionId !== null && runtime.sessionId === sessionId(ctx);
+}
+
+// 开始或切换一次运行：清挂起收尾，自增代际并清除上一轮标记。
+function beginRun(): void {
+  if (!runtime) return;
+  cancelSettlement();
+  runtime.runId += 1;
+  runtime.active = true;
+  runtime.reportedRunning = false;
+  runtime.ended = false;
+  runtime.outcome = "ended";
 }
 
 function bridgeTarget(): { tabId: string; port: string; token: string } | null {
@@ -139,6 +224,7 @@ async function postJson(path: string, payload: unknown, signal?: AbortSignal): P
 async function postHook(event: NotifyEvent, message: string | null = null, heartbeat = false): Promise<void> {
   const target = bridgeTarget();
   if (!target) return;
+  const identity = nextPiIdentity();
   await postJson("/api/claude-hook", {
     tabId: target.tabId,
     source: "pi",
@@ -146,15 +232,18 @@ async function postHook(event: NotifyEvent, message: string | null = null, heart
     title: event === "SessionStart" ? "Pi Agent session started"
       : event === "UserPromptSubmit" ? "Pi Agent running"
         : event === "Notification" ? "Pi Agent waiting for a terminal answer"
-          : event === "StopFailure" ? "Pi Agent interrupted" : "Pi Agent done",
+          : event === "Interrupt" ? "Pi Agent interrupted"
+            : event === "StopFailure" ? "Pi Agent interrupted" : "Pi Agent done",
     message,
-    sessionId: activeSessionId,
+    sessionId: bridgeSessionId(),
     cwd: process.cwd(),
     wslDistroName: nonEmpty(process.env.WSL_DISTRO_NAME),
     timestamp: new Date(nextEventTimestampMs()).toISOString(),
     heartbeat,
     sourceInstanceId,
-    remoteEventId: heartbeat ? null : crypto.randomUUID(),
+    remoteEventId: heartbeat ? null : `${identity.instanceId}:${identity.sequence}`,
+    remoteSequence: identity.sequence,
+    pi: identity,
   });
 }
 
@@ -221,7 +310,7 @@ async function requestDecision(
   const target = bridgeTarget();
   const currentSessionId = sessionId(ctx);
   if (!target || !currentSessionId) return null;
-  const requestId = crypto.randomUUID();
+  const requestId = randomUUID();
   pendingDecisions.set(requestId, null);
   let response = await postJson("/api/pi-decision/open", {
     requestId,
@@ -1285,10 +1374,11 @@ let terminalPromptSpan: TerminalPromptSpan | null = null;
 let terminalPromptTimer: ReturnType<typeof setInterval> | null = null;
 let terminalPromptSequence = 0;
 
-// 每份报告独立去重，序号在发出前分配；抓住区间身份，不读可变的 activeSessionId。
+// 每份报告独立去重，序号在发出前分配；抓住区间身份，不读可变的会话 ID。
 async function postTerminalPrompt(span: TerminalPromptSpan, active: boolean): Promise<void> {
   const target = bridgeTarget();
   if (!target || terminalPromptSequence >= Number.MAX_SAFE_INTEGER) return;
+  const identity = nextPiIdentity();
   await postJson("/api/claude-hook", {
     tabId: target.tabId,
     source: "pi",
@@ -1297,9 +1387,11 @@ async function postTerminalPrompt(span: TerminalPromptSpan, active: boolean): Pr
     cwd: process.cwd(),
     wslDistroName: nonEmpty(process.env.WSL_DISTRO_NAME),
     timestamp: new Date(nextEventTimestampMs()).toISOString(),
-    remoteEventId: crypto.randomUUID(),
+    remoteEventId: `${identity.instanceId}:${identity.sequence}`,
+    remoteSequence: identity.sequence,
+    pi: identity,
     terminalPrompt: {
-      instanceId: sourceInstanceId,
+      instanceId: bridgeInstanceId(),
       id: span.id,
       sequence: ++terminalPromptSequence,
       active,
@@ -1325,7 +1417,7 @@ function beginTerminalPrompt(kind: PromptKind, title: unknown, ctx: ExtensionCon
   if (!currentSessionId || !bridgeTarget()) return;
   const text = (nonEmpty(title) ?? "").replace(/\s+/g, " ").replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
   const span: TerminalPromptSpan = {
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     sessionId: currentSessionId,
     kind,
     title: Array.from(text).slice(0, 512).join("") || null,
@@ -1361,58 +1453,121 @@ function registerPromptEvents(pi: ExtensionAPI): void {
 }
 
 export default function cliManagerHook(pi: ExtensionAPI) {
+  const target = bridgeTarget();
+  // 缺少回调环境或已被父实例认领时保持静默，不注册任何监听器。
+  if (!target || isInheritedChildProcess(target.tabId)) return;
+  const existing = bridgeHost.__cliManagerPiBridge;
+  const state: PiBridgeState = existing && existing.tabId === target.tabId
+    ? existing
+    : {
+      tabId: target.tabId,
+      instanceId: randomUUID(),
+      instanceStartedAt: Date.now(),
+      sequence: 0,
+      runId: 0,
+      sessionId: null,
+      lease: null,
+      active: false,
+      reportedRunning: false,
+      ended: false,
+      outcome: "ended",
+    };
+  bridgeHost.__cliManagerPiBridge = state;
+  process.env[PI_OWNER_ENV] = JSON.stringify({ tabId: target.tabId, pid: process.pid });
+  // 在工厂阶段就持租约，防止根 session_start 前启动的 SDK 子会话抢先认领。
+  const lease = Symbol("pi-hook-runtime");
+  if (state.lease !== null) return;
+  state.lease = lease;
+  runtime = state;
+
   const loadedDecisionBridges = new Set<string>();
   pi.on("tool_call", permissionDecision);
   // Pi 0.84.4+ 有这两个事件；老版本只是注册了永不触发的 handler，靠 installDialogMirror 兜底。
   registerPromptEvents(pi);
 
-  pi.on("session_start", async (_event, ctx) => {
+  // 生命周期 handler 保持同步返回，重活用 void 排入后台，不阻塞 Pi。
+  pi.on("session_start", (_event, ctx) => {
+    if (state.lease !== lease) return;
     suspendHeartbeatForLifecycle();
     endOfficialPrompt();
-    await cancelPendingDecisions();
+    void cancelPendingDecisions();
     loadDecisionBridges(pi, loadedDecisionBridges);
     // 会话/reload 边界上不可能有对话框还开着，顺手清掉计数，避免异常路径漏配平后长期失衡。
     mirroredDialogs = 0;
     ownDialogs = 0;
     officialSpanMirrored = false;
     installDialogMirror(ctx);
-    activeSessionId = sessionId(ctx);
+    state.sessionId = sessionId(ctx);
+    beginRun();
     if (ENABLED.sessionStart) void postHook("SessionStart");
   });
 
-  pi.on("agent_start", async (_event, ctx) => {
-    activeSessionId = sessionId(ctx);
+  // 每次运行开始前先翻转代际；同进程 SDK 子会话换绑会话身份时不会替父会话上报。
+  pi.on("before_agent_start", (_event, ctx) => {
+    if (!owns(ctx)) return;
+    beginRun();
+  });
+
+  pi.on("agent_start", (_event, ctx) => {
+    if (!owns(ctx)) return;
+    cancelSettlement();
+    if (state.ended) beginRun();
     failureMessage = null;
     if (ENABLED.running) {
-      if (mirroredDialogs === 0 && !officialSpanMirrored) void postHook("UserPromptSubmit");
+      if (!state.reportedRunning) {
+        state.reportedRunning = true;
+        if (mirroredDialogs === 0 && !officialSpanMirrored) void postHook("UserPromptSubmit");
+      }
       startHeartbeat();
     } else {
       suspendHeartbeatForLifecycle();
     }
   });
 
-  pi.on("agent_end", async (event) => {
-    const assistant = [...event.messages].reverse().find((message) => message.role === "assistant");
-    failureMessage = assistant?.role === "assistant"
-      && (assistant.stopReason === "error" || assistant.stopReason === "aborted")
-      ? nonEmpty(assistant.errorMessage) || `Pi stopped with ${assistant.stopReason}`
+  // 只采信最后一条 assistant 结果；中间失败后重试成功会覆盖 error。
+  pi.on("message_end", (event, ctx) => {
+    if (!owns(ctx) || event.message.role !== "assistant") return;
+    const reason = event.message.stopReason;
+    failureMessage = reason === "error" || reason === "aborted"
+      ? nonEmpty(event.message.errorMessage) || `Pi stopped with ${reason}`
       : null;
+    state.outcome = reason === "error" ? "error" : reason === "aborted" ? "aborted" : "ended";
   });
 
-  pi.on("agent_settled", async () => {
+  // 每次运行只收尾一次；让同步 settle 排入的新运行先启动，再确认会话确实空闲。
+  pi.on("agent_settled", (event, ctx) => {
+    if (!owns(ctx) || state.ended) return;
+    cancelSettlement();
+    const settledRunId = state.runId;
+    const settledOutcome: RunOutcome = event.aborted ? "aborted" : state.outcome;
     suspendHeartbeatForLifecycle();
     endOfficialPrompt();
-    if (ENABLED.stop) {
-      void postHook(failureMessage ? "StopFailure" : "Stop", failureMessage);
-    }
-    failureMessage = null;
+    settleTimer = setTimeout(() => {
+      settleTimer = null;
+      if (!owns(ctx) || state.runId !== settledRunId || state.ended) return;
+      if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
+      state.active = false;
+      state.ended = true;
+      if (ENABLED.stop) {
+        const stopEvent: NotifyEvent = settledOutcome === "aborted" ? "Interrupt"
+          : settledOutcome === "error" ? "StopFailure" : "Stop";
+        void postHook(stopEvent, stopEvent === "Stop" ? null : failureMessage);
+      }
+      failureMessage = null;
+    }, 0);
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", (event, ctx) => {
+    if (!owns(ctx)) return;
+    cancelSettlement();
     suspendHeartbeatForLifecycle();
     endOfficialPrompt();
-    await cancelPendingDecisions();
-    activeSessionId = null;
+    void cancelPendingDecisions();
+    // 同一扩展执行 new/resume/fork 时保留租约；只有卸载/退出才允许新工厂接管。
+    if (event.reason === "reload" || event.reason === "quit" || !event.reason) state.lease = null;
+    state.active = false;
+    state.sessionId = null;
+    state.runId += 1;
     failureMessage = null;
   });
 }

@@ -12,12 +12,13 @@ const hookSettings = [
 const broker = readFileSync(new URL("../src-tauri/src/desktop_pet_e_agent.rs", import.meta.url), "utf8");
 const hookServer = readFileSync(new URL("../src-tauri/src/features/hooks/claude.rs", import.meta.url), "utf8");
 
+// 上游 V1.4.4 的 Pi 接纳门与事件白名单必须与 fork 模板的生产行为保持一致。
 test("managed Pi extension is generated from the owned decision template", () => {
   assert.match(hookSettings, /include_str!\("\.\.\/\.\.\/\.\.\/pi_extension_template\.ts"\)/);
   assert.match(template, /__CLI_MANAGER_PI_HOOK__|__PI_MARKER__/);
   // 与 Rust 升级常量对齐，后续升版不再留下过时的固定版本断言。
   const version = hookSettings.match(/const PI_EXTENSION_VERSION: u32 = (\d+);/)?.[1];
-  assert.ok(version && Number(version) >= 9, "Pi 模板版本必须包含 WSL 身份与只读等待升级");
+  assert.ok(version && Number(version) >= 10, "Pi 模板版本必须包含 WSL 身份、只读等待与运行身份升级");
   assert.match(template, new RegExp(`CLI_MANAGER_PI_EXTENSION_VERSION:${version}\\b`));
   assert.match(template, /wslDistroName: nonEmpty\(process\.env\.WSL_DISTRO_NAME\)/);
   assert.match(hookSettings, /PI_EXTENSION_VERSION_PREFIX/);
@@ -29,7 +30,14 @@ test("managed Pi extension is generated from the owned decision template", () =>
   assert.match(template, /tools\.find\(\(tool\) => tool\.name === "questionnaire"\)/);
   assert.match(template, /isQuestionToolCompatible/);
   assert.match(template, /isQuestionnaireToolCompatible/);
-  assert.doesNotMatch(template, /before_agent_start/);
+  // 上游 V1.4.4 的运行身份与代际：根实例持租约，子会话不得替父上报。
+  assert.match(template, /pi\.on\("before_agent_start"/);
+  assert.match(template, /instanceStartedAt/);
+  assert.match(template, /runId/);
+  assert.match(template, /sequence/);
+  assert.match(template, /CLI_MANAGER_PI_OWNER/);
+  assert.match(template, /state\.lease = lease/);
+  assert.match(template, /pi: identity/);
 });
 
 test("Pi decision loop opens, polls, acknowledges, and cancels by broker epoch", () => {
@@ -95,7 +103,8 @@ test("third-party Pi dialogs are answerable from the pet and fall back to a noti
   assert.match(template, /function endMirroredDialog/);
   assert.match(template, /heartbeatRunning/);
   assert.match(template, /suspendHeartbeatForLifecycle\(\)/);
-  assert.match(hookServer, /"SessionStart" \| "UserPromptSubmit" \| "Notification" \| "Stop" \| "StopFailure"/);
+  assert.match(hookServer, /"SessionStart" \| "UserPromptSubmit" \| "Notification" \| "Stop" \| "Interrupt"/);
+  assert.match(hookServer, /"StopFailure" \| DESKTOP_PET_E_UI_PROMPT_EVENT/);
 });
 
 test("正式 UI 等待独立续报并在生命周期边界收尾", () => {
@@ -153,6 +162,7 @@ test("heartbeat and shutdown cleanup preserve lifecycle status", () => {
   assert.match(template, /nextEventTimestampMs/);
   assert.match(template, /stopHeartbeat\(\)/);
   assert.match(template, /pi\.on\("session_shutdown"/);
+  assert.match(template, /"Interrupt"/);
   assert.match(template, /"StopFailure"/);
-  assert.match(hookServer, /"SessionStart" \| "UserPromptSubmit" \| "Stop" \| "StopFailure"/);
+  assert.match(hookServer, /"SessionStart" \| "UserPromptSubmit" \| "Notification" \| "Stop"/);
 });

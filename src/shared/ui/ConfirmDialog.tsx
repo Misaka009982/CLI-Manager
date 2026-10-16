@@ -16,6 +16,8 @@ interface Props {
   confirmText?: string;
   cancelText?: string;
   danger?: boolean;
+  /** 已开始的任务不能通过取消/遮罩/Escape 假装撤销；调用方仍须同步防重入。 */
+  pending?: boolean;
   zIndex?: number;
   confirmAutoFocus?: boolean;
   contentClassName?: string;
@@ -36,6 +38,7 @@ export function ConfirmDialog({
   confirmText = "Confirm",
   cancelText = "Cancel",
   danger = false,
+  pending = false,
   zIndex,
   confirmAutoFocus = false,
   contentClassName,
@@ -49,23 +52,24 @@ export function ConfirmDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) onClose();
+        if (!next && !pending) onClose();
       }}
     >
       <DialogContent
         className={cn("max-w-[360px]", contentClassName)}
         showCloseButton={false}
+        aria-busy={pending || undefined}
         style={zIndex !== undefined ? { zIndex } : undefined}
         overlayStyle={zIndex !== undefined ? { zIndex } : undefined}
         onInteractOutside={
-          explicitCloseOnly
+          explicitCloseOnly || pending
             ? (event) => {
                 event.preventDefault();
               }
             : undefined
         }
         onEscapeKeyDown={
-          explicitCloseOnly
+          explicitCloseOnly || pending
             ? (event) => {
                 event.preventDefault();
               }
@@ -85,12 +89,13 @@ export function ConfirmDialog({
           <DialogDescription className="mt-2 mb-2">{message}</DialogDescription>
         )}
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" disabled={pending} onClick={onClose}>
             {cancelText}
           </Button>
           <Button
             ref={confirmButtonRef}
             variant={danger ? "destructive" : "default"}
+            disabled={pending}
             onClick={onConfirm}
           >
             {confirmText}

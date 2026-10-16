@@ -11,6 +11,7 @@ use std::path::Path;
 
 // 重建 Codex 托管事件，开启 hooks 特性、清理旧脚本并写回 JSON。
 pub(super) fn install_codex_hooks(codex_dir: &Path) -> Result<(), String> {
+    super::repair_duplicate_codex_hook_state_blocks(codex_dir)?;
     let exe = hook_exe_for_dir(codex_dir)?;
     let hooks_path = codex_dir.join(CODEX_HOOKS_FILE_NAME);
     let mut settings = read_json(&hooks_path)?;
@@ -44,6 +45,7 @@ pub(super) fn install_codex_hook_module(
     codex_dir: &Path,
     module: CodexHookModule,
 ) -> Result<(), String> {
+    super::repair_duplicate_codex_hook_state_blocks(codex_dir)?;
     if matches!(module, CodexHookModule::HooksFeature) {
         return ensure_codex_hooks_feature(codex_dir);
     }
@@ -358,17 +360,12 @@ pub(super) fn codex_hook_state_event_name(event: &str) -> Option<&'static str> {
     }
 }
 
-// 检查至少一条托管 Hook 存在，且其信任状态未禁用、哈希均匹配。
-pub(super) fn codex_cli_manager_hooks_trusted(
+// 检查已合并的有效配置；查询不会生成或更新任何信任决定。
+pub(super) fn codex_hooks_trusted_in_config(
     settings: &Value,
     hooks_path: &Path,
-    config_path: &Path,
+    config: &toml::Value,
 ) -> Result<bool, String> {
-    let Some(config) = read_text_if_exists(config_path)? else {
-        return Ok(false);
-    };
-    let config: toml::Value = toml::from_str(&config)
-        .map_err(|err| format!("解析 {} 失败: {err}", path_to_string(config_path)))?;
     let state = config
         .get("hooks")
         .and_then(|value| value.get("state"))
@@ -549,6 +546,7 @@ pub(super) fn toml_bool_value(value: &str) -> Option<bool> {
     }
 }
 
+#[cfg(test)]
 // 按行检查 features 表中的 hooks 赋值是否精确为 true。
 pub(super) fn codex_hooks_feature_installed(config_path: &Path) -> Result<bool, String> {
     let Some(content) = read_text_if_exists(config_path)? else {

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import ts from 'typescript';
+import { buildSync } from 'esbuild';
 
 const read = path => readFileSync(new URL(`../src/features/extensions/${path}`, import.meta.url), 'utf8');
-const js = ts.transpileModule(read('lib/mcpJsonEditor.ts'), { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
+const js = buildSync({ entryPoints: ['src/features/extensions/lib/mcpJsonEditor.ts'], bundle: true, write: false, format: 'esm', platform: 'node' }).outputFiles[0].text;
 const { mcpEditorJson, parseMcpEditorJson } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
 
 test('Common MCP JSON round trip preserves environment references and hides bookkeeping', () => {
@@ -43,7 +43,9 @@ test('Bounded JSON editor and handle-only persistent sorting replace old control
   const editor = read('components/McpEditorDialog.tsx');
   assert.ok(editor.indexOf('</div>') < editor.indexOf('<Group justify="flex-end"'));
   assert.match(editor, /38dvh/);
-  assert.doesNotMatch(editor, /McpResourceForm|SegmentedControl|minRows=\{18\}/);
+  assert.match(editor, /McpConfigForm/);
+  assert.match(editor, /useState\("form"\)/);
+  assert.doesNotMatch(editor, /minRows=\{18\}/);
   assert.doesNotMatch(read('components/GlobalMcpPanel.tsx'), /ProjectionDialog|extensions\.mcp\.capabilities|ExtensionSortSelect/);
   const order = read('components/ExtensionSortableList.tsx');
   for (const token of ['setActivatorNodeRef', 'KeyboardSensor', 'extension-list-order.json']) assert.ok(order.includes(token));

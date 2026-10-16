@@ -1,4 +1,5 @@
 import type { McpResource, McpResourceRedacted } from "../../../shared/types/extensions";
+import { visit } from "monaco-editor/esm/external/jsonc-parser/lib/esm/impl/parser.js";
 
 const nativeFields = ["type", "command", "args", "cwd", "url", "env", "headers", "timeout", "secretRefs"];
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -21,7 +22,7 @@ function stringMap(value: unknown): Record<string, string> {
 }
 
 /** Show only server configuration; identity, source and CLI selection stay out of editable JSON. */
-export function mcpEditorJson(resource: McpResourceRedacted | null): string {
+export function mcpEditorJson(resource: McpResourceRedacted | McpResource | null): string {
   if (!resource) return JSON.stringify({ mcpServers: { example: { command: "npx", args: ["-y", "package-name"] } } }, null, 2);
   const entry: Record<string, unknown> = { ...resource.perCliExtensions.claude };
   if (resource.transport !== "stdio") entry.type = resource.transport === "sse" ? "sse" : "http";
@@ -35,6 +36,8 @@ export function mcpEditorJson(resource: McpResourceRedacted | null): string {
 /** One editor owns one server. Preserve hidden canonical metadata and vendor fields when editing. */
 export function parseMcpEditorJson(text: string, original: McpResourceRedacted | null): McpResource {
   const root: unknown = JSON.parse(text);
+  // JSON.parse 校验严格语法，成熟 AST 保留重复属性，避免 last-wins 静默丢字段。
+  assertUniqueProperties(text);
   if (!object(root) || Object.keys(root).length !== 1 || !object(root.mcpServers)) throw new Error("extensions_json_shape");
   const entries = Object.entries(root.mcpServers);
   if (entries.length !== 1 || !entries[0][0].trim() || !object(entries[0][1])) throw new Error("extensions_json_single_server");
@@ -58,4 +61,17 @@ export function parseMcpEditorJson(text: string, original: McpResourceRedacted |
     enabledByCli: original?.enabledByCli ?? { claude: false, codex: false, grok: false },
     source: original?.source ?? null,
   }; // Rust validation remains authoritative for semantic and native compatibility checks.
+}
+
+function assertUniqueProperties(text: string): void {
+  const stack: Set<string>[] = [];
+  visit(text, {
+    onObjectBegin: () => { stack.push(new Set()); },
+    onObjectProperty: name => {
+      const names = stack[stack.length - 1];
+      if (names.has(name)) throw new Error("extensions_json_duplicate");
+      names.add(name);
+    },
+    onObjectEnd: () => { stack.pop(); },
+  });
 }

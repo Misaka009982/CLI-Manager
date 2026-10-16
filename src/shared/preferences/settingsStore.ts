@@ -546,6 +546,7 @@ export interface Settings {
   batchLaunchPaneDirection: BatchLaunchPaneDirection;
   projectScopedTerminalViewEnabled: boolean;
   workspanEnabled: boolean;
+  terminalLayoutLocked: boolean;
   desktopPet: DesktopPetSettings;
   desktopPetE: DesktopPetESettings;
   /** 宠物E设置页各折叠区的展开状态（当前仅「Codex 宠物包」选择网格）。 */
@@ -754,6 +755,7 @@ const DEFAULTS: Settings = {
   batchLaunchPaneDirection: "horizontal",
   projectScopedTerminalViewEnabled: false,
   workspanEnabled: true,
+  terminalLayoutLocked: false,
   desktopPet: {
     enabled: false,
     petId: BUILTIN_DESKTOP_PET_ID,
@@ -1890,6 +1892,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.projectScopedTerminalViewEnabled === "boolean"
         ? entries.projectScopedTerminalViewEnabled
         : DEFAULTS.projectScopedTerminalViewEnabled;
+    entries.terminalLayoutLocked = entries.terminalLayoutLocked === true;
     entries.workspanEnabled =
       typeof entries.workspanEnabled === "boolean"
         ? entries.workspanEnabled

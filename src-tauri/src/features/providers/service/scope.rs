@@ -672,15 +672,16 @@ fn codex_config_overrides(provider_id: &str, effective: &Value) -> Result<Vec<St
     Ok(overrides)
 }
 
-// 在默认 Codex 配置根写入使用专用密钥环境变量的供应商 profile 文件，并返回 profile 名称。
+// 在默认 Codex 根更新供应商 profile，保留该同名文件已有的 Hook 用户决定。
 fn write_codex_profile(provider_id: &str, profile_text: &str) -> Result<String, String> {
     let config_dir = home::default_config_root("codex")
         .ok_or_else(|| "provider_snapshot_write_failed".to_string())?;
     let profile_name = crate::provider::runtime::codex_profile_name(provider_id);
-    write_snapshot_file(
+    super::codex_profile::write_preserving_hook_state(
         &config_dir.join(format!("{profile_name}.config.toml")),
-        profile_text.as_bytes(),
-    )?;
+        profile_text,
+    )
+    .map_err(|error| format!("provider_snapshot_write_failed: {error}"))?;
     Ok(profile_name)
 }
 
@@ -811,8 +812,8 @@ fn codex_profile_config_from_manifest(
     let mut document = config
         .parse::<toml_edit::DocumentMut>()
         .map_err(|_| "provider_snapshot_invalid".to_string())?;
-    // 已持久化的旧供应商快照也不能覆盖独立的 Home 状态栏设置。
-    if crate::provider::global::remove_provider_statusline(&mut document) {
+    // 旧供应商快照同样不能覆盖当前 Home 的信任、确认和界面状态。
+    if crate::provider::global::remove_provider_home_state(&mut document) {
         Ok(document.to_string())
     } else {
         Ok(config)
@@ -1258,6 +1259,26 @@ mod tests {
             assert_eq!(actual["model"].as_str(), Some("selected"));
             assert_eq!(actual["tui"]["theme"].as_str(), Some("theme"));
             assert!(actual["tui"].get("status_line").is_none());
+        }
+    }
+
+    #[test]
+    // 完整与旧覆盖项快照进入项目组合时，状态清理规则与新生成配置一致。
+    fn codex_snapshot_omits_home_trust_and_acknowledgement_state() {
+        let config = "model='selected'\nservice_tier='fast'\nwindows_wsl_setup_acknowledged=true\n[hooks.state.old]\ntrusted_hash='stale'\n[notice]\nmodel_migrations={old='stale'}\n[tui]\nmodel_availability_nux={old=1}\nnotifications=false\n[projects.old]\ntrust_level='trusted'\n";
+        for complete in [false, true] {
+            let mut value = json!({"appType":"codex","providerId":"provider","activeKeyId":"key",
+                "snapshotId":"snapshot", "codexConfigOverrides": config.lines().collect::<Vec<_>>()});
+            if complete { value["codexProfileText"] = json!(config); }
+            let manifest = serde_json::from_value::<SnapshotManifest>(value).unwrap();
+            let text = codex_profile_config_from_manifest(manifest, "snapshot", "provider").unwrap();
+            let actual: toml::Value = toml::from_str(&text).unwrap();
+            for section in ["hooks", "notice", "projects", "windows_wsl_setup_acknowledged"] {
+                assert!(actual.get(section).is_none());
+            }
+            assert!(actual["tui"].get("model_availability_nux").is_none());
+            assert_eq!(actual["tui"]["notifications"].as_bool(), Some(false));
+            assert_eq!(actual["service_tier"].as_str(), Some("fast"));
         }
     }
 

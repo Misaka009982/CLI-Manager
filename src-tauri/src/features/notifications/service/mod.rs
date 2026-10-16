@@ -2,6 +2,7 @@ mod adapters;
 mod dispatcher;
 mod http;
 mod model;
+mod pi_text;
 
 pub use dispatcher::DispatcherHandle;
 pub use model::{HookNotificationJob, TestSendResult, ThirdPartyTarget};

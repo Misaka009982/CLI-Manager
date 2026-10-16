@@ -41,6 +41,7 @@ const MAX_APPROVAL_PROGRESS_TOMBSTONES: usize = 512;
 struct RecentHookEvents {
     ids: HashSet<String>,
     order: VecDeque<String>,
+    pi: pi_admission::PiHookAdmission,
 }
 
 impl RecentHookEvents {
@@ -104,6 +105,7 @@ struct ClaudeHookRequest {
     hook_input: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_prompt: Option<DesktopPetEUiPrompt>,
+    pi: Option<pi_admission::PiHookIdentity>,
 }
 
 #[derive(Clone, Serialize)]
@@ -646,7 +648,10 @@ pub fn spawn_hook_listener(
 #[path = "legacy_goal.rs"]
 mod legacy_goal;
 
-// 鉴权、校验及去重后先消费宠物完成事件；其余 Hook 补全元数据再向普通出口分发。
+#[path = "pi_admission.rs"]
+mod pi_admission;
+
+// 鉴权、校验及 Pi 身份/去重接纳后先消费宠物完成事件；其余 Hook 补全元数据再向普通出口分发。
 fn handle_stream(
     mut stream: TcpStream,
     sink: HookPayloadSink,
@@ -705,10 +710,24 @@ fn handle_stream(
         return;
     }
 
-    let accepted = recent_events
-        .lock()
-        .map(|mut recent| recent.accept(payload.remote_event_id.as_deref()))
-        .unwrap_or(true);
+    // Pi 的接纳锁持续到 sink 返回，避免并发 HTTP 请求通过检查后又倒序分发。
+    // 身份只在入口消费，既有 daemon/回放协议继续接收标准事件。
+    let is_pi = normalize_source(payload.source.as_deref()) == "pi";
+    let mut recent = recent_events.lock().ok();
+    let accepted = recent
+        .as_mut()
+        .map(|recent| {
+            recent.accept(payload.remote_event_id.as_deref()) && recent.pi.accept(&payload)
+        })
+        .unwrap_or(!is_pi);
+    if is_pi {
+        debug!(
+            "pi hook admission: event={} session={:?} sequence={:?} accepted={}",
+            payload.event, payload.session_id, payload.remote_sequence, accepted
+        );
+    } else {
+        drop(recent.take());
+    }
     if !accepted {
         write_response(&mut stream, "204 No Content", "");
         return;
@@ -894,6 +913,7 @@ pub fn remote_hook_payload_from_spool(
         remote_sequence: value.get("sequence").and_then(serde_json::Value::as_u64),
         hook_input: None,
         terminal_prompt: None,
+        pi: None,
     };
     if !is_valid_payload(&request) {
         return Err("remote_hook_payload_invalid".to_string());
@@ -1017,6 +1037,11 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
     if !desktop_pet_e_ui_prompt::is_valid(payload) {
         return false;
     }
+    if let Some(identity) = &payload.pi {
+        if payload.source.as_deref() != Some("pi") || !identity.valid() {
+            return false;
+        }
+    }
     let tab_id = payload.tab_id.trim();
     if tab_id.is_empty() || tab_id.len() > 128 {
         return false;
@@ -1106,8 +1131,8 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
             payload.event.as_str(),
             // Notification：Pi 扩展把第三方扩展的 ctx.ui 对话框镜像成一条提醒，
             // 让宠物端知道「终端里有对话框在等你」，回答仍在终端内完成。
-            "SessionStart" | "UserPromptSubmit" | "Notification" | "Stop" | "StopFailure"
-                | DESKTOP_PET_E_UI_PROMPT_EVENT
+            "SessionStart" | "UserPromptSubmit" | "Notification" | "Stop" | "Interrupt"
+                | "StopFailure" | DESKTOP_PET_E_UI_PROMPT_EVENT
         ),
         "opencode" => matches!(
             payload.event.as_str(),

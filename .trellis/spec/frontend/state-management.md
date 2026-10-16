@@ -749,3 +749,41 @@ set((state) => ({
 - Verify one expanded turn can be collapsed, all turns can remain collapsed, and any turn can be reopened.
 - Verify multiple turns stay expanded independently while replay data updates.
 - Verify session remounts and model replacement remove IDs for turns that no longer exist without forcing a replacement turn open.
+
+### Pattern: Terminal layout lock guards user actions at both UI and store boundaries
+
+**Scope / Trigger**: Adding a terminal drag, split, merge, detach, unsplit, or divider resize entry point.
+
+**Signatures**:
+- `Settings.terminalLayoutLocked: boolean` defaults to false; loading accepts only literal true.
+- `isTerminalLayoutLocked(): boolean` reads the latest preference.
+- `guardTerminalLayoutChange(): boolean` returns true when blocked and supplies a deduplicated toast with Unlock.
+- `setTerminalLayoutLocked(locked: boolean): void` uses existing settings persistence; the flag is excluded from cloud backup/sync.
+
+**Contracts**:
+- Both Workspan and Pane sortable sources disable dragging while locked; click, close, rename, keyboard navigation and terminal input remain available. Drag disablement must not advertise a locked tab itself as disabled to assistive technology.
+- `observeLockedLayoutDrag` observes one primary-button pointer gesture. It notifies only after the existing drag distance is exceeded and cleans up on pointer release/cancel, blur or unmount; ordinary clicks never notify.
+- Store guards cover `reorderWorkspans`, `restoreWorkspanToSinglePane`, `mergeWorkspanAtPaneEdge`, `reorderSessions`, `moveSessionToPane`, `detachSessionToWorkspan`, `splitSessionToPaneEdge`, `splitPaneEmpty`, `splitTerminal`, `unsplitTerminal`, and `setSplitRatio`. These actions are shared by menus, command palette, shortcuts and sidebar entry points.
+- Async `splitTerminal` rechecks before committing the new layout. If locked during creation, unsubscribe/close the new PTY and release provider/extension snapshots. Never close the source session.
+- Locking during an active gesture clears tab drop previews and hover timers. Divider previews revert to the saved ratio and remove listeners without committing a resize.
+- Tab context-menu events explicitly stop propagation; the outer whitespace trigger excludes tab/workspan targets, independently of DnD disabled state. Lock/unlock menu items are text-only.
+- The small lock uses terminal tab-control CSS. The lock toast and its action retain the default application notification styling without terminal theme overrides.
+- Tabs and tab-strip whitespace offer the context-menu toggle. Only locked layouts display a small unlock button: the visible Workspan strip owns it; without that strip, the current visible Pane owns it. Hidden top strips must leave a Pane strip available even for one session.
+- Closing, normal tab creation, session restoration and process lifecycle are allowed; this is not an immutable session/layout snapshot. Project tree, file drops, provider sorting, sidebar sizing and Workspan-mode configuration are separate controls.
+
+**Validation / Error Matrix**:
+
+| State | Expected behavior |
+| --- | --- |
+| Unlocked | Existing layout controls work; no lock indicator |
+| Locked + click | Switch tab, no notification |
+| Locked + intentional drag/split | No layout mutation; one notification with Unlock |
+| Lock during divider drag | Preview rolls back, listener/RAF cleanup, no persisted ratio change |
+| Lock during async split | New PTY/snapshots cleaned; existing sessions unchanged |
+| Missing/invalid stored value | Unlocked |
+
+**Good / Base / Bad Cases**: Good: source disablement plus store guard and async recheck. Base: unlock through the small indicator/menu/toast and repeat the operation. Bad: suppress only `onDragEnd`, leaving misleading drag previews and shortcut-based splits active.
+
+**Tests Required**: `node --test scripts/terminalLayoutLock.test.mjs` executes real store action bodies, pointer observers and divider handlers with isolated dependencies. Cover unlocked persistence, all guarded actions, async cancellation, gesture cleanup, no idle indicator and both unlock entries. Run `node --test scripts/terminalLayoutLock.browser.test.mjs` for real Radix/DnD menu ownership and mixed app/terminal theme regressions in zh-CN/en-US, plus existing Workspan/layout regressions, TypeScript and strict architecture checks.
+
+**Wrong vs Correct**: Wrong: change the shared 3px constant to solve only terminal-tab misdrags, affecting project/file/provider interactions. Correct: keep shared thresholds stable and enforce the explicit user layout-lock preference at terminal-owned boundaries.

@@ -132,6 +132,7 @@ export const SETTING_BACKUP_POLICY = {
   batchLaunchPaneDirection: "preferences",
   projectScopedTerminalViewEnabled: "preferences",
   workspanEnabled: "excluded",
+  terminalLayoutLocked: "excluded",
   desktopPet: "excluded",
   desktopPetE: "excluded",
   desktopPetESettingsSectionsExpanded: "preferences",

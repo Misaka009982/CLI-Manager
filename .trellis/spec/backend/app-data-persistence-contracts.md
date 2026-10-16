@@ -36,7 +36,9 @@ app_prepare_data_dir_switch(
 - A custom directory is the data root itself; never append `.cli-manager` or `data`.
 - `app_get_data_paths` keeps its existing response fields and dev/install file-name isolation. All consumers obtain the selected root through `cli_manager_data_dir()`.
 - A prepared switch is pending until the next normal GUI startup. Hook, statusline, and daemon helper entrypoints read only the active root and never execute migration.
-- Automatic migration copies the complete source tree into a target-sibling temporary directory, rejects links/reparse points, and activates it with rename only after the copy succeeds. The source is retained for recovery.
+- Automatic migration copies the complete persistent source tree into a target-sibling temporary directory, rejects links/reparse points, and activates it with rename only after the copy succeeds. The source is retained for recovery.
+- The only runtime-node exception is the exact source-root-relative `remote-manager/data/run/api.sock`, confirmed as a native AF_UNIX socket (Windows tag `0x80000023`) and refusing connections. Skip that stopped endpoint without deleting it; the service recreates it under the next root. Same-name regular files/directories are copied. Real links/junctions, unknown socket paths, listening endpoints, or uncertain probes must never be silently skipped.
+- Switch preparation holds the cc-connect operation idle guard until pending state is saved; starting/tracked processes, running Weixin authorization, busy operations, or poisoned state reject the request. No service is started/stopped or authorization canceled by this guard. Existing daemon session checks remain in force.
 - Automatic migration is allowed only when the target is empty. Direct use may select an existing non-empty directory but never merges or overwrites it.
 - Windows path canonicalization may produce a `\\?\\` verbatim prefix; normalize it back to a regular drive or UNC path before serializing `dbUrl`, otherwise SQLx treats `?` as the start of query parameters.
 - Hook diagnostics use `app_paths::logs_dir()`. Managed desktop-pet assets are scoped dynamically to `<data-root>/pets`; `$HOME/.codex/pets` remains external and unchanged.
@@ -53,6 +55,10 @@ app_prepare_data_dir_switch(
 | Copy or activation fails | Keep the previous `customDataDir`, clear pending state, and persist `lastError`. |
 | Explicit active custom root is unavailable at GUI startup | Stop before logs/SQLite/Store initialization and show a startup error; never silently fall back. |
 | Alive daemon session exists | Reject switch with `data_storage_tasks_active`; never terminate it automatically. |
+| cc-connect is starting/running, QR authorization is running, or a management operation is busy | Reject switch with `data_storage_tasks_active` before persisting pending state; do not stop the task. |
+| Exact owned socket is confirmed stopped | Omit only this runtime node from the copied tree; retain the source socket and all persistent data. |
+| Owned socket is listening or connect is still in progress | Reject migration with `data_storage_tasks_active`; do not activate the target. |
+| Owned socket probe is uncertain or fails | Reject with `data_storage_runtime_socket_probe_failed`; keep the previous root. |
 
 ### 5. Good/Base/Bad Cases
 
@@ -67,6 +73,9 @@ app_prepare_data_dir_switch(
 - Rust tests for distribution precedence and portable/standalone default paths.
 - Rust tests for Bootstrap path placement and previous-root retention after pending-switch failure.
 - Rust tests for complete-tree migration, non-empty target rejection, and parent/child overlap rejection.
+- Native socket tests for closed/listening endpoints, unknown-path sockets, same-name regular file/directory, exact-root boundaries, and Windows case-insensitive matching. Native Windows junctions at the socket or a parent directory remain rejected without traversing external contents; Unix symlinks remain rejected.
+- cc-connect tests for idle-guard lifetime, concurrent operations, starting state, poisoned locks, owned running processes, and running authorization. Temporary test processes must remain alive on rejection and be cleaned up only by their own test job.
+- `node --test scripts/dataStorageMigration.test.mjs` checks the actual settings error mapper, both language dictionaries, persisted-error rendering and the real IPC guard ordering; renderer parameters remain unchanged.
 - Windows tests must cover verbatim drive/UNC prefix stripping and parsing the resulting absolute path as a SQLite URL.
 - `cargo test --manifest-path src-tauri/Cargo.toml app_paths --lib` and `cargo check` after backend changes.
 - `npx tsc --noEmit` after changing storage IPC/UI types.

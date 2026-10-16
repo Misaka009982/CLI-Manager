@@ -3,6 +3,7 @@ import { getOsPlatform } from "../../../shared/platform/shell";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { logWarn } from "../../../shared/platform/logger";
 import { useHistoryStore } from "../index";
 import { useTerminalStore } from "../../terminal/state";
 import type { HistoryFileChangeSummary, HistoryMessage, HistorySearchHit, HistorySessionDetail, HistorySessionView, HistorySourceFilter, HistoryTitleProviderOption, Project, SshRemoteResumePreflight, WorktreeRecord } from "../../../shared/types/index";
@@ -13,7 +14,7 @@ import { useExternalSessionSyncStore } from "./externalSessionSyncStore";
 import { useI18n } from "../../../shared/i18n/index";
 import { getHistoryPathArgs } from "./historyPathArgs";
 import {
-  executeHistoryDeletion, getHistoryDeletionBlockReason, historyDeletionErrorKey, planHistoryDeletion,
+  getHistoryDeletionBlockReason, historyDeletionErrorKey, planHistoryDeletion,
 } from "../lib/historyDeletion";
 import {
   findLocalHistoryCwdProjects,
@@ -221,7 +222,8 @@ export function HistoryWorkspace({ active = true, onOpenSettings }: HistoryWorks
   const refreshIndex = useHistoryStore((s) => s.refreshIndex);
   const openSession = useHistoryStore((s) => s.openSession);
   const addConvertedSession = useHistoryStore((s) => s.addConvertedSession);
-  const deleteSession = useHistoryStore((s) => s.deleteSession);
+  const deleteSessions = useHistoryStore((s) => s.deleteSessions);
+  const deletingSessions = useHistoryStore((s) => s.deletingSessions);
   const cancelAutomaticSmartTitles = useHistoryStore((s) => s.cancelAutomaticSmartTitles);
   const generateSmartTitle = useHistoryStore((s) => s.generateSmartTitle);
   const clearSmartTitle = useHistoryStore((s) => s.clearSmartTitle);
@@ -1110,16 +1112,17 @@ export function HistoryWorkspace({ active = true, onOpenSettings }: HistoryWorks
     [openSession]
   );
 
-  // 确认后基于最新 Store 预检，避免对已失效或变为只读的选项执行部分删除。
+  // 同步复查 Store 执行权，拦截重渲染前的连点；唯一队列仍按最新列表整批预检。
   const confirmDeleteSession = useCallback(() => {
-    if (!deleteIntent) return;
+    if (!deleteIntent || useHistoryStore.getState().deletingSessions) return;
     const intent = deleteIntent;
     void (async () => {
       const keys = intent.type === "single" ? [intent.session.sessionKey] : intent.sessionKeys;
-      const { deletedCount, error } = await executeHistoryDeletion(
-        keys, () => useHistoryStore.getState().sessions, deleteSession,
-      );
+      const outcome = await deleteSessions(keys);
+      if (outcome === null) return;
+      const { deletedCount, error } = outcome;
       if (error !== null) {
+        logWarn("history.delete.failed", { mode: intent.type, selectedCount: keys.length, deletedCount, error: String(error) });
         const errorKey = historyDeletionErrorKey(error);
         const description = errorKey ? t(errorKey) : String(error);
         if (intent.type === "bulk" && deletedCount > 0) {
@@ -1136,7 +1139,12 @@ export function HistoryWorkspace({ active = true, onOpenSettings }: HistoryWorks
       }
       setDeleteIntent(null);
     })();
-  }, [deleteIntent, deleteSession, t]);
+  }, [deleteIntent, deleteSessions, t]);
+
+  // 删除开始后关闭弹窗不等于取消文件变更，等待其唯一执行队列给出最终结果。
+  const closeDeleteDialog = useCallback(() => {
+    if (!useHistoryStore.getState().deletingSessions) setDeleteIntent(null);
+  }, []);
 
   const handleToggleSessionSelection = useCallback((sessionKey: string) => {
     setSelectedSessionKeys((prev) => {
@@ -1172,6 +1180,7 @@ export function HistoryWorkspace({ active = true, onOpenSettings }: HistoryWorks
 
   // 单条和批量入口均使用与 Store 相同的资格规则及可见提示。
   const handleRequestDelete = useCallback((session: HistorySessionView) => {
+    if (useHistoryStore.getState().deletingSessions) return;
     const reason = getHistoryDeletionBlockReason(session);
     const errorKey = reason && historyDeletionErrorKey(reason);
     if (errorKey) {
@@ -1182,6 +1191,7 @@ export function HistoryWorkspace({ active = true, onOpenSettings }: HistoryWorks
   }, [t]);
 
   const handleRequestBulkDelete = useCallback(() => {
+    if (useHistoryStore.getState().deletingSessions) return;
     const errorKey = selectedDeletionPlan.blockedReason && historyDeletionErrorKey(selectedDeletionPlan.blockedReason);
     if (errorKey) {
       toast.info(t(errorKey));
@@ -1195,7 +1205,8 @@ export function HistoryWorkspace({ active = true, onOpenSettings }: HistoryWorks
   const deleteDialogMessage = deleteIntent
     ? deleteIntent.type === "bulk"
       ? t("history.bulk.confirmDeleteMessage", { count: deleteIntent.sessionKeys.length })
-      : t(deleteIntent.session.favoriteSnapshot ? "history.confirmDeleteSnapshotMessage" : "history.confirmDeleteMessage", {
+      : t(deleteIntent.session.favoriteSnapshot ? "history.confirmDeleteSnapshotMessage"
+          : deleteIntent.session.source === "codex" ? "history.confirmDeleteCodexMessage" : "history.confirmDeleteMessage", {
           title: deleteIntent.session.displayTitle,
         })
     : "";
@@ -1388,6 +1399,7 @@ export function HistoryWorkspace({ active = true, onOpenSettings }: HistoryWorks
           selectionMode={selectionMode}
           selectedCount={selectedSessionKeys.size}
           deletionPlan={selectedDeletionPlan}
+          deletingSessions={deletingSessions}
           allVisibleSelected={allVisibleSelected}
           selectedSessionKeys={selectedSessionKeys}
           smartTitleInFlightSessionKeys={smartTitleInFlightSessionKeys}
@@ -1539,11 +1551,12 @@ export function HistoryWorkspace({ active = true, onOpenSettings }: HistoryWorks
         open={deleteIntent !== null}
         title={deleteDialogTitle}
         message={deleteDialogMessage}
-        confirmText={t("common.delete")}
+        confirmText={t(deletingSessions ? "history.delete.inProgress" : "common.delete")}
+        pending={deletingSessions}
         cancelText={t("common.cancel")}
         danger
         onConfirm={confirmDeleteSession}
-        onClose={() => setDeleteIntent(null)}
+        onClose={closeDeleteDialog}
       />
 
       <ConfirmDialog

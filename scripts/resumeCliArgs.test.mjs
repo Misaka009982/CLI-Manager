@@ -444,6 +444,40 @@ const launchCode = ts.transpileModule(launchFunction.getText(launchSource).repla
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
+test("pending Codex trust keeps bridge env without trusting hooks or writing config", async () => {
+  const fn = launchSource.statements.find((node) =>
+    ts.isFunctionDeclaration(node) && node.name?.text === "shouldEnableHookEnv");
+  const code = ts.transpileModule(fn.getText(launchSource).replace(/^export /, ""), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const complete = { status: "partialInstalled", hooksFeatureInstalled: true,
+    sessionStartHookInstalled: true, runningHookInstalled: true, attentionHookInstalled: true,
+    stopHookInstalled: true, subagentStartHookInstalled: true };
+  for (const [codex, enabled, expected] of [
+    [complete, true, true], [{ status: "installed" }, true, true],
+    [{ ...complete, hooksFeatureInstalled: false }, true, true],
+    [{ ...complete, runningHookInstalled: false }, true, true],
+    [{ status: "partialInstalled" }, true, true], [complete, false, false],
+  ]) {
+    const calls = [];
+    const mocks = {
+      useSettingsStore: { getState: () => ({ codexHookBridgeEnabled: enabled,
+        claudeHookBridgeEnabled: false, kimiHookBridgeEnabled: false,
+        piHookBridgeEnabled: false, grokHookBridgeEnabled: false }) },
+      logError: () => {},
+      invoke: async (command) => {
+        calls.push(command);
+        assert.equal(command, "opencode_hook_status",
+          `terminal creation must not inspect or repair Codex ${codex.status} hooks`);
+        return { status: "notInstalled" };
+      },
+    };
+    const decide = new Function(...Object.keys(mocks), `${code}; return shouldEnableHookEnv;`)(...Object.values(mocks));
+    assert.equal(await decide(), expected);
+    assert.deepEqual(calls, enabled ? [] : ["opencode_hook_status"]);
+  }
+});
+
 async function resolveProviderTestLaunch({ profile = "cli-manager-provider", combined, startup = "codex", shell = "cmd" } = {}) {
   const project = { id: "project", environment_type: "local", cli_tool: "codex" };
   const provider = { appType: "codex", codexProfileName: profile,

@@ -427,7 +427,7 @@ pub(super) async fn parse_opencode_session_row(
         title,
         message_count: messages.len(),
         branch: None,
-        stats,
+        stats: stats.into(),
     };
     Ok(OpenCodeParsedSession {
         file_ref,

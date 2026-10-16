@@ -1,3 +1,4 @@
+import { guardTerminalLayoutChange } from "../api/terminalLayoutLock";
 import { setDeepSeekTuiIdentityHandler } from "../api/deepseekTuiRuntime";
 import { isDeepSeekTuiCommand, isValidDeepSeekTuiSessionId } from "../../../shared/lib/deepseekTui";
 import { invoke } from "@tauri-apps/api/core";
@@ -802,6 +803,7 @@ export const useTerminalStore = create<TerminalStore>((set, get, api) => {
     },
 
     reorderWorkspans: (fromId, toId) => {
+      if (guardTerminalLayoutChange()) return;
       const state = get();
       const workspans = reorderTerminalWorkspans(state.workspans, fromId, toId);
       if (workspans === state.workspans) return;
@@ -820,6 +822,7 @@ export const useTerminalStore = create<TerminalStore>((set, get, api) => {
     },
 
     restoreWorkspanToSinglePane: (id) => {
+      if (guardTerminalLayoutChange()) return;
       const state = get();
       const current = state.workspans.find((workspan) => workspan.id === id);
       if (!current) return;
@@ -836,6 +839,7 @@ export const useTerminalStore = create<TerminalStore>((set, get, api) => {
     },
 
     mergeWorkspanAtPaneEdge: (sourceId, targetId, targetPaneId, edge) => {
+      if (guardTerminalLayoutChange()) return;
       const state = get();
       const result = mergeTerminalWorkspansAtPaneEdge(
         state.workspans,
@@ -859,6 +863,7 @@ export const useTerminalStore = create<TerminalStore>((set, get, api) => {
     handleShellRuntimeEvent: runtimeActions.handleShellRuntimeEvent,
 
     reorderSessions: (fromId, toId) => {
+      if (guardTerminalLayoutChange()) return;
       const state = get();
       const owner = findWorkspanBySession(state.workspans, fromId);
       const pane = owner ? findPaneLeafBySession(owner.paneTree, fromId) : null;
@@ -873,6 +878,7 @@ export const useTerminalStore = create<TerminalStore>((set, get, api) => {
     },
 
     moveSessionToPane: (sessionId, targetPaneId, beforeSessionId) => {
+      if (guardTerminalLayoutChange()) return;
       const state = get();
       const owner = findWorkspanBySession(state.workspans, sessionId);
       const targetOwner = findWorkspanByPane(state.workspans, targetPaneId);
@@ -890,6 +896,7 @@ export const useTerminalStore = create<TerminalStore>((set, get, api) => {
     },
 
     detachSessionToWorkspan: (sessionId, insertAt) => {
+      if (guardTerminalLayoutChange()) return;
       const state = get();
       const result = detachTerminalSessionToWorkspan(
         state.workspans,
@@ -905,6 +912,7 @@ export const useTerminalStore = create<TerminalStore>((set, get, api) => {
     },
 
     splitSessionToPaneEdge: (sessionId, targetPaneId, edge) => {
+      if (guardTerminalLayoutChange()) return;
       const state = get();
       const owner = findWorkspanBySession(state.workspans, sessionId);
       if (!owner || owner.id !== findWorkspanByPane(state.workspans, targetPaneId)?.id) return;
@@ -934,6 +942,7 @@ export const useTerminalStore = create<TerminalStore>((set, get, api) => {
     },
 
     splitPaneEmpty: (paneId, direction) => {
+      if (guardTerminalLayoutChange()) return;
       const state = get();
       const owner = findWorkspanByPane(state.workspans, paneId);
       if (!owner?.paneTree) return;
@@ -945,6 +954,7 @@ export const useTerminalStore = create<TerminalStore>((set, get, api) => {
     },
 
     splitTerminal: async (sessionId, direction, options) => {
+      if (guardTerminalLayoutChange()) return null;
       const initialState = get();
       const owner = findWorkspanBySession(initialState.workspans, sessionId);
       const targetPane = owner ? findPaneLeafBySession(owner.paneTree, sessionId) : null;
@@ -1032,7 +1042,8 @@ export const useTerminalStore = create<TerminalStore>((set, get, api) => {
       const currentState = get();
       const currentOwner = findWorkspanBySession(currentState.workspans, sessionId);
       const currentTargetPane = currentOwner ? findPaneLeafBySession(currentOwner.paneTree, sessionId) : null;
-      if (!currentOwner?.paneTree || !currentTargetPane) {
+      // 创建期间可能锁定；复用废弃分屏的 PTY 与快照清理，禁止提交新布局。
+      if (guardTerminalLayoutChange() || !currentOwner?.paneTree || !currentTargetPane) {
         unlisten();
         await terminalProcessManager.close(splitSessionId).catch((err) => {
           logError("PtyHost close failed for abandoned split terminal", { sessionId: splitSessionId, err });
@@ -1257,6 +1268,7 @@ export const useTerminalStore = create<TerminalStore>((set, get, api) => {
     },
 
     unsplitTerminal: async (sessionId) => {
+      if (guardTerminalLayoutChange()) return;
       const state = get();
       const owner = findWorkspanBySession(state.workspans, sessionId);
       const pane = owner ? findPaneLeafBySession(owner.paneTree, sessionId) : null;
@@ -1384,6 +1396,7 @@ export const useTerminalStore = create<TerminalStore>((set, get, api) => {
     },
 
     setSplitRatio: (splitId, ratio) => {
+      if (guardTerminalLayoutChange()) return;
       const state = get();
       const activeWorkspan = state.workspans.find((workspan) => workspan.id === state.activeWorkspanId);
       if (!activeWorkspan) return;

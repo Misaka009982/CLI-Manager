@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import { joinStartupCommandLines } from "../src/features/terminal/lib/startupCommandText.ts";
 
 // 执行真实启动编排/参数构造，仅替换设置、平台与 IPC 等外部依赖。
 function declarations(path, names) {
@@ -25,6 +26,7 @@ function loadLaunch(light = false) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText, {
     exports,
+    joinStartupCommandLines,
     isCurrentTerminalBackgroundLight: () => light,
     useProjectStore: { getState: () => ({ projects: [] }) },
     useSshHostStore: { getState: () => ({ loaded: true, hosts: [{ id: "host", startup_script: "" }] }) },
@@ -45,6 +47,30 @@ function loadLaunch(light = false) {
 
 const launch = loadLaunch();
 const isolated = (args = "") => `codex --no-daemon${args}`;
+
+test("local and SSH startup plans join multiline text before applying Codex isolation", async () => {
+  for (const command of ["npm\nrun\ndev", "codex\n--yolo"]) {
+    const expected = command.startsWith("codex") ? isolated(" --yolo") : "npm run dev";
+    for (const shell of ["powershell", "pwsh", "cmd", "gitbash", "wsl", "bash", "zsh", "fish", "sh"]) {
+      const local = await launch.resolvePtyLaunch({ shell, startupCmd: command }, "windows");
+      assert.equal(local.startupCmd, expected, shell);
+      const input = launch.formatStartupInputForPty(local.startupCmd, shell);
+      assert.equal(input, `${command.startsWith("codex") ? "\x0c" : ""}${expected}\r`, shell);
+      assert.equal(launch.prepareStartupCommandForPty(local.startupCmd, shell), expected, shell);
+    }
+    const remote = await launch.resolvePtyLaunch({ sshHostId: "host", cwd: "/repo", startupCmd: command }, "windows");
+    assert.equal(remote.startupHandledByLaunch, true);
+    assert.equal(remote.startupCmd, expected);
+    assert.equal(remote.invokeArgs.sshLaunch.startupCommand, expected);
+  }
+});
+
+test("PTY formatting preserves literal escape pairs and joins legacy deferred startup text", () => {
+  const command = ["printf '%s\\n' \\", "C:\\\\"].join("\n");
+  assert.equal(launch.formatStartupInputForPty(command, "bash"), "printf '%s\\n' C:\\\\\r");
+  assert.equal(launch.formatStartupInputForPty("codex\n--yolo", "cmd"), "\x0ccodex --yolo\r");
+  assert.equal(launch.formatStartupInputForPty("npm\nrun\ndev", "powershell"), "npm run dev\r");
+});
 
 test("automatic local and WSL Codex launches opt out of the first terminal's shared server", async () => {
   for (const shell of ["powershell", "pwsh", "cmd", "gitbash", "wsl", "bash", "zsh", "fish"]) {

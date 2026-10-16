@@ -54,6 +54,13 @@ function dataStorageErrorMessage(error: unknown, t: Translate): string {
   if (raw.includes("data_storage_target_not_writable")) return t("settings.dataStorage.error.targetNotWritable");
   if (raw.includes("data_storage_source_target_overlap")) return t("settings.dataStorage.error.pathOverlap");
   if (raw.includes("data_storage_target_is_current")) return t("settings.dataStorage.error.samePath");
+  if (raw.includes("data_storage_runtime_socket_probe_failed")) return t("settings.dataStorage.error.runtimeSocket");
+  const migrationLinkPrefix = "data_storage_migration_symlink_rejected:";
+  if (raw.includes(migrationLinkPrefix)) {
+    return t("settings.dataStorage.error.migrationLink", {
+      path: raw.slice(raw.indexOf(migrationLinkPrefix) + migrationLinkPrefix.length).trim(),
+    });
+  }
   if (raw.includes("data_storage_path_is_symlink") || raw.includes("data_storage_bootstrap_is_symlink")) {
     return t("settings.dataStorage.error.symlink");
   }
@@ -246,7 +253,7 @@ export function DataStorageSection() {
 
               {status.lastError && (
                 <Alert color="red" icon={<AlertTriangle size={16} />} title={t("settings.dataStorage.lastErrorTitle")}>
-                  <Text size="xs" style={{ overflowWrap: "anywhere" }}>{status.lastError}</Text>
+                  <Text size="xs" style={{ overflowWrap: "anywhere" }}>{dataStorageErrorMessage(status.lastError, t)}</Text>
                 </Alert>
               )}
 

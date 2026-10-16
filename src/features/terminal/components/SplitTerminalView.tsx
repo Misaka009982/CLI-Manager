@@ -1,3 +1,5 @@
+import { useSettingsStore } from "../../../shared/preferences/settingsStore";
+import { guardTerminalLayoutChange, isTerminalLayoutLocked } from "../api/terminalLayoutLock";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { useTerminalStore } from "../state";
 import { clampSplitRatio, type TerminalPaneLeaf, type TerminalPaneNode, type TerminalPaneSplit } from "../api/terminalPaneTree";
@@ -49,6 +51,7 @@ function applyRectStyle(element: HTMLDivElement | undefined, rect: TerminalSplit
 
 export function SplitTerminalView({ node, visibleNode = node, renderLeaf, fullscreenLeafId }: Props) {
   const setSplitRatio = useTerminalStore((s) => s.setSplitRatio);
+  const locked = useSettingsStore((s) => s.terminalLayoutLocked);
   const containerRef = useRef<HTMLDivElement>(null);
   const [layoutMetrics, setLayoutMetrics] = useState<SplitLayoutMetrics>({
     rect: { left: 0, top: 0, width: 0, height: 0 },
@@ -59,6 +62,11 @@ export function SplitTerminalView({ node, visibleNode = node, renderLeaf, fullsc
   const dividerElementsRef = useRef(new Map<string, HTMLDivElement>());
   const liveDragLayoutRef = useRef<LiveDragLayout | null>(null);
   const activeDragCleanupRef = useRef<(() => void) | null>(null);
+
+  // 锁定立即回滚正在进行的分隔线预览，不等待鼠标松开。
+  useLayoutEffect(() => useSettingsStore.subscribe((state, previous) => {
+    if (state.terminalLayoutLocked && !previous.terminalLayoutLocked) activeDragCleanupRef.current?.();
+  }), []);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -147,7 +155,9 @@ export function SplitTerminalView({ node, visibleNode = node, renderLeaf, fullsc
 
   const handleDragStart = useCallback(
     (split: TerminalPaneSplit, splitRect: TerminalSplitRect, e: MouseEvent) => {
+      if (e.button !== 0) return;
       e.preventDefault();
+      if (guardTerminalLayoutChange()) return;
       const container = containerRef.current;
       if (!container) return;
 
@@ -161,6 +171,7 @@ export function SplitTerminalView({ node, visibleNode = node, renderLeaf, fullsc
 
       const flush = () => {
         rafId = null;
+        if (isTerminalLayoutLocked()) { cancel(); return; }
         applyDragPreview({ splitId: split.id, ratio: latestRatio });
       };
 
@@ -171,6 +182,7 @@ export function SplitTerminalView({ node, visibleNode = node, renderLeaf, fullsc
       };
 
       const onMove = (ev: globalThis.MouseEvent) => {
+        if (isTerminalLayoutLocked()) { cancel(); return; }
         updateLatestRatio(ev);
         if (rafId === null) rafId = requestAnimationFrame(flush);
       };
@@ -185,11 +197,20 @@ export function SplitTerminalView({ node, visibleNode = node, renderLeaf, fullsc
         window.removeEventListener("blur", onBlur);
         document.body.style.cursor = previousCursor;
         document.body.style.userSelect = previousUserSelect;
-        if (activeDragCleanupRef.current === cleanup) activeDragCleanupRef.current = null;
+        if (activeDragCleanupRef.current === cancel) activeDragCleanupRef.current = null;
+      };
+
+      const cancel = () => {
+        if (disposed) return;
+        cleanup();
+        applyDragPreview({ splitId: split.id, ratio: split.ratio });
+        liveDragLayoutRef.current = null;
+        setDraggingSplitId(null);
       };
 
       const finish = () => {
         if (disposed) return;
+        if (isTerminalLayoutLocked()) { cancel(); return; }
         if (rafId !== null) {
           cancelAnimationFrame(rafId);
           rafId = null;
@@ -211,7 +232,7 @@ export function SplitTerminalView({ node, visibleNode = node, renderLeaf, fullsc
       }
 
       activeDragCleanupRef.current?.();
-      activeDragCleanupRef.current = cleanup;
+      activeDragCleanupRef.current = cancel;
       document.addEventListener("mousemove", onMove);
       document.addEventListener("mouseup", onUp);
       window.addEventListener("blur", onBlur);
@@ -272,7 +293,7 @@ export function SplitTerminalView({ node, visibleNode = node, renderLeaf, fullsc
             data-orientation={isHorizontal ? "vertical" : "horizontal"}
             style={{
               ...rectStyle(rect),
-              cursor: isHorizontal ? "col-resize" : "row-resize",
+              cursor: locked ? "default" : isHorizontal ? "col-resize" : "row-resize",
               zIndex: 10,
             }}
           />
