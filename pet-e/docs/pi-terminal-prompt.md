@@ -25,7 +25,7 @@
 | `src-tauri/src/features/hooks/claude.rs` | 声明外挂模块；请求/广播载荷透传可选 `terminal_prompt`；调用外挂校验和 `route`；Pi 白名单接纳专用事件；SSH 拒绝专用字段 | 字段规则、状态机、序列化分发与审批旁路判断 |
 | `src-tauri/src/infrastructure/daemon/server.rs` | 在普通出口副作用之前调用 `payload.dispatch_desktop_pet_e_ui_prompt(...)`，提供原有广播回调，已消费则返回 | 专用载荷序列化、日志、状态处理 |
 | `src/app/App.tsx` | 从外挂导入事件标记和守卫，监听参数兼容该标记；普通处理前调用 `isDesktopPetEUiPromptEvent(payload)` 并返回 | 私有载荷定义、等待状态、通知/审批兼容逻辑 |
-| `features/hooks/settings/mod.rs` | `PI_EXTENSION_VERSION = 9` 与外部模板标记一致 | 模板内容或新的 UI 设置 |
+| `features/hooks/settings/mod.rs` | `PI_EXTENSION_VERSION = 10` 与外部模板标记一致 | 模板内容或新的 UI 设置 |
 | `desktop-pet.zh-CN.ts` / `desktop-pet.en-US.ts` | 既有宠物E词条区增加 `desktopPetE.renderer.answerInTerminal` | 新翻译加载器或全局字典重构 |
 | `package.json` | 既有 `test:pet-e:contracts` 列表登记新用例 | 新依赖或构建流程 |
 
@@ -53,7 +53,7 @@ tabId / sessionId / timestamp / remoteEventId: 必需
 terminalPrompt: { instanceId, id, sequence, active, kind, title? }
 实例内 sequence: 1..Number.MAX_SAFE_INTEGER
 等待续报: 5_000ms；显示租期: 30_000ms
-托管模板版本: 9
+托管模板版本: 10
 请求超时: REQUEST_TIMEOUT_MS = 2_000
 ```
 
@@ -75,7 +75,8 @@ terminalPrompt: { instanceId, id, sequence, active, kind, title? }
 - 可选快照字段 `terminalPrompt` 只含只读展示信息。序号和租期不进入快照，续报复用展示对象，不提升快照 revision。任务 ID 使用长度前缀组合身份，避免转义膨胀；提交契约与宠物协议版本不变。
 - 只读项显示本地化“请在终端作答”，动态文本转义，沿用打开会话按钮；只有交互式 `pendingAction` 可进入回答面板。真实请求、只读等待、普通状态按此优先级去重，同会话只计一次。
 - 只服从宠物总开关，不依赖 `notificationsEnabled` / `agentInteractionEnabled`。普通通知不计黄灯，等待状态不进入红蓝终态历史。
-- 升级应用后确认 Pi 托管扩展为 v9，再重新加载 Pi；应用/daemon 回调地址变化时须新建终端。没有正式 UI 事件的旧 Pi 不承诺自绘问卷支持，既有标准控件代答保留。
+- 升级应用后确认 Pi 托管扩展为 v10，再重新加载 Pi；应用/daemon 回调地址变化时须新建终端。没有正式 UI 事件的旧 Pi 不承诺自绘问卷支持，既有标准控件代答保留。
+- V1.4.4 起模板同时上报上游运行身份 `pi = { instanceId, instanceStartedAt, sequence, runId }`：根 Pi 在工厂阶段持有进程租约并写入 `CLI_MANAGER_PI_OWNER`，嵌套子进程/同进程 SDK 子会话不得接管父 Tab；结束区分 `Stop` / `Interrupt` / `StopFailure`，并由后端接纳门在 sink 副作用前拒绝重复、迟到与已退役实例。上游若把运行身份改为其它字段名或增加新终端事件，需同步移植进 fork 模板与 `PiHookIdentity`。
 
 ## 验证与交付限制
 

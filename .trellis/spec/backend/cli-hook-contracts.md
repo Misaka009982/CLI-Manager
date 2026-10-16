@@ -1001,7 +1001,7 @@ Exact ownership prevents upgrades or uninstalls from deleting third-party and ot
 
 ## Scenario: Pi Agent Extension Hook Bridge
 
-> fork 的只读等待实现、上游薄接点清单及 v9 / 2 秒超时差异见 [Pi 等待外挂契约](../../../pet-e/docs/pi-terminal-prompt.md)。以下保留原有安装契约。
+> fork 的只读等待实现、上游薄接点清单及 v10 / 2 秒超时差异见 [Pi 等待外挂契约](../../../pet-e/docs/pi-terminal-prompt.md)。以下保留原有安装契约，但 fork 以 `src-tauri/src/pi_extension_template.ts` 为唯一外部模板（上游为 `settings/pi_extension.ts`），上报函数为 `postHook`、审批超时为 `REQUEST_TIMEOUT_MS = 2_000`；上游 V1.4.4 的运行身份、接纳门与生命周期语义已移植进该模板。
 
 ### 1. Scope / Trigger
 

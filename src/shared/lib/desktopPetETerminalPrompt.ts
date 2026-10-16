@@ -105,10 +105,10 @@ export function reduceDesktopPetETerminalPrompt(
 ): DesktopPetETerminalPromptState {
   const raw = record(value);
   if (!raw || raw.source !== "pi"
-    || !["DesktopPetEUiPrompt", "SessionStart", "Stop", "StopFailure"].includes(String(raw.event))
+    || !["DesktopPetEUiPrompt", "SessionStart", "Stop", "Interrupt", "StopFailure"].includes(String(raw.event))
     || !validIdentity(raw.tabId, 128) || !validIdentity(raw.sessionId, 256)
     || (raw.environmentType != null && raw.environmentType !== "local" && raw.environmentType !== "wsl")
-    || ["remoteHostId", "remoteProjectId", "remoteTranscriptRef", "remoteAgentTranscriptRef", "remoteSequence"]
+    || ["remoteHostId", "remoteProjectId", "remoteTranscriptRef", "remoteAgentTranscriptRef"]
       .some((key) => raw[key] != null)
     || typeof raw.timestamp !== "string" || raw.timestamp.length > 64) return state;
   const sentAt = Date.parse(raw.timestamp);

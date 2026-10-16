@@ -113,7 +113,10 @@ test("正式 UI 等待独立续报并在生命周期边界收尾", () => {
   assert.match(publisher, /event: "DesktopPetEUiPrompt"/);
   assert.match(publisher, /sessionId: span\.sessionId/);
   assert.match(publisher, /sequence: \+\+terminalPromptSequence/);
-  assert.match(publisher, /remoteEventId: crypto\.randomUUID\(\)/);
+  assert.match(publisher, /remoteEventId: `\$\{identity\.instanceId\}:\$\{identity\.sequence\}`/);
+  // 只读通道保持本机：只带运行身份，不带仅用于 SSH spool 的 remoteSequence。
+  assert.doesNotMatch(publisher, /remoteSequence/);
+  assert.match(publisher, /pi: identity/);
   assert.match(publisher, /if \(terminalPromptSpan === span\) void postTerminalPrompt\(span, true\)/);
   assert.match(publisher, /terminalPromptSpan = null;[\s\S]*postTerminalPrompt\(span, false\)/);
   assert.doesNotMatch(publisher, /pi-decision\/open|requestDecision\(/);

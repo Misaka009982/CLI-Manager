@@ -115,7 +115,7 @@ test("新实例接管后拒绝旧实例的续报和结束，多会话互不串�
 });
 
 test("生命周期只清理来源、Tab、会话和时间匹配的等待，心跳不是完成证据", () => {
-  for (const event of ["SessionStart", "Stop", "StopFailure"]) {
+  for (const event of ["SessionStart", "Stop", "Interrupt", "StopFailure"]) {
     let current = apply(empty(), 1, start);
     const prompt = selected(current, start).get(key);
     for (const extra of [{ source: "claude" }, { tabId: "other" }, { sessionId: "other" }, { agentId: "child" }]) {

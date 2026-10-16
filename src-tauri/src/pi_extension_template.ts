@@ -1388,7 +1388,7 @@ async function postTerminalPrompt(span: TerminalPromptSpan, active: boolean): Pr
     wslDistroName: nonEmpty(process.env.WSL_DISTRO_NAME),
     timestamp: new Date(nextEventTimestampMs()).toISOString(),
     remoteEventId: `${identity.instanceId}:${identity.sequence}`,
-    remoteSequence: identity.sequence,
+    // 只读通道保持本机：上报运行身份供接纳门仲裁，但不带 remoteSequence（后端表示 SSH spool）。
     pi: identity,
     terminalPrompt: {
       instanceId: bridgeInstanceId(),
