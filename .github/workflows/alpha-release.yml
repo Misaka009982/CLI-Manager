@@ -116,16 +116,10 @@ jobs:
           if (!/^\d+$/.test(runNumber ?? "") || !/^\d+$/.test(runAttempt ?? "")) {
             throw new Error("GitHub run identity is unavailable");
           }
-          const runNumberValue = Number(runNumber);
-          if (
-            !Number.isSafeInteger(runNumberValue)
-            || runNumberValue < 1
-            || runNumberValue > 65535
-          ) {
-            throw new Error("GITHUB_RUN_NUMBER must be between 1 and 65535 for MSI packaging");
-          }
           const releaseVersion = `${targetVersion}-alpha.${runNumber}.${runAttempt}`;
-          const bundleVersion = `${targetVersion}-${runNumberValue}`;
+          // 安装包版本必须是稳定语义版本：带 `-<run>` 后缀会被 semver 视为预发布版，
+          // 永远小于同号稳定版，导致每次启动都提示可以升级。构建次数只用于 Release tag。
+          const bundleVersion = targetVersion;
           const tag = `V${releaseVersion}`;
 
           // 上游 V1.4.0 起把 bundle.resources 由字符串数组改为「源 -> 目标」对象映射，
@@ -230,7 +224,7 @@ jobs:
             - Debug 安装包文件名带 `-debug`，用于验证和诊断
             - Debug 验证通过后可直接安装同次运行中不带 `-debug` 的 Release 安装包，无需重新打包
             - 安装包内部版本：`${{ steps.version.outputs.bundle_version }}`；Alpha 身份以 Release tag 为准
-            - 构建版本可以与仓库当前版本相同；若本机已安装同版本稳定版，Windows 安装器可能要求先卸载稳定版
+            - 安装包版本不再附加构建序号，与稳定版同号时不会反复提示升级；但同号的新旧 Alpha 之间无法直接覆盖安装，需先卸载旧版
             - 不包含 `latest.json` 或 updater 签名资产，不能通过应用内更新安装本 Alpha
             - 不包含内置 SSH Agent bundle；需要 Agent 时会联网获取并验证稳定版 manifest
             - 不会写入稳定版 R2/`latest` 更新通道
