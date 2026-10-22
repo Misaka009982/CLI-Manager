@@ -21,6 +21,7 @@ import {
   type DesktopPetETerminalPrompt,
 } from "./desktopPetE";
 import { desktopPetETerminalPromptScopeKey } from "./desktopPetETerminalPrompt";
+import { resolvePiSessionIdle } from "./piSessionLifecycle";
 
 export type DesktopPetERawStatus = "none" | "running" | "attention" | "done" | "failed";
 
@@ -174,21 +175,24 @@ export function deriveDesktopPetECandidates(
     openSessionIds.add(session.id);
     const project = resolveSessionProject(session, projectById);
     if (!shouldIncludeAgentTerminal(session, project, false)) continue;
-    const resolved = resolveDesktopPetOpenSessionStatus({
+    const source = resolveDesktopPetEAgentSource(resolveDesktopPetECliTool(session, project));
+    const statusInput = {
       frontendStatus: input.tabNotifications[session.id] ?? "none",
       frontendDetails: input.tabStatusDetails[session.id],
       daemonTask: backgroundBySession.get(session.id),
       outputActivityAt: input.ptyOutputActivityAt[session.id] ?? 0,
       now,
-    });
+    };
+    const resolved = resolvePiSessionIdle(source, statusInput) ?? resolveDesktopPetOpenSessionStatus(statusInput);
     const pendingAction = input.pendingActions?.get(session.id) ?? null;
-    const source = resolveDesktopPetEAgentSource(resolveDesktopPetECliTool(session, project));
     const terminalPrompt = resolveTerminalPrompt(input, session, project, source,
       input.sessionStatuses[session.id] === "running" && backgroundBySession.get(session.id)?.alive !== false);
     const status = terminalPrompt ? "attention"
       : resolved.status === "none" && input.sessionStatuses[session.id] === "error"
         ? "failed" : resolved.status;
-    if (status === "none" && !pendingAction && !terminalPrompt) continue;
+    // 明确的 Pi 空闲保留内部候选，才能清掉同 Tab 旧历史；快照不会渲染 none。
+    if (status === "none" && !pendingAction && !terminalPrompt
+      && !(source === "pi" && resolved.updatedAt > 0)) continue;
     const target = input.targetBySessionId?.get(session.id) ?? null;
     const statusUpdatedAt = input.sessionStatusUpdatedAt?.[session.id] ?? now;
     candidates.push({
@@ -233,7 +237,8 @@ export function deriveDesktopPetECandidates(
       paneId: null,
       daemonOnly: true,
       sessionAlive: true,
-      status: pendingAction || terminalPrompt ? "attention" : resolveDaemonTaskStatus(task),
+      status: pendingAction || terminalPrompt ? "attention"
+        : source === "pi" && task.taskStatus === "none" ? "none" : resolveDaemonTaskStatus(task),
       updatedAt: pendingAction ? now : terminalPrompt ? terminalPrompt.startedAt : resolveDaemonTaskUpdatedAt(task, now),
       active: false,
       pendingAction,
@@ -254,8 +259,17 @@ export function mergeDesktopPetECandidatesWithHistory(
     previousTerminalStates.map((candidate) => [candidate.sessionId, candidate]),
   );
   const effectiveCurrent = current.flatMap((candidate) => {
-    if (candidate.pendingAction || candidate.terminalPrompt || candidate.status !== "attention") return [candidate];
     const previous = previousBySession.get(candidate.sessionId);
+    // 背景轮询可能迟到；Pi 空闲与普通状态按时间双向仲裁，旧快照不能清新任务或复活旧任务。
+    // 已结束的交互不能从历史复活，仍由当前真实 pendingAction / terminalPrompt 决定。
+    if (candidate.source === "pi" && previous?.source === "pi"
+      && (candidate.status === "none" || previous.status === "none")
+      && !candidate.pendingAction && !candidate.terminalPrompt
+      && !previous.pendingAction && !previous.terminalPrompt
+      && previous.updatedAt > candidate.updatedAt) {
+      return [{ ...candidate, status: previous.status, updatedAt: previous.updatedAt }];
+    }
+    if (candidate.pendingAction || candidate.terminalPrompt || candidate.status !== "attention") return [candidate];
     if (!previous || previous.pendingAction || previous.terminalPrompt || previous.status === "attention") return [];
     return [{
       ...candidate,

@@ -10,6 +10,7 @@ import { useSessionStore } from "../api/sessionStore";
 import { normalizeShellKey } from "../../../shared/platform/shell";
 import { useProjectStore } from "../../projects/api/projectStore";
 import { resolveCliSessionRebind } from "./terminalCliSession";
+import { isPiSessionStart, isStalePiSessionStart } from "../../../shared/lib/piSessionLifecycle";
 import { inferHookBindingSource, resolveCliHookTarget } from "./terminalHookBinding";
 import { findProjectByPath, findWorktreeByPath } from "../api/terminalProject";
 import {
@@ -593,6 +594,7 @@ export function createTerminalRuntime(
           reason: resolution.reason,
         });
       }
+      if (isStalePiSessionStart(payload, get().tabStatuses[tabId]?.hookUpdatedAt)) return tabId;
       const cliSessionId = payload.sessionId?.trim();
       const remoteTranscriptRef = payload.environmentType === "ssh" ? payload.remoteTranscriptRef?.trim() : undefined;
       const cliReasoningEffort = payload.reasoningEffort?.trim();
@@ -685,7 +687,7 @@ export function createTerminalRuntime(
           ...base,
           tabStatuses: { ...base.tabStatuses, [tabId]: resolvedStatus },
         };
-        const terminalOutputStopped = status === "done" || status === "failed";
+        const terminalOutputStopped = status === "done" || status === "failed" || isPiSessionStart(payload);
         const ptyOutputActivityAt = terminalOutputStopped
           ? { ...state.ptyOutputActivityAt }
           : null;

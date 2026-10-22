@@ -11,7 +11,8 @@ function timestampFromDetails(details: TabStatusDetails | undefined): number {
 
 function explicitDaemonTaskStatus(task: BackgroundPetTask | undefined): TabNotificationState | null {
   if (
-    task?.taskStatus === "running"
+    task?.taskStatus === "none"
+    || task?.taskStatus === "running"
     || task?.taskStatus === "attention"
     || task?.taskStatus === "done"
     || task?.taskStatus === "failed"
@@ -37,9 +38,8 @@ export function resolveDesktopPetOpenSessionStatus(input: {
     ? { status: daemonStatus, updatedAt: daemonUpdatedAt }
     : { status: input.frontendStatus, updatedAt: frontendUpdatedAt };
 
-  // PTY output is only an activity hint. Once Hook/daemon has supplied a task
-  // lifecycle state, terminal repaint output must never reopen a finished turn.
-  if (resolved.status !== "none") return resolved;
+  // 只有缺少生命周期证据时才采用输出提示；明确空闲也不能被 TUI 重绘重新点亮。
+  if (resolved.status !== "none" || frontendUpdatedAt > 0 || daemonStatus !== null) return resolved;
   const recentOutput = input.outputActivityAt > 0
     && input.now >= input.outputActivityAt
     && input.now - input.outputActivityAt <= DESKTOP_PET_OUTPUT_ACTIVITY_TTL_MS;

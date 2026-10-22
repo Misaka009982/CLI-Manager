@@ -32,7 +32,7 @@ interface Props {
   popoverStyle?: CSSProperties;
 }
 
-type BackgroundTaskDisplayStatus = "running" | "attention" | "done" | "failed";
+type BackgroundTaskDisplayStatus = "none" | "running" | "attention" | "done" | "failed";
 
 const AGENT_INSTALL_PHASE_KEYS: Record<string, TranslationKey> = {
   resolvingRelease: "settings.sshHosts.cliIntegration.agent.progress.resolvingRelease",
@@ -86,6 +86,7 @@ function operationDisplayStatus(operation: BackgroundOperation): BackgroundTaskD
 
 function resolveTaskStatus(task: BackgroundTaskMeta): BackgroundTaskDisplayStatus {
   if (
+    task.taskStatus === "none" ||
     task.taskStatus === "running" ||
     task.taskStatus === "attention" ||
     task.taskStatus === "done" ||
@@ -330,6 +331,7 @@ export function BackgroundTasksPanel({ tasks, onRefresh, showText, popoverSide =
                     {task.status === "failed" ? <X size={11} /> : null}
                     {task.status === "attention" ? <AlertTriangle size={11} /> : null}
                     {task.status === "running" ? <Activity size={11} /> : null}
+                    {task.status === "none" ? t("terminal.backgroundTasks.idle") : null}
                     {task.status === "running" ? t("terminal.backgroundTasks.running") : null}
                     {task.status === "attention" ? t("terminal.backgroundTasks.attention") : null}
                     {task.status === "done" ? t("terminal.backgroundTasks.completed") : null}

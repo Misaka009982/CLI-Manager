@@ -1,5 +1,5 @@
 // __PI_MARKER__
-// CLI_MANAGER_PI_EXTENSION_VERSION:10
+// CLI_MANAGER_PI_EXTENSION_VERSION:11
 // 由 CLI-Manager 管理，请勿手动修改；如需恢复，请在 Hook 设置中重新安装。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -95,9 +95,11 @@ interface PiBridgeState {
   instanceId: string;
   instanceStartedAt: number;
   sequence: number;
+  lastEventTimestampMs?: number;
   runId: number;
   sessionId: string | null;
   lease: symbol | null;
+  lastLease?: symbol;
   active: boolean;
   reportedRunning: boolean;
   ended: boolean;
@@ -111,6 +113,7 @@ let lastEventTimestampMs = 0;
 let settleTimer: ReturnType<typeof setTimeout> | null = null;
 // 当前持租约的实例；身份、代际与结束标记都从这里读写。
 let runtime: PiBridgeState | null = null;
+let runtimeLease: symbol | null = null;
 
 function nonEmpty(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -118,7 +121,8 @@ function nonEmpty(value: unknown): string | null {
 
 function nextEventTimestampMs(): number {
   const now = Date.now();
-  lastEventTimestampMs = Math.max(now, lastEventTimestampMs + 1);
+  lastEventTimestampMs = Math.max(now, lastEventTimestampMs + 1, (runtime?.lastEventTimestampMs ?? 0) + 1);
+  if (runtime) runtime.lastEventTimestampMs = lastEventTimestampMs;
   return lastEventTimestampMs;
 }
 
@@ -131,11 +135,10 @@ function bridgeSessionId(): string | null {
 }
 
 // 序号与代际在发出前从原状态读出并回写；同运行内单调，新代际自增 runId。
-function nextPiIdentity(): PiBridgeIdentity {
+function nextPiIdentity(): PiBridgeIdentity | null {
   const state = runtime;
-  if (!state) {
-    return { instanceId: sourceInstanceId, instanceStartedAt: Date.now(), sequence: 1, runId: 0 };
-  }
+  if (!state || runtimeLease === null || state.lease !== runtimeLease
+    || !state.sessionId || state.sequence >= Number.MAX_SAFE_INTEGER) return null;
   state.sequence += 1;
   return {
     instanceId: state.instanceId,
@@ -160,11 +163,6 @@ function isInheritedChildProcess(tabId: string): boolean {
   } catch {
     return true;
   }
-}
-
-// 只接收当前根 Pi 会话的事件；同进程 SDK 子会话不得替父区分内上报。
-function owns(ctx: ExtensionContext): boolean {
-  return runtime !== null && runtime.sessionId !== null && runtime.sessionId === sessionId(ctx);
 }
 
 // 开始或切换一次运行：清挂起收尾，自增代际并清除上一轮标记。
@@ -225,6 +223,7 @@ async function postHook(event: NotifyEvent, message: string | null = null, heart
   const target = bridgeTarget();
   if (!target) return;
   const identity = nextPiIdentity();
+  if (!identity) return;
   await postJson("/api/claude-hook", {
     tabId: target.tabId,
     source: "pi",
@@ -274,7 +273,11 @@ function startHeartbeat(): void {
   stopHeartbeat();
   heartbeatRunning = true;
   if (mirroredDialogs > 0 || officialSpanMirrored) return;
-  heartbeatTimer = setInterval(() => void postHook("UserPromptSubmit", null, true), HEARTBEAT_INTERVAL_MS);
+  const scope = dialogScope;
+  const lease = runtimeLease;
+  heartbeatTimer = setInterval(() => {
+    if (dialogScope === scope && runtimeLease === lease) void postHook("UserPromptSubmit", null, true);
+  }, HEARTBEAT_INTERVAL_MS);
 }
 
 function wait(milliseconds: number, signal?: AbortSignal): Promise<void> {
@@ -310,6 +313,11 @@ async function requestDecision(
   const target = bridgeTarget();
   const currentSessionId = sessionId(ctx);
   if (!target || !currentSessionId) return null;
+  const scope = dialogScope;
+  const lease = runtimeLease;
+  const isCurrent = () => scope === dialogScope && lease !== null && runtimeLease === lease
+    && runtime?.lease === lease && runtime.sessionId === currentSessionId;
+  if (!isCurrent()) return null;
   const requestId = randomUUID();
   pendingDecisions.set(requestId, null);
   let response = await postJson("/api/pi-decision/open", {
@@ -325,6 +333,12 @@ async function requestDecision(
   }, signal);
   const epoch = response?.brokerEpoch;
   const payload = response?.payload;
+  // /open 可能在 shutdown 之后才返回；只取消旧 requestId，不能污染新会话的真实待答。
+  if (!isCurrent()) {
+    pendingDecisions.delete(requestId);
+    if (epoch) await postJson("/api/pi-decision/cancel", { requestId, brokerEpoch: epoch, sourceInstanceId });
+    return null;
+  }
   if (epoch) pendingDecisions.set(requestId, epoch);
   if (response?.status === "resolved" && response.answer) {
     pendingDecisions.delete(requestId);
@@ -361,20 +375,22 @@ async function requestDecision(
   // 到这里 broker 已经接下请求，宠物端能看到待处理项。
   onOpened?.();
   try {
-    while (!signal?.aborted) {
+    while (!signal?.aborted && isCurrent()) {
       await wait(POLL_INTERVAL_MS, signal);
+      if (!isCurrent()) return null;
       response = await postJson("/api/pi-decision/poll", {
         requestId,
         brokerEpoch: epoch,
         sourceInstanceId,
       }, signal);
+      if (!isCurrent()) return null;
       if (response?.status === "resolved" && response.answer) {
         const acknowledgement = await postJson("/api/pi-decision/ack", {
           requestId,
           brokerEpoch: epoch,
           sourceInstanceId,
         }, signal);
-        if (acknowledgement?.status === "accepted") {
+        if (acknowledgement?.status === "accepted" && isCurrent()) {
           acknowledged = true;
           return response.answer;
         }
@@ -503,6 +519,7 @@ async function showQuestionSurface(
   if (ctx.mode !== "tui" || questions.length === 0 || signal?.aborted) return cancelledResult;
   // ctx.ui.custom 不接受 opts，官方 ui_prompt 事件里也拿不到 skipMirror 标记，
   // 只能靠 ownDialogs 计数告诉镜像逻辑「这是本扩展自己弹的，宠物端已有待处理项」。
+  const scope = dialogScope;
   ownDialogs += 1;
   try {
     const result = await ctx.ui.custom<SurfaceResult>((tui, theme, _keybindings, done) => {
@@ -749,7 +766,7 @@ async function showQuestionSurface(
     });
     return result ?? cancelledResult;
   } finally {
-    ownDialogs = Math.max(0, ownDialogs - 1);
+    if (dialogScope === scope) ownDialogs = Math.max(0, ownDialogs - 1);
   }
 }
 
@@ -1179,6 +1196,8 @@ function endMirroredDialog(): void {
 // 本扩展自己发起的对话框数量。官方事件里拿不到 opts 上的 skip 标记，只能靠这个计数
 // 判断当前等待的对话框是不是自己弹的（自己弹的宠物端已有待处理项，不该再发提醒）。
 let ownDialogs = 0;
+// 模块可能被缓存复用；会话切换后旧对话框的 finally 不得改写新会话计数。
+let dialogScope = Symbol("pi-dialog-scope");
 
 // 第三方对话框的宠物端代答：把 select / confirm / input 的选项搬到宠物端，与终端竞速。
 // 代答走的是 pendingAction 通道（受「宠物端问题交互」开关管），不再依赖通知气泡，
@@ -1272,7 +1291,7 @@ function planDialogTakeover(kind: DialogKind, args: unknown[]): DialogTakeover |
   };
 }
 
-function installDialogMirror(ctx: ExtensionContext): void {
+function installDialogMirror(ctx: ExtensionContext, isCurrent: () => boolean): void {
   if (!ENABLED.running || ctx.mode !== "tui") return;
   let ui: Record<string, unknown>;
   try {
@@ -1280,12 +1299,14 @@ function installDialogMirror(ctx: ExtensionContext): void {
   } catch {
     return;
   }
-  if (!ui || ui[DIALOG_MIRROR_INSTALLED]) return;
+  const scope = dialogScope;
+  if (!ui || ui[DIALOG_MIRROR_INSTALLED] === scope) return;
   for (const kind of ["select", "confirm", "input"] as DialogKind[]) {
     const original = ui[kind];
     if (typeof original !== "function") continue;
     const forward = original as (...args: unknown[]) => unknown;
     ui[kind] = async function (this: unknown, ...args: unknown[]) {
+      if (!isCurrent() || dialogScope !== scope) return forward.apply(this, args);
       const opts = args[2] as MirroredDialogOptions | undefined;
       const own = opts?.[DIALOG_MIRROR_SKIP] === true;
       if (own) {
@@ -1294,7 +1315,7 @@ function installDialogMirror(ctx: ExtensionContext): void {
         try {
           return await forward.apply(this, args);
         } finally {
-          ownDialogs = Math.max(0, ownDialogs - 1);
+          if (dialogScope === scope) ownDialogs = Math.max(0, ownDialogs - 1);
         }
       }
       const plan = planDialogTakeover(kind, args);
@@ -1305,7 +1326,7 @@ function installDialogMirror(ctx: ExtensionContext): void {
       // 宠物端没接住（未启用、未运行、选项不适配）时退回只发一条提醒，
       // 并挂起心跳，否则 20 秒一次的 UserPromptSubmit 会把提示刷掉。
       const mirrorNotice = () => {
-        if (petOpened || mirrored) return;
+        if (petOpened || mirrored || dialogScope !== scope || !isCurrent()) return;
         mirrored = true;
         beginMirroredDialog();
         void postHook("Notification", dialogNotice(kind, args[0]));
@@ -1353,12 +1374,14 @@ function installDialogMirror(ctx: ExtensionContext): void {
         // 两侧都无结论（调用方自己 abort）：沿用原生取消语义。
         return kind === "confirm" ? false : undefined;
       } finally {
-        if (mirrored) endMirroredDialog();
-        ownDialogs = Math.max(0, ownDialogs - 1);
+        if (dialogScope === scope) {
+          if (mirrored) endMirroredDialog();
+          ownDialogs = Math.max(0, ownDialogs - 1);
+        }
       }
     };
   }
-  ui[DIALOG_MIRROR_INSTALLED] = true;
+  ui[DIALOG_MIRROR_INSTALLED] = scope;
 }
 
 // 官方事件覆盖所有外层 UI 等待，包括本扩展自己的界面；只读状态与真实代答独立。
@@ -1372,13 +1395,13 @@ interface TerminalPromptSpan {
 }
 let terminalPromptSpan: TerminalPromptSpan | null = null;
 let terminalPromptTimer: ReturnType<typeof setInterval> | null = null;
-let terminalPromptSequence = 0;
 
 // 每份报告独立去重，序号在发出前分配；抓住区间身份，不读可变的会话 ID。
 async function postTerminalPrompt(span: TerminalPromptSpan, active: boolean): Promise<void> {
   const target = bridgeTarget();
-  if (!target || terminalPromptSequence >= Number.MAX_SAFE_INTEGER) return;
+  if (!target) return;
   const identity = nextPiIdentity();
+  if (!identity) return;
   await postJson("/api/claude-hook", {
     tabId: target.tabId,
     source: "pi",
@@ -1393,7 +1416,7 @@ async function postTerminalPrompt(span: TerminalPromptSpan, active: boolean): Pr
     terminalPrompt: {
       instanceId: bridgeInstanceId(),
       id: span.id,
-      sequence: ++terminalPromptSequence,
+      sequence: identity.sequence,
       active,
       kind: span.kind,
       title: span.title,
@@ -1437,9 +1460,9 @@ function endOfficialPrompt(): void {
   endMirroredDialog();
 }
 
-function registerPromptEvents(pi: ExtensionAPI): void {
+function registerPromptEvents(pi: ExtensionAPI, owns: (ctx: ExtensionContext) => boolean): void {
   pi.on("ui_prompt_start", async (event, ctx) => {
-    if (ctx.mode !== "tui" || officialSpanMirrored) return;
+    if (!owns(ctx) || ctx.mode !== "tui" || officialSpanMirrored) return;
     officialSpanMirrored = true;
     beginMirroredDialog();
     beginTerminalPrompt(event.kind, event.title, ctx);
@@ -1447,8 +1470,8 @@ function registerPromptEvents(pi: ExtensionAPI): void {
       void postHook("Notification", dialogNotice(event.kind, event.title));
     }
   });
-  pi.on("ui_prompt_end", async () => {
-    endOfficialPrompt();
+  pi.on("ui_prompt_end", async (_event, ctx) => {
+    if (owns(ctx)) endOfficialPrompt();
   });
 }
 
@@ -1464,6 +1487,7 @@ export default function cliManagerHook(pi: ExtensionAPI) {
       instanceId: randomUUID(),
       instanceStartedAt: Date.now(),
       sequence: 0,
+      lastEventTimestampMs: 0,
       runId: 0,
       sessionId: null,
       lease: null,
@@ -1478,27 +1502,41 @@ export default function cliManagerHook(pi: ExtensionAPI) {
   const lease = Symbol("pi-hook-runtime");
   if (state.lease !== null) return;
   state.lease = lease;
+  state.lastLease = lease;
   runtime = state;
+  runtimeLease = lease;
+  let retired = false;
+  // 不能仅比较 sessionId：reload 会沿用 ID，旧工厂回调仍必须失效。
+  const owns = (ctx: ExtensionContext): boolean => !retired && state.lease === lease
+    && state.sessionId !== null && state.sessionId === sessionId(ctx);
 
   const loadedDecisionBridges = new Set<string>();
-  pi.on("tool_call", permissionDecision);
+  pi.on("tool_call", (event, ctx) => owns(ctx) ? permissionDecision(event, ctx) : undefined);
   // Pi 0.84.4+ 有这两个事件；老版本只是注册了永不触发的 handler，靠 installDialogMirror 兜底。
-  registerPromptEvents(pi);
+  registerPromptEvents(pi, owns);
 
   // 生命周期 handler 保持同步返回，重活用 void 排入后台，不阻塞 Pi。
   pi.on("session_start", (_event, ctx) => {
-    if (state.lease !== lease) return;
+    if (retired || state.lastLease !== lease || (state.lease !== null && state.lease !== lease)) return;
+    const nextSessionId = sessionId(ctx);
+    if (!nextSessionId) return;
+    // 旧 Pi 可复用最后一次认领的 handler；一旦有新工厂接管，旧工厂不能再次抢回租约。
+    state.lease = lease;
+    runtime = state;
+    runtimeLease = lease;
     suspendHeartbeatForLifecycle();
     endOfficialPrompt();
     void cancelPendingDecisions();
     loadDecisionBridges(pi, loadedDecisionBridges);
-    // 会话/reload 边界上不可能有对话框还开着，顺手清掉计数，避免异常路径漏配平后长期失衡。
+    dialogScope = Symbol("pi-dialog-scope");
     mirroredDialogs = 0;
     ownDialogs = 0;
     officialSpanMirrored = false;
-    installDialogMirror(ctx);
-    state.sessionId = sessionId(ctx);
+    state.sessionId = nextSessionId;
     beginRun();
+    state.active = false;
+    failureMessage = null;
+    installDialogMirror(ctx, () => owns(ctx));
     if (ENABLED.sessionStart) void postHook("SessionStart");
   });
 
@@ -1511,7 +1549,7 @@ export default function cliManagerHook(pi: ExtensionAPI) {
   pi.on("agent_start", (_event, ctx) => {
     if (!owns(ctx)) return;
     cancelSettlement();
-    if (state.ended) beginRun();
+    if (!state.active || state.ended) beginRun();
     failureMessage = null;
     if (ENABLED.running) {
       if (!state.reportedRunning) {
@@ -1536,7 +1574,7 @@ export default function cliManagerHook(pi: ExtensionAPI) {
 
   // 每次运行只收尾一次；让同步 settle 排入的新运行先启动，再确认会话确实空闲。
   pi.on("agent_settled", (event, ctx) => {
-    if (!owns(ctx) || state.ended) return;
+    if (!owns(ctx) || !state.active || state.ended) return;
     cancelSettlement();
     const settledRunId = state.runId;
     const settledOutcome: RunOutcome = event.aborted ? "aborted" : state.outcome;
@@ -1558,16 +1596,21 @@ export default function cliManagerHook(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", (event, ctx) => {
-    if (!owns(ctx)) return;
+    // 工厂已持租约但 session_start 尚未完成时，shutdown 仍须交还自己的租约。
+    if (retired || state.lease !== lease || (state.sessionId !== null && !owns(ctx))) return;
     cancelSettlement();
     suspendHeartbeatForLifecycle();
     endOfficialPrompt();
     void cancelPendingDecisions();
-    // 同一扩展执行 new/resume/fork 时保留租约；只有卸载/退出才允许新工厂接管。
-    if (event.reason === "reload" || event.reason === "quit" || !event.reason) state.lease = null;
+    // Pi 1.4.0 会重建 new/resume/fork 的扩展工厂，所有正式 shutdown 都交还租约。
+    // 仅兼容旧 Pi 在这些会话切换后复用 handler；reload/quit 的旧回调永久退役。
+    retired = !["new", "resume", "fork"].includes(event.reason ?? "");
+    dialogScope = Symbol("pi-dialog-scope");
     state.active = false;
     state.sessionId = null;
     state.runId += 1;
+    state.lease = null;
+    runtimeLease = null;
     failureMessage = null;
   });
 }

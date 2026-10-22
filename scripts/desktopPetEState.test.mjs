@@ -19,11 +19,18 @@ writeFileSync(join(tempDir, "desktopPetE.mjs"), protocolOutput, "utf8");
 writeFileSync(join(tempDir, "agentTerminal.mjs"), [
   "export function shouldIncludeAgentTerminal() { return true; }",
 ].join("\n"), "utf8");
-writeFileSync(join(tempDir, "desktopPetStatus.mjs"), [
-  "export function resolveDesktopPetOpenSessionStatus(input) {",
-  "  return { status: input.frontendStatus, updatedAt: Date.parse(input.frontendDetails?.updatedAt ?? '') || 0 };",
-  "}",
-].join("\n"), "utf8");
+// 使用真实解析器，覆盖后台状态及重绘提示；不再将这层简化为只读前端字段。
+for (const [moduleName, relative] of [
+  ["desktopPetStatus", "../src/features/desktop-pet/lib/desktopPetStatus.ts"],
+  ["piSessionLifecycle", "../src/shared/lib/piSessionLifecycle.ts"],
+]) {
+  writeFileSync(join(tempDir, `${moduleName}.mjs`), ts.transpileModule(
+    readFileSync(new URL(relative, import.meta.url), "utf8"), {
+      compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+      fileName: `${moduleName}.ts`,
+    },
+  ).outputText, "utf8");
+}
 
 const promptSource = readFileSync(new URL("../src/shared/lib/desktopPetETerminalPrompt.ts", import.meta.url), "utf8");
 writeFileSync(join(tempDir, "desktopPetETerminalPrompt.mjs"), ts.transpileModule(promptSource, {
@@ -40,6 +47,7 @@ const stateOutput = ts.transpileModule(stateSource, {
   .replace('from "../../features/agents/api/agentTerminal"', 'from "./agentTerminal.mjs"')
   .replace('from "../../features/desktop-pet/lib/desktopPetStatus"', 'from "./desktopPetStatus.mjs"')
   .replace('from "./desktopPetETerminalPrompt"', 'from "./desktopPetETerminalPrompt.mjs"')
+  .replace('from "./piSessionLifecycle"', 'from "./piSessionLifecycle.mjs"')
   .replace('from "./desktopPetE"', 'from "./desktopPetE.mjs"');
 writeFileSync(join(tempDir, "desktopPetEState.mjs"), stateOutput, "utf8");
 const state = await import(pathToFileURL(join(tempDir, "desktopPetEState.mjs")).href);
@@ -252,6 +260,78 @@ function piInput(overrides = {}) {
     ...overrides,
   };
 }
+
+test("Pi 新会话空闲清除旧错误历史，不被旧后台状态或 TUI 重绘复活", () => {
+  const idle = piInput({
+    terminalPrompts: new Map(),
+    tabNotifications: { "tab-1": "none" },
+    tabStatusDetails: { "tab-1": { status: "none", updatedAt: new Date(9_000).toISOString() } },
+    ptyOutputActivityAt: { "tab-1": 9_999 },
+    backgroundTasks: [{ sessionId: "tab-1", alive: true, createdAtMs: 100, taskStatus: "failed", taskUpdatedAtMs: 1_000 }],
+  });
+  for (const oldStatus of ["failed", "done"]) {
+    const previous = [candidate("tab-1", oldStatus, 1_000, { source: "pi" })];
+    const current = state.deriveDesktopPetECandidates(idle);
+    assert.equal(current[0].status, "none");
+    const merged = state.mergeDesktopPetECandidatesWithHistory(previous, current, new Set(["tab-1"]));
+    assert.equal(snapshot(merged).tasks.length, 0);
+    assert.equal(snapshot(merged).mood, "idle");
+    const running = state.deriveDesktopPetECandidates({
+      ...idle, tabNotifications: { "tab-1": "running" },
+      tabStatusDetails: { "tab-1": { status: "running", updatedAt: new Date(10_000).toISOString() } },
+    });
+    assert.equal(snapshot(state.mergeDesktopPetECandidatesWithHistory(merged, running, new Set(["tab-1"]))).tasks[0].color, "green");
+  }
+});
+
+test("旧 Pi 空闲快照不抹掉较新的运行或红蓝历史，也不复活已结束的交互", () => {
+  const idle = candidate("tab-1", "none", 900, { source: "pi" });
+  for (const status of ["running", "failed", "done"]) {
+    const previous = [candidate("tab-1", status, 1_000, { source: "pi" })];
+    const merged = state.mergeDesktopPetECandidatesWithHistory(previous, [idle], new Set(["tab-1"]));
+    assert.equal(merged[0].status, status);
+    assert.equal(merged[0].updatedAt, 1_000);
+    const reset = state.mergeDesktopPetECandidatesWithHistory(merged, [{ ...idle, updatedAt: 1_001 }], new Set(["tab-1"]));
+    assert.equal(snapshot(reset).tasks.length, 0);
+  }
+  const reset = candidate("tab-1", "none", 1_000, { source: "pi" });
+  for (const status of ["running", "failed", "done", "attention"]) {
+    const merged = state.mergeDesktopPetECandidatesWithHistory(
+      [reset], [candidate("tab-1", status, 900, { source: "pi" })], new Set(["tab-1"]),
+    );
+    assert.equal(snapshot(merged).tasks.length, 0, "旧后台状态不能复活已经复位的任务");
+    assert.equal(merged[0].updatedAt, 1_000);
+  }
+  const other = state.mergeDesktopPetECandidatesWithHistory(
+    [candidate("tab-1", "failed", 1_000, { source: "claude" })], [idle], new Set(["tab-1"]),
+  );
+  assert.equal(snapshot(other).tasks.length, 0, "Pi 复位不沿用其他 CLI 的历史");
+  const pendingAction = { id: "old-action", kind: "question", adapterMode: "interactive" };
+  for (const interaction of [{ pendingAction }, { terminalPrompt }]) {
+    const merged = state.mergeDesktopPetECandidatesWithHistory(
+      [candidate("tab-1", "attention", 1_000, { source: "pi", ...interaction })],
+      [idle], new Set(["tab-1"]),
+    );
+    assert.equal(snapshot(merged).tasks.length, 0, "只保留普通新状态，不从历史恢复已结束的待答");
+  }
+});
+
+test("Pi 后台明确空闲同样清历史，新的失败及真实待答不被空闲抹掉", () => {
+  const task = { sessionId: "tab-1", alive: true, createdAtMs: 100, taskStatus: "none", taskUpdatedAtMs: 9_000 };
+  const input = piInput({
+    terminalPrompts: new Map(), sessions: [], persistedSessions: [piSession], backgroundTasks: [task],
+  });
+  const current = state.deriveDesktopPetECandidates(input);
+  const previous = [candidate("tab-1", "failed", 1_000, { source: "pi" })];
+  assert.equal(current[0].status, "none");
+  assert.equal(snapshot(state.mergeDesktopPetECandidatesWithHistory(previous, current, new Set(["tab-1"]))).tasks.length, 0);
+  const failed = state.deriveDesktopPetECandidates({ ...input, backgroundTasks: [{ ...task, taskStatus: "failed", taskUpdatedAtMs: 10_000 }] });
+  assert.equal(snapshot(failed).tasks[0].color, "red");
+  const pendingAction = { id: "real-question", kind: "question", requestGeneration: 1, adapterMode: "interactive", submitting: true };
+  const waiting = state.deriveDesktopPetECandidates({ ...input, pendingActions: new Map([["tab-1", pendingAction]]) });
+  assert.equal(snapshot(waiting).tasks[0].pendingAction, pendingAction);
+  assert.equal(snapshot(waiting).tasks[0].color, "yellow");
+});
 
 test("只读等待可独立计入黄灯，任务身份与开始时间保持稳定", () => {
   const first = state.deriveDesktopPetECandidates(piInput());

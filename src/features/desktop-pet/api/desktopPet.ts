@@ -260,6 +260,7 @@ function daemonTaskUpdatedAt(task: BackgroundPetTask): number {
 
 function explicitDaemonTaskStatus(task: BackgroundPetTask | undefined): TabNotificationState | null {
   if (
+    task?.taskStatus === "none" ||
     task?.taskStatus === "running" ||
     task?.taskStatus === "attention" ||
     task?.taskStatus === "done" ||

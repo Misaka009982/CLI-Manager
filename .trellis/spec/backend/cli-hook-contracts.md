@@ -1001,7 +1001,7 @@ Exact ownership prevents upgrades or uninstalls from deleting third-party and ot
 
 ## Scenario: Pi Agent Extension Hook Bridge
 
-> fork 的只读等待实现、上游薄接点清单及 v10 / 2 秒超时差异见 [Pi 等待外挂契约](../../../pet-e/docs/pi-terminal-prompt.md)。以下保留原有安装契约，但 fork 以 `src-tauri/src/pi_extension_template.ts` 为唯一外部模板（上游为 `settings/pi_extension.ts`），上报函数为 `postHook`、审批超时为 `REQUEST_TIMEOUT_MS = 2_000`；上游 V1.4.4 的运行身份、接纳门与生命周期语义已移植进该模板。
+> fork 的只读等待实现、上游薄接点清单及 v11 / 2 秒超时差异见 [Pi 等待外挂契约](../../../pet-e/docs/pi-terminal-prompt.md)。以下保留上游原有安装契约；fork 以 `src-tauri/src/pi_extension_template.ts` 为唯一外部模板（上游为 `settings/pi_extension.ts`），上报函数为 `postHook`，请求超时为 `REQUEST_TIMEOUT_MS = 2_000`。v11 覆盖下文旧租约语义：Pi 1.4.0 在 `/new`、`/resume`、`/fork` 重建扩展，正式 shutdown 交还租约，新工厂认领，旧回调按租约与作用域失效；合法本机/WSL Pi `SessionStart` 复位为明确空闲，绑定前拒绝迟到复位，宠物E按时间清理旧历史。其他 CLI、SSH、真实待答和模块开关语义保持不变。
 
 ### 1. Scope / Trigger
 

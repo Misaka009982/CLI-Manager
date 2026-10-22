@@ -18,7 +18,7 @@ test("managed Pi extension is generated from the owned decision template", () =>
   assert.match(template, /__CLI_MANAGER_PI_HOOK__|__PI_MARKER__/);
   // 与 Rust 升级常量对齐，后续升版不再留下过时的固定版本断言。
   const version = hookSettings.match(/const PI_EXTENSION_VERSION: u32 = (\d+);/)?.[1];
-  assert.ok(version && Number(version) >= 10, "Pi 模板版本必须包含 WSL 身份、只读等待与运行身份升级");
+  assert.ok(version && Number(version) >= 11, "Pi 模板版本必须包含会话重建后的租约交接与状态复位");
   assert.match(template, new RegExp(`CLI_MANAGER_PI_EXTENSION_VERSION:${version}\\b`));
   assert.match(template, /wslDistroName: nonEmpty\(process\.env\.WSL_DISTRO_NAME\)/);
   assert.match(hookSettings, /PI_EXTENSION_VERSION_PREFIX/);
@@ -77,7 +77,7 @@ test("third-party Pi dialogs are answerable from the pet and fall back to a noti
   // 同时提供独立只读等待和可选普通通知，不伪装成宠物可回答的问题。
   assert.match(template, /pi\.on\("ui_prompt_start"/);
   assert.match(template, /pi\.on\("ui_prompt_end"/);
-  assert.match(template, /registerPromptEvents\(pi\)/);
+  assert.match(template, /registerPromptEvents\(pi, owns\)/);
   assert.match(template, /postHook\("Notification", dialogNotice\(event\.kind, event\.title\)\)/);
   // 官方区间用布尔量配平，不在结束时重新判断 ownDialogs，否则心跳可能永久挂起。
   assert.match(template, /officialSpanMirrored/);
@@ -95,9 +95,9 @@ test("third-party Pi dialogs are answerable from the pet and fall back to a noti
   assert.match(broker, /"destructive": destructive,/);
   // 宠物端确实接住时不发提醒；接不住（未启用、选项不适配）才退回只发一条。
   assert.match(template, /const mirrorNotice = \(\) => \{/);
-  assert.match(template, /if \(petOpened \|\| mirrored\) return;/);
+  assert.match(template, /if \(petOpened \|\| mirrored \|\| dialogScope !== scope \|\| !isCurrent\(\)\) return;/);
   assert.match(template, /if \(!raceSignal\.aborted\) mirrorNotice\(\);/);
-  assert.match(template, /installDialogMirror\(ctx\)/);
+  assert.match(template, /installDialogMirror\(ctx, \(\) => owns\(ctx\)\)/);
   // 镜像期间挂起心跳，否则 20 秒一次的 UserPromptSubmit 会把「需要关注」刷回「运行中」。
   assert.match(template, /function beginMirroredDialog/);
   assert.match(template, /function endMirroredDialog/);
@@ -112,10 +112,10 @@ test("正式 UI 等待独立续报并在生命周期边界收尾", () => {
   assert.match(template, /TERMINAL_PROMPT_INTERVAL_MS = 5_000/);
   assert.match(publisher, /event: "DesktopPetEUiPrompt"/);
   assert.match(publisher, /sessionId: span\.sessionId/);
-  assert.match(publisher, /sequence: \+\+terminalPromptSequence/);
+  assert.match(publisher, /sequence: identity\.sequence/);
   assert.match(publisher, /remoteEventId: `\$\{identity\.instanceId\}:\$\{identity\.sequence\}`/);
   // 只读通道保持本机：只带运行身份，不带仅用于 SSH spool 的 remoteSequence。
-  assert.doesNotMatch(publisher, /remoteSequence/);
+  assert.doesNotMatch(publisher, /remoteSequence\s*:/);
   assert.match(publisher, /pi: identity/);
   assert.match(publisher, /if \(terminalPromptSpan === span\) void postTerminalPrompt\(span, true\)/);
   assert.match(publisher, /terminalPromptSpan = null;[\s\S]*postTerminalPrompt\(span, false\)/);
@@ -155,7 +155,7 @@ test("questions preserve ordered groups and keep native TUI fallback", () => {
 
 test("Pi permission bridge observes only the explicit producer", () => {
   assert.match(template, /event\.toolName !== "cli_manager_permission"/);
-  assert.match(template, /pi\.on\("tool_call", permissionDecision\)/);
+  assert.match(template, /pi\.on\("tool_call", \(event, ctx\) => owns\(ctx\) \? permissionDecision\(event, ctx\) : undefined\)/);
   assert.doesNotMatch(template, /event\.toolName === "bash"|event\.toolName === "read"/);
   assert.match(template, /Permission remains unresolved; request it again when ready/);
 });

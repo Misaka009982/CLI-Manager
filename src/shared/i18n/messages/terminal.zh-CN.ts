@@ -18,6 +18,7 @@ export const zh = {
   "termStats.agentCapabilities.health.unknownReason": "尚无可验证的调用结果或原生健康状态；推断调用不能证明连接健康。",
   "terminal.backgroundTasks.title": "后台任务",
   "terminal.backgroundTasks.shortTitle": "任务",
+  "terminal.backgroundTasks.idle": "空闲",
   "terminal.backgroundTasks.running": "执行中",
   "terminal.backgroundTasks.attention": "待处理",
   "terminal.backgroundTasks.completed": "已完成",

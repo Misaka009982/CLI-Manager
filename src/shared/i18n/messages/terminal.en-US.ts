@@ -19,6 +19,7 @@ export const en: Record<keyof typeof zh, string> = {
   "termStats.agentCapabilities.health.unknownReason": "No verifiable call result or native health status yet. Inferred calls do not establish connection health.",
   "terminal.backgroundTasks.title": "Background tasks",
   "terminal.backgroundTasks.shortTitle": "Tasks",
+  "terminal.backgroundTasks.idle": "Idle",
   "terminal.backgroundTasks.running": "Running",
   "terminal.backgroundTasks.attention": "Needs attention",
   "terminal.backgroundTasks.completed": "Completed",

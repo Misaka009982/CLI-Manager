@@ -143,6 +143,25 @@ mod tests {
     }
 
     #[test]
+    fn rebuilt_session_reuses_instance_with_a_new_generation() {
+        let mut gate = PiHookAdmission::default();
+        assert!(gate.accept(&request("root", 1, 1, "StopFailure")));
+        let mut start = request("root", 2, 2, "SessionStart");
+        start.session_id = Some("new-session".into());
+        assert!(gate.accept(&start));
+        // 即使序号更大，旧代际终态也不能覆盖新会话的空闲复位。
+        assert!(!gate.accept(&request("root", 3, 1, "StopFailure")));
+        let mut running = request("root", 4, 3, "UserPromptSubmit");
+        running.session_id = start.session_id.clone();
+        assert!(gate.accept(&running));
+        start.pi.as_mut().unwrap().sequence = 5;
+        assert!(!gate.accept(&start));
+        let mut ended = request("root", 6, 3, "Stop");
+        ended.session_id = running.session_id;
+        assert!(gate.accept(&ended));
+    }
+
+    #[test]
     fn retired_instances_cannot_take_over_new_root() {
         let mut gate = PiHookAdmission::default();
         assert!(gate.accept(&request("root", 1, 1, "SessionStart")));

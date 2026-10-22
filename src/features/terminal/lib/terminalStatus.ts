@@ -2,6 +2,7 @@ import type { SshDisconnectReason, TerminalSession } from "../../../shared/types
 import { logInfo, recordCrashActivity } from "../../../shared/platform/logger";
 import { useProjectStore } from "../../projects/api/projectStore";
 import { translateCurrent } from "../../../shared/i18n/index";
+import { isPiSessionStart } from "../../../shared/lib/piSessionLifecycle";
 import { findProjectByPath, findWorktreeByPath } from "../api/terminalProject";
 import {
   type CliHookEventName, type CliHookPayload, type CodexGoalStatus, type TabNotificationState, type ShellRuntimeEventName,
@@ -59,7 +60,7 @@ export function isGenericDaemonSessionTitle(title: string | null | undefined): b
 }
 
 export function normalizeDaemonTaskStatus(status: string | null | undefined): TabNotificationState | null {
-  if (status === "running" || status === "attention" || status === "done" || status === "failed") return status;
+  if (status === "none" || status === "running" || status === "attention" || status === "done" || status === "failed") return status;
   return null;
 }
 
@@ -231,7 +232,7 @@ export function resolveCliHookStatus(payload: Pick<CliHookPayload, "tabId" | "so
   const isCodexGoalStop = payload.source === "codex" && payload.event === "Stop";
   if (!isCodexGoalStop) {
     return {
-      status: mapCliHookEvent(payload.event),
+      status: isPiSessionStart(payload) ? "none" : mapCliHookEvent(payload.event),
       isCodexGoalStop: false,
       goalStatus: null,
       goalId: null,
