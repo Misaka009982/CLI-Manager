@@ -40,7 +40,7 @@ function isolatedSettings() {
       }
       if (resolve(importer).toLowerCase() !== modalPath.toLowerCase()) return;
       const page = source.match(/\/pages\/(\w+)$/)?.[1];
-      if (page === 'CcConnectSettingsPage') return normalizePath(join(fixture, 'settingsEscapePage.tsx'));
+      if (page === 'RemoteConnectionsSettingsPage') return normalizePath(join(fixture, 'settingsEscapePage.tsx'));
       const empty = page ?? ({ '../index': 'HookSettingsPage', '../../extensions': 'GlobalExtensionsPage' })[source];
       if (empty) return virtual(empty, `export function ${empty}() { return null; }`);
       if (source.endsWith('/mcpSaving')) return virtual('mcp',
@@ -111,7 +111,7 @@ test('settings Escape ownership and shell focus outlines in Chromium', { timeout
   });
 
   await t.test('visible drawer/modal owns one Escape, including zero-duration synchronous close', async () => {
-    for (const duration of [200, 0]) for (const layer of ['web-device', 'cc-connect', 'inner-modal']) {
+    for (const duration of [200, 0]) for (const layer of ['web-device', 'connection-details', 'inner-modal']) {
       await page.goto(`${url}?duration=${duration}`);
       await openSettings();
       await page.locator(`#open-${layer}`).click();

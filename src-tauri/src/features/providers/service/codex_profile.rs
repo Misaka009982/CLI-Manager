@@ -180,7 +180,7 @@ trust_level = 'trusted'
             .into(),
         };
         for _ in 0..3 {
-            crate::provider::runtime::write_codex_profile_to_dir(dir.path(), &profile).unwrap();
+            write_preserving_hook_state(&path, &profile.profile_text).unwrap();
             let actual: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(actual["model"].as_str(), Some("new"));
             let trusted = &actual["projects"][r"f:\gitrepository\cli-manager"];
@@ -241,7 +241,7 @@ trust_level = 'trusted'
         }
     }
 
-    // 远程托管的真实入口必须与普通启动共用状态保留写入，不只是测试私有合并函数。
+    // 共享写入入口保留 Codex 已保存的 Hook 信任。
 
     #[test]
     fn runtime_writer_preserves_codex_saved_trust_when_regenerating() {
@@ -253,7 +253,7 @@ trust_level = 'trusted'
         };
         let path = dir.path().join("managed.config.toml");
         fs::write(&path, "[hooks.state.saved]\ntrusted_hash='confirmed'\n").unwrap();
-        crate::provider::runtime::write_codex_profile_to_dir(dir.path(), &profile).unwrap();
+        write_preserving_hook_state(&path, &profile.profile_text).unwrap();
         let actual: toml::Value = toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(actual["model"].as_str(), Some("updated"));
         assert_eq!(

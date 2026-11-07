@@ -1,5 +1,13 @@
 # History List and Search Index Contracts
 
+## Detail page IPC (TEMP, 2026-11-01)
+
+- `commands::history::detail_page::history_get_session_page` is registered at its command macro owner, not via a function re-export. Existing `history_get_session` remains complete and unchanged.
+- The v2 detail reader accepts an optional offset/limit/revision window. Messages and parts use the same ordered SQL window; heavy usage/tool/file-change rows are not fetched on the paged path. No schema migration or persisted format change.
+- Metadata/messages/parts share one read transaction, also for the existing v2 complete adapter, so background materialization cannot mix catalog revisions between SELECTs. Success/failure rolls back the read-only transaction; nested callers use SQLx savepoint semantics.
+- The page revision includes catalog row identity, indexed fingerprint and update time. Every request also verifies the current source fingerprint/deletion as before. Continuation cannot fall back to live parsing; mismatches return `history_page_changed`. Initial uncached reads keep the complete legacy/remote adapter.
+- Bounded offset validation and at most 160 messages per page do not constitute a byte cap on one unusually large message. Explicit complete detail requests and legacy parsers retain existing allocation semantics.
+
 ## Scenario: Cached history list and full-text search
 
 ### 1. Scope / Trigger
@@ -39,9 +47,13 @@
 - First indexing is recent-first and partial results remain usable. A ready generation change reloads the list and current search.
 - Project filtering uses indexed normalized `cwd` plus Claude encoded project keys; it must not reopen every JSONL in the request path.
 - Editing/deleting/converting history marks the catalog dirty. Refresh replaces only changed files and removes missing files.
+- Foreground file-backed detail reads must not await a dirty catalog's full refresh. Schedule refresh in the background and validate/read the requested source directly; V2 cached detail must reject a missing source file even while catalog rows remain. OpenCode database locators retain their separate provider/catalog path.
+- The session-file directory cache is keyed by source and history roots with a 60-second TTL. A full scan (no source filter) replaces the `*` entry and drops every per-source entry for the same roots, so `validate_session_file_ref` accepts a file the refreshed catalog already returns (for example a new Claude session after `/clear`); entries for other roots are kept.
 - WSL history inventory continues to use `wsl.exe` discovery rather than native recursive UNC enumeration.
 
 ### 4. Validation & Error Matrix
+
+Codex `response_item` function/custom/MCP calls, their outputs, and public reasoning summaries are canonical history messages. Claude tool-only/thinking-only rows must survive even without ordinary text. Preserve call IDs and timestamps; tool outputs have tool role. Read public reasoning fields only, never ciphertext or signatures. Message iteration and file-change references must use the same parser. Activity support uses legacy cache version 15, catalog parser version 4 and V2 adapter parser version 8 so unchanged files are re-derived after upgrading; user-authored logs are untouched.
 
 | Condition | Required behavior |
 |---|---|
@@ -696,3 +708,7 @@ invalidate_history_caches(); // only after commit
 ### Required verification
 
 Isolated temporary fixtures cover missing/existing parent, cross-date/cwd/nested subagents, normal forks/generic parent fields, other roots, duplicate UUIDs/cycles, bounded/mismatched/compatible headers, directory links, backup creation failure and Windows locked-parent rollback. Frontend tests cover real Store cleanup (including search-only descendants), readonly/snapshot preservation, batch preflight/coverage/partial failure and bilingual diagnostics. Human WSL/UI acceptance is separate from automated fixture tests.
+
+## Live Tap transcript isolation
+
+`history_read_live_transcript` is a separate read-only projection for an exact host-authorized Claude/Codex PTY binding. It reuses canonical `parse_message`, model/effort extraction and source/WSL discovery, validates source-root containment and exact transcript metadata cwd/CLI ID, and never substitutes a recent conversation. The host validates the project/Worktree/PTY tuple before and after I/O. Its bounded reader/revision/observation lease do not change `history_get_session`, general history statistics or catalog materialization. Older pages explicitly stream from the start with bounded retained memory. See web-service-contracts for byte, lease and compatibility limits.

@@ -22,7 +22,7 @@ const outputPath = join(tempDir, "desktopPetTransport.mjs");
 writeFileSync(outputPath, output, "utf8");
 const transport = await import(pathToFileURL(outputPath).href);
 
-// 构造含任务与接管字段的桌宠传输快照。
+// 构造桌宠任务传输快照。
 function snapshot(overrides = {}) {
   return {
     mood: "working",
@@ -41,16 +41,7 @@ function snapshot(overrides = {}) {
       status: "running",
       active: true,
       updatedAt: 1000,
-      handoffCandidate: true,
-      handoffEligible: false,
-      handoffRecoverable: true,
-      handoffReason: "missing_cli_session_id",
-      handedOff: false,
-      handoffPhase: null,
     }],
-    handoff: null,
-    handoffPlatforms: [],
-    handoffBusy: false,
     ...overrides,
   };
 }

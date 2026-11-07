@@ -11,9 +11,13 @@ const eventsUrl = moduleUrl(read("./fileOperationEvents.ts"));
 const cacheUrl = moduleUrl(read("./projectDirectoryCache.ts"));
 const { subscribeFileOperation } = await import(eventsUrl);
 const { directoryScope, projectDirectoryCache } = await import(cacheUrl);
+const socketUrl = moduleUrl(read("../../../src/shared/lib/webBrowserSocket.ts"));
+const httpUrl = moduleUrl(read("../../../src/shared/lib/webBrowserHttp.ts"));
 const { connectBrowserSocket } = await import(moduleUrl(read("./webClient.ts")
   .replace('"./fileOperationEvents"', JSON.stringify(eventsUrl))
-  .replace('"./projectDirectoryCache"', JSON.stringify(cacheUrl))));
+  .replace('"./projectDirectoryCache"', JSON.stringify(cacheUrl))
+  .replace('"../../../src/shared/lib/webBrowserSocket"', JSON.stringify(socketUrl))
+  .replace('"../../../src/shared/lib/webBrowserHttp"', JSON.stringify(httpUrl))));
 
 test("10,000 replay invalidations share one fetch and at most one follow-up", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });

@@ -6,6 +6,10 @@ import vm from "node:vm";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
+const gitRead = {};
+vm.runInNewContext(ts.transpileModule(readFileSync(new URL("./webGitRead.ts", import.meta.url), "utf8"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, { exports: gitRead, require: () => ({}) });
 const code = ts.transpileModule(readFileSync(new URL("./webManagement.ts", import.meta.url), "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
@@ -22,6 +26,7 @@ function harness() {
   };
   const exports = {};
   vm.runInNewContext(code, { exports, TextEncoder, require: (id) => {
+    if (id.endsWith("webGitRead")) return gitRead;
     if (id.endsWith("projectStore")) return { useProjectStore: { getState: () => store } };
     if (id.endsWith("webDeviceActionBus")) return { requestWebDeviceAction: async (request) => { calls.push(["desktop", request]); return request; } };
     return {};

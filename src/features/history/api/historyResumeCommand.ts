@@ -1,7 +1,6 @@
 import { resolveCliToolHistorySourceId } from "../../../shared/lib/cliTools";
 import { appendResumeCliArgs } from "../../projects/api/projectStartupCommand";
 import { isValidGrokSessionId, isValidKimiSessionId, stripKimiResumeCliArgs } from "./resumeCliArgs";
-import type { RemoteHandoffAgent } from "../../remote/api/remoteHandoff";
 import type { HistorySessionSummary, Project } from "../../../shared/types/index";
 
 type ResumeProject = Pick<
@@ -143,35 +142,6 @@ function appendSessionCliArgs(
     ? stripOpenCodeResumeCliArgs(project.cli_args)
     : stripPiResumeCliArgs(project.cli_args);
   return cliArgs ? `${base} ${cliArgs}` : base;
-}
-
-export function buildRemoteHandoffResumeCommand(
-  agent: RemoteHandoffAgent,
-  sessionId: string,
-  project?: ResumeProject | null,
-): string | null {
-  const normalizedId = agent === "opencode"
-    ? normalizeOpenCodeSessionId(sessionId)
-    : normalizeSessionId(sessionId);
-  if (!normalizedId) return null;
-
-  if (agent === "codex") {
-    return appendResumeCliArgs(
-      `codex resume --no-alt-screen ${normalizedId}`,
-      "codex",
-      project,
-      { includeProviderOverrides: false },
-    );
-  }
-  if (agent === "claude") {
-    return appendResumeCliArgs(
-      `claude --resume ${normalizedId}`,
-      "claude",
-      project,
-      { includeProviderOverrides: false },
-    );
-  }
-  return appendSessionCliArgs(`${agent} --session ${normalizedId}`, agent, project);
 }
 
 export function buildHistoryResumeCommand(

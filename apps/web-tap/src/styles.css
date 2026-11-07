@@ -1,0 +1,331 @@
+/* Tap workspace: quiet neutral surfaces, violet interaction states, native dark terminal. */
+@import "./session.css";
+@import "./chat.css";
+@import "./turnRail.css";
+@import "./completion.css";
+@import "./panels.css";
+
+@font-face {
+  font-family: "Tap Mono";
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url("/fonts/inconsolata-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193;
+}
+
+:root {
+  color-scheme: light;
+  --bg: oklch(1 0 0);
+  --surface: oklch(.985 .002 285.82);
+  --fg: oklch(.145 .014 285.82);
+  --fg-2: oklch(.38 .014 285.82);
+  --muted: oklch(.965 .003 285.82);
+  --muted-fg: oklch(.52 .014 285.82);
+  --border: oklch(.922 .003 285.82);
+  --border-strong: oklch(.87 .005 285.82);
+  --ring: oklch(.708 .014 285.82);
+  --brand: oklch(.54 .2 280);
+  --brand-fg: oklch(.985 0 0);
+  --brand-soft: color-mix(in oklch, var(--brand) 9%, transparent);
+  --success: oklch(.527 .154 150.07);
+  --warning: oklch(.72 .17 70);
+  --warning-soft: color-mix(in oklch, var(--warning) 12%, transparent);
+  --danger: oklch(.577 .245 27.33);
+  --bubble: oklch(.935 .04 283);
+  --bubble-fg: oklch(.27 .05 283);
+  --bubble-link: var(--brand);
+  --term-bg: #1c1b22;
+  --term-border: oklch(.3 .01 285);
+  --scrim: oklch(.2 .02 285 / .32);
+  --shadow-float: 0 1px 2px oklch(.2 .01 285 / .05), 0 12px 32px -12px oklch(.2 .02 285 / .18);
+  --shadow-overlay: 0 1px 2px oklch(.2 .01 285 / .06), 0 24px 48px -16px oklch(.2 .02 285 / .28);
+  --ease: cubic-bezier(.22, 1, .36, 1);
+  --hit: 32px;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  font: 14px/1.5 var(--sans);
+  color: var(--fg);
+  background: var(--bg);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: oklch(.165 .012 285.82);
+  --surface: oklch(.145 .014 285.82);
+  --fg: oklch(.985 0 0);
+  --fg-2: oklch(.82 .008 285.82);
+  --muted: oklch(.24 .014 285.82);
+  --muted-fg: oklch(.708 .014 285.82);
+  --border: oklch(.269 .014 285.82);
+  --border-strong: oklch(.34 .014 285.82);
+  --ring: oklch(.5 .014 285.82);
+  --brand: oklch(.72 .14 280);
+  --brand-fg: oklch(.205 .014 285.82);
+  --brand-soft: color-mix(in oklch, var(--brand) 14%, transparent);
+  --warning: oklch(.8 .15 75);
+  --danger: oklch(.7 .19 22);
+  --bubble: oklch(.33 .075 283);
+  --bubble-fg: oklch(.97 .012 283);
+  --bubble-link: oklch(.84 .08 285);
+  --term-border: oklch(.32 .014 285.82);
+  --scrim: oklch(0 0 0 / .55);
+  --shadow-float: 0 1px 2px oklch(0 0 0 / .3), 0 16px 40px -12px oklch(0 0 0 / .55);
+  --shadow-overlay: 0 1px 2px oklch(0 0 0 / .35), 0 24px 56px -16px oklch(0 0 0 / .7);
+}
+@media (pointer: coarse) { :root { --hit: 34px; } }
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; background: var(--bg); }
+button, input, textarea { font: inherit; color: inherit; }
+button { border: 0; background: none; padding: 0; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+button:disabled { cursor: default; opacity: .4; }
+a { color: var(--brand); text-underline-offset: 2px; -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid color-mix(in oklch, var(--brand) 55%, transparent); outline-offset: 2px; }
+::selection { background: color-mix(in oklch, var(--brand) 22%, transparent); }
+input, textarea { caret-color: var(--brand); }
+h1, h2, h3, p { margin: 0; }
+svg { flex-shrink: 0; stroke-width: 1.75; }
+button, nav, .tap-dock-status, .tap-keybar { -webkit-user-select: none; user-select: none; }
+[hidden] { display: none !important; }
+* { scrollbar-width: thin; scrollbar-color: color-mix(in oklch, var(--muted-fg) 25%, transparent) transparent; }
+
+/* Shared controls */
+.tap-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: var(--hit); height: var(--hit); border-radius: 8px; color: var(--muted-fg); transition: background-color 150ms, color 150ms;
+}
+.tap-icon.is-small { width: 26px; height: 26px; border-radius: 6px; }
+.tap-text-button {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border-radius: 6px;
+  color: var(--brand); font-size: 13px; font-weight: 500; white-space: nowrap;
+}
+.tap-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 14px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); font-size: 13.5px; font-weight: 500;
+}
+.tap-button.is-primary { border-color: transparent; background: var(--brand); color: var(--brand-fg); }
+.tap-button.is-wide { width: 100%; min-height: 40px; }
+.tap-quiet-danger {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; border-radius: 7px;
+  border: 1px dashed color-mix(in oklch, var(--danger) 55%, transparent); color: var(--danger); font-size: 12.5px; font-weight: 500;
+}
+.tap-add { color: var(--success); font-weight: 500; }
+.tap-del { color: var(--danger); font-weight: 500; }
+.tap-spin { animation: tap-spin 900ms linear infinite; }
+@media (hover: hover) {
+  .tap-icon:hover:not(:disabled) { background: var(--muted); color: var(--fg); }
+  .tap-text-button:hover:not(:disabled) { background: var(--brand-soft); }
+  .tap-button:hover:not(:disabled) { background: var(--muted); }
+  .tap-button.is-primary:hover:not(:disabled) { background: color-mix(in oklch, var(--brand) 88%, black); }
+  .tap-quiet-danger:hover { background: color-mix(in oklch, var(--danger) 7%, transparent); }
+}
+.tap-mark {
+  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px;
+  background: var(--term-bg); color: #fff; font: 700 13px/1 var(--mono);
+}
+.tap-mark b { color: oklch(.72 .14 280); }
+
+/* Status glyphs */
+.tap-status { position: relative; display: inline-block; flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--brand); }
+.tap-status.is-connecting, .tap-status.is-offline { background: none; border: 1.5px solid var(--ring); }
+.tap-status.is-ended { width: 7px; height: 7px; background: none; border: 1.5px solid var(--ring); }
+.tap-link { display: inline-block; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+.tap-link.is-waiting { background: var(--ring); }
+.tap-link.is-lost { background: var(--danger); animation: tap-blink 1.2s ease-in-out infinite; }
+.tap-device-option { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tap-device-option > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tap-menu .tap-device-option > small { margin-left: 0; color: var(--muted-fg); font-size: 11px; }
+
+/* App shell: absolute, never a full-screen fixed layer (iOS samples the first fixed layer for the status bar). */
+.tap-app, .tap-login { position: absolute; inset: 0; bottom: auto; z-index: 0; height: 100%; overflow: hidden; background: var(--bg); transition: top 160ms ease-out; }
+.tap-app { display: grid; grid-template-columns: 272px minmax(0, 1fr); padding-top: env(safe-area-inset-top); }
+.tap-app.has-panel { grid-template-columns: 272px minmax(0, 1fr) 320px; }
+.tap-workspace { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.tap-sessions { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+
+/* Session header */
+.tap-topbar {
+  position: relative; z-index: 5; display: flex; align-items: center; gap: 4px; min-height: 48px; padding: 0 10px 0 16px;
+  border-bottom: 1px solid var(--border); background: var(--bg);
+}
+.tap-title { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 0; }
+.tap-title h1 { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 600; line-height: 1.4; }
+.tap-title h1 span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tap-subtitle { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted-fg); font-size: 12px; white-space: nowrap; }
+.tap-subtitle span { overflow: hidden; text-overflow: ellipsis; }
+.tap-top-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.tap-crumb {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; max-width: 280px; padding: 0 9px; margin-right: 4px;
+  border: 1px solid var(--border); border-radius: 7px; color: var(--fg-2); font: 12px var(--mono);
+}
+.tap-crumb svg { color: var(--muted-fg); }
+.tap-crumb span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tap-crumb b { color: var(--border-strong); font-weight: 400; }
+.tap-toggle { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--muted); }
+.tap-toggle [role="tab"] {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 7px;
+  color: var(--muted-fg); font-size: 12.5px; font-weight: 500; transition: background-color 150ms, color 150ms;
+}
+.tap-toggle [role="tab"][aria-selected="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px oklch(.2 .01 285 / .1); }
+:root[data-theme="dark"] .tap-toggle [role="tab"][aria-selected="true"] { background: var(--border-strong); box-shadow: none; }
+.tap-changes-chip {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 32px; height: 30px; padding: 0 9px;
+  border-radius: 8px; color: var(--fg-2); font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.tap-changes-chip.is-open { background: var(--brand-soft); }
+@media (hover: hover) { .tap-changes-chip:hover { background: var(--muted); } .tap-changes-chip.is-open:hover { background: var(--brand-soft); } }
+@container session (max-width: 900px) { .tap-crumb { display: none; } }
+@container session (max-width: 620px) { .tap-toggle [role="tab"] span { display: none; } .tap-toggle [role="tab"] { padding: 0 7px; } }
+
+/* Menus anchored to their trigger; a transparent scrim takes the dismissing tap. */
+.tap-menu-anchor { position: relative; display: inline-flex; }
+.tap-menu-scrim { position: fixed; inset: 0; z-index: 29; }
+.tap-menu {
+  position: absolute; z-index: 30; min-width: 208px; padding: 4px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg); box-shadow: var(--shadow-overlay); color: var(--fg); outline: none; animation: tap-menu-in 200ms var(--ease);
+}
+.tap-menu.is-down-end { top: calc(100% + 6px); right: 0; transform-origin: top right; }
+.tap-menu.is-down-start { top: calc(100% + 6px); left: 0; transform-origin: top left; }
+.tap-menu.is-up-start { bottom: calc(100% + 10px); left: -6px; min-width: 236px; transform-origin: bottom left; animation-name: tap-menu-up; }
+.tap-menu.is-up-end { bottom: calc(100% + 8px); right: 0; transform-origin: bottom right; animation-name: tap-menu-up; }
+.tap-menu > button {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: var(--hit); padding: 0 10px; border-radius: 6px;
+  font-size: 13.5px; text-align: left; white-space: nowrap;
+}
+.tap-menu > button > svg:first-child { color: var(--muted-fg); }
+.tap-menu > button small { margin-left: auto; color: var(--muted-fg); font-size: 11.5px; }
+.tap-menu > button .tap-menu-check { margin-left: 8px; color: var(--brand); stroke-width: 2.25; }
+.tap-menu > button.is-danger { position: relative; margin-top: 9px; color: var(--danger); }
+.tap-menu > button.is-danger svg { color: var(--danger); }
+.tap-menu > button.is-danger::before { content: ""; position: absolute; top: -5px; left: 8px; right: 8px; height: 1px; background: var(--border); }
+.tap-menu-stepper { display: flex; align-items: center; gap: 10px; min-height: var(--hit); padding: 0 4px 0 10px; font-size: 13.5px; white-space: nowrap; }
+.tap-menu-stepper > svg { color: var(--muted-fg); }
+.tap-menu-stepper > span { flex: 1; }
+.tap-menu-stepper button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; color: var(--fg-2); }
+.tap-menu-stepper button:disabled { opacity: .35; }
+.tap-menu-stepper output { min-width: 22px; margin: 0 -6px; text-align: center; font: 12.5px var(--mono); }
+.tap-menu.is-confirm { width: min(300px, calc(100vw - 24px)); padding: 14px 12px 12px 14px; }
+.tap-menu.is-confirm strong { display: block; font-size: 14px; font-weight: 600; }
+.tap-menu.is-confirm p { margin-top: 6px; color: var(--fg-2); font-size: 13px; line-height: 1.65; }
+.tap-confirm-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 14px; }
+@media (hover: hover) { .tap-menu > button:hover:not(:disabled), .tap-menu-stepper button:hover:not(:disabled) { background: var(--muted); } }
+.tap-menu > button:focus-visible { outline: none; background: var(--muted); }
+
+/* Toasts and states */
+.tap-toast {
+  position: absolute; z-index: 20; top: 56px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
+  max-width: min(560px, calc(100% - 24px)); padding: 6px 6px 6px 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg); box-shadow: var(--shadow-float); font-size: 13px; animation: tap-rise 180ms var(--ease);
+}
+.tap-toast > span { flex: 1; }
+.tap-offline { padding: 7px 16px; background: var(--warning-soft); color: color-mix(in oklch, var(--warning) 65%, var(--fg)); font-size: 12.5px; }
+
+/* Empty workspace */
+.tap-empty { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.tap-empty-body {
+  display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px 24px 64px;
+  text-align: center; overflow: auto;
+}
+.tap-empty-tile { display: inline-flex; padding: 11px; margin-bottom: 6px; border-radius: 13px; background: var(--brand-soft); color: var(--brand); }
+.tap-empty-body h2 { font-size: 18px; font-weight: 600; }
+.tap-empty-body p { max-width: 30em; color: var(--muted-fg); font-size: 13.5px; line-height: 1.6; }
+.tap-empty-actions { display: flex; gap: 8px; margin-top: 12px; }
+.tap-pair { display: flex; gap: 8px; margin-top: 12px; }
+.tap-pair input, .tap-login input {
+  min-height: 38px; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg); outline: none;
+}
+.tap-pair input:focus, .tap-login input:focus {
+  border-color: color-mix(in oklch, var(--brand) 45%, transparent); box-shadow: 0 0 0 3px color-mix(in oklch, var(--brand) 12%, transparent);
+}
+
+/* Sign-in */
+.tap-login { display: grid; place-items: center; padding: max(24px, env(safe-area-inset-top)) 24px; background: var(--surface); overflow: auto; }
+.tap-login-card { display: flex; flex-direction: column; gap: 16px; width: min(400px, 100%); }
+.tap-login-mark {
+  display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 13px;
+  border: 1px solid color-mix(in oklch, var(--brand) 22%, transparent); background: var(--brand-soft); color: var(--brand);
+}
+.tap-login h1 { font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
+.tap-login-card > p { color: var(--muted-fg); font-size: 14px; line-height: 1.7; }
+.tap-login form { display: flex; flex-direction: column; gap: 14px; }
+.tap-login label { display: flex; flex-direction: column; gap: 6px; color: var(--fg-2); font-size: 13px; font-weight: 500; }
+.tap-login-error { padding: 8px 12px; border-radius: 8px; background: color-mix(in oklch, var(--danger) 8%, transparent); color: var(--danger); font-size: 13px; }
+.tap-login-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.tap-login-links { display: flex; justify-content: space-between; align-items: center; }
+.tap-login-links a { display: inline-flex; align-items: center; gap: 4px; color: var(--muted-fg); font-size: 13px; text-decoration: none; }
+
+/* Overlays: portal layer, backdrop sibling, no inert. */
+#overlays { display: contents; }
+.tap-backdrop { position: fixed; inset: 0; z-index: 50; background: var(--scrim); animation: tap-fade 200ms ease-out; }
+.tap-backdrop.is-closing { opacity: 0; animation: tap-fade-out 180ms ease-in; }
+.tap-sheet {
+  position: fixed; z-index: 50; inset: 0; margin: auto; display: flex; flex-direction: column; width: min(480px, calc(100vw - 32px));
+  height: fit-content; max-height: calc(var(--vv-height, 100dvh) - 48px); border: 1px solid var(--border); border-radius: 14px;
+  background: var(--bg); box-shadow: var(--shadow-overlay); outline: none; overflow: hidden; animation: tap-modal-in 250ms var(--ease);
+}
+.tap-sheet.is-wide { width: min(760px, calc(100vw - 32px)); }
+.tap-sheet.is-closing { opacity: 0; animation: tap-modal-out 150ms ease-in; }
+.tap-sheet-head { position: relative; display: flex; align-items: center; gap: 8px; min-height: 54px; padding: 0 10px 0 20px; border-bottom: 1px solid var(--border); }
+.tap-sheet-head h2 { flex: 1; font-size: 15px; font-weight: 600; }
+.tap-grabber { display: none; }
+.tap-sheet-body { min-height: 0; padding: 16px 20px 20px; overflow: auto; overscroll-behavior: contain; }
+.tap-sheet-lead { margin-bottom: 12px; color: var(--muted-fg); font-size: 13px; }
+.tap-scrim {
+  position: fixed; inset: 0; z-index: 39; background: var(--scrim); opacity: 0; visibility: hidden;
+  transition: opacity 220ms ease-out, visibility 0s 320ms;
+}
+.tap-scrim.is-open { opacity: 1; visibility: visible; transition: opacity 220ms ease-out; }
+.tap-drawer {
+  position: fixed; top: 0; bottom: 0; z-index: 40; display: flex; flex-direction: column; width: min(86vw, 340px);
+  background: var(--bg); box-shadow: var(--shadow-overlay); outline: none; visibility: hidden; touch-action: pan-y;
+  transition: transform 320ms var(--ease), visibility 0s 320ms; will-change: transform;
+}
+.tap-drawer.is-left { left: 0; transform: translateX(-102%); padding-top: env(safe-area-inset-top); }
+.tap-drawer.is-right { right: 0; transform: translateX(102%); }
+.tap-drawer.is-open { transform: none; visibility: visible; transition: transform 320ms var(--ease); }
+
+@keyframes tap-spin { to { transform: rotate(360deg); } }
+@keyframes tap-blink { 50% { opacity: .35; } }
+@keyframes tap-fade { from { opacity: 0; } }
+@keyframes tap-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes tap-rise { from { opacity: 0; transform: translate(-50%, 6px); } }
+@keyframes tap-menu-in { from { opacity: 0; transform: translateY(-4px) scale(.97); } }
+@keyframes tap-menu-up { from { opacity: 0; transform: translateY(4px) scale(.97); } }
+@keyframes tap-modal-in { from { opacity: 0; transform: scale(.96); } }
+@keyframes tap-modal-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(.97); } }
+@keyframes tap-sheet-up { from { transform: translateY(100%); } }
+@keyframes tap-sheet-down { from { transform: none; } to { transform: translateY(100%); } }
+
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
+  :root { font-size: 13px; }
+  .tap-app { display: flex; flex-direction: column; padding-top: 0; }
+  .tap-workspace { flex: 1; }
+  .tap-topbar {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 2px; min-height: calc(44px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 2px 0;
+  }
+  .tap-title { flex-direction: column; align-items: stretch; gap: 0; padding-left: 2px; }
+  .tap-title h1 { font-size: 13.5px; line-height: 1.3; }
+  .tap-subtitle { font: 10.5px/1.4 var(--mono); }
+  .tap-top-actions { gap: 0; }
+  .tap-toggle { margin-right: 2px; }
+  .tap-toggle [role="tab"] { height: 28px; padding: 0 7px; }
+  .tap-toggle [role="tab"] span { display: none; }
+  .tap-toast { top: calc(52px + env(safe-area-inset-top)); }
+  .tap-sheet {
+    inset: auto 0 var(--keyboard, 0px) 0; margin: 0; width: 100%; max-height: calc(var(--vv-height, 100dvh) - 16px);
+    border-width: 1px 0 0; border-radius: 16px 16px 0 0; animation: tap-sheet-up 320ms var(--ease);
+  }
+  .tap-sheet.is-closing { opacity: 1; transform: translateY(100%); animation: tap-sheet-down 180ms ease-in; }
+  .tap-sheet-head { min-height: 58px; padding-top: 6px; touch-action: none; }
+  .tap-grabber { display: block; position: absolute; top: 7px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--border-strong); }
+  .tap-sheet-body { padding: 12px 16px max(20px, env(safe-area-inset-bottom)); }
+  :root[data-keyboard="open"] .tap-sheet-body { padding-bottom: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}

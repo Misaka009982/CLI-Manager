@@ -1,3 +1,4 @@
+import { Command as HomeCommand } from "../../../shared/ui/homeIcons";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/shallow";
 import { useTemplateStore } from "./templateStore";
@@ -12,7 +13,7 @@ import { Skeleton } from "../../../shared/ui/Skeleton";
 import { toast } from "sonner";
 import { logError } from "../../../shared/platform/logger";
 import { useI18n } from "../../../shared/i18n/index";
-import { terminalProcessManager } from "../../terminal/api/TerminalProcessManager";
+import { submitTerminalText } from "../../terminal/api/terminalTextSubmission";
 
 type TemplateScope = "global" | "project" | "session";
 type ScopeFilter = "all" | TemplateScope;
@@ -272,11 +273,12 @@ export function CommandTemplatePanel({
       : t("settings.templates.scope.project");
   };
 
+  // Resolve variables before submitting to the captured session, not a later active tab.
   const handleRun = async (template: CommandTemplate) => {
     if (!activeSessionId) return;
     const resolved = resolveCommand(template.command, activeProject);
     try {
-      await terminalProcessManager.write(activeSessionId, resolved + "\r");
+      await submitTerminalText(activeSessionId, resolved);
       setOpen(false);
     } catch (err) {
       toast.error(t("commandTemplate.toast.runFailed"), { description: String(err) });
@@ -382,7 +384,7 @@ export function CommandTemplatePanel({
           title={popoverSide === "left" ? undefined : t("commandTemplate.title")}
           aria-label={t("commandTemplate.openPanel")}
         >
-          <TerminalSquare size={14} strokeWidth={1.5} />
+          <HomeCommand size={14} strokeWidth={1.5} />
         </button>
       </PopoverTrigger>
       <PopoverContent

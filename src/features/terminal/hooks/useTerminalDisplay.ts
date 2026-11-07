@@ -1,5 +1,6 @@
 import { useRef, type RefObject } from "react";
 import { createTerminalColorQueryFilter } from "../../../shared/lib/terminalColorQueryFilter";
+import { restoreKnownTerminalCheckpoint } from "../../../shared/lib/terminalSnapshot";
 import { canAnswerTerminalQueryFrame, claimTerminalQueryFrame, setTerminalQueryReplay } from "../../../shared/lib/terminalQueryPolicy";
 import type { IMarker, ITheme, Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
@@ -179,7 +180,6 @@ interface UseTerminalDisplayOptions {
   fitAddonRef: RefObject<FitAddon | null>;
   isVisibleRef: RefObject<boolean>;
   isComposingRef: RefObject<boolean>;
-  lowMemoryMode: boolean;
   disableHardwareAcceleration: boolean;
   disableWebglForSessionRef: RefObject<boolean>;
   linuxGraphicsDisableWebgl: boolean;
@@ -220,7 +220,6 @@ export function useTerminalDisplay({
   fitAddonRef,
   isVisibleRef,
   isComposingRef,
-  lowMemoryMode,
   disableHardwareAcceleration,
   disableWebglForSessionRef,
   linuxGraphicsDisableWebgl,
@@ -322,7 +321,7 @@ export function useTerminalDisplay({
     if (!canUseWebglRenderer(theme)) {
       return disposeWebglRenderer();
     }
-    if (lowMemoryMode && !isVisibleRef.current) return false;
+    if (!isVisibleRef.current) return false;
     if (webglAddonRef.current) return false;
     try {
       const addon = createWebglAddon();
@@ -336,7 +335,7 @@ export function useTerminalDisplay({
 
   const scheduleHiddenWebglDispose = (enabled: boolean) => {
     clearHiddenWebglDisposeTimer();
-    if (!enabled || !webglAddonRef.current) return;
+    if (!webglAddonRef.current) return;
     webglDisposeTimerRef.current = window.setTimeout(() => {
       webglDisposeTimerRef.current = null;
       if (isVisibleRef.current) return;
@@ -344,7 +343,7 @@ export function useTerminalDisplay({
         needsViewportRefreshRef.current = true;
         onViewportRefreshNeeded?.();
       }
-    }, HIDDEN_WEBGL_DISPOSE_DELAY_MS);
+    }, enabled ? HIDDEN_WEBGL_DISPOSE_DELAY_MS : 30_000);
   };
 
   const clearWebglTextureAtlas = () => {
@@ -463,7 +462,10 @@ export function useTerminalDisplay({
     const queuePayload = (delivery: TerminalOutputDelivery, markSnapshotDirty: boolean) => {
       const payload = delivery.frame;
       const rawText = textDecoder.decode(payload.data, { stream: true });
-      const text = normalizeOutputRef.current(rawText, {
+      const snapshotText = payload.kind === "replay"
+        ? restoreKnownTerminalCheckpoint(rawText, useTerminalStore.getState().sessions.find((item) => item.id === sessionId)?.initialTerminalOutput)
+        : rawText;
+      const text = normalizeOutputRef.current(snapshotText, {
         applyOsc52: payload.kind !== "replay" && payload.kind !== "reset",
       });
       outputDiagnosticsRef?.current?.onFrame(payload, rawText, text);
@@ -517,7 +519,9 @@ export function useTerminalDisplay({
             terminal.resize(entry.cols, entry.rows);
           }
           const rawText = textDecoder.decode(entry.data, { stream: true });
-          const text = normalizeOutputRef.current(rawText, { applyOsc52: false });
+          const snapshotText = restoreKnownTerminalCheckpoint(rawText,
+            useTerminalStore.getState().sessions.find((item) => item.id === sessionId)?.initialTerminalOutput);
+          const text = normalizeOutputRef.current(snapshotText, { applyOsc52: false });
           outputDiagnosticsRef?.current?.onFrame(entry, rawText, text);
           if (!text) {
             terminalProcessManager.acknowledgeOutput(sessionId, entry.sequence, 0);

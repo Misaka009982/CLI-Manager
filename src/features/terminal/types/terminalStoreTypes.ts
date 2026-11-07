@@ -1,6 +1,6 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  Project, NativeProviderLaunchSnapshot, RemoteHandoffSessionState, SshConnectionState,
+  Project, NativeProviderLaunchSnapshot, SshConnectionState,
   SshDisconnectReason, SubagentTranscriptSource, TerminalSession,
 } from "../../../shared/types/index";
 import type { SyncedHistoryGroup } from "../../history/api/externalSessionGrouping";
@@ -224,10 +224,6 @@ export interface TerminalStore {
   updateSessionCwd: (sessionId: string, cwd: string) => void;
   updateSshConnectionState: (sessionId: string, connectionState: SshConnectionState, disconnectReason?: SshDisconnectReason) => void;
   updateSessionTerminalSnapshot: (sessionId: string, initialTerminalOutput: string) => void;
-  suspendSessionForRemoteHandoff: (sessionId: string, handoff: RemoteHandoffSessionState) => Promise<void>;
-  updateSessionRemoteHandoff: (sessionId: string, handoff: RemoteHandoffSessionState) => Promise<void>;
-  resumeSessionFromRemoteHandoff: (sessionId: string) => Promise<string>;
-  restorePersistedRemoteHandoffSessions: () => void;
   bindRemoteCliSessionIdentity: (
     sessionId: string,
     cliSessionId: string,

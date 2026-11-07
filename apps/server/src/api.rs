@@ -4,7 +4,7 @@ use crate::auth::{
 };
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::storage::now_ms;
+use crate::storage::{is_transcript_operation, now_ms};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -22,6 +22,7 @@ const ENABLED_OPERATION_KINDS: &[&str] = &[
     "conversation.prompt",
     "conversation.history",
     "terminal.attach_image",
+    "terminal.transcript",
     "project.tree.reorder",
     "project.start",
     "project.action",
@@ -481,6 +482,12 @@ pub async fn create_operation(
     if !state.registry.is_device_online(&request.device_id).await {
         return Err(AppError::conflict("device_offline", "device is offline"));
     }
+    // 轉錄結果只是當下的快照；趁新的輪詢進來時清掉過期的，清理失敗不影響這次請求。
+    if is_transcript_operation(&request.kind) {
+        if let Err(error) = state.storage.prune_transcript_operations(now_ms()).await {
+            tracing::warn!(%error, "transcript operation prune failed");
+        }
+    }
     let mut operation = state
         .storage
         .create_operation(
@@ -588,6 +595,33 @@ fn validate_operation_request(request: &CreateOperationRequest) -> Result<(), Ap
             "operation payload is too large",
         ));
     }
+    if request.kind == "terminal.transcript" {
+        for key in ["projectId", "sessionId"] {
+            if payload
+                .get(key)
+                .and_then(Value::as_str)
+                .is_none_or(|value| {
+                    value.trim().is_empty()
+                        || value.len() > 128
+                        || value.chars().any(char::is_control)
+                })
+            {
+                return Err(AppError::bad_request(
+                    "invalid_operation_payload",
+                    "transcript requires registered context IDs",
+                ));
+            }
+        }
+        if payload
+            .get("before")
+            .is_some_and(|value| value.as_u64().is_none_or(|cursor| cursor > 10_000_000))
+        {
+            return Err(AppError::bad_request(
+                "invalid_operation_payload",
+                "invalid transcript cursor",
+            ));
+        }
+    }
     if request.kind == "terminal.attach_image" {
         let data = payload.get("dataBase64").and_then(Value::as_str).filter(|value| !value.is_empty()).ok_or_else(|| AppError::bad_request("invalid_operation_payload", "dataBase64 is required"))?;
         if data.len() > 240_000 || payload.get("sessionId").and_then(Value::as_str).is_none_or(|value| value.is_empty()) {
@@ -687,6 +721,9 @@ fn validate_operation_request(request: &CreateOperationRequest) -> Result<(), Ap
 }
 
 fn operation_capability(kind: &str) -> &'static str {
+    if kind == "terminal.transcript" {
+        return "terminal.transcript";
+    }
     match kind.split_once('.').map(|(prefix, _)| prefix) {
         Some("conversation") => "conversation",
         Some("terminal") => "conversation",
@@ -749,6 +786,28 @@ mod tests {
             serde_json::json!({ "prompt": "hello" }),
         ));
         assert!(error.is_err());
+    }
+
+    #[test]
+    fn terminal_transcript_requires_registered_ids_and_a_bounded_cursor() {
+        assert_eq!(
+            operation_capability("terminal.transcript"),
+            "terminal.transcript"
+        );
+        assert!(validate_operation_request(&request(
+            "terminal.transcript",
+            serde_json::json!({"projectId":"p1","sessionId":"pty-a","before":40})
+        ))
+        .is_ok());
+        for payload in [
+            serde_json::json!({"sessionId":"pty-a"}),
+            serde_json::json!({"projectId":"p1","sessionId":""}),
+            serde_json::json!({"projectId":"p1","sessionId":"pty-a","before":-1}),
+            serde_json::json!({"projectId":"p1","sessionId":"pty-a","before":1.5}),
+            serde_json::json!({"projectId":"p1","sessionId":"pty-a","cwd":"/private"}),
+        ] {
+            assert!(validate_operation_request(&request("terminal.transcript", payload)).is_err());
+        }
     }
 
     #[test]

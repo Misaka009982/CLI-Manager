@@ -18,7 +18,7 @@ test("managed Pi extension is generated from the owned decision template", () =>
   assert.match(template, /__CLI_MANAGER_PI_HOOK__|__PI_MARKER__/);
   // 与 Rust 升级常量对齐，后续升版不再留下过时的固定版本断言。
   const version = hookSettings.match(/const PI_EXTENSION_VERSION: u32 = (\d+);/)?.[1];
-  assert.ok(version && Number(version) >= 11, "Pi 模板版本必须包含会话重建后的租约交接与状态复位");
+  assert.ok(version && Number(version) >= 12, "Pi 模板版本必须包含会话重建修复及 Pi 1.5.0 的自绘问答阻塞状态");
   assert.match(template, new RegExp(`CLI_MANAGER_PI_EXTENSION_VERSION:${version}\\b`));
   assert.match(template, /wslDistroName: nonEmpty\(process\.env\.WSL_DISTRO_NAME\)/);
   assert.match(hookSettings, /PI_EXTENSION_VERSION_PREFIX/);

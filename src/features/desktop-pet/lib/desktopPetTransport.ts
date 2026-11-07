@@ -18,16 +18,7 @@ export function desktopPetSnapshotFingerprint(snapshot: DesktopPetSnapshot): str
       projectName: target.projectName,
       status: target.status,
       active: target.active,
-      handoffCandidate: target.handoffCandidate,
-      handoffEligible: target.handoffEligible,
-      handoffRecoverable: target.handoffRecoverable,
-      handoffReason: target.handoffReason,
-      handedOff: target.handedOff,
-      handoffPhase: target.handoffPhase,
     })),
-    handoff: snapshot.handoff,
-    handoffPlatforms: snapshot.handoffPlatforms,
-    handoffBusy: snapshot.handoffBusy,
   });
 }
 

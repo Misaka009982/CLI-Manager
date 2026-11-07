@@ -9,6 +9,7 @@ import { backgroundImageExists } from "../platform/assetUrl";
 import { defaultShellForOs, getOsPlatform, isWindowsOnlyShellKey } from "../platform/shell";
 import { getCliManagerDataPaths } from "../platform/appPaths";
 import { singleFlight } from "../lib/singleFlight";
+import { debugConsoleWarn } from "../platform/debugConsole";
 import {
   DEFAULT_TERMINAL_INPUT_SUGGESTION_USAGE,
   TERMINAL_INPUT_SUGGESTION_AI_MODEL,
@@ -33,11 +34,20 @@ import {
 } from "../lib/desktopPetSize";
 import {
   DEFAULT_DESKTOP_PET_E_SETTINGS,
-  canEnableDesktopPet,
-  canEnableDesktopPetE,
-  normalizeDesktopPetESettings,
+  DESKTOP_PET_E_SETTINGS_SECTIONS_EXPANDED_DEFAULT,
+  applyDesktopPetEPreferences,
+  prepareDesktopPetSettingUpdate,
   type DesktopPetESettings,
-} from "../lib/desktopPetE";
+  type DesktopPetESettingsSectionsExpanded,
+} from "./desktopPetEPreferences";
+export {
+  DESKTOP_PET_E_SETTINGS_SECTION_KEYS,
+  DESKTOP_PET_E_SETTINGS_SECTIONS_EXPANDED_DEFAULT,
+  migrateDesktopPetESettings,
+  migrateDesktopPetESettingsSectionsExpanded,
+  type DesktopPetESettingsSectionKey,
+  type DesktopPetESettingsSectionsExpanded,
+} from "./desktopPetEPreferences";
 import {
   normalizeCliArgsHistory,
   recordCliArgsUsage,
@@ -106,6 +116,9 @@ export type ViewMode = "standard" | "compact";
 export type GitDiffViewMode = "split" | "unified";
 export type GitDiffOpenMode = "dialog" | "editor";
 export type CloseBehavior = "ask" | "minimize" | "exit";
+
+/** 设置页图标风格：refined 为自绘彩色圆角砖，classic 恢复 lucide 线性图标。 */
+export type SettingsIconStyle = "classic" | "refined";
 /** 退出时存在运行中任务的处理方式：询问 / 后台继续 / 最小化到托盘 / 丢弃任务并退出。 */
 export type ExitWithRunningTasksBehavior = "ask" | "background" | "minimize" | "discard";
 /** 启动检测到可恢复终端标签时的恢复方式：启动时弹窗询问 / 静默自动恢复。 */
@@ -125,7 +138,7 @@ type LastSettingsTab =
   | "native-providers"
   | "sponsors"
   | "model-pricing"
-  | "cc-connect"
+  | "cc-connect" // Legacy persisted ID for the Web remote-connections page.
   | "ssh-hosts"
   | "sync"
   | "history-sources"
@@ -158,8 +171,6 @@ export type TerminalSettingsSectionKey = "behavior" | "paneMarker" | "shells" | 
 export type TerminalSettingsSectionsExpanded = Record<TerminalSettingsSectionKey, boolean>;
 export type HookSettingsSectionKey = "toast" | "notifications" | "claude" | "codex" | "kimi" | "pi" | "grok";
 export type HookSettingsSectionsExpanded = Record<HookSettingsSectionKey, boolean>;
-export type DesktopPetESettingsSectionKey = "petPicker";
-export type DesktopPetESettingsSectionsExpanded = Record<DesktopPetESettingsSectionKey, boolean>;
 export const UI_FONT_SIZE_MIN = 11;
 export const UI_FONT_SIZE_MAX = 18;
 export const UI_FONT_SIZE_DEFAULT = 13;
@@ -213,13 +224,6 @@ export const HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT: HookSettingsSectionsExpand
   pi: false,
   grok: false,
 };
-export const DESKTOP_PET_E_SETTINGS_SECTION_KEYS: readonly DesktopPetESettingsSectionKey[] = [
-  "petPicker",
-];
-/** 宠物包选择网格默认折叠：宠物较多时网格会铺满设置页，选定后极少改动。 */
-export const DESKTOP_PET_E_SETTINGS_SECTIONS_EXPANDED_DEFAULT: DesktopPetESettingsSectionsExpanded = {
-  petPicker: false,
-};
 export type ShortcutAction =
   | "newTerminal"
   | "closeTerminal"
@@ -229,6 +233,7 @@ export type ShortcutAction =
   | "sessionHistory"
   | "copyAi"
   | "copyTerminalSelection"
+  | "scrollToTop"
   | "scrollToBottom"
   | "pageUp"
   | "pageDown"
@@ -288,6 +293,7 @@ const SHORTCUT_ACTIONS: readonly ShortcutAction[] = [
   "sessionHistory",
   "copyAi",
   "copyTerminalSelection",
+  "scrollToTop",
   "scrollToBottom",
   "pageUp",
   "pageDown",
@@ -349,6 +355,7 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutMap = {
   sessionHistory: "Ctrl+K",
   copyAi: "Alt+P",
   copyTerminalSelection: "Ctrl+Shift+C",
+  scrollToTop: "Ctrl+Home",
   scrollToBottom: "Ctrl+End",
   pageUp: "PageUp",
   pageDown: "PageDown",
@@ -416,6 +423,7 @@ export interface Settings {
   uiFontFamily: string;
   uiFontSize: number;
   uiTextColor: string;
+  settingsIconStyle: SettingsIconStyle;
   lastSettingsTab: LastSettingsTab;
   statuslineEditorSource: StatuslineEditorSource;
   defaultShell: string;
@@ -436,6 +444,7 @@ export interface Settings {
   sidebarDensity: SidebarDensity;
   sidebarProjectFilterVisible: boolean;
   viewMode: ViewMode;
+  windowsExplorerContextMenuEnabled: boolean;
   closeBehavior: CloseBehavior;
   exitWithRunningTasksBehavior: ExitWithRunningTasksBehavior;
   /** 退出检测是否把「已完成/失败」的 Claude/Codex 会话也算作可转入后台的任务（默认仅检测运行中）。 */
@@ -509,11 +518,6 @@ export interface Settings {
   hookSettingsSectionsExpanded: HookSettingsSectionsExpanded;
   thirdPartyHookNotificationsEnabled: boolean;
   thirdPartyHookTargets: ThirdPartyHookTarget[];
-  remoteHandoffNotificationsEnabled: boolean;
-  remoteHandoffCompletionNotificationsEnabled: boolean;
-  remoteHandoffPermissionNotificationsEnabled: boolean;
-  remoteHandoffProgressNotificationsEnabled: boolean;
-  remoteHandoffProgressIntervalMinutes: number;
   claudeHookConfigDir: string | null;
   claudeHookAutoRepairKnownInstalled: boolean;
   claudeHookAutoRepairNoticeShown: boolean;
@@ -586,6 +590,7 @@ const DEFAULTS: Settings = {
     "\"Segoe UI Variable\", \"Segoe UI\", -apple-system, BlinkMacSystemFont, \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
   uiFontSize: UI_FONT_SIZE_DEFAULT,
   uiTextColor: "",
+  settingsIconStyle: "refined",
   lastSettingsTab: "general",
   statuslineEditorSource: "claude",
   defaultShell: "powershell.exe",
@@ -612,6 +617,7 @@ const DEFAULTS: Settings = {
   sidebarDensity: "comfortable",
   sidebarProjectFilterVisible: false,
   viewMode: "standard",
+  windowsExplorerContextMenuEnabled: true,
   closeBehavior: "ask",
   exitWithRunningTasksBehavior: "ask",
   backgroundIncludeFinishedTasks: false,
@@ -728,11 +734,6 @@ const DEFAULTS: Settings = {
   hookSettingsSectionsExpanded: { ...HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT },
   thirdPartyHookNotificationsEnabled: true,
   thirdPartyHookTargets: [],
-  remoteHandoffNotificationsEnabled: true,
-  remoteHandoffCompletionNotificationsEnabled: true,
-  remoteHandoffPermissionNotificationsEnabled: true,
-  remoteHandoffProgressNotificationsEnabled: true,
-  remoteHandoffProgressIntervalMinutes: 5,
   claudeHookConfigDir: null,
   claudeHookAutoRepairKnownInstalled: false,
   claudeHookAutoRepairNoticeShown: false,
@@ -1070,20 +1071,6 @@ export function migrateHookSettingsSectionsExpanded(value: unknown): HookSetting
   }, { ...defaults });
 }
 
-export function migrateDesktopPetESettingsSectionsExpanded(
-  value: unknown,
-): DesktopPetESettingsSectionsExpanded {
-  const defaults = DESKTOP_PET_E_SETTINGS_SECTIONS_EXPANDED_DEFAULT;
-  if (typeof value !== "object" || value === null) {
-    return { ...defaults };
-  }
-  const raw = value as Partial<Record<DesktopPetESettingsSectionKey, unknown>>;
-  return DESKTOP_PET_E_SETTINGS_SECTION_KEYS.reduce<DesktopPetESettingsSectionsExpanded>((next, key) => {
-    next[key] = typeof raw[key] === "boolean" ? raw[key] : defaults[key];
-    return next;
-  }, { ...defaults });
-}
-
 export function migrateTerminalStatsCardVisibility(value: unknown): TerminalStatsCardVisibilitySettings {
   const defaults = DEFAULTS.terminalStatsCardVisibility;
   if (typeof value !== "object" || value === null) {
@@ -1286,10 +1273,6 @@ export function migrateTerminalBackground(value: unknown): TerminalBackgroundSet
   return { enabled, fillWorkspace, imagePath, imageSizeBytes, opacity, fit, position, blur, overlayDarken };
 }
 
-export function migrateDesktopPetESettings(value: unknown): DesktopPetESettings {
-  return normalizeDesktopPetESettings(value, DEFAULTS.desktopPetE);
-}
-
 export function migrateDesktopPetSettings(value: unknown): DesktopPetSettings {
   const defaults = DEFAULTS.desktopPet;
   if (!value || typeof value !== "object") {
@@ -1368,7 +1351,7 @@ async function applyDebugMode(enabled: boolean) {
     await invoke("set_debug_logging", { enabled });
   } catch (err) {
     if (enabled) {
-      console.warn("Failed to set debug logging:", err);
+      debugConsoleWarn("Failed to set debug logging:", err);
     }
   }
 }
@@ -1456,6 +1439,15 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     ) {
       entries.uiTextColor = DEFAULTS.uiTextColor;
       persistSetting("uiTextColor", DEFAULTS.uiTextColor);
+    }
+    const storedSettingsIconStyle = entries.settingsIconStyle;
+    const settingsIconStyle =
+      storedSettingsIconStyle === "classic" || storedSettingsIconStyle === "refined"
+        ? storedSettingsIconStyle
+        : DEFAULTS.settingsIconStyle;
+    entries.settingsIconStyle = settingsIconStyle;
+    if (storedSettingsIconStyle !== undefined && storedSettingsIconStyle !== settingsIconStyle) {
+      persistSetting("settingsIconStyle", settingsIconStyle);
     }
     const storedTerminalTextColor = entries.terminalTextColor;
     const terminalTextColor =
@@ -1571,14 +1563,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.systemResourceCardOrder = migrateSystemResourceCardOrder(entries.systemResourceCardOrder);
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
     entries.desktopPet = migrateDesktopPetSettings(entries.desktopPet);
-    entries.desktopPetE = migrateDesktopPetESettings(entries.desktopPetE);
-    entries.desktopPetESettingsSectionsExpanded = migrateDesktopPetESettingsSectionsExpanded(
-      entries.desktopPetESettingsSectionsExpanded,
-    );
-    if (entries.desktopPet.enabled && entries.desktopPetE.enabled) {
-      entries.desktopPetE = { ...entries.desktopPetE, enabled: false };
-      persistSetting("desktopPetE", entries.desktopPetE);
-    }
+    applyDesktopPetEPreferences(entries, persistSetting);
     entries.terminalShellProfiles = migrateTerminalShellProfiles(entries.terminalShellProfiles);
     entries.terminalSettingsSectionsExpanded = migrateTerminalSettingsSectionsExpanded(
       entries.terminalSettingsSectionsExpanded
@@ -1775,27 +1760,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         ? entries.thirdPartyHookNotificationsEnabled
         : DEFAULTS.thirdPartyHookNotificationsEnabled;
     entries.thirdPartyHookTargets = sanitizeThirdPartyHookTargets(entries.thirdPartyHookTargets);
-    entries.remoteHandoffNotificationsEnabled =
-      typeof entries.remoteHandoffNotificationsEnabled === "boolean"
-        ? entries.remoteHandoffNotificationsEnabled
-        : DEFAULTS.remoteHandoffNotificationsEnabled;
-    entries.remoteHandoffCompletionNotificationsEnabled =
-      typeof entries.remoteHandoffCompletionNotificationsEnabled === "boolean"
-        ? entries.remoteHandoffCompletionNotificationsEnabled
-        : DEFAULTS.remoteHandoffCompletionNotificationsEnabled;
-    entries.remoteHandoffPermissionNotificationsEnabled =
-      typeof entries.remoteHandoffPermissionNotificationsEnabled === "boolean"
-        ? entries.remoteHandoffPermissionNotificationsEnabled
-        : DEFAULTS.remoteHandoffPermissionNotificationsEnabled;
-    entries.remoteHandoffProgressNotificationsEnabled =
-      typeof entries.remoteHandoffProgressNotificationsEnabled === "boolean"
-        ? entries.remoteHandoffProgressNotificationsEnabled
-        : DEFAULTS.remoteHandoffProgressNotificationsEnabled;
-    entries.remoteHandoffProgressIntervalMinutes =
-      typeof entries.remoteHandoffProgressIntervalMinutes === "number"
-        && Number.isFinite(entries.remoteHandoffProgressIntervalMinutes)
-        ? Math.min(60, Math.max(1, Math.round(entries.remoteHandoffProgressIntervalMinutes)))
-        : DEFAULTS.remoteHandoffProgressIntervalMinutes;
     entries.claudeHookConfigDir =
       typeof entries.claudeHookConfigDir === "string" && entries.claudeHookConfigDir.trim()
         ? entries.claudeHookConfigDir
@@ -1946,23 +1910,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   update: async (key, value) => {
-    const nextValue = key === "desktopPetE"
-      ? normalizeDesktopPetESettings(value, get().desktopPetE)
-      : key === "fileTreeSort" ? migrateFileTreeSortSettings(value) : value;
-    if (
-      key === "desktopPet" &&
-      (nextValue as DesktopPetSettings).enabled &&
-      !canEnableDesktopPet(get().desktopPetE.enabled)
-    ) {
-      throw new Error("desktop_pet_mutual_exclusion");
-    }
-    if (
-      key === "desktopPetE" &&
-      (nextValue as DesktopPetESettings).enabled &&
-      !canEnableDesktopPetE(get().desktopPet.enabled)
-    ) {
-      throw new Error("desktop_pet_e_mutual_exclusion");
-    }
+    const nextValue = key === "fileTreeSort"
+      ? migrateFileTreeSortSettings(value)
+      : prepareDesktopPetSettingUpdate(key, value, get());
     const s = await getStore();
     await s.set(key, nextValue);
     set({ [key]: nextValue } as Partial<SettingsStore>);
@@ -1981,7 +1931,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         await s.set("historyDetailSortDirections", next);
       })
       .catch((err) => {
-        console.warn("Failed to persist history detail sort directions:", err);
+        debugConsoleWarn("Failed to persist history detail sort directions:", err);
       });
   },
 

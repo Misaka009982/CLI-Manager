@@ -157,7 +157,9 @@ function resolveTerminalPrompt(
 ): DesktopPetETerminalPrompt | null {
   if (!session || !alive || source !== "pi" || !session.cliSessionId?.trim()
     || (session.kind && session.kind !== "pty") || session.environmentType === "ssh"
-    || session.sshHostId || project?.environment_type === "ssh" || session.remoteHandoff) return null;
+    || session.sshHostId || project?.environment_type === "ssh") return null;
+  // 上游已退役 remoteHandoff 类型；旧持久化记录迁移前仍不得投影只读等待。
+  if ("remoteHandoff" in session && session.remoteHandoff) return null;
   return input.terminalPrompts?.get(desktopPetETerminalPromptScopeKey(session.id, session.cliSessionId)) ?? null;
 }
 

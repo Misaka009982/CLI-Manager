@@ -1,5 +1,5 @@
 // __PI_MARKER__
-// CLI_MANAGER_PI_EXTENSION_VERSION:11
+// CLI_MANAGER_PI_EXTENSION_VERSION:12
 // 由 CLI-Manager 管理，请勿手动修改；如需恢复，请在 Hook 设置中重新安装。
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -50,6 +50,7 @@ interface BridgeResponse {
   answer?: DecisionAnswer;
 }
 
+// 仅使用标准 JSON Schema；Pi 1.5.0 改用 pi-schema 校验，仍由宿主提供 typebox。
 // schema 里的说明文字直接决定模型会不会填写选项说明，必须与 Pi 原生 question /
 // questionnaire 工具保持一致，否则模型只给光秃秃的 label，终端和宠物端都没有解释可展示。
 const QuestionParams = Type.Object({
@@ -517,8 +518,8 @@ async function showQuestionSurface(
 ): Promise<SurfaceResult> {
   const cancelledResult: SurfaceResult = { answers: [], cancelled: true };
   if (ctx.mode !== "tui" || questions.length === 0 || signal?.aborted) return cancelledResult;
-  // ctx.ui.custom 不接受 opts，官方 ui_prompt 事件里也拿不到 skipMirror 标记，
-  // 只能靠 ownDialogs 计数告诉镜像逻辑「这是本扩展自己弹的，宠物端已有待处理项」。
+  // custom 的 options 没有 signal/skipMirror；正式 ui_prompt 事件也不携带本地标记，
+  // 用 ownDialogs 避免重复通知，取消仍通过组件的 done 收尾。
   const scope = dialogScope;
   ownDialogs += 1;
   try {
@@ -763,6 +764,9 @@ async function showQuestionSurface(
         handleInput,
         dispose: () => signal?.removeEventListener("abort", onAbort),
       };
+    }, {
+      // Pi 1.5.0 的终端程序状态；与正式 ui_prompt 只读黄灯各自独立。
+      blocked: { kind: "question", message: questions[0].prompt },
     });
     return result ?? cancelledResult;
   } finally {

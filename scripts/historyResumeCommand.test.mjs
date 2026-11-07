@@ -51,7 +51,6 @@ const outputPath = join(tempDir, "historyResumeCommand.mjs");
 writeFileSync(outputPath, output, "utf8");
 
 const {
-  buildRemoteHandoffResumeCommand,
   buildHistoryResumeCommand,
   stripOpenCodeResumeCliArgs,
 } = await import(pathToFileURL(outputPath).href);
@@ -107,13 +106,6 @@ test("OpenCode resume argument stripping handles separated, equals and quoted fo
   );
 });
 
-test("OpenCode remote handoff uses the same strict ID and argument filtering", () => {
-  assert.equal(
-    buildRemoteHandoffResumeCommand("opencode", "ses_abc123", openCodeProject),
-    'opencode --session ses_abc123 --model provider/model --prompt "hello world"',
-  );
-  assert.equal(buildRemoteHandoffResumeCommand("opencode", "msg_abc123", openCodeProject), null);
-});
 
 test("other history sources keep their existing command builders", () => {
   assert.equal(

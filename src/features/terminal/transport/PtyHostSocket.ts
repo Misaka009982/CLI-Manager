@@ -25,6 +25,15 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const OUTPUT_BACKLOG_WARN_BYTES = 4 * 1024 * 1024;
 const OUTPUT_BACKLOG_WARN_FRAMES = 1024;
 const DIAGNOSTIC_SESSION_LIMIT = 5;
+const RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000];
+const RECONNECT_CONCURRENCY = 4;
+
+// 错误分类来自协议边界；日志只记录类别和操作，不复制服务端任意正文。
+class PtyHostRequestError extends Error {
+  constructor(readonly kind: "timeout" | "missing" | "remote" | "cancelled", readonly operation: string, message: string) {
+    super(message);
+  }
+}
 
 interface PtyHostEndpoint {
   transportMode: "websocket" | "legacy";
@@ -37,6 +46,8 @@ interface PtyHostEndpoint {
 }
 
 interface PendingRequest {
+  operation: string;
+  sessionId?: string;
   resolve: (frame: Record<string, unknown>) => void;
   reject: (error: Error) => void;
   timeoutId: number;
@@ -160,7 +171,15 @@ export class PtyHostSocket {
   private readonly latestReceivedSequence = new Map<string, number>();
   private readonly latestCommittedSequence = new Map<string, number>();
   private readonly attachedSessions = new Set<string>();
+  private readonly recoverySessions = new Set<string>();
+  private readonly attachAttempts = new Map<string, Promise<PtyHostAttachResult>>();
   private readonly closedSessions = new Set<string>();
+  private reconnectPromise: Promise<void> | null = null;
+  private reconnectAttempt = 0;
+  private lifecycleGeneration = 0;
+  private connectionGeneration = 0;
+  private disposed = false;
+  private abortConnect: (() => void) | null = null;
   private heartbeatTimer: number | null = null;
   private reconnectTimer: number | null = null;
   private lastPongAt = 0;
@@ -170,16 +189,25 @@ export class PtyHostSocket {
   private legacyStatusUnlisten: UnlistenFn | null = null;
 
   async connect(): Promise<void> {
+    if (this.disposed) throw new Error("PtyHost socket disposed");
+    // OPEN 仅表示 TCP/WebSocket 握手完成，调用方仍须等待 auth_ok。
+    if (this.connectPromise) return this.connectPromise;
     if (this.transportMode === "legacy") return;
     if (this.socket?.readyState === WebSocket.OPEN) return;
-    if (this.connectPromise) return this.connectPromise;
-    this.connectPromise = this.openSocket().finally(() => {
-      this.connectPromise = null;
+    const connecting = this.openSocket().finally(() => {
+      if (this.connectPromise === connecting) this.connectPromise = null;
     });
-    return this.connectPromise;
+    this.connectPromise = connecting;
+    return connecting;
   }
 
   resetAfterDaemonRestart(): void {
+    this.lifecycleGeneration += 1;
+    this.connectionGeneration += 1;
+    this.abortConnect?.();
+    this.connectPromise = null;
+    this.recoverySessions.clear();
+    this.attachAttempts.clear();
     window.dispatchEvent(new Event("cli-manager-pty-daemon-restarted"));
     this.attachedSessions.clear();
     this.closedSessions.clear();
@@ -213,6 +241,13 @@ export class PtyHostSocket {
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.lifecycleGeneration += 1;
+    this.connectionGeneration += 1;
+    this.abortConnect?.();
+    this.connectPromise = null;
+    this.recoverySessions.clear();
+    this.attachAttempts.clear();
     const error = new Error("PtyHost socket disposed");
     this.attachedSessions.clear();
     this.cancelReconnectWhenIdle();
@@ -346,7 +381,11 @@ export class PtyHostSocket {
   }
 
   async closeAll(): Promise<void> {
-    this.attachedSessions.forEach((sessionId) => this.closedSessions.add(sessionId));
+    // 先取消每个 attach 的等待，避免关闭完成后旧超时再断开新连接。
+    this.attachedSessions.forEach((sessionId) => {
+      this.closedSessions.add(sessionId);
+      this.clearSession(sessionId);
+    });
     this.pendingOutput.clear();
     this.pendingOutputBytes.clear();
     this.pendingOutputWarned.clear();
@@ -359,16 +398,49 @@ export class PtyHostSocket {
     this.latestReceivedSequence.clear();
     this.latestCommittedSequence.clear();
     this.attachedSessions.clear();
+    this.recoverySessions.clear();
+    this.attachAttempts.clear();
     this.cancelReconnectWhenIdle();
     await this.request({ type: "close_all" });
   }
 
+  // 初次 attach 失败由调用者处理；已有会话的临时失败必须保留恢复意图。
   async attach(sessionId: string, replayFromStart = false, resumeAfterSequence?: number): Promise<PtyHostAttachResult> {
-    if (this.closedSessions.has(sessionId)) {
+    const wasAttached = this.attachedSessions.has(sessionId);
+    if (this.disposed || this.closedSessions.has(sessionId)) return { attached: false, alive: false, replay: [] };
+    this.attachedSessions.add(sessionId);
+    const generation = this.lifecycleGeneration;
+    try {
+      return await this.attemptAttach(sessionId, replayFromStart, resumeAfterSequence);
+    } catch (error) {
+      if (generation !== this.lifecycleGeneration || this.closedSessions.has(sessionId)) {
+        return { attached: false, alive: false, replay: [] };
+      }
+      if (!wasAttached || (error instanceof PtyHostRequestError && error.kind === "missing")) {
+        this.clearSession(sessionId);
+      } else if (this.attachedSessions.has(sessionId)) {
+        this.recoverySessions.add(sessionId);
+        this.scheduleReconnect(1_000);
+      }
+      this.logAttachFailure(error);
       return { attached: false, alive: false, replay: [] };
     }
-    this.attachedSessions.add(sessionId);
-    try {
+  }
+
+  // 每会话最多一个 attach 在途；代次或所有权变化后丢弃迟到结果。
+  private attemptAttach(sessionId: string, replayFromStart = false, resumeAfterSequence?: number): Promise<PtyHostAttachResult> {
+    if (this.closedSessions.has(sessionId)) {
+      return Promise.reject(new PtyHostRequestError("cancelled", "attach", "PtyHost session closed"));
+    }
+    const existing = this.attachAttempts.get(sessionId);
+    if (existing) return existing;
+    const lifecycle = this.lifecycleGeneration;
+    const attempt = Promise.resolve().then(async (): Promise<PtyHostAttachResult> => {
+      await this.connect();
+      const generation = this.connectionGeneration;
+      if (lifecycle !== this.lifecycleGeneration || !this.attachedSessions.has(sessionId)) {
+        throw new PtyHostRequestError("cancelled", "attach", "PtyHost attach cancelled");
+      }
       const afterSequence = replayFromStart
         ? 0
         : resumeAfterSequence ?? this.latestCommittedSequence.get(sessionId) ?? 0;
@@ -377,10 +449,17 @@ export class PtyHostSocket {
         session_id: sessionId,
         after_sequence: replayFromStart || afterSequence === 0 ? undefined : afterSequence,
       });
+      if (lifecycle !== this.lifecycleGeneration || generation !== this.connectionGeneration
+        || this.closedSessions.has(sessionId) || this.attachAttempts.get(sessionId) !== attempt) {
+        throw new PtyHostRequestError("cancelled", "attach", "PtyHost attach superseded");
+      }
+      if (frame.type !== "attached") throw new PtyHostRequestError("remote", "attach", "Invalid attach response");
       const meta = (frame.meta ?? {}) as Record<string, unknown>;
       if (this.transportMode === "legacy") this.deliverLegacyReplay(sessionId, frame);
       const latestSequence = Number(frame.latest_sequence ?? 0);
       this.latestReceivedSequence.set(sessionId, latestSequence);
+      this.recoverySessions.delete(sessionId);
+      this.cancelReconnectWhenIdle();
       return {
         attached: true,
         alive: meta.alive === true,
@@ -393,17 +472,11 @@ export class PtyHostSocket {
         processTraits: normalizeProcessTraits(meta.processTraits),
         replayTruncated: frame.replay_truncated === true || meta.replayTruncated === true,
       };
-    } catch {
-      if (this.socket?.readyState === WebSocket.OPEN) {
-        this.attachedSessions.delete(sessionId);
-      } else if (this.reconnectTimer === null) {
-        this.reconnectTimer = window.setTimeout(() => {
-          this.reconnectTimer = null;
-          void this.reconnectAttachedSessions();
-        }, 1_000);
-      }
-      return { attached: false, alive: false, replay: [] };
-    }
+    }).finally(() => {
+      if (this.attachAttempts.get(sessionId) === attempt) this.attachAttempts.delete(sessionId);
+    });
+    this.attachAttempts.set(sessionId, attempt);
+    return attempt;
   }
 
   queueReplay(sessionId: string, replay: TerminalBinaryFrame[]): void {
@@ -549,12 +622,15 @@ export class PtyHostSocket {
   }
 
   private async openSocket(): Promise<void> {
+    const generation = ++this.connectionGeneration;
     const endpoint = await invoke<PtyHostEndpoint | null>("pty_host_get_endpoint");
+    if (this.disposed || generation !== this.connectionGeneration) throw new Error("PtyHost connection cancelled");
     if (endpoint?.transportMode === "legacy") {
       this.transportMode = "legacy";
       this.connectedFeatures = new Set(endpoint.features);
       this.nextRequestId = Math.max(this.nextRequestId, Date.now());
-      await this.ensureLegacyListeners();
+      await this.ensureLegacyListeners(generation);
+      if (this.disposed || generation !== this.connectionGeneration) throw new Error("PtyHost connection cancelled");
       logInfo("PtyHost legacy transport active", this.lifecycleSnapshot({
         features: [...this.connectedFeatures],
       }));
@@ -608,11 +684,13 @@ export class PtyHostSocket {
         window.clearTimeout(authTimeoutId);
         reject(error);
       };
+      this.abortConnect = () => rejectAuth(new Error("PtyHost connection cancelled"));
       const fail = (error: Error, details: SocketDisconnectDetails) => {
         if (!authenticated) rejectAuth(error);
         this.handleDisconnect(error, socket, details);
       };
       socket.onopen = () => {
+        if (this.socket !== socket || generation !== this.connectionGeneration) return;
         this.send({
           type: "auth",
           token: endpointToken,
@@ -620,6 +698,7 @@ export class PtyHostSocket {
         });
       };
       socket.onmessage = (event) => {
+        if (this.socket !== socket || generation !== this.connectionGeneration) return;
         try {
           if (typeof event.data === "string") {
             const frame = JSON.parse(event.data) as Record<string, unknown>;
@@ -627,6 +706,7 @@ export class PtyHostSocket {
               authenticated = true;
               authSettled = true;
               window.clearTimeout(authTimeoutId);
+              this.abortConnect = null;
               this.startHeartbeat();
               logInfo("PtyHost websocket connected", this.lifecycleSnapshot({
                 features: [...this.connectedFeatures],
@@ -671,22 +751,31 @@ export class PtyHostSocket {
   }
 
   private async request(frame: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const lifecycle = this.lifecycleGeneration;
     await this.connect();
+    const operation = String(frame.type ?? "unknown");
+    const sessionId = typeof frame.session_id === "string" ? frame.session_id : undefined;
+    if (lifecycle !== this.lifecycleGeneration || (operation === "attach" && sessionId && this.closedSessions.has(sessionId))) {
+      throw new PtyHostRequestError("cancelled", operation, "PtyHost request cancelled");
+    }
     const id = this.nextRequestId++;
     if (this.transportMode === "legacy") {
-      return invoke<Record<string, unknown>>("pty_legacy_request", {
+      const reply = await invoke<Record<string, unknown>>("pty_legacy_request", {
         frame: { ...frame, id },
       });
+      if (reply.type === "err") throw this.remoteRequestError(operation, reply.message);
+      return reply;
     }
     return new Promise((resolve, reject) => {
       const timeoutId = window.setTimeout(() => {
         const pending = this.pendingRequests.get(id);
         if (!pending) return;
         this.pendingRequests.delete(id);
-        pending.reject(new Error(`PtyHost request timed out: ${String(frame.type ?? "unknown")}`));
+        pending.reject(new PtyHostRequestError("timeout", operation, `PtyHost request timed out: ${operation}`));
+        // 二进制 replay 不带 request id；超时必须撤销连接，避免迟到 replay 与下一轮混合。
         this.socket?.close();
       }, REQUEST_TIMEOUT_MS);
-      this.pendingRequests.set(id, { resolve, reject, timeoutId });
+      this.pendingRequests.set(id, { resolve, reject, timeoutId, operation, sessionId });
       try {
         this.send({ ...frame, id });
       } catch (error) {
@@ -762,7 +851,7 @@ export class PtyHostSocket {
     }
     if (frame.type === "attached") {
       const sessionId = String(frame.session_id ?? "");
-      if (sessionId) {
+      if (sessionId && !this.closedSessions.has(sessionId) && this.pendingRequests.has(Number(frame.id))) {
         this.emitOutputFrame({
           kind: "replay",
           sessionId,
@@ -782,7 +871,7 @@ export class PtyHostSocket {
     this.pendingRequests.delete(id);
     window.clearTimeout(pending.timeoutId);
     if (frame.type === "err") {
-      pending.reject(new Error(String(frame.message ?? "PtyHost request failed")));
+      pending.reject(this.remoteRequestError(pending.operation, frame.message));
       return;
     }
     pending.resolve(frame);
@@ -878,9 +967,9 @@ export class PtyHostSocket {
     this.pendingOutputWarned.delete(sessionId);
   }
 
-  private async ensureLegacyListeners(): Promise<void> {
+  private async ensureLegacyListeners(generation: number): Promise<void> {
     if (!this.legacyOutputUnlisten) {
-      this.legacyOutputUnlisten = await listen<Record<string, unknown>>(
+      const unlisten = await listen<Record<string, unknown>>(
         "pty-legacy-output",
         ({ payload }) => {
           const sessionId = String(payload.sessionId ?? "");
@@ -899,9 +988,11 @@ export class PtyHostSocket {
           });
         },
       );
+      if (this.disposed || generation !== this.connectionGeneration) { unlisten(); return; }
+      this.legacyOutputUnlisten = unlisten;
     }
     if (!this.legacyStatusUnlisten) {
-      this.legacyStatusUnlisten = await listen<Record<string, unknown>>(
+      const unlisten = await listen<Record<string, unknown>>(
         "pty-legacy-status",
         ({ payload }) => {
           const sessionId = String(payload.sessionId ?? "");
@@ -915,6 +1006,8 @@ export class PtyHostSocket {
           else this.pendingStatus.set(sessionId, event);
         },
       );
+      if (this.disposed || generation !== this.connectionGeneration) { unlisten(); return; }
+      this.legacyStatusUnlisten = unlisten;
     }
   }
 
@@ -955,6 +1048,9 @@ export class PtyHostSocket {
 
   private handleDisconnect(error: Error, socket?: WebSocket, details?: SocketDisconnectDetails): void {
     if (socket && this.socket !== socket) return;
+    this.connectionGeneration += 1;
+    this.abortConnect?.();
+    this.abortConnect = null;
     this.stopHeartbeat();
     this.socket = null;
     const connectedFeatures = [...this.connectedFeatures];
@@ -983,56 +1079,104 @@ export class PtyHostSocket {
       reject(error);
     });
     this.pendingCheckpoints.clear();
-    if (this.attachedSessions.size > 0 && this.reconnectTimer === null) {
-      logInfo("PtyHost reconnect scheduled", this.lifecycleSnapshot({
-        cause: details?.cause ?? "unknown",
-        delayMs: 250,
-      }));
-      this.reconnectTimer = window.setTimeout(() => {
-        this.reconnectTimer = null;
-        void this.reconnectAttachedSessions();
-      }, 250);
-    }
+    this.attachedSessions.forEach((sessionId) => this.recoverySessions.add(sessionId));
+    this.scheduleReconnect(250);
   }
 
+  // 所有断连来源共用一个流程和一个 timer；失败重试只处理尚未恢复的会话。
   private async reconnectAttachedSessions(): Promise<void> {
-    const reconnectSessions = [...this.attachedSessions].filter(
+    if (this.reconnectPromise) return this.reconnectPromise;
+    if (this.disposed || this.recoverySessions.size === 0) return;
+    const lifecycle = this.lifecycleGeneration;
+    const reconnecting = this.runReconnect(lifecycle).finally(() => {
+      if (this.reconnectPromise !== reconnecting) return;
+      this.reconnectPromise = null;
+      if (this.recoverySessions.size > 0 && !this.disposed) {
+        const delay = RECONNECT_BACKOFF_MS[Math.min(this.reconnectAttempt - 1, RECONNECT_BACKOFF_MS.length - 1)];
+        this.scheduleReconnect(delay ?? 1_000);
+      } else {
+        this.reconnectAttempt = 0;
+      }
+    });
+    this.reconnectPromise = reconnecting;
+    return reconnecting;
+  }
+
+  // 一轮最多四个 attach；连接被替换时让未恢复集合留给下一轮，成功会话不重复请求。
+  private async runReconnect(lifecycle: number): Promise<void> {
+    const reconnectSessions = [...this.recoverySessions].filter(
       (sessionId) => !this.closedSessions.has(sessionId),
     );
     if (reconnectSessions.length === 0) return;
+    this.reconnectAttempt += 1;
     logInfo("PtyHost reconnect attempt started", this.lifecycleSnapshot({
       reconnectSessions: reconnectSessions.length,
     }));
     try {
       await this.connect();
+      if (lifecycle !== this.lifecycleGeneration) return;
+      const generation = this.connectionGeneration;
       logInfo("PtyHost reconnect transport ready", this.lifecycleSnapshot({
         reconnectSessions: reconnectSessions.length,
       }));
-      for (const sessionId of reconnectSessions) {
-        if (this.closedSessions.has(sessionId)) continue;
-        const previousSequence = this.latestCommittedSequence.get(sessionId) ?? 0;
-        this.latestReceivedSequence.set(sessionId, previousSequence);
-        await this.attach(sessionId);
-      }
-      logInfo("PtyHost reconnect attempt completed", this.lifecycleSnapshot({
+      let restored = 0;
+      let missing = 0;
+      const queue = [...reconnectSessions];
+      const worker = async () => {
+        while (queue.length > 0 && lifecycle === this.lifecycleGeneration && generation === this.connectionGeneration) {
+          const sessionId = queue.shift()!;
+          if (!this.recoverySessions.has(sessionId) || this.closedSessions.has(sessionId)) continue;
+          this.latestReceivedSequence.set(sessionId, this.latestCommittedSequence.get(sessionId) ?? 0);
+          try {
+            await this.attemptAttach(sessionId);
+            restored += 1;
+          } catch (error) {
+            if (lifecycle !== this.lifecycleGeneration || generation !== this.connectionGeneration) return;
+            if (error instanceof PtyHostRequestError && error.kind === "missing") {
+              this.clearSession(sessionId);
+              missing += 1;
+            }
+            this.logAttachFailure(error);
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(RECONNECT_CONCURRENCY, queue.length) }, worker));
+      if (lifecycle !== this.lifecycleGeneration || generation !== this.connectionGeneration) return;
+      logInfo(this.recoverySessions.size > 0 ? "PtyHost reconnect attempt partial" : "PtyHost reconnect attempt completed", this.lifecycleSnapshot({
         reconnectSessions: reconnectSessions.length,
+        restored,
+        missing,
+        closed: reconnectSessions.filter((id) => this.closedSessions.has(id)).length,
       }));
     } catch (error) {
+      if (lifecycle !== this.lifecycleGeneration) return;
       logWarn("PtyHost reconnect attempt failed", this.lifecycleSnapshot({
         reconnectSessions: reconnectSessions.length,
-        error: error instanceof Error ? error.message : String(error),
+        failureKind: error instanceof PtyHostRequestError ? error.kind : "unavailable",
       }));
-      if (this.attachedSessions.size > 0 && this.reconnectTimer === null) {
-        logInfo("PtyHost reconnect retry scheduled", this.lifecycleSnapshot({
-          reconnectSessions: reconnectSessions.length,
-          delayMs: 1000,
-        }));
-        this.reconnectTimer = window.setTimeout(() => {
-          this.reconnectTimer = null;
-          void this.reconnectAttachedSessions();
-        }, 1_000);
-      }
     }
+  }
+
+  private scheduleReconnect(delayMs: number): void {
+    if (this.disposed || this.recoverySessions.size === 0 || this.reconnectTimer !== null || this.reconnectPromise) return;
+    logInfo("PtyHost reconnect scheduled", this.lifecycleSnapshot({ delayMs }));
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.reconnectAttachedSessions();
+    }, delayMs);
+  }
+
+  // 旧协议仅精确识别已知 missing 文案，未知错误不得删除恢复意图。
+  private remoteRequestError(operation: string, message: unknown): PtyHostRequestError {
+    return new PtyHostRequestError(message === "session not found" ? "missing" : "remote", operation,
+      typeof message === "string" ? message : "PtyHost request failed");
+  }
+
+  private logAttachFailure(error: unknown): void {
+    logWarn("PtyHost attach attempt failed", this.lifecycleSnapshot({
+      operation: "attach",
+      failureKind: error instanceof PtyHostRequestError ? error.kind : "unavailable",
+    }));
   }
 
   private startHeartbeat(): void {
@@ -1062,6 +1206,14 @@ export class PtyHostSocket {
 
   private clearSession(sessionId: string): void {
     this.attachedSessions.delete(sessionId);
+    this.recoverySessions.delete(sessionId);
+    this.attachAttempts.delete(sessionId);
+    this.pendingRequests.forEach((pending, id) => {
+      if (pending.operation !== "attach" || pending.sessionId !== sessionId) return;
+      window.clearTimeout(pending.timeoutId);
+      pending.reject(new PtyHostRequestError("cancelled", "attach", "PtyHost session closed"));
+      this.pendingRequests.delete(id);
+    });
     this.clearPendingOutput(sessionId);
     this.pendingStatus.delete(sessionId);
     [...this.pendingCheckpoints.entries()]
@@ -1079,6 +1231,9 @@ export class PtyHostSocket {
   private lifecycleSnapshot(extra: Record<string, unknown> = {}): Record<string, unknown> {
     return {
       ...this.diagnosticsSnapshot(),
+      generation: this.connectionGeneration,
+      reconnectAttempt: this.reconnectAttempt,
+      recoverySessions: this.recoverySessions.size,
       ...extra,
     };
   }
@@ -1095,7 +1250,7 @@ export class PtyHostSocket {
   }
 
   private cancelReconnectWhenIdle(): void {
-    if (this.attachedSessions.size > 0 || this.reconnectTimer === null) return;
+    if (this.recoverySessions.size > 0 || this.reconnectTimer === null) return;
     window.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
   }

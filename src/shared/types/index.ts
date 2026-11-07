@@ -449,23 +449,6 @@ export interface SyncedHistoryPaneSession {
   updatedAt: number;
 }
 
-export type RemoteHandoffPhase = "pending" | "active" | "cancelling" | "recovery_failed";
-
-export interface RemoteHandoffSessionState {
-  phase: RemoteHandoffPhase;
-  agent?: import("./remoteHandoff").RemoteHandoffAgent;
-  cliSessionId: string;
-  projectName: string;
-  workDir: string;
-  providerId?: string;
-  providerName?: string;
-  platform?: "telegram" | "feishu" | "weixin" | "wecom";
-  startedAtMs?: number;
-  transport?: "local" | "ssh";
-  sshHostId?: string;
-  remotePath?: string;
-}
-
 export interface TerminalSession {
   id: string;
   /** 本次 PTY 启动时间，用于将无 Hook 的 SSH Codex 终端安全关联到远端历史。 */
@@ -501,8 +484,6 @@ export interface TerminalSession {
   remoteTranscriptRef?: string;
   remoteHistoryConsumerId?: string;
   remoteHistorySourceInstanceId?: string;
-  /** 远程托管期间保留标签元数据，但本地不再持有 PTY。 */
-  remoteHandoff?: RemoteHandoffSessionState;
   /** CLI hook 上报的当前 effort，仅用于实时统计展示，不作为历史解析来源。 */
   cliReasoningEffort?: string;
   /** CLI hook 上报的 WSL 发行版名（WSL_DISTRO_NAME）；用于在终端实际所在发行版内组装能力诊断等请求。 */
@@ -783,6 +764,7 @@ export interface HistorySessionUsage {
 }
 
 export interface HistorySessionDetail extends HistorySessionSummary {
+  message_page?: { revision: string };
   cwd?: string | null;
   usage?: HistorySessionUsage;
   tool_events?: HistoryToolEvent[];

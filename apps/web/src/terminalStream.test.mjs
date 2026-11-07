@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createTerminalStream } from "./terminalStream.ts";
+import { createTerminalStream } from "../../../src/shared/lib/webTerminalStream.ts";
 
 function chunk(sequence) {
   return { sequence, frames: [{ sequence, cols: 80, rows: 24, data: "YQ==", kind: "output", replayBatchEnd: false }] };

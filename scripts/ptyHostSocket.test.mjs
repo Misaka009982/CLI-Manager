@@ -12,9 +12,14 @@ process.on("exit", () => rmSync(tempDir, { recursive: true, force: true }));
 globalThis.window = globalThis;
 
 writeFileSync(join(tempDir, "tauriCore.mjs"), `
-export async function invoke() {
+export const state = { legacy: false, failure: null };
+export async function invoke(command, args) {
+  if (command === "pty_legacy_request") {
+    if (state.failure) return { type: "err", id: args.frame.id, message: state.failure };
+    return { type: "attached", id: args.frame.id, meta: { alive: true }, replay: [] };
+  }
   return {
-    transportMode: "websocket",
+    transportMode: state.legacy ? "legacy" : "websocket",
     url: "ws://127.0.0.1:1/pty",
     token: "token",
     protocolVersion: 2,
@@ -50,6 +55,7 @@ class FakeWebSocket {
   static createRequests = 0;
   static connectionCount = 0;
   static sentFrames = [];
+  static attachFailures = new Map();
 
   // 创建模拟连接并安排异步打开事件。
   constructor() {
@@ -75,6 +81,14 @@ class FakeWebSocket {
     }
     if (frame.type === "attach") {
       FakeWebSocket.attachRequests += 1;
+      const failure = FakeWebSocket.attachFailures.get(frame.session_id);
+      if (failure === "timeout") return;
+      if (failure) {
+        queueMicrotask(() => this.onmessage?.({
+          data: JSON.stringify({ type: "err", id: frame.id, message: failure }),
+        }));
+        return;
+      }
       // 异步返回附加成功及会话元数据。
       queueMicrotask(() => this.onmessage?.({
         data: JSON.stringify({
@@ -146,6 +160,138 @@ const socketPath = join(tempDir, "PtyHostSocket.mjs");
 writeFileSync(socketPath, transpiled, "utf8");
 const { PtyHostSocket } = await import(pathToFileURL(socketPath).href);
 const resourceLogStub = await import(pathToFileURL(join(tempDir, "resourceDiagnosticsLog.mjs")).href);
+const loggerStub = await import(pathToFileURL(join(tempDir, "logger.mjs")).href);
+const coreStub = await import(pathToFileURL(join(tempDir, "tauriCore.mjs")).href);
+
+// 等待可观察状态而非猜测一次异步调度需要多长时间；超时必须使测试失败。
+async function waitFor(predicate, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    assert.ok(Date.now() < deadline, "condition did not become true before deadline");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+for (const failure of ["timeout", "temporarily unavailable"]) {
+  test(`reconnect retains intent after ${failure} and automatically recovers`, async (t) => {
+    FakeWebSocket.mode = "normal";
+    const socket = new PtyHostSocket();
+    t.after(() => { socket.dispose(); FakeWebSocket.attachFailures.clear(); });
+    await socket.attach("recover");
+    loggerStub.infoLogs.length = 0;
+    loggerStub.warnLogs.length = 0;
+    FakeWebSocket.attachFailures.set("recover", failure);
+    socket.socket.close();
+    const initialRequests = FakeWebSocket.attachRequests;
+    await waitFor(() => FakeWebSocket.attachRequests > initialRequests);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(socket.diagnosticsSnapshot().attachedSessions, 1);
+    assert.equal(loggerStub.infoLogs.some((entry) => entry.message.endsWith("attempt completed")), false);
+    FakeWebSocket.attachFailures.clear();
+    await waitFor(() => loggerStub.infoLogs.some((entry) => entry.message.endsWith("attempt completed")));
+    assert.equal(socket.diagnosticsSnapshot().reconnectTimerActive, false);
+  });
+}
+
+test("missing sessions terminate recovery while a slow session does not block a healthy one", async (t) => {
+  const socket = new PtyHostSocket();
+  t.after(() => { socket.dispose(); FakeWebSocket.attachFailures.clear(); });
+  for (const id of ["slow", "healthy", "missing"]) await socket.attach(id);
+  FakeWebSocket.attachFailures.set("slow", "temporarily unavailable");
+  FakeWebSocket.attachFailures.set("missing", "session not found");
+  FakeWebSocket.sentFrames.length = 0;
+  socket.socket.close();
+  await waitFor(() => FakeWebSocket.sentFrames.some((frame) => frame.type === "attach" && frame.session_id === "missing"));
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(socket.attachedSessions.has("missing"), false);
+  assert.equal(socket.attachedSessions.has("slow"), true);
+  const healthyCount = FakeWebSocket.sentFrames.filter((frame) => frame.type === "attach" && frame.session_id === "healthy").length;
+  FakeWebSocket.attachFailures.clear();
+  await waitFor(() => !socket.diagnosticsSnapshot().reconnectTimerActive);
+  assert.equal(FakeWebSocket.sentFrames.filter((frame) => frame.type === "attach" && frame.session_id === "healthy").length, healthyCount);
+});
+
+test("initial failed attach keeps its boolean contract and leaves no recovery subscription", async (t) => {
+  const socket = new PtyHostSocket();
+  t.after(() => { socket.dispose(); FakeWebSocket.attachFailures.clear(); });
+  FakeWebSocket.attachFailures.set("initial", "timeout");
+  const result = await socket.attach("initial");
+  assert.equal(result.attached, false);
+  assert.equal(socket.diagnosticsSnapshot().attachedSessions, 0);
+  assert.equal(socket.diagnosticsSnapshot().reconnectTimerActive, false);
+});
+
+test("late attach replies after close cannot restore sequence or replay barriers", async (t) => {
+  const socket = new PtyHostSocket();
+  t.after(() => { socket.dispose(); FakeWebSocket.attachFailures.clear(); });
+  FakeWebSocket.attachFailures.set("late", "timeout");
+  const attach = socket.attach("late");
+  await waitFor(() => FakeWebSocket.sentFrames.some((frame) => frame.type === "attach" && frame.session_id === "late"));
+  const frame = FakeWebSocket.sentFrames.findLast((frame) => frame.type === "attach" && frame.session_id === "late");
+  await socket.close("late");
+  socket.handleControlFrame({ type: "attached", id: frame.id, session_id: "late", latest_sequence: 99, meta: { alive: true } });
+  assert.equal((await attach).attached, false);
+  assert.equal(socket.latestReceivedSequence.has("late"), false);
+  assert.equal(socket.diagnosticsSnapshot().pendingOutputFrames, 0);
+});
+
+test("overlapping reconnect triggers share one attach and do not log remote payloads", async (t) => {
+  const socket = new PtyHostSocket();
+  t.after(() => { socket.dispose(); FakeWebSocket.attachFailures.clear(); });
+  await socket.attach("single-flight");
+  FakeWebSocket.attachFailures.set("single-flight", "private-command SECRET_TOKEN");
+  socket.socket.close();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const before = FakeWebSocket.attachRequests;
+  loggerStub.warnLogs.length = 0;
+  await Promise.all([socket.reconnectAttachedSessions(), socket.reconnectAttachedSessions()]);
+  assert.equal(FakeWebSocket.attachRequests - before, 1);
+  assert.equal(JSON.stringify(loggerStub.warnLogs).includes("SECRET_TOKEN"), false);
+});
+
+for (const action of ["dispose", "resetAfterDaemonRestart", "closeAll"]) {
+  test(`${action} cancels in-flight attach without reviving state`, async (t) => {
+    const socket = new PtyHostSocket();
+    t.after(() => { socket.dispose(); FakeWebSocket.attachFailures.clear(); });
+    FakeWebSocket.attachFailures.set(`cancel-${action}`, "timeout");
+    const attach = socket.attach(`cancel-${action}`);
+    await waitFor(() => socket.pendingRequests.size === 1);
+    const old = socket.socket;
+    const id = [...socket.pendingRequests.keys()][0];
+    await socket[action]();
+    old.onmessage({ data: JSON.stringify({ type: "attached", id, session_id: `cancel-${action}`, latest_sequence: 80, meta: { alive: true } }) });
+    assert.equal((await attach).attached, false);
+    assert.equal(socket.diagnosticsSnapshot().attachedSessions, 0);
+    assert.equal(socket.diagnosticsSnapshot().reconnectTimerActive, false);
+    assert.equal(socket.diagnosticsSnapshot().pendingOutputFrames, 0);
+  });
+}
+
+test("dispose during endpoint bootstrap cannot open a new transport", async () => {
+  const socket = new PtyHostSocket();
+  const connections = FakeWebSocket.connectionCount;
+  const connecting = socket.connect();
+  socket.dispose();
+  await assert.rejects(connecting, /cancelled/);
+  assert.equal(FakeWebSocket.connectionCount, connections);
+});
+
+test("legacy remote errors keep the boolean contract and retry only established sessions", async (t) => {
+  coreStub.state.legacy = true;
+  const socket = new PtyHostSocket();
+  t.after(() => { socket.dispose(); coreStub.state.legacy = false; coreStub.state.failure = null; });
+  assert.equal((await socket.attach("legacy")).attached, true);
+  coreStub.state.failure = "temporarily unavailable";
+  assert.equal((await socket.attach("legacy")).attached, false);
+  assert.equal(socket.diagnosticsSnapshot().attachedSessions, 1);
+  assert.equal(socket.diagnosticsSnapshot().reconnectTimerActive, true);
+  loggerStub.infoLogs.length = 0;
+  coreStub.state.failure = null;
+  await waitFor(() => loggerStub.infoLogs.some((entry) => entry.message.endsWith("attempt completed")));
+  coreStub.state.failure = "session not found";
+  assert.equal((await socket.attach("legacy")).attached, false);
+  assert.equal(socket.diagnosticsSnapshot().attachedSessions, 0);
+});
 
 // 验证认证等待具有明确超时边界。
 test("authentication has a bounded timeout", { concurrency: false }, async () => {

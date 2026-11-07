@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Puzzle } from "lucide-react";
+import { Puzzle } from "../../../shared/ui/homeIcons";
 import type { useSidebarController } from "../hooks/useSidebarController";
 import { sanitizeWorktreeTaskName, validateWorktreeTaskName } from "../api/worktreeStore";
 import { ConfigModal } from "./ConfigModal";
@@ -23,7 +23,7 @@ import { GroupEditDialog } from "./GroupEditDialog";
 import { NodeAppearancePanel } from "./NodeAppearancePanel";
 import { SidebarFooter } from "./SidebarFooter";
 import { FileExplorerSidebar } from "../../files/api/FileExplorerSidebar";
-import { ArrowLeftRight, Check, CircleStop, Copy, Crosshair, FileCode, FolderOpen, FolderPlus, ListClockIcon, Palette, Pencil, Pin, Play, Plus, Settings, SquareSplitHorizontal, SquareSplitVertical, Terminal, TerminalSquare, Trash2, X } from "../../../shared/ui/icons";
+import { ArrowLeftRight, Check, CircleStop, Copy, Crosshair, FileCode, FolderOpen, FolderPlus, ListClockIcon, Palette, Pencil, Pin, Play, Plus, Settings, SquareSplitHorizontal, SquareSplitVertical, Terminal, TerminalSquare, Trash2, X } from "../../../shared/ui/homeIcons";
 import { buildProjectSplitOptions } from "../lib/sidebarModel";
 import type { Project, WorktreeRecord } from "../../../shared/types/index";
 
@@ -198,7 +198,7 @@ export function SidebarView({
           <FileExplorerSidebar onBackToProjects={handleBackToProjectTree} />
         ) : (
           <TreeContext.Provider value={treeActions}>
-            <div className="ui-sidebar-combined-list h-full min-h-0 overflow-y-auto overflow-x-hidden">
+            <div className="ui-autohide-scroll ui-sidebar-combined-list h-full min-h-0 overflow-y-auto overflow-x-hidden">
               <ProjectTree
                 tree={displayedTree}
                 initialLoading={initialLoading}

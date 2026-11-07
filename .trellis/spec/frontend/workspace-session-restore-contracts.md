@@ -1,5 +1,14 @@
 # Workspace Session Restore Contracts
 
+## Protected display and snapshot residency (TEMP, 2026-11-01)
+
+- Hidden desktop xterms remain the live parser/protocol responder and committed-write ACK owner. Only the WebGL renderer is reclaimed: default 30 seconds hidden, low-memory/constrained mode 10 seconds. Showing a pane restores renderer/layout without terminal reset, scrollback reduction or input-mode loss.
+- The snapshot source has a full serializer plus an optional local serializer. Production local persistence/dispose passes `scrollback: 2000` to the public SerializeAddon API; keyboard stack and mouse modes use the same production helpers.
+- Complete daemon checkpoints are independent, debt-tracked and throttled to 30 seconds. Exit/handoff forces a fresh full checkpoint, not the local tail. Output revisions arriving during serialization retain checkpoint debt; overlapping/timed-out uploads remain single-flight. Legacy source registrations retain previous behavior.
+- Each snapshot pass freezes its source list and rotates attempted owners afterward. A set of stalled sources cannot repeatedly consume the deadline before healthy sources are attempted; deadlines and upload single-flight protection remain unchanged.
+- This reduces full synchronous serialization frequency, not the cost of one explicitly required complete checkpoint. Parser/scrollback/image residency remains protected; no headless terminal migration or unsafe cold-buffer eviction is claimed.
+- Regressions: `terminalSnapshotPersistence.test.mjs`, `terminalSnapshotMouse.test.mjs`, existing terminal ACK/query/input-mode suites.
+
 > 关闭后恢复终端工作区会话（Issue #123）的可执行契约。与 `history-session-contracts.md`（外部 CLI 历史浏览，SQLite `session_meta`）是**两套独立数据**：本契约面向 `tauri-plugin-store` 的工作区 live 终端标签。
 
 ## Scenario: Restore Terminal Workspace Sessions on Startup
@@ -18,6 +27,9 @@
 - 每进程一次守护：`App.tsx` 模块级 `sessionRestoreHandled` 变量保证恢复提示/自动恢复只在 `init()` 里触发一次。切换设置页等后续操作禁止再次弹窗——这是历史上功能被移除的根因（提示曾反复弹）。
 - 恢复确认交互：共享 `ConfirmDialog` 提供默认关闭的 `confirmAutoFocus?: boolean` 与 `contentClassName?: string`；恢复弹窗单独启用确认按钮聚焦与响应式专用宽度。
 - 节流落盘：`sessionSnapshotPersistence.ts` — `registerTerminalSnapshotSource(sessionId, serialize)` / `markTerminalSnapshotDirty(id)` / `flushTerminalSnapshotsNow()`。
+- 序列化/checkpoint 单操作预算 3 秒、整轮采集预算 10 秒，使用单调时钟；超时来源保留 dirty 可重试，迟到 write callback 不执行旧序列化，未结束 checkpoint 不允许重复上传。保留完整 daemon checkpoint 与 2000 行本地尾部。
+- 退出期间 `suspendTerminalSnapshots()` 暂停周期 tick，并返回已有 flush 的等待入口。丢弃前先 drain；必要阶段失败不退出，未完成 discard 真正结束后才恢复 tick。会话读取、保存与 clear 在 `sessionStore` 原入口 FIFO 排序，失败释放队列，不改持久化字段/格式。
+- 退出 backup 含 settings load 的预算为 8 秒；snapshots 25 秒、terminals 30 秒、discard 8 秒。超时停止等待但不等于取消后台操作，禁止重复提交仍在途的必要阶段；迟到 settings load 不启动旧备份。必需操作未确认完成时保留窗口并提示中英文失败/等待状态，不输出误导的 cleanup completed。
 - 分流判定：`detectCliResumeKind(startupCmd, project) -> "codex" | "claude" | null`。
 - resume 拼接：`buildCliResumeStartupCommand(kind, cliSessionId, project)`，复用 `appendResumeCliArgs`（`projectStartupCommand.ts`）。
 - Hook 身份绑定：`terminalStore.handleCliHookEvent(payload)` 通过 `resolveCliSessionRebind(currentId, payload.sessionId)` 更新运行态 `TerminalSession.cliSessionId`，再用相同规则对账 `sessionStore.sessions` 中的持久化 ID；持久化快照缺失或不同时必须立即调用串行保存入口。
@@ -37,6 +49,7 @@
 - `appendResumeCliArgs` 在继承项目普通 CLI 参数前必须移除 `cli_args` 中已有的 `resume <id>`、`resume --no-alt-screen <id>`、`--resume <id>`、`--continue` 等会话选择片段；新命令中的目标 Session ID 只能出现一次，Provider 参数仍须保留并去重。
 - 持续保存：定时节流 10s(`SNAPSHOT_THROTTLE_MS`)，脏检测跳过无新输出的终端，单终端尾部限行 `SNAPSHOT_MAX_LINES=2000`，仅有真实 PTY 会话时启动定时器。正常退出且明确丢弃会话时，`flushTerminalSnapshotsNow()` 必须在 `TerminalProcessManager.closeAll()` 之前强制落盘最终画面。
 - 快照并发/生命期（1.4.3）：周期 flush 单飞；已有 flush 时的强制请求必须等待其后新一轮强制刷新，不允许只等旧画面。来源注册携带取消信号，卸载/同 ID 替换取消 xterm 写屏障；旧注销不能移除新来源，异步结果在上传和写 Store 前核验来源身份。上传失败或落盘失败标脏重试；保留完整 daemon checkpoint，禁止以本机恢复尾部替代。`scripts/terminalSnapshotPersistence.test.mjs` 执行真实模块的定时/强制/关闭/替换/失败序列回归。
+- 鼠标快照（1.4.4）：定时和卸载统一调用 `serializeTerminalSnapshot`，在 tracking 开启前设置真实 DEFAULT/SGR/SGR_PIXELS 编码，并在尾部保存完整开启/关闭状态；不得直接使用遗漏编码的 SerializeAddon 输出。旧快照编码不可猜测，只在明确 snapshot/checkpoint 边界暂停不安全跟踪，实时原始 legacy 鼠标模式不改写。daemon attach 保留已存快照身份但禁止静态贴屏；旧 daemon 仅精确匹配该快照才兼容，未知旧会话需要重开。输入/query 所有权、历史几何与 ACK 原始字符计数不变。
 - 启动问询（`mode=ask`）：有可恢复真实 PTY 会话 → 弹窗询问；无 → 静默进入不弹窗。拒绝 → `sessionStore.clear()` 只清工作区快照，**不碰 SQLite `session_meta`**，并 `TerminalProcessManager.closeAll()` 关闭无人认领的 daemon 会话。
 - 自动恢复（`mode=auto`）：有可恢复真实 PTY 会话 → 不弹窗，`init()` 直接调用 `restoreSessions`；无 → 静默进入。daemon 会话仍走 `restoreSessions` 内部 attach 优先，与后台续跑不冲突。
 - **★每进程只触发一次**：`App.tsx` 模块级 `sessionRestoreHandled` 守护——恢复弹窗/自动恢复只在 `init()` 里触发一次并立即置位。切换设置页等任何后续渲染都不得重新触发（历史教训：`735123d2` 拆功能的根因就是提示不受控、切设置页反复弹）。

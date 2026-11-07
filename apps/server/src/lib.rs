@@ -30,6 +30,11 @@ pub fn build_router(state: AppState) -> Result<Router, String> {
     let static_files = ServeDir::new(&web_dist)
         .append_index_html_on_directories(true)
         .not_found_service(ServeFile::new(web_dist.join("index.html")));
+    // Each client owns its SPA fallback. Missing Tap assets must stay 404.
+    let tap_dist = web_dist.join("tap");
+    let tap_files = ServeDir::new(&tap_dist)
+        .append_index_html_on_directories(true)
+        .fallback(ServeFile::new(tap_dist.join("index.html")));
 
     let api_router = Router::new()
         .route("/health", get(api::health))
@@ -65,6 +70,8 @@ pub fn build_router(state: AppState) -> Result<Router, String> {
         .nest("/api", api_router)
         .route("/ws/browser", get(ws::browser_socket))
         .route("/ws/device", get(ws::device_socket))
+        .nest_service("/tap/assets", ServeDir::new(tap_dist.join("assets")))
+        .nest_service("/tap", tap_files)
         .fallback_service(static_files)
         .with_state(state.clone())
         .layer(RequestBodyLimitLayer::new(MAX_HTTP_BODY_BYTES))

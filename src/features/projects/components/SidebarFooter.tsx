@@ -3,7 +3,8 @@ import { useHookStatusRequest } from "../../settings/api/useHookStatusRequest";
 import { codexHookNeedsReview, type CodexHookReadiness } from "../../settings/api/codexHookStatus";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { BarChart3, Handshake, Settings } from "../../../shared/ui/icons";
+import { BarChart3, Handshake, Settings } from "../../../shared/ui/homeIcons";
+import { SPONSORS_ENABLED } from "../../settings/api/sponsors";
 import { SyncStatusIndicator } from "./SyncStatusIndicator";
 import type { SettingsTab } from "../../settings/api/SettingsModal";
 import { getErrorMessage, getKimiHookErrorMessage, getPiHookErrorMessage } from "../../settings/api/hookErrors";
@@ -254,7 +255,7 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
       title={t("sidebar.stats")}
       aria-label={t("sidebar.openStats")}
     >
-      <BarChart3 size={14} strokeWidth={1.5} />
+      <BarChart3 size={17} strokeWidth={1.5} />
     </button>
   ) : null;
 
@@ -265,11 +266,11 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
       title={t("sidebar.settings")}
       aria-label={t("sidebar.openSettings")}
     >
-      <Settings size={14} strokeWidth={1.5} />
+      <Settings size={17} strokeWidth={1.5} />
     </button>
   );
 
-  const tokenStationButton = (
+  const tokenStationButton = SPONSORS_ENABLED ? (
     <button
       type="button"
       onClick={() => onOpenSettings("sponsors")}
@@ -277,9 +278,9 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
       title={t("sidebar.tokenStation")}
       aria-label={t("sidebar.openTokenStation")}
     >
-      <Handshake size={14} strokeWidth={1.7} aria-hidden="true" />
+      <Handshake size={17} strokeWidth={1.7} aria-hidden="true" />
     </button>
-  );
+  ) : null;
 
   if (collapsed) {
     return (

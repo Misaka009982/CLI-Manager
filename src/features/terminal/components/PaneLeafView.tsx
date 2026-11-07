@@ -3,7 +3,6 @@ import { useTerminalStore, type TabNotificationState } from "../state";
 import { useSettingsStore } from "../../../shared/preferences/settingsStore";
 import type { TerminalPaneLeaf, TerminalPaneSplitDirection } from "../api/terminalPaneTree";
 import { XTermTerminal } from "./XTermTerminal";
-import { RemoteHandoffOverlay } from "./RemoteHandoffOverlay";
 import type { Project, TerminalSession, WorktreeRecord } from "../../../shared/types/index";
 import { resolveTerminalPaneMarker, type TerminalPaneMarkerSettings } from "../../../shared/lib/terminalPaneMarker";
 import { FileEditorPane, SubagentTranscriptView } from "./lazyTerminalPanels";
@@ -207,6 +206,7 @@ export function PaneLeafView({
                 <FileEditorPane
                   session={session}
                   isActive={!historyActive && isLayoutVisible && session.id === activeSessionId}
+                  isVisible={!historyActive && isLayoutVisible && session.id === effectivePaneActiveSessionId}
                   terminalThemeBackground={terminalThemeBackground}
                   onClose={() => onCloseSessions([session.id])}
                 />
@@ -219,8 +219,6 @@ export function PaneLeafView({
                   isVisible={!historyActive && isLayoutVisible && session.id === effectivePaneActiveSessionId}
                 />
               </Suspense>
-            ) : session.remoteHandoff ? (
-              <RemoteHandoffOverlay session={session} />
             ) : (
               <XTermTerminal
                 sessionId={session.id}

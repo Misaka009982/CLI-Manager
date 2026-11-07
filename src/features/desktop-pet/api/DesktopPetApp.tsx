@@ -12,17 +12,9 @@ import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AppWindow,
-  ArrowLeft,
-  Building2,
   EyeOff,
-  LockKeyhole,
   Maximize2,
-  MessageCircle,
-  MessagesSquare,
   MonitorUp,
-  PauseCircle,
-  RadioTower,
-  Send,
   Settings,
 } from "lucide-react";
 import { CliCat } from "./CliCat";
@@ -30,8 +22,6 @@ import { PetArtwork } from "./PetArtwork";
 import {
   DESKTOP_PET_CONFIG_EVENT,
   DESKTOP_PET_CLOSE_MENU_EVENT,
-  DESKTOP_PET_HANDOFF_CANCEL_EVENT,
-  DESKTOP_PET_HANDOFF_START_EVENT,
   DESKTOP_PET_OPEN_SETTINGS_EVENT,
   DESKTOP_PET_OPEN_TARGET_EVENT,
   DESKTOP_PET_POSITION_EVENT,
@@ -41,7 +31,6 @@ import {
   DESKTOP_PET_SIZE_MAX_PERCENT,
   DESKTOP_PET_SIZE_MIN_PERCENT,
   DESKTOP_PET_SIZE_STEP_PERCENT,
-  DESKTOP_PET_MENU_MAX_VISIBLE_PLATFORMS,
   DESKTOP_PET_MENU_MAX_VISIBLE_TARGETS,
   calculateDesktopPetMenuWindowGeometry,
   createLatestAsyncTaskRunner,
@@ -62,10 +51,6 @@ import {
 import { convertChineseForLanguage, getCurrentLanguage, translate } from "../../../shared/i18n/index";
 import { logWarn } from "../../../shared/platform/logger";
 import { calculateDesktopPetRenderedBounds } from "../lib/desktopPetRenderedBounds";
-import type {
-  CcConnectHandoffPlatformTarget,
-  CcConnectPlatform,
-} from "../../remote/api/remoteHandoff";
 import { BUILTIN_DESKTOP_PET_ID } from "../../../shared/preferences/settingsStore";
 import "../styles/desktopPet.css";
 
@@ -86,50 +71,6 @@ function buildDesktopPetLabels(language: DesktopPetConfigPayload["language"]): D
     currentTask: translate(language, "desktopPet.actions.currentTask"),
     unnamedTask: translate(language, "desktopPet.actions.unnamedTask"),
     openCurrent: translate(language, "desktopPet.actions.openCurrent"),
-    remoteHandoff: translate(language, "desktopPet.actions.remoteHandoff"),
-    cancelHandoff: translate(language, "desktopPet.actions.cancelHandoff"),
-    handoffPlatforms: translate(language, "desktopPet.actions.handoffPlatforms"),
-    handoffSessions: translate(language, "desktopPet.actions.handoffSessions"),
-    handoffBack: translate(language, "desktopPet.actions.handoffBack"),
-    platformReady: translate(language, "desktopPet.actions.platformReady"),
-    platformNotRunning: translate(language, "desktopPet.actions.platformNotRunning"),
-    platformCredentialsMissing: translate(
-      language,
-      "desktopPet.actions.platformCredentialsMissing"
-    ),
-    platformUserMissing: translate(language, "desktopPet.actions.platformUserMissing"),
-    platformSessionMissing: translate(language, "desktopPet.actions.platformSessionMissing"),
-    platformUnavailable: translate(language, "desktopPet.actions.platformUnavailable"),
-    platformTelegram: translate(language, "settings.ccConnect.platformTelegram"),
-    platformFeishu: translate(language, "settings.ccConnect.platformFeishu"),
-    platformWeixin: translate(language, "settings.ccConnect.platformWeixin"),
-    platformWecom: translate(language, "settings.ccConnect.platformWecom"),
-    handoffPending: translate(language, "remoteHandoff.overlay.pending"),
-    handoffCancelling: translate(language, "remoteHandoff.overlay.cancelling"),
-    handedOff: translate(language, "desktopPet.actions.handedOff"),
-    handoffRecoveryFailed: translate(language, "desktopPet.actions.handoffRecoveryFailed"),
-    noHandoffSessions: translate(language, "desktopPet.actions.noHandoffSessions"),
-    handoffReady: translate(language, "desktopPet.actions.handoffReady"),
-    handoffResolveRemoteSession: translate(
-      language,
-      "desktopPet.actions.handoffResolveRemoteSession"
-    ),
-    handoffTaskRunning: translate(language, "desktopPet.actions.handoffTaskRunning"),
-    handoffStateUnknown: translate(language, "desktopPet.actions.handoffStateUnknown"),
-    handoffUnavailable: translate(language, "desktopPet.actions.handoffUnavailable"),
-    handoffRegisteredProvider: translate(
-      language,
-      "desktopPet.actions.handoffRegisteredProvider"
-    ),
-    handoffPiConfiguration: translate(language, "desktopPet.actions.handoffPiConfiguration"),
-    handoffOpenCodeConfiguration: translate(
-      language,
-      "desktopPet.actions.handoffOpenCodeConfiguration"
-    ),
-    handoffOpenCodeCapabilityLimited: translate(
-      language,
-      "desktopPet.actions.handoffOpenCodeCapabilityLimited"
-    ),
   };
 }
 
@@ -167,9 +108,6 @@ const DEFAULT_SNAPSHOT: DesktopPetSnapshot = {
   attentionCount: 0,
   updatedAt: Date.now(),
   targets: [],
-  handoff: null,
-  handoffPlatforms: [],
-  handoffBusy: false,
 };
 
 function moodLabel(labels: DesktopPetConfigPayload["labels"], mood: DesktopPetMood): string {
@@ -194,12 +132,6 @@ function targetStatusLabel(
   labels: DesktopPetConfigPayload["labels"],
   target: DesktopPetTarget
 ): string {
-  if (target.handoffPhase === "pending") return labels.handoffPending;
-  if (target.handoffPhase === "cancelling") return labels.handoffCancelling;
-  if (target.handoffPhase === "recovery_failed") {
-    return labels.handoffRecoveryFailed;
-  }
-  if (target.handedOff) return labels.handedOff;
   const mood: DesktopPetMood =
     target.status === "running"
       ? "working"
@@ -211,81 +143,6 @@ function targetStatusLabel(
             ? "error"
             : "idle";
   return moodLabel(labels, mood);
-}
-
-function handoffTargetStatusLabel(
-  labels: DesktopPetConfigPayload["labels"],
-  target: DesktopPetTarget
-): string {
-  if (target.handoffEligible) return labels.handoffReady;
-  if (target.handoffRecoverable) return labels.handoffResolveRemoteSession;
-  if (target.handoffReason === "task_running") return labels.handoffTaskRunning;
-  if (target.handoffReason === "task_state_unknown") return labels.handoffStateUnknown;
-  return labels.handoffUnavailable;
-}
-
-function handoffAgentLabel(target: DesktopPetTarget): string | null {
-  if (!target.handoffAgent) return null;
-  return {
-    claude: "Claude Code",
-    codex: "Codex",
-    pi: "Pi",
-    opencode: "OpenCode",
-  }[target.handoffAgent];
-}
-
-function handoffProviderLabel(
-  labels: DesktopPetConfigPayload["labels"],
-  target: DesktopPetTarget,
-): string | null {
-  if (target.handoffAgent === "pi") return labels.handoffPiConfiguration;
-  if (target.handoffAgent === "opencode") return labels.handoffOpenCodeConfiguration;
-  if (target.handoffAgent === "claude" || target.handoffAgent === "codex") {
-    return target.handoffProviderName || labels.handoffRegisteredProvider;
-  }
-  return null;
-}
-
-function platformLabel(
-  labels: DesktopPetConfigPayload["labels"],
-  platform: CcConnectPlatform
-): string {
-  return {
-    telegram: labels.platformTelegram,
-    feishu: labels.platformFeishu,
-    weixin: labels.platformWeixin,
-    wecom: labels.platformWecom,
-  }[platform];
-}
-
-function platformStatusLabel(
-  labels: DesktopPetConfigPayload["labels"],
-  target: CcConnectHandoffPlatformTarget
-): string {
-  if (target.ready) return labels.platformReady;
-  if (target.unavailableReason === "cc_connect_not_running") {
-    return labels.platformNotRunning;
-  }
-  if (target.unavailableReason === "handoff_credentials_missing") {
-    return labels.platformCredentialsMissing;
-  }
-  if (target.unavailableReason === "handoff_platform_user_missing") {
-    return labels.platformUserMissing;
-  }
-  if (target.unavailableReason === "handoff_platform_session_missing") {
-    return labels.platformSessionMissing;
-  }
-  return labels.platformUnavailable;
-}
-
-function PlatformIcon({ platform }: { platform: CcConnectPlatform }) {
-  const Icon = {
-    telegram: Send,
-    feishu: MessagesSquare,
-    weixin: MessageCircle,
-    wecom: Building2,
-  }[platform];
-  return <Icon size={15} aria-hidden="true" />;
 }
 
 interface CollapsedPetWindowGeometry {
@@ -342,25 +199,13 @@ export default function DesktopPetApp() {
   const [displayMood, setDisplayMood] = useState<DesktopPetMood>(DEFAULT_SNAPSHOT.mood);
   const [installedPet, setInstalledPet] = useState<InstalledPet | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [targetMode, setTargetMode] = useState<"open" | "platforms" | "handoff">("open");
-  const [selectedPlatform, setSelectedPlatform] = useState<CcConnectPlatform | null>(null);
   const [menuGeometry, setMenuGeometry] = useState<DesktopPetMenuWindowGeometry | null>(null);
   const [previewSize, setPreviewSize] = useState<number | null>(null);
   const [documentVisible, setDocumentVisible] = useState(() => !document.hidden);
-  const menuTargets = targetMode === "handoff"
-    ? snapshot.targets.filter((target) => target.handoffCandidate)
-    : snapshot.targets;
-  const handoffPlatforms = useMemo(
-    () => snapshot.handoffPlatforms.filter((platform) => platform.enabled),
-    [snapshot.handoffPlatforms]
-  );
-  const secondaryItemCount = targetMode === "platforms"
-    ? handoffPlatforms.length
-    : menuTargets.length;
-  const secondaryHeaderHeight = targetMode === "open" ? 0 : 34;
-  const maxVisibleSecondaryItems = targetMode === "platforms"
-    ? DESKTOP_PET_MENU_MAX_VISIBLE_PLATFORMS
-    : DESKTOP_PET_MENU_MAX_VISIBLE_TARGETS;
+  const menuTargets = snapshot.targets;
+  const secondaryItemCount = menuTargets.length;
+  const secondaryHeaderHeight = 0;
+  const maxVisibleSecondaryItems = DESKTOP_PET_MENU_MAX_VISIBLE_TARGETS;
   const secondaryListScrollable = secondaryItemCount > maxVisibleSecondaryItems;
   const canOpenMenu = config.settings.showActionMenu || snapshot.targets.length > 0;
   const effectiveSize = previewSize ?? config.settings.size;
@@ -489,8 +334,6 @@ export default function DesktopPetApp() {
               collapsedWindowGeometryRef.current = null;
               setMenuGeometry(null);
               setMenuOpen(false);
-              setTargetMode("open");
-              setSelectedPlatform(null);
             }
             throw error;
           }
@@ -541,7 +384,6 @@ export default function DesktopPetApp() {
       if (!disposed) {
         setSnapshot({
           ...event.payload,
-          handoffPlatforms: event.payload.handoffPlatforms ?? [],
         });
       }
     });
@@ -635,10 +477,6 @@ export default function DesktopPetApp() {
 
   useEffect(() => {
     if (config.settings.showActionMenu) return;
-    if (targetMode !== "open") {
-      setTargetMode("open");
-      setSelectedPlatform(null);
-    }
     if (snapshot.targets.length === 0) {
       if (hoverOpenTimerRef.current !== null) {
         window.clearTimeout(hoverOpenTimerRef.current);
@@ -646,28 +484,7 @@ export default function DesktopPetApp() {
       }
       if (menuOpen) closeMenuRef.current(true);
     }
-  }, [config.settings.showActionMenu, menuOpen, snapshot.targets.length, targetMode]);
-
-  useEffect(() => {
-    if (targetMode === "platforms" && handoffPlatforms.length === 0) {
-      setTargetMode("open");
-      setSelectedPlatform(null);
-      return;
-    }
-    if (
-      targetMode === "handoff"
-      && (
-        !selectedPlatform
-        || !snapshot.targets.some((target) => target.handoffCandidate)
-        || !handoffPlatforms.some(
-          (platform) => platform.platform === selectedPlatform && platform.ready
-        )
-      )
-    ) {
-      setTargetMode(handoffPlatforms.length > 0 ? "platforms" : "open");
-      setSelectedPlatform(null);
-    }
-  }, [handoffPlatforms, selectedPlatform, snapshot.targets, targetMode]);
+  }, [config.settings.showActionMenu, menuOpen, snapshot.targets.length]);
 
   useEffect(() => {
     if (snapshot.mood !== "success") {
@@ -949,8 +766,6 @@ export default function DesktopPetApp() {
     commitSizePreview();
     if (suppressHover) hoverSuppressedUntilLeaveRef.current = true;
     setMenuOpen(false);
-    setTargetMode("open");
-    setSelectedPlatform(null);
   };
   closeMenuRef.current = closeMenu;
 
@@ -979,8 +794,6 @@ export default function DesktopPetApp() {
       ) {
         return;
       }
-      setTargetMode("open");
-      setSelectedPlatform(null);
       setMenuOpen(true);
     }, DESKTOP_PET_HOVER_OPEN_DELAY_MS);
   };
@@ -1060,27 +873,6 @@ export default function DesktopPetApp() {
     }).catch((err) => logWarn("Failed to request desktop pet target activation", err));
   };
 
-  const requestHandoff = (target: DesktopPetTarget) => {
-    if (!selectedPlatform || (!target.handoffEligible && !target.handoffRecoverable)) return;
-    closeMenu();
-    void emitTo("main", DESKTOP_PET_HANDOFF_START_EVENT, {
-      sessionId: target.sessionId,
-      platform: selectedPlatform,
-    }).catch((err) => logWarn("Failed to request remote handoff", err));
-  };
-
-  const selectHandoffPlatform = (target: CcConnectHandoffPlatformTarget) => {
-    if (!target.ready) return;
-    setSelectedPlatform(target.platform);
-    setTargetMode("handoff");
-  };
-
-  const cancelHandoff = () => {
-    closeMenu();
-    void emitTo("main", DESKTOP_PET_HANDOFF_CANCEL_EVENT).catch((err) => {
-      logWarn("Failed to request remote handoff cancellation", err);
-    });
-  };
 
   const openMainWindow = () => {
     closeMenu();
@@ -1121,8 +913,6 @@ export default function DesktopPetApp() {
           closeMenu(true);
         } else if (canOpenMenu) {
           hoverSuppressedUntilLeaveRef.current = false;
-          setTargetMode("open");
-          setSelectedPlatform(null);
           setMenuOpen(true);
         }
       }}
@@ -1169,89 +959,13 @@ export default function DesktopPetApp() {
           className="desktop-pet-menu"
           data-has-targets={secondaryItemCount > 0 || undefined}
           role="menu"
-          aria-label={
-            targetMode === "platforms"
-              ? labels.handoffPlatforms
-              : targetMode === "handoff"
-                ? labels.handoffSessions
-                : labels.taskList
-          }
+          aria-label={labels.taskList}
         >
-          {targetMode === "platforms" && handoffPlatforms.length > 0 ? (
-            <div
-              className="desktop-pet-target-list desktop-pet-platform-list"
-              data-scrollable={secondaryListScrollable || undefined}
-            >
-              <div className="desktop-pet-secondary-header">
-                <button
-                  type="button"
-                  role="menuitem"
-                  aria-label={labels.handoffBack}
-                  title={labels.handoffBack}
-                  onClick={() => {
-                    setTargetMode("open");
-                    setSelectedPlatform(null);
-                  }}
-                >
-                  <ArrowLeft size={14} aria-hidden="true" />
-                </button>
-                <strong>{labels.handoffPlatforms}</strong>
-              </div>
-              {handoffPlatforms.map((platform, index) => {
-                const name = platformLabel(labels, platform.platform);
-                const status = platformStatusLabel(labels, platform);
-                return (
-                  <button
-                    key={platform.platform}
-                    type="button"
-                    role="menuitem"
-                    className="desktop-pet-platform"
-                    data-ready={platform.ready || undefined}
-                    disabled={!platform.ready}
-                    style={targetFanStyle(
-                      index,
-                      handoffPlatforms.length,
-                      DESKTOP_PET_MENU_MAX_VISIBLE_PLATFORMS
-                    )}
-                    onClick={() => selectHandoffPlatform(platform)}
-                    title={[name, status].join(" · ")}
-                  >
-                    <PlatformIcon platform={platform.platform} />
-                    <span className="desktop-pet-target-copy">
-                      <strong>{name}</strong>
-                      <small>{status}</small>
-                    </span>
-                    <span className="desktop-pet-platform-state" aria-hidden="true" />
-                  </button>
-                );
-              })}
-            </div>
-          ) : menuTargets.length > 0 ? (
+          {menuTargets.length > 0 ? (
             <div
               className="desktop-pet-target-list"
               data-scrollable={secondaryListScrollable || undefined}
             >
-            {targetMode === "handoff" ? (
-              <div className="desktop-pet-secondary-header">
-                <button
-                  type="button"
-                  role="menuitem"
-                  aria-label={labels.handoffBack}
-                  title={labels.handoffBack}
-                  onClick={() => {
-                    setTargetMode("platforms");
-                    setSelectedPlatform(null);
-                  }}
-                >
-                  <ArrowLeft size={14} aria-hidden="true" />
-                </button>
-                <strong>
-                  {selectedPlatform
-                    ? platformLabel(labels, selectedPlatform)
-                    : labels.handoffSessions}
-                </strong>
-              </div>
-            ) : null}
             {menuTargets.map((target, index) => {
               const identityLabels = distinctDisplayLabels(
                 localizeDisplayText(target.projectName),
@@ -1259,23 +973,8 @@ export default function DesktopPetApp() {
               );
               const primary = identityLabels[0] || `${labels.unnamedTask} ${index + 1}`;
               const secondary = identityLabels[1] ?? null;
-              const status = targetMode === "handoff"
-                ? handoffTargetStatusLabel(labels, target)
-                : targetStatusLabel(labels, target);
-              const handoffDisabled = targetMode === "handoff"
-                && !target.handoffEligible
-                && !target.handoffRecoverable;
-              const handoffDetails = targetMode === "handoff"
-                ? [
-                    handoffAgentLabel(target),
-                    handoffProviderLabel(labels, target),
-                    target.handoffAgent === "opencode"
-                      ? labels.handoffOpenCodeCapabilityLimited
-                      : null,
-                    status,
-                  ].filter((value): value is string => Boolean(value))
-                : [status];
-              const detailLabels = [secondary, ...handoffDetails]
+              const status = targetStatusLabel(labels, target);
+              const detailLabels = [secondary, status]
                 .filter((value): value is string => Boolean(value));
               return (
                 <button
@@ -1285,28 +984,16 @@ export default function DesktopPetApp() {
                   className="desktop-pet-target"
                   data-status={target.status}
                   data-active={target.active || undefined}
-                  data-handed-off={target.handedOff || undefined}
-                  data-recovery-failed={
-                    target.handoffPhase === "recovery_failed" || undefined
-                  }
-                  data-handoff-disabled={handoffDisabled || undefined}
-                  disabled={handoffDisabled}
                   aria-current={target.active ? "true" : undefined}
                   style={targetFanStyle(
                     index,
                     menuTargets.length,
                     DESKTOP_PET_MENU_MAX_VISIBLE_TARGETS
                   )}
-                  onClick={() => (
-                    targetMode === "handoff" ? requestHandoff(target) : openTarget(target)
-                  )}
-                  title={[...identityLabels, ...handoffDetails].join(" · ")}
+                  onClick={() => openTarget(target)}
+                  title={[...identityLabels, status].join(" · ")}
                 >
-                  {target.handoffPhase ? (
-                    <LockKeyhole className="desktop-pet-target-lock" size={14} aria-hidden="true" />
-                  ) : (
-                    <span className="desktop-pet-target-indicator" aria-hidden="true" />
-                  )}
+                  <span className="desktop-pet-target-indicator" aria-hidden="true" />
                   <span className="desktop-pet-target-copy">
                     <strong>{primary}</strong>
                     <small>{detailLabels.join(" · ")}</small>
@@ -1330,44 +1017,6 @@ export default function DesktopPetApp() {
               <MonitorUp size={14} aria-hidden="true" />
               <span>{labels.openCurrent}</span>
             </button>
-            <button
-              type="button"
-              role="menuitem"
-              data-active={targetMode !== "open" || undefined}
-              disabled={
-                snapshot.handoffBusy
-                || Boolean(snapshot.handoff)
-                || !snapshot.targets.some((target) => target.handoffCandidate)
-                || handoffPlatforms.length === 0
-              }
-              onClick={() => {
-                if (targetMode === "open") {
-                  setSelectedPlatform(null);
-                  setTargetMode("platforms");
-                } else if (targetMode === "platforms") {
-                  setSelectedPlatform(null);
-                  setTargetMode("open");
-                } else {
-                  setSelectedPlatform(null);
-                  setTargetMode("platforms");
-                }
-              }}
-            >
-              <RadioTower size={14} aria-hidden="true" />
-              <span>{labels.remoteHandoff}</span>
-            </button>
-            {snapshot.handoff ? (
-              <button
-                type="button"
-                role="menuitem"
-                className="desktop-pet-menu-danger"
-                disabled={snapshot.handoffBusy}
-                onClick={cancelHandoff}
-              >
-                <PauseCircle size={14} aria-hidden="true" />
-                <span>{labels.cancelHandoff}</span>
-              </button>
-            ) : null}
             <button type="button" role="menuitem" onClick={openMainWindow}>
               <AppWindow size={14} aria-hidden="true" />
               <span>{labels.openMain}</span>

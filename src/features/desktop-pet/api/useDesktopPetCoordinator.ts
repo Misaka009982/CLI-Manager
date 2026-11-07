@@ -16,7 +16,6 @@ import {
   deriveDesktopPetSnapshot,
   desktopPetScale,
   normalizeDesktopPetSizePercent,
-  type BackgroundPetTask,
   type DesktopPetConfigPayload,
   type DesktopPetOpenTargetPayload,
   type DesktopPetPositionPayload,
@@ -25,7 +24,6 @@ import {
 } from "./desktopPet";
 import {
   desktopPetSnapshotFingerprint,
-  sameBackgroundPetTasks,
 } from "../lib/desktopPetTransport";
 import { debugConsoleInfo } from "../../../shared/platform/debugConsole";
 import { useI18n } from "../../../shared/i18n/index";
@@ -34,9 +32,7 @@ import { useProjectStore } from "../../projects/api/projectStore";
 import { useSessionStore } from "../../terminal/api/sessionStore";
 import { useSettingsStore } from "../../../shared/preferences/settingsStore";
 import { useTerminalStore } from "../../terminal/state";
-import { useWorktreeStore } from "../../projects/api/worktreeStore";
-import { useRemoteHandoffStore } from "../../remote/api/remoteHandoffStore";
-import { useSshHostStore } from "../../remote/api/sshHostStore";
+import { useDaemonTaskInventory } from "../../terminal/api/daemonTaskInventory";
 
 interface UseDesktopPetCoordinatorOptions {
   appReady: boolean;
@@ -56,17 +52,10 @@ export function useDesktopPetCoordinator({
   const settingsLoaded = useSettingsStore((state) => state.loaded);
   const updateSetting = useSettingsStore((state) => state.update);
   const projects = useProjectStore((state) => state.projects);
-  const worktrees = useWorktreeStore((state) => state.worktrees);
-  const remoteHandoffStatus = useRemoteHandoffStore((state) => state.status);
-  const remoteHandoffPlatforms = useRemoteHandoffStore((state) => state.platforms);
-  const remoteHandoffBusy = useRemoteHandoffStore((state) => state.busy);
-  const sshHosts = useSshHostStore((state) => state.hosts);
-  const sshHostsLoaded = useSshHostStore((state) => state.loaded);
   const persistedSessions = useSessionStore((state) => state.sessions);
   const {
     sessions,
     activeSessionId,
-    sessionStatuses,
     tabNotifications,
     tabStatusDetails,
     ptyOutputActivityAt,
@@ -74,27 +63,17 @@ export function useDesktopPetCoordinator({
     useShallow((state) => ({
       sessions: state.sessions,
       activeSessionId: state.activeSessionId,
-      sessionStatuses: state.sessionStatuses,
       tabNotifications: state.tabNotifications,
       tabStatusDetails: state.tabStatusDetails,
       ptyOutputActivityAt: state.ptyOutputActivityAt,
     }))
   );
-  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundPetTask[]>([]);
   const [activityExpiryRevision, setActivityExpiryRevision] = useState(0);
   const petWindowVisible = appReady
     && settingsLoaded
     && desktopPet.enabled
     && !(desktopPet.autoHideFullscreen && terminalFullscreen);
-
-  useEffect(() => {
-    if (!appReady || sshHostsLoaded || !projects.some((project) => project.environment_type === "ssh")) {
-      return;
-    }
-    void useSshHostStore.getState().fetchHosts().catch((error) => {
-      logWarn("Failed to load SSH hosts for desktop pet handoff", error);
-    });
-  }, [appReady, projects, sshHostsLoaded]);
+  const { tasks: backgroundTasks } = useDaemonTaskInventory(petWindowVisible);
 
   useEffect(() => {
     if (!petWindowVisible) return;
@@ -117,17 +96,12 @@ export function useDesktopPetCoordinator({
       sessions,
       persistedSessions,
       activeSessionId,
-      sessionStatuses,
       tabNotifications,
       tabStatusDetails,
       ptyOutputActivityAt,
       projects,
-      worktrees,
-      sshHosts,
       backgroundTasks,
       agentSessionsOnly: desktopPet.agentSessionsOnly,
-      activeHandoff: remoteHandoffStatus.info,
-      handoffBusy: remoteHandoffBusy,
       now: Date.now(),
     }),
     [
@@ -138,14 +112,9 @@ export function useDesktopPetCoordinator({
       persistedSessions,
       projects,
       ptyOutputActivityAt,
-      remoteHandoffBusy,
-      remoteHandoffStatus.info,
       sessions,
-      sessionStatuses,
-      sshHosts,
       tabNotifications,
       tabStatusDetails,
-      worktrees,
     ]
   );
 
@@ -169,44 +138,14 @@ export function useDesktopPetCoordinator({
       currentTask: t("desktopPet.actions.currentTask"),
       unnamedTask: t("desktopPet.actions.unnamedTask"),
       openCurrent: t("desktopPet.actions.openCurrent"),
-      remoteHandoff: t("desktopPet.actions.remoteHandoff"),
-      cancelHandoff: t("desktopPet.actions.cancelHandoff"),
-      handoffPlatforms: t("desktopPet.actions.handoffPlatforms"),
-      handoffSessions: t("desktopPet.actions.handoffSessions"),
-      handoffBack: t("desktopPet.actions.handoffBack"),
-      platformReady: t("desktopPet.actions.platformReady"),
-      platformNotRunning: t("desktopPet.actions.platformNotRunning"),
-      platformCredentialsMissing: t("desktopPet.actions.platformCredentialsMissing"),
-      platformUserMissing: t("desktopPet.actions.platformUserMissing"),
-      platformSessionMissing: t("desktopPet.actions.platformSessionMissing"),
-      platformUnavailable: t("desktopPet.actions.platformUnavailable"),
-      platformTelegram: t("settings.ccConnect.platformTelegram"),
-      platformFeishu: t("settings.ccConnect.platformFeishu"),
-      platformWeixin: t("settings.ccConnect.platformWeixin"),
-      platformWecom: t("settings.ccConnect.platformWecom"),
-      handoffPending: t("remoteHandoff.overlay.pending"),
-      handoffCancelling: t("remoteHandoff.overlay.cancelling"),
-      handedOff: t("desktopPet.actions.handedOff"),
-      handoffRecoveryFailed: t("desktopPet.actions.handoffRecoveryFailed"),
-      noHandoffSessions: t("desktopPet.actions.noHandoffSessions"),
-      handoffReady: t("desktopPet.actions.handoffReady"),
-      handoffResolveRemoteSession: t("desktopPet.actions.handoffResolveRemoteSession"),
-      handoffTaskRunning: t("desktopPet.actions.handoffTaskRunning"),
-      handoffStateUnknown: t("desktopPet.actions.handoffStateUnknown"),
-      handoffUnavailable: t("desktopPet.actions.handoffUnavailable"),
-      handoffRegisteredProvider: t("desktopPet.actions.handoffRegisteredProvider"),
-      handoffPiConfiguration: t("desktopPet.actions.handoffPiConfiguration"),
-      handoffOpenCodeConfiguration: t("desktopPet.actions.handoffOpenCodeConfiguration"),
-      handoffOpenCodeCapabilityLimited: t("desktopPet.actions.handoffOpenCodeCapabilityLimited"),
     },
   }), [desktopPet, language, petWindowVisible, t]);
 
   const publicSnapshot = useMemo<DesktopPetSnapshot>(() => ({
     ...snapshot,
-    handoffPlatforms: remoteHandoffPlatforms,
     sessionTitle: desktopPet.showSessionName ? snapshot.sessionTitle : null,
     projectName: desktopPet.showSessionName ? snapshot.projectName : null,
-  }), [desktopPet.showSessionName, remoteHandoffPlatforms, snapshot]);
+  }), [desktopPet.showSessionName, snapshot]);
 
   const configPayloadRef = useRef(configPayload);
   const publicSnapshotRef = useRef(publicSnapshot);
@@ -304,33 +243,6 @@ export function useDesktopPetCoordinator({
     }
   }, []);
 
-  useEffect(() => {
-    if (!petWindowVisible) {
-      setBackgroundTasks((current) => (current.length === 0 ? current : []));
-      return;
-    }
-    let disposed = false;
-    const refresh = async () => {
-      try {
-        const tasks = await invoke<BackgroundPetTask[]>("pty_daemon_sessions");
-        if (!disposed) {
-          setBackgroundTasks((current) => (
-            sameBackgroundPetTasks(current, tasks) ? current : tasks
-          ));
-        }
-      } catch {
-        if (!disposed) {
-          setBackgroundTasks((current) => (current.length === 0 ? current : []));
-        }
-      }
-    };
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 3000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [petWindowVisible]);
 
   useEffect(() => {
     if (!appReady || !settingsLoaded) return;

@@ -100,7 +100,7 @@ const {
   withGrokModelOverride,
 } = await import(pathToFileURL(projectStartupPath).href);
 const { buildResumeCliArgs } = await import(pathToFileURL(saveSessionPath).href);
-const { buildHistoryResumeCommand, buildRemoteHandoffResumeCommand, stripPiResumeCliArgs, stripKimiResumeCliArgs } = await import(
+const { buildHistoryResumeCommand, stripPiResumeCliArgs, stripKimiResumeCliArgs } = await import(
   pathToFileURL(historyResumeCommandPath).href
 );
 const historySourcesPath = transpile(
@@ -353,33 +353,6 @@ test("Pi history resume uses --session and strips every conflicting selector", (
   );
 });
 
-test("remote handoff resume preserves each Agent identity and strips conflicting selectors", () => {
-  const project = (cliTool, cliArgs) => ({
-    cli_tool: cliTool,
-    cli_args: cliArgs,
-    startup_cmd: "",
-    provider_overrides: "{}",
-    shell: "powershell",
-  });
-
-  assert.equal(
-    buildRemoteHandoffResumeCommand("codex", NEW_ID, project("codex", `--model o3 resume ${OLD_ID}`)),
-    `codex resume --no-alt-screen ${NEW_ID} --model o3`,
-  );
-  assert.equal(
-    buildRemoteHandoffResumeCommand("claude", NEW_ID, project("claude", "--continue --model sonnet")),
-    `claude --resume ${NEW_ID} --model sonnet`,
-  );
-  assert.equal(
-    buildRemoteHandoffResumeCommand("pi", NEW_ID, project("pi", `--model opus --session ${OLD_ID}`)),
-    `pi --session ${NEW_ID} --model opus`,
-  );
-  assert.equal(
-    buildRemoteHandoffResumeCommand("opencode", OPENCODE_ID, project("opencode", `--model openai/gpt-5 --session=${OLD_ID} -s ${OLD_ID}`)),
-    `opencode --session ${OPENCODE_ID} --model openai/gpt-5`,
-  );
-  assert.equal(buildRemoteHandoffResumeCommand("opencode", "bad id"), null);
-});
 
 test("existing Claude Codex and Grok history resume commands stay unchanged", () => {
   assert.equal(buildHistoryResumeCommand({ source: "claude", session_id: NEW_ID }), `claude --resume ${NEW_ID}`);

@@ -1,5 +1,8 @@
 import http from "node:http";
 import { createServer } from "vite";
+import { copyFileSync, existsSync, statSync } from "node:fs";
+import path from "node:path";
+import { buildAndInstallHelperBinaries, helperBinaryPaths, helperProfile, helperTargetRoot } from "./prepare-helper-binaries.mjs";
 
 const DEV_PORT = 1420;
 const DEV_HOST = "127.0.0.1";
@@ -99,8 +102,47 @@ await server.listen();
 server.printUrls();
 server.bindCLIShortcuts({ print: true });
 
+// helper 编译必须在 Vite 监听之后进行：Tauri CLI 只轮询 devUrl 180s，
+// 若把 cargo 构建放在 listen() 之前，冷态编译（实测 >5min）必然拖到超时。
+// 这里不 await：让 dev server 先完成握手，编译在后台继续，完成后由下方 watcher 热替换。
+const helperTarget = process.platform === "win32" ? helperTargetRoot() : null;
+const helperProfileName = process.platform === "win32" ? helperProfile({ TAURI_ENV_DEBUG: "true" }) : null;
+
+if (helperTarget && helperProfileName) {
+  buildAndInstallHelperBinaries({ targetRoot: helperTarget, profile: helperProfileName }).catch(
+    (error) => {
+      // 构建失败不再拖垮 dev server：主应用会回落到 __daemon 自派发路径。
+      console.error(`[helper-binaries] build failed: ${error.message}`);
+    },
+  );
+}
+
+let helperWatch;
+if (helperTarget && helperProfileName) {
+  const outputPaths = helperBinaryPaths(helperTarget, helperProfileName);
+  const sourceDir = path.join(helperTarget, "helper-binaries", helperProfileName);
+  const lastOutputMtimes = new Map();
+  helperWatch = setInterval(() => {
+    for (const output of outputPaths) {
+      const name = path.basename(output);
+      const source = path.join(sourceDir, name);
+      if (!existsSync(source) || !existsSync(output)) continue;
+      try {
+        const outputMtime = statSync(output).mtimeMs;
+        if (lastOutputMtimes.get(output) === outputMtime) continue;
+        copyFileSync(source, output);
+        lastOutputMtimes.set(output, statSync(output).mtimeMs);
+      } catch {
+        // The daemon may already be running and hold the executable open.
+      }
+    }
+  }, 250);
+  helperWatch.unref();
+}
+
 // 创建自有 Vite 服务后，退出前先关闭该服务。
 close = async () => {
+  if (helperWatch) clearInterval(helperWatch);
   await server.close();
   process.exit(0);
 };

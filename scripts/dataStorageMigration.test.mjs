@@ -54,15 +54,14 @@ test("restart failure feedback uses the actual mapper, not the raw persisted err
   assert.match(section, /dataStorageErrorMessage\(status\.lastError, t\)/);
 });
 
-test("remote idle guard is wired into switch IPC before validation, daemon and pending writes", () => {
+test("switch IPC retains daemon safety without the retired manager", () => {
   const code = readFileSync(new URL("../src-tauri/src/features/app-data/commands.rs", import.meta.url), "utf8");
   const command = code.slice(code.indexOf("pub async fn app_prepare_data_dir_switch"));
-  assert.match(command, /remote_manager: tauri::State<'_, CcConnectManager>/);
-  const guard = command.indexOf("remote_manager.data_storage_idle_guard()?");
-  assert.ok(guard >= 0);
-  for (const entry of ["validate_data_storage_switch(", "daemon_bridge.get()", "prepare_data_storage_switch("]) {
-    assert.ok(guard < command.indexOf(entry), `guard must precede ${entry}`);
-  }
+  assert.doesNotMatch(command, /CcConnectManager|data_storage_idle_guard/);
+  assert.ok(command.indexOf("validate_data_storage_switch(") < command.indexOf("daemon_bridge.get()"));
+  assert.ok(command.indexOf("session.alive") < command.indexOf("prepare_data_storage_switch("));
+  assert.match(command, /data_storage_tasks_active/);
+  assert.match(command, /shutdown_if_idle\(\)\?/);
   assert.match(section, /targetMode: switchRequest\.mode/);
   assert.match(section, /migrate,\s*\}\)/);
 });

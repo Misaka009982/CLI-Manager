@@ -850,7 +850,7 @@ dependencies = [
 
 [[package]]
 name = "cli-manager"
-version = "1.4.4"
+version = "1.5.0"
 dependencies = [
  "apple-native-keyring-store",
  "base64 0.22.1",
@@ -920,6 +920,7 @@ dependencies = [
  "wallpaper",
  "windows-native-keyring-store",
  "windows-sys 0.61.2",
+ "winreg 0.55.0",
  "zbus-secret-service-keyring-store",
  "zip 0.6.6",
 ]

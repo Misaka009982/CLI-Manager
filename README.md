@@ -21,35 +21,6 @@
 
 ---
 
-## ❤️ 赞助商
-
-<p align="center">
-<a href="https://fluxionai.space/register?source=github&campaign=climanager">
-<img src="docs/img/sponsor/fluxion-ai-banner.png" width="100%" alt="Fluxion AI：AI 模型统一接入与管理平台" />
-</a>
-</p>
-
-<table>
-<tr>
-<td width="18%" align="center">
-<a href="https://fluxionai.space/register?source=github&campaign=climanager">
-<img src="docs/img/sponsor/fluxion-ai-logo.jpg" width="96" alt="Fluxion AI 标志" />
-</a>
-</td>
-<td width="82%">
-
-### [Fluxion AI](https://fluxionai.space/register?source=github&campaign=climanager)
-
-**一个入口，接入并管理全球主流 AI 模型**
-
-Fluxion AI 面向个人开发者、技术团队与企业，通过统一 API 接入全球主流 AI 模型，以多线路调度提升可用性，并集中管理模型质量、使用情况与费用。灵活的线路与计费方案带来更具竞争力的调用成本，实时价格与每笔消费公开可查。
-
-[访问 Fluxion AI →](https://fluxionai.space/register?source=github&campaign=climanager)
-
-</td>
-</tr>
-</table>
-
 ## 💡 项目简介
 
 CLI-Manager 是一款专注于 **AI CLI 工作流增强**的桌面应用，将本地与 SSH 终端、多项目管理、Claude Code / Codex 深度集成、多来源历史、Git Worktree 隔离和手机协作连接到同一工作台。
@@ -73,10 +44,12 @@ CLI-Manager 是一款专注于 **AI CLI 工作流增强**的桌面应用，将�
 ✅ **历史 Diff 回看** — 统一查看所有历史会话的代码变更，支持跳回触发消息<br>
 ✅ **用量分析看板** — 多维度统计（热力图、趋势图、效率散点）<br>
 ✅ **SSH 远程开发** — 不离开工作区即可启动和管理远端 AI CLI 终端<br>
-✅ **cc-connect 手机对话** — 通过 Telegram 或飞书继续 Claude Code / Codex 会话<br>
+✅ **Web 与手机访问** — 通过配对浏览器访问经典终端与 Tap 工作台<br>
+✅ **Windows 资源管理器集成** — 右键文件夹直接在新终端打开<br>
 ✅ **多来源会话历史** — 统一解析、筛选和搜索 11 类 AI CLI / Coding Agent 历史<br>
 ✅ **成熟 Worktree 隔离** — 通过向导完成并行任务隔离、提交、合并与清理<br>
 ✅ **持久后台任务** — 终端任务持续运行，重新打开应用后可直接恢复连接<br>
+✅ **性能与内存治理** — 隐藏终端与编辑器自动回收，历史 / Diff 按需加载<br>
 ✅ **桌面宠物** — 用悬浮伙伴展示会话状态，并快速跳回正在执行的任务<br>
 ✅ **项目级供应商切换** — 一键切换 Claude 后端（官方 / 中转 / 自建），无需手动改配置<br>
 ✅ **灵活分屏布局** — 自由的终端分屏 + Tab 跨 pane 拖拽<br>
@@ -260,23 +233,13 @@ CLI-Manager 是一款专注于 **AI CLI 工作流增强**的桌面应用，将�
 
 ---
 
-### 📱 cc-connect 手机对话
+### 🌐 Web 与手机访问
 
-- **手机发起对话** — 通过 Telegram 或飞书，在桌面主机上发起独立的 Claude Code / Codex 会话
-- **项目级授权** — 明确选择允许远程访问的项目，并通过默认拒绝的用户 ID 白名单限制访问者
-- **托管运行** — CLI-Manager 校验受支持 cc-connect 程序的版本与 SHA-256，生成隔离配置、托管进程，并可随应用自动启动
-- **凭据安全** — Bot Token、App ID 和 App Secret 保存到 Windows 凭据管理器，不写入生成的配置文件
-- **Claude 与 Codex 支持** — Claude 使用自身权限模式；Codex 使用 app-server stdio 审批通道，YOLO 模式必须经过明确风险提示和二次确认
-- **历史汇合** — 手机端产生原生 CLI 历史，后续会自动进入 CLI-Manager 的统一会话工作区
-
-> 当前 cc-connect 集成运行在 Windows 桌面主机上，首版每次托管一个项目和一个消息平台，支持 Telegram 与飞书。
-
-<table>
-<tr>
-<td width="50%" align="center"><img src="docs/img/cc-connect-settings.png" width="100%" alt="cc-connect 设置" /><br><sub>项目 / Agent 选择、白名单、凭据与进程状态</sub></td>
-<td width="50%" align="center"><img src="docs/img/cc-connect-mobile.png" width="55%" alt="cc-connect 手机对话" /><br><sub>通过 Telegram 或飞书与 Claude Code / Codex 对话</sub></td>
-</tr>
-</table>
+- **经典 Web 终端** — `/` 提供完整终端、文件与只读 Git 浏览，浏览器通过设备配对访问。
+- **Tap 工作台** — `/tap/` 面向手机与桌面：Claude / Codex 会话以聊天气泡阅读，工具步骤与执行过程默认折叠，支持时间轴、复制、跳转点和会话搜索。
+- **对话输入增强** — `/` 展开 CLI 原生命令与已加载 skills，`@` 浏览项目 / Worktree 文件并插入引用；输入法确认、长按回车与断线重发均有保护。
+- **终端阅读** — 手机默认「文本重排」，可随时切回原生画面；桌面共享终端仍以原生网格为准，窄屏可双向滚动。
+- **配对与安全** — cc-connect 消息平台集成已移除；SSH、原生 Hook 与供应商配置保持独立。
 
 ---
 
@@ -294,6 +257,8 @@ CLI-Manager 是一款专注于 **AI CLI 工作流增强**的桌面应用，将�
 - **中文输入法完美支持** — 候选框锚点冻结 / 流式重绘免疫
 - **终端搜索** — `Ctrl+F` 搜索历史输出
 - **自定义背景** — 支持图片 / 透明度 / 高斯模糊 / 暗化覆盖
+- **换行与滚动快捷键** — 可配置 `Shift+Enter` / `Ctrl+Enter` / `Alt+Enter` 换行，`Ctrl+Home` 回到顶部、`Ctrl+End` 回到底部、`PageUp` / `PageDown` 翻页
+- **macOS 文本选择** — TUI 开启鼠标上报后仍可按住 Option 拖动选择文本，再用 Cmd+C 或右键复制
 
 </td>
 <td width="50%">
@@ -318,6 +283,7 @@ CLI-Manager 是一款专注于 **AI CLI 工作流增强**的桌面应用，将�
 
 - **Workspan 工作区** — 将多个终端与嵌套分屏组织成可持久化的顶层工作区
 - **daemon 会话托管** — 主窗口退出后 CLI 任务仍可继续运行，重新打开时直接 attach，不会重复执行启动命令
+- **独立守护进程** — `cli-manager-daemon` / `cli-manager-web-daemon` 在任务管理器中独立标识，控制连接失效后自动恢复
 - **有序回放与恢复** — 重连后按顺序恢复终端输出、Tab 元数据、分屏布局与实时输出
 - **后台任务中心** — 查看、恢复、丢弃或清理由主窗口外持续运行的任务
 
@@ -358,6 +324,7 @@ CLI-Manager 是一款专注于 **AI CLI 工作流增强**的桌面应用，将�
 - **项目配置** — 独立配置路径 / Shell / 启动命令 / 环境变量
 - **健康检查** — 自动检测失效路径
 - **右键菜单** — 打开所在目录 / 切换供应商 / 启动终端
+- **Windows 资源管理器集成** — 文件夹或空白处右键“在此处打开 CLI-Manager”，冷启动或复用现有窗口新建终端
 - **Git 集成** — 自动识别项目 Git 分支
 - **内置文件与 Git 工具** — 文件浏览 / 编辑、Git 状态与 Diff、Hunk 回滚和子仓库展示
 - **成熟的 Worktree 隔离** — 支持提醒、并行任务自动隔离或始终隔离到独立目录与 `wt/<任务名>` 分支
@@ -382,12 +349,22 @@ CLI-Manager 是一款专注于 **AI CLI 工作流增强**的桌面应用，将�
 - **字体自定义** — UI 字体 / 终端字体 / 字号 / 字体颜色
 - **快捷键配置** — 所有快捷键可自定义
 - **精简模式** — 紧凑界面 + 外部终端默认启动
+- **系统化设置界面** — 统一分组、分隔与控件样式，窄窗口切换顶部分类导航
+- **精致图标** — 首页双色 / 多色分层图标，可随时关闭恢复经典图标
 - **桌面宠物** — 悬浮状态伙伴、任务列表与会话跳转、尺寸 / 位置 / 置顶设置、`.clipet` 宠物包及 Codex Pets 兼容
 
 <p align="center">
 <img src="docs/img/pet-settings.png" width="85%" alt="桌面宠物设置与图鉴" />
 <br><sub>桌面宠物、任务列表、宠物图鉴与 `.clipet` 宠物包管理</sub>
 </p>
+
+---
+
+### ⚡ 性能与内存
+
+- **按需加载** — 历史普通浏览每页 160 条，工具 / Diff / 趋势按需读取；回放与 patch 缓存有界淘汰
+- **自动回收** — 隐藏编辑器 10 秒释放渲染器，隐藏终端 30 秒（低内存 10 秒）释放 WebGL；PTY、历史与 ACK 协议不受影响
+- **可观测与可控** — 设置 -> 通用新增“性能与内存”，低内存模式默认关闭、切换立即生效
 
 ---
 
@@ -401,13 +378,13 @@ CLI-Manager 的定位是一个**可长期使用的 AI CLI 工作台**：把本�
 |---|---|---|---|
 | 核心定位 | 跨项目、本地 / SSH 终端、历史、统计和配置的一体化长期 AI CLI 工作台 | 在隔离 Worktree 中进行多 Agent 编排、结果比较与合并 | 面向 Agent pane、通知和可编程界面的原生 macOS 终端工作区 |
 | 桌面平台 | Windows / macOS 完整测试；Linux 实验支持 | macOS / Windows / Linux | macOS |
-| 远程工作流 | 内置 SSH 远程项目 / 终端，并可通过 cc-connect 在 Telegram / 飞书手机端对话 | SSH Worktree 与远程编排工作流 | 通过 SSH / tmux 组合远程终端工作流 |
+| 远程工作流 | 内置 SSH 远程项目 / 终端及配对 Web 工作台 | SSH Worktree 与远程编排工作流 | 通过 SSH / tmux 组合远程终端工作流 |
 | 会话历史 | 解析 11 类来源，统一浏览、搜索、筛选、标签、收藏和统计 | 侧重账号、用量、通知与 AI Diff 等能力 | 会话恢复、通知面板与工作区元数据 |
 | 深度历史操作 | Claude / Codex Diff、文件变更、消息编辑 / 删除、审计撤回、恢复会话和双向互转 | 公开定位中不是核心方向 | 公开定位中不是核心方向 |
 | Git Worktree 生命周期 | 成熟的项目级隔离：提醒 / 自动策略、独立分支、依赖初始化、历史、提交、合并、冲突中止和清理 | 多 Agent 并行编排的核心模型 | 更偏外部组合式 Git 工作流，不提供任务完成向导闭环 |
 | Agent 可视化 | 子 Agent 自动分屏、会话关联与实时状态 | 多 Agent 隔离执行、结果对比与合并 | 原生 pane / split 展示 Agent 与相关工具 |
 | 统计与配置 | Token / 费用 / 模型 / 项目分析、cc-switch 供应商集成、WebDAV 版本化备份 | 用量、rate-limit 跟踪与账号切换 | Ghostty 配置、CLI / socket API、Hook 与 OSC 集成 |
-| 手机与 Web | cc-connect 手机对话已可用；独立 Web 端和 Mobile 端正在规划 | 公开产品定位包含移动端伴侣 | 以 macOS 桌面端为主 |
+| 手机与 Web | 经典 Web 与 Tap 工作台支持手机访问 | 公开产品定位包含移动端伴侣 | 以 macOS 桌面端为主 |
 | 个性化 | 应用 / 终端主题、自定义背景、状态栏工具和桌面宠物 | 产品自身的编排视图与界面 | 原生终端主题与 Ghostty 配置兼容 |
 
 **选择建议：**
@@ -421,7 +398,7 @@ CLI-Manager 的定位是一个**可长期使用的 AI CLI 工作台**：把本�
 | 载体 | 状态 | 定位 |
 |---|---|---|
 | 桌面应用 | ✅ 已可用 | 完整的终端、项目、历史、Git、统计、SSH 与后台任务工作区 |
-| 手机对话 | ✅ 已通过 cc-connect 可用 | 在 Telegram / 飞书与 Claude Code / Codex 对话，由桌面主机托管会话 |
+| 手机访问 | ✅ Web / Tap 工作台 | 设备配对后通过浏览器访问 CLI 会话 |
 | Web 端 | 🧭 规划中 | 通过浏览器访问 CLI-Manager 工作流，具体范围与交付时间尚未承诺 |
 | 独立 Mobile 端 | 🧭 规划中 | 超越消息平台对话的第一方移动伴侣，具体范围与交付时间尚未承诺 |
 
@@ -492,7 +469,6 @@ CLI-Manager 提供两条成熟的并行工作路径：在终端工作区内自�
 - 多来源历史解析（Claude Code、Codex CLI、Gemini CLI、GitHub Copilot CLI、Antigravity、Grok Build、Pi、OpenCode、Kiro、Cursor、Cline）
 - Claude / Codex 深度历史能力（Diff、编辑、恢复、互转与统计）
 - SSH 远程项目与远程终端（OpenSSH Launch Plan、代理、诊断与远程目录浏览）
-- cc-connect 手机对话（通过 Telegram / 飞书连接 Claude Code 或 Codex）
 - 桌面宠物（`.clipet` 宠物包与 Codex Pets 兼容）
 - cc-switch 供应商数据库只读解析
 - WebDAV 云同步与冲突处理
@@ -611,6 +587,7 @@ cd src-tauri && cargo test
 - 路径健康检查
 - Git 分支自动识别
 - 右键菜单（打开目录 / 切换供应商）
+- Windows 资源管理器右键打开
 - 内置文件浏览 / 编辑与 Git Diff 工具
 - Git Worktree 隔离策略与完成任务向导
 
@@ -628,6 +605,9 @@ cd src-tauri && cargo test
 - 终端搜索（`Ctrl+F`）
 - 自定义背景（图片 / 透明度 / 高斯模糊）
 - 中文输入法完美支持
+- 可配置换行快捷键与 `Ctrl+Home` 回顶
+- macOS TUI 鼠标上报下 Option 拖选
+- 性能与内存：隐藏终端 / 编辑器自动回收
 
 </details>
 
@@ -661,14 +641,14 @@ cd src-tauri && cargo test
 </details>
 
 <details>
-<summary><b>cc-connect 手机对话</b></summary>
+<summary><b>Web 与手机访问</b></summary>
 
-- Telegram / 飞书手机对话
-- Claude Code / Codex Agent 选择
-- 项目级授权与用户 ID 白名单
-- cc-connect 程序校验与托管运行
-- Windows 凭据管理器保存平台凭证
-- 原生历史自动汇入 CLI-Manager
+- 经典 Web 终端与 Tap 工作台
+- 设备配对与管理员密码
+- Tap 对话视图、时间轴与执行过程折叠
+- `/` 原生命令面板与 `@` 文件引用
+- 文本重排 / 原生画面切换
+- 手机抽屉、软键盘与深浅主题
 
 </details>
 
@@ -727,6 +707,19 @@ cd src-tauri && cargo test
 - 精简模式
 - 桌面宠物 / `.clipet` 宠物包 / Codex Pets
 - 终端背景自定义
+- 精致图标（经典 / 多色分层）
+- 系统化设置界面
+
+</details>
+
+<details>
+<summary><b>性能与内存</b></summary>
+
+- 历史详情分页与工具 / Diff 按需加载
+- 回放事件与 patch 缓存有界淘汰
+- 隐藏编辑器 10 秒释放渲染器
+- 隐藏终端 30 秒（低内存 10 秒）释放 WebGL
+- 设置 -> 通用“性能与内存”入口
 
 </details>
 
@@ -744,6 +737,8 @@ cd src-tauri && cargo test
 | `Alt+ArrowLeft` | 上一个 Tab |
 | `F11` | 终端全屏 |
 | `Ctrl+F` | 终端搜索 / 会话内搜索 |
+| `Ctrl+Home` | 跳转到终端顶部 |
+| `Ctrl+End` | 跳转到终端底部 |
 
 > 💡 所有快捷键可在「设置 - 快捷键」中自定义
 

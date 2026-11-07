@@ -2,7 +2,7 @@
 
 ## 1. Scope / Trigger
 
-- Applies to `apps/server`, `apps/web` transport calls, and `crates/web-protocol`.
+- Applies to `apps/server`, `apps/web` / `apps/web-tap` transport calls, shared browser primitives under `src/shared`, and `crates/web-protocol`.
 - The desktop Device WebSocket adapter may run in the sibling `cli-manager-web-daemon` process. The daemon-to-Tauri loopback protocol is an internal transport; browser and server contracts remain unchanged.
 - Trigger this contract when changing Web authentication, pairing, HTTP routes, WebSocket frames, SQLite tables, event sequence handling, or operation states.
 - The Web service is a single-process Rust modular monolith. Desktop remains authoritative for projects, files, Git, CLI execution, Hook state, and final operation results.
@@ -22,6 +22,21 @@
 | GET | `/api/history` | `deviceId,limit,offset` -> cached summaries |
 | POST | `/api/operations` | Creates/idempotently returns an enabled conversation or management operation |
 | GET | `/api/operations/{id}` | Returns one user-owned operation |
+| GET | `/tap/` or `/tap/s/{sessionId}` | Optional Tap SPA; session links never bypass authenticated inventory |
+
+`terminal.transcript` is a read-only operation with capability `terminal.transcript`:
+
+```typescript
+// POST /api/operations with the usual owned deviceId and idempotencyKey
+{ kind: "terminal.transcript", payload: { projectId, worktreeId?, sessionId, before?, includeDetails?: boolean, revision?: string } }
+// result (PTY sessionId is not the CLI's conversation ID)
+{ available: boolean, reason?: "unbound" | "missing" | "unsupported",
+  cliSessionId?: string, revision?: string, epoch?: string, unchanged?: boolean, start: number, total: number,
+  messages: Array<{ id: string, role: "user" | "assistant" | "tool", text: string,
+    truncated?: boolean, at?: string, model?: string, partsTruncated?: boolean,
+    parts?: Array<{ id: string, kind: "text" | "tool_call" | "tool_result" | "reasoning",
+      text: string, toolName?: string, callId?: string, truncated?: boolean }> }> }
+```
 
 ### WebSocket
 
@@ -53,8 +68,34 @@
 - Migration SQL files must use LF. Before SQLx validation, startup may rewrite an applied migration checksum only when it exactly matches the same embedded SQL with the alternate LF/CRLF representation; any other checksum mismatch must remain an error.
 - Required uniqueness: browser token hash, pairing code hash, `(device_id, stream)` cursor, `(user_id, idempotency_key)` operation, browser event sequence.
 - Startup must mark persisted devices offline before accepting new connections.
+- Finished `terminal.transcript` operations, with their `operation.updated` browser events, are deleted two minutes after completion; events are selected by the IDs of the operations being deleted, so a transcript operation still waiting or running keeps all of its events. Pruning runs when a new transcript operation arrives, at most once per 30 seconds; other operation kinds keep their existing retention.
 
 ## 3. Contracts
+
+### Optional Tap client and native transcript
+
+- `/` remains Classic Web; `/tap/` has its own Vite app and SPA fallback. `/tap/assets/*` misses return 404, never either client's HTML. Unknown `/api/*` remains JSON 404. `web:build` builds Classic first, then Tap to `apps/web/dist/tap`; Tauri/portable consume that same dist root. A Classic-only workspace build deletes nested output, so packaging must use the root script.
+- Tauri maps the complete Tap source directory (`../apps/web/dist/tap`) to `apps/web/dist/tap`, without a glob. Mapped glob entries flatten to file names; they must not replace the directory mapping or `assets/`, `fonts/`, and future nested resources disappear after installation. Validate the actual NSIS resource tree and file contents against the built dist, not only a successful build or source-tree HTTP response. Do not change production installs or network settings to make a packaging smoke test pass.
+- Tap sidebar and session picker preserve workspace group hierarchy (`parentId`/`groupId`) and mixed sibling `sortOrder`; same-name projects keep distinct IDs and display paths for disambiguation. Search retains ancestor groups and matching projects without sessions. Orphan groups fall back to root, cyclic parent edges are broken without losing registered projects, and collapse state is scoped to account/device. Session ownership and start requests remain keyed by project/worktree IDs, never display names or cwd.
+- Tap sidebar defaults to expanding only live-terminal projects and their ancestor groups, while keeping the currently viewed session reachable. Empty inventory defaults to collapsed; explicit user expansion choices survive status refresh, and search expansion is temporary. Project icons/arrows/counts must not shrink or inherit text truncation; long names/paths only truncate inside their own label container.
+- Both clients reuse the Cookie, device ownership/mobile scope, existing PTY and operation state machine. Shared browser HTTP/socket/types/stream/image primitives live in `src/shared`; Classic compatibility exports retain its directory-cache and file-operation side effects. No client imports the other's app model or view components.
+- Tap sends registered project/Worktree IDs to `project.start`, then attaches the returned native PTY ID. Chat submission stays PTY input, not `conversation.start/prompt`; native permissions remain in the CLI. Browser detach and mounted-terminal eviction never close the process. Close confirmation freezes the account/device/session ID and displayed title when opened; a late project start or session switch must not retarget it.
+- Transcript host resolves the current local project/Worktree and PTY tuple. SSH, remote handoff and non-PTY sessions are rejected. Only the exact host-owned `cliSessionId` may be read; match history source/CLI ID/canonical cwd, then revalidate the binding and root after asynchronous history I/O. Never substitute the latest session in a directory. Only Claude/Codex is supported in this operation.
+- Transcript pages cover at most 40 source messages, `before` is a nonnegative integer ≤10,000,000, and ordinary message text is capped at 4000 UTF-16 code units with a truncation marker. Default requests export only canonical user/assistant text without tool/call metadata. An explicit boolean `includeDetails=true` additionally exports allowlisted tool_call/tool_result/reasoning blocks (including tool-role rows), each ≤4000 UTF-16 units, at most 23 activity blocks and 8000 activity units per source message. Reserve ordinary text independently; verbose tools never consume its budget. Omitted blocks set partsTruncated. Export neither flattened content nor system/metadata/unknown blocks, reasoning signatures or encrypted fields. Oversized call IDs are omitted, never truncated into false identities. Remove a trailing high surrogate at truncation boundaries. JSON UTF-8 pages stay within 512 KiB: shorten from the older edge and adjust start so pagination never skips messages. Existing 700 KiB operation result limit also applies.
+- Tap requests detailed transcript pages but accepts text-only replies from older hosts. Tool results never start a user turn; input/output grouping uses only call ID within the same turn, without guessing by tool name or inferring success from output. Process sections and individual activity cards start collapsed, including live output; updates preserve manual expansion. Activity text renders escaped with independent scrolling, and no new execution/approval path is introduced.
+- Transcript is demand-loaded only while visible/active. Hosts advertising `terminal.transcript.incremental` use a native bounded JSONL reader, not full `HistorySessionDetail`: unchanged metadata performs zero body I/O, appends preserve model context and source indexes, valid no-newline tails are provisional without duplicates, and truncation/replacement resets the epoch. Recent projections retain ≤40 source rows/1 MiB per cache, at most four caches; incomplete records are limited to 8 MiB and excess is an explicit error, not silent skipping. Two transcript read lanes are independent of the ordered management lane (pending operation IDs remain bounded/deduplicated); PTY commands/output and other management order stay unchanged.
+- New Tap coalesces visible updates at 400ms with single-flight/trailing refresh, reuses identical messages/turns, and lazily mounts folded process details while retaining manual state after first expansion. An unchanged revision never replaces messages. Epoch/binding/account/device generations isolate late responses; older pages remain explicit and preserve scroll anchor. A visible-only 5s revision probe renews a 12s host observation lease and recovers dropped hints/final writes after PTY becomes idle; hidden/detached pages stop renewal and observers/caches expire. Legacy full-detail hosts retain output-triggered reads without continuous polling.
+- Log notifications are `transcript_changed` invalidations, never PTY bytes or ACKs. Native file/parent watch plus metadata fallback only observes leased exact locators and sends no text/path. Device sends only after `HelloOk.capabilities` includes `terminal.transcript.changed` (missing means old server); browser opts in with `/ws/browser?...&transcriptChanges=true`. Server relays only to the paired device owner and matching mobile device scope, and only to opted-in browsers; old browsers never receive unknown frames. New browser/new host on old server can still use bounded 5s revision reads. Unbound/missing/unsupported is an honest read result, not a fabricated conversation. No queue, Push, history-resume or menu automation is implied.
+- Tap's Conversation/Terminal switch remains visible without `terminal.transcript`; capability gates reads, not view selection. Old hosts receive a bilingual device-selection/desktop-helper-upgrade explanation. Terminal text reflow must not be presented as a structured conversation. Browser socket ready re-reads the authorized device inventory, including newly paired devices; live device events can add newly authorized IDs. Preserve the explicit mobile `deviceScope` across refresh/pairing, and never auto-select a newly discovered device. Later per-device events win over an older snapshot. Disposed or superseded flights and old account/device generations cannot update state or expire a newer login, including before React effect cleanup commits. Device selection identifies development/release channel and conversation capability so same-name instances remain distinguishable.
+- Conversation Markdown retains escaped HTML and safe URLs. Code blocks preserve whitespace, scroll horizontally within their own surface, and provide localized language/fallback labels, copy feedback and collapse controls. Reading typography does not change terminal geometry, PTY ownership or input dispatch.
+- Tap keeps at most three terminal mounts. Adjacent same-grid frames coalesce up to 256 KiB of encoded data without crossing reset/grid boundaries. A document-wide scheduler starts one batch per animation frame, yields after three visible batches to waiting hidden work and uses a hidden/stalled-rAF timer fallback. Rendered cursor advances only after xterm's write callback and the final fragment. The browser mirror never answers host terminal queries or resizes a desktop-owned grid. A bounded render queue failure disables that session's input and offers explicit replay. Retry remounts only the failed renderer, never cached siblings; never silently drop output or retry input.
+- Draft/selection storage is local and scoped by account/device/session. Account/device changes cancel operations and clear sockets, subscriptions and mounted sensitive content. Delayed input/resize/close callbacks retain their captured account/device/auth generation, even if opaque terminal IDs collide. A disposed workspace HTTP flight must ignore all errors, including a 401 whose headers arrived before aborting its body; it cannot expire a newer scope. Drafts remain local after logout, documented for shared browsers. A session URL is validated against current inventory before restoring; manual reconnect resets selection restoration without resubmitting input.
+- Tap `@` completion edits the local draft using existing `file.list`/`file.search` operations with registered project/worktree IDs and relative paths only. Gate both operations on the actual `file.management` capability, never the operation name. No completion request reads file contents, launches a CLI, widens device scope or changes protocol/approval authority.
+- File candidate Enter/Tab inserts, arrows select and Esc dismisses; IME confirmation and held Enter must not submit. An empty/loading list consumes plain Enter; explicit send/Ctrl/Meta+Enter retains existing PTY submission. Replace only the caret's token, preserve draft limits/surrounding text, quote space-containing references, hide `.git` files and directories, and cap visible candidates at 80.
+- File requests debounce and keep at most one request in flight per composer. A new interaction identity on each draft/context transition isolates dismissals, selections, old results and stale callbacks even when the same query returns later. Capability absence/disconnect/hidden composer gates reads; retry is explicit. The shared viewport owner publishes visual height; individual composers add no global viewport listeners.
+- Tap slash input uses the running CLI's native menu inside the conversation page, not a browser command catalog or a reconstructed menu. A collapsed caret at the end of a bare slash prefix can hand it to the same terminal once; prefixes are bounded and forbid whitespace, arguments and controls. Do not add a paste wrapper, carriage return or retry. IME, disabled state and stale contexts cannot hand off; rejected input keeps the local draft. The native panel shares the existing renderer, exposes keys/mobile keyboard, keeps chat mounted and preserves saved view preferences. Explicitly submitted slash messages can also show native results, but late/failed delivery cannot steal focus. Returning only hides the panel: the user finishes/cancels and clears pending input in the CLI first. Do not inject cleanup keys or infer execution success. Scroll an oversized desktop-owned grid to its prompt without resizing the PTY. Skills/plugins/MCP behavior is whatever that CLI actually exposes; no discovery-to-activation inference, config scanning or ACP migration.
+- Mobile tokens are scrubbed from URL to memory and require explicit confirmation before redemption, including same-document hash navigation. Canceling an authorization screen restores the draft and replays into the remounted terminal instead of reusing its old renderer cursor. Cancellation is disabled during redemption. Native approval is never synthesized from such a token.
+- Sheets ignore composing, repeated and default-prevented Escape in the bubble phase. Leaving direct input restores the coarse-pointer textarea readOnly/inputMode policy; failed optional font loading keeps a resident font and must not reject terminal setup.
 
 ### Managed Windows lifecycle and terminal recovery
 
@@ -64,6 +105,7 @@
 - PID liveness alone cannot establish helper identity after reboot. Startup treats an observable non-Web-daemon executable as stale discovery, but preserves unknown/inaccessible identities and never kills an unrelated process.
 - Test embedded Web networking with `src-tauri/Cargo.lock`, not only the standalone server lock. The desktop must retain mio 1.2.2 or a newer version containing atomic `WSA_FLAG_NO_HANDLE_INHERIT` socket creation; inheritable listener/client/accepted sockets leak into helpers launched after the service starts and can retain a port after successful thread shutdown.
 - Managed start/stop/restart/config application is serialized. A timed-out stop retains its worker handle, reports `stopping`, and forbids another start until cleanup completes. UI status refresh must not overwrite unsaved connection configuration.
+- Desktop Web server/device forms initialize from status only before editing. Background events, polling, failed actions and lifecycle results update runtime status without replacing drafts. Successful saves reconcile only the submitted draft revision; newer edits survive. Non-loopback HTTP/WS setup exposes the relevant advanced settings and localized guidance; listener/device trust remain separate explicit opt-ins, never inferred from LAN/overlay addresses.
 - Terminal bridges split individual large frames before encoding, preserve original byte order/dimensions and ACK only after the final fragment of the original output frame has been queued. Detached/retired output queues cannot ACK newer attaches.
 - `invalid_terminal_output` is a recoverable session output failure: notify the browser with terminal error status and retain the device connection. Diagnostics contain bounds/size/dimensions, never terminal contents. Authentication and other protocol rejection remain fatal. Local Web helper protocol 6 supports restricted inspection/shutdown upgrades from 1–5.
 
@@ -78,7 +120,8 @@
 | `CLI_MANAGER_WEB_BIND_FILE` | No | Optional TOML file path; defaults to `<data-dir>/web-server.toml` |
 | `CLI_MANAGER_WEB_DATA_DIR` | No | SQLite data directory |
 | `CLI_MANAGER_WEB_DIST` | No | Defaults to `apps/web/dist` relative to the server manifest |
-| `CLI_MANAGER_COOKIE_SECURE` | Conditional | Must be true for non-loopback bind |
+| `CLI_MANAGER_COOKIE_SECURE` | Conditional | Must be true for non-loopback bind unless trusted-network mode was explicitly enabled |
+| `CLI_MANAGER_WEB_TRUSTED_NETWORK` | No | Explicitly allow non-loopback HTTP on a trusted network; defaults to false |
 | `CLI_MANAGER_WEB_ALLOWED_ORIGIN` | No | Exact credentialed CORS and Browser WebSocket Origin |
 
 The server also accepts `--bind host:port` and `--port number`. Precedence is command line > environment > `web-server.toml` > defaults. The final value is parsed as a `SocketAddr`; invalid or zero ports fail startup. Management result payloads are bounded before crossing the device WebSocket so oversized file previews and diffs fail with a stable error instead of disconnecting the device.
@@ -104,7 +147,7 @@ The server also accepts `--bind host:port` and `--port number`. Precedence is co
 - Tauri owns `/ws/device`, heartbeat, reconnect, pairing, history, and outbound queues in Rust; hiding, minimizing, or unmounting a settings component must not stop the connection.
 - When `cli-manager-web-daemon` is available, it owns `/ws/device`, heartbeat, reconnect, pairing, history, and outbound queues; Tauri remains the local operation executor and keeps the existing command/event surface.
 - The non-secret installed profile is `.cli-manager/web-device.json`; Dev uses `.cli-manager/web-device.dev.json`. Both share `.cli-manager/machine-id`, while each profile owns a distinct stable `clientId`. `deviceToken` is keyed by `clientId` in the native credential store and must never enter a WebView payload, log, SQLite row, or JSON profile.
-- Only loopback servers may use `ws://`; remote device servers require `wss://`.
+- Device connections outside loopback require HTTPS/WSS unless the user explicitly enables that profile's trusted-network HTTP/WS mode. Public browser HTTP origins use the same device-profile opt-in; the managed listener has a separate trusted-network flag.
 - The embedded desktop Web service defaults to loopback and manual startup. A non-loopback bind must be a current local-interface IP or an explicit unspecified address, and must use an exact browser Origin; `autoStart` remains independent from the Web device connection's `autoStart`.
 - When an Origin is still the automatically derived URL of the previous concrete listener, changing bind/port updates it to the new listener. Explicit custom domains, reverse-proxy Origins and Origins paired with unspecified binds remain authoritative.
 
@@ -199,6 +242,15 @@ non-terminal -> canceled | timed_out
 | Applied migration checksum differs only by LF/CRLF | Rewrite to the embedded migration checksum, then run normal SQLx validation |
 | Applied migration checksum differs by SQL content | Preserve SQLx `VersionMismatch`; never auto-repair |
 | Unknown `/api/*` path | JSON 404; never SPA `index.html` |
+| Tap session deep link is not in authenticated inventory | Do not attach it; show the normal workspace selection |
+| Missing transcript project/session IDs, control characters, or fractional/negative/oversized cursor | `invalid_operation_payload` before dispatch |
+| Transcript PTY belongs to another project/Worktree, is SSH/handoff/non-PTY, or was removed during I/O | `history_context_not_found`; no text returned |
+| No exact CLI binding, missing/mismatched history, or unsupported CLI | `available=false` with `unbound`, `missing` or `unsupported`; do not guess |
+| CLI binding or project root changed during history I/O | Revalidate and withhold the old content |
+| Missing `/tap/assets/*` file | HTTP 404; never Classic or Tap index |
+| Tap switches device while an old HTTP 401 body is pending | Ignore the disposed flight; keep the new authenticated scope |
+| Tap project start finishes while close confirmation is open | Close only the originally displayed terminal if confirmed |
+| Tap cancels mobile authorization or retries one renderer | Restore/replay the affected mount without resending input or unmounting cached siblings |
 
 ## 5. Good / Base / Bad Cases
 
@@ -207,7 +259,7 @@ non-terminal -> canceled | timed_out
 - Good: a desktop project with no history session still appears in the Web tree because project navigation comes from `workspace.projects`, not from `history_sessions`.
 - Good: a CLI process that exits during initialize fails its operation without creating a resumable conversation; an old failure-only row is invisible after upgrade.
 - Good: restoring a valid session older than the first desktop history page succeeds after an exact catalog lookup and one forced refresh, while source and canonical cwd are still verified.
-- Good: Web project navigation never renders session rows; dragging a project or group writes through the desktop Store and the next workspace snapshot confirms the final order.
+- Good: Classic Web project navigation never renders session rows; dragging a project or group writes through the desktop Store and the next workspace snapshot confirms the final order. Optional Tap instead groups live PTY sessions beneath registered projects without changing native ordering.
 - Good: right-click quick-start sends only a project/group/Worktree ID, and the desktop returns the created session IDs after resolving the current native project state.
 - Good: a dangerous context-menu action carries browser intent plus native confirmation; denial produces a terminal rejection without deleting or stopping anything.
 - Good: desktop groups and Worktrees preserve their IDs and hierarchy while only safe display/launch context fields cross the device boundary.
@@ -228,6 +280,9 @@ non-terminal -> canceled | timed_out
 - Bad: derive the Web project tree from history rows, or upload full desktop `Project` records containing `env_vars`, startup commands, credential references, or provider overrides.
 - Bad: let the browser send `cwd`, shell text, environment variables, or a direct delete command; the desktop must resolve the target ID and reuse the native Sidebar action handler.
 - Bad: accept a browser-provided partial sibling list, persist Web-only ordering, allow Worktree dragging, or move a group into itself/its descendants.
+- Good: Tap reads an exact bound Claude/Codex transcript, keeps input on the same PTY, and exposes native permission menus through terminal keys.
+- Base: old devices lack `terminal.transcript`, or a new CLI has no binding yet; Tap explicitly reports unavailable chat and keeps terminal usable.
+- Bad: use a recent-by-cwd conversation as a terminal's chat, expose tool/internal log fields, or export a stale binding after asynchronous I/O.
 
 ## 6. Tests Required
 
@@ -248,12 +303,25 @@ non-terminal -> canceled | timed_out
 - `npm run web:typecheck` and `npm run web:build`.
 - `cargo fmt --manifest-path src-tauri/Cargo.toml --check`, `cargo check --manifest-path src-tauri/Cargo.toml`, and `cargo test --manifest-path src-tauri/Cargo.toml web_device` with assertions for URL TLS policy, profile/token serialization, queue bounds/deduplication, profile replacement, and native path boundary rejection.
 - `npx tsc --noEmit` and `npm run build` for the desktop bridge and settings integration.
-- Contract review: Rust camelCase/snake_case payloads must match `apps/web/src/domain.ts` and `webClient.ts`.
+- Contract review: Rust camelCase/snake_case payloads must match `src/shared/types/webBrowser.ts`, the shared browser transports and Classic compatibility entries.
 - Management contract review: server enabled kinds, desktop `MANAGEMENT_KINDS`, Web controls, capabilities, and confirmation sets must match exactly.
 - Project-tree contract tests must assert that `project.start` accepts ID-only project/group/Worktree/selection payloads, rejects SSH external launch and multi-target split launch, and returns session IDs only for internal/split launches.
 - Project-action contract tests must assert target/action prefix matching, allowlist rejection, native confirmation for destructive actions, and reuse of the desktop Sidebar behavior through the action bus.
+- Tap: `npm run tap:typecheck`, `npm run tap:test`; shared renderer queue and host transcript unit/integration tests; `apps/server/tests/tap_static.rs` for both SPA roots, deep links, static asset and JSON API isolation.
+- Transcript tests assert canonical text-only export, pagination/Unicode-safe truncation, exact source/CLI/cwd/context, missing binding and rejection after PTY/root changes during I/O. Server tests assert required IDs/cursor bounds/capability and forbidden cwd/root payload fields.
+- `apps/web-tap/src/terminalWrites.test.mjs` asserts one start per frame, three-batch visible priority, hidden/timer/wake progress and cancellation.
+- Browser fixture in `.trellis/tasks/10-16-optional-tap-web/browser-check.mjs` covers IME, draft/selection restore, interrupted paste without retry, desktop grid ownership, 5001-frame batching, two-renderer scheduling, renderer retry with sibling identity retained, phone reading/direct input, optional-font failure, frozen close target, late 401/stale callbacks across devices, Escape ownership and explicit token redemption/cancellation. Synthetic viewport tests cannot replace real iOS/Android keyboard acceptance.
 
 ## 7. Wrong vs Correct
+
+```typescript
+// Wrong: matching cwd does not prove a live PTY owns this conversation.
+const detail = recentSessions.find((item) => item.cwd === project.path);
+// Correct: use host-owned CLI identity and revalidate the PTY/root after I/O.
+const boundId = terminal.cliSessionId;
+const detail = await readExactHistory(boundId, source);
+await revalidateTerminalContext(projectId, worktreeId, terminal.id, boundId);
+```
 
 ### Wrong
 

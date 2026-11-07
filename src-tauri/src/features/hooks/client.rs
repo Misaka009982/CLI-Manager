@@ -69,7 +69,7 @@ pub fn run_and_exit(source: &str, event: &str) -> ! {
     exit(0);
 }
 
-// 序列化既有载荷并按目标列表最多重试两轮，返回是否收到成功响应。
+// 序列化既有载荷并按目标列表最多重试两轮；Codex 宠物问答仍使用此入口。
 pub(crate) fn try_notify_prepared_payload(payload: &Value) -> bool {
     let Ok(body) = serde_json::to_vec(payload) else {
         return false;

@@ -29,10 +29,9 @@ import {
   DESKTOP_PET_OUTPUT_ACTIVITY_TTL_MS,
   joinPetAssetPath,
   localizedPetText,
-  type BackgroundPetTask,
   type InstalledPet,
 } from "../../desktop-pet/api/desktopPet";
-import { sameBackgroundPetTasks } from "../../desktop-pet/lib/desktopPetTransport";
+import { useDaemonTaskInventory } from "../api/daemonTaskInventory";
 import { desktopPetESyncFingerprint } from "../../../shared/lib/desktopPetETransport";
 import { useI18n } from "../../../shared/i18n/index";
 import { logWarn } from "../../../shared/platform/logger";
@@ -165,7 +164,6 @@ export function useDesktopPetECoordinator({
       ptyOutputActivityAt: state.ptyOutputActivityAt,
     })),
   );
-  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundPetTask[]>([]);
   const [installedCodexPets, setInstalledCodexPets] = useState<InstalledPet[]>([]);
   const [notification, setNotification] = useState<DesktopPetENotification | null>(null);
   const [activityExpiryRevision, setActivityExpiryRevision] = useState(0);
@@ -188,6 +186,8 @@ export function useDesktopPetECoordinator({
   onActivateSessionRef.current = onActivateSession;
 
   const tracking = appReady && settingsLoaded && settings.enabled;
+  const { tasks: daemonTasks } = useDaemonTaskInventory(tracking && isTauri());
+  const backgroundTasks = useMemo(() => tracking && isTauri() ? daemonTasks : [], [daemonTasks, tracking]);
   const terminalPrompts = useDesktopPetETerminalPrompts(tracking);
   const visible = tracking && !(settings.autoHideFullscreen && terminalFullscreen);
   const selectedPet = useMemo(() => {
@@ -479,30 +479,6 @@ export function useDesktopPetECoordinator({
     );
     return () => window.clearTimeout(timer);
   }, [activityExpiryRevision, ptyOutputActivityAt, tracking]);
-
-  useEffect(() => {
-    if (!tracking || !isTauri()) {
-      setBackgroundTasks((current) => current.length === 0 ? current : []);
-      return;
-    }
-    let disposed = false;
-    const refresh = async () => {
-      try {
-        const next = await invoke<BackgroundPetTask[]>("pty_daemon_sessions");
-        if (!disposed) {
-          setBackgroundTasks((current) => sameBackgroundPetTasks(current, next) ? current : next);
-        }
-      } catch {
-        if (!disposed) setBackgroundTasks((current) => current.length === 0 ? current : []);
-      }
-    };
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 3000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [tracking]);
 
   const applyRuntimeState = (nextRuntimeState: DesktopPetERuntimeState) => {
     setRuntimeState(nextRuntimeState);

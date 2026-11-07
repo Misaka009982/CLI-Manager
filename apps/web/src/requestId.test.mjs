@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { webcrypto } from "node:crypto";
-import { createRequestId } from "./requestId.ts";
+import { createRequestId } from "../../../src/shared/lib/webRequestId.ts";
 
 test("LAN HTTP request IDs work without secure-context randomUUID", () => {
   const httpCrypto = { getRandomValues: (bytes) => webcrypto.getRandomValues(bytes) };

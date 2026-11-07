@@ -10,6 +10,7 @@ import {
 import { arrayMove } from "@dnd-kit/sortable";
 import { useTerminalStore, type TabNotificationState } from "../state";
 import { useDesktopPetEAgentStore } from "../api/desktopPetEAgentStore";
+import { withDesktopPetEPendingAttention } from "../lib/desktopPetETabNotifications";
 import { useSettingsStore } from "../../../shared/preferences/settingsStore";
 import { updateWorkspaceLayout } from "../../../shared/lib/workspaceLayout";
 import { useWorktreeStore } from "../../projects/api/worktreeStore";
@@ -24,7 +25,7 @@ import {
 import type { TerminalPaneLeaf, TerminalPaneSplitDirection } from "../api/terminalPaneTree";
 import { collectPaneLeaves, filterPaneTreeBySessionIds, findFirstSessionId } from "../api/terminalPaneTree";
 import { collectWorkspanSessionIds } from "../api/terminalWorkspan";
-import { type BackgroundTaskMeta } from "../components/BackgroundTasksPanel";
+import { refreshDaemonTaskInventory, useDaemonTaskInventory } from "../api/daemonTaskInventory";
 import {
   TERMINAL_SIDE_PANEL_TAB_ORDER, type TerminalSidePanelTab,
 } from "../components/TerminalSidePanel";
@@ -100,12 +101,9 @@ export function useTerminalTabsController({
     }))
   );
   const pendingActions = useDesktopPetEAgentStore((state) => state.pendingActions);
-  const tabNotifications = useMemo<Record<string, TabNotificationState>>(() => {
-    if (pendingActions.size === 0) return terminalTabNotifications;
-    const next = { ...terminalTabNotifications };
-    for (const sessionId of pendingActions.keys()) next[sessionId] = "attention";
-    return next;
-  }, [pendingActions, terminalTabNotifications]);
+  const tabNotifications = useMemo(() => withDesktopPetEPendingAttention(
+    terminalTabNotifications, pendingActions,
+  ), [pendingActions, terminalTabNotifications]);
   const setActive = useTerminalStore((s) => s.setActive);
   const setActiveWorkspan = useTerminalStore((s) => s.setActiveWorkspan);
   const reorderWorkspans = useTerminalStore((s) => s.reorderWorkspans);
@@ -150,8 +148,7 @@ export function useTerminalTabsController({
     for (const [sessionId, status] of Object.entries(tabStatuses)) {
       next[sessionId] = status.hook ?? "none";
     }
-    for (const sessionId of pendingActions.keys()) next[sessionId] = "attention";
-    return next;
+    return withDesktopPetEPendingAttention(next, pendingActions);
   }, [pendingActions, tabStatuses]);
 
   useEffect(() => {
@@ -208,7 +205,7 @@ export function useTerminalTabsController({
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [splitPicker, setSplitPicker] = useState<SplitPickerState>(null);
   const [closeConfirm, setCloseConfirm] = useState<TerminalCloseConfirmState>(null);
-  const [daemonTasks, setDaemonTasks] = useState<BackgroundTaskMeta[]>([]);
+  const { tasks: daemonTasks } = useDaemonTaskInventory();
   const [activeDropPreview, setActiveDropPreview] = useState<PaneDropPreview>(null);
   const [workspanDetachPreview, setWorkspanDetachPreview] = useState({
     left: 0,
@@ -1696,19 +1693,8 @@ export function useTerminalTabsController({
   }, []);
 
   const refreshBackgroundTasks = useCallback(async () => {
-    try {
-      const tasks = await invoke<BackgroundTaskMeta[]>("pty_daemon_sessions");
-      setDaemonTasks(tasks);
-    } catch {
-      setDaemonTasks([]);
-    }
+    await refreshDaemonTaskInventory();
   }, []);
-
-  useEffect(() => {
-    void refreshBackgroundTasks();
-    const timer = window.setInterval(() => void refreshBackgroundTasks(), 3000);
-    return () => window.clearInterval(timer);
-  }, [refreshBackgroundTasks]);
 
   const backgroundTasks = useMemo(() => {
     const openIds = new Set(sessions.map((session) => session.id));

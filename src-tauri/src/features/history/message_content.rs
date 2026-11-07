@@ -27,15 +27,27 @@ pub(crate) fn parse_message(value: &Value) -> Option<HistoryMessage> {
 
             if matches!(
                 payload_type,
-                "custom_tool_call" | "tool_call" | "function_call"
+                "custom_tool_call"
+                    | "tool_call"
+                    | "function_call"
+                    | "mcp_tool_call"
+                    | "custom_tool_call_output"
+                    | "function_call_output"
+                    | "tool_result"
+                    | "mcp_tool_call_output"
+                    | "reasoning"
             ) {
-                if let Some(payload_value) = payload {
-                    if let Some(message) = parse_message(payload_value) {
-                        if looks_like_patch(&message.content) {
-                            return Some(message);
-                        }
-                    }
-                }
+                // Only the canonical payload block is parsed. Reasoning extraction below
+                // reads public text/summary fields, never encrypted_content or signatures.
+                let role = if payload_type.ends_with("_output") || payload_type == "tool_result" {
+                    "tool"
+                } else {
+                    "assistant"
+                };
+                let normalized = serde_json::json!({ "role": role, "content": [payload?] });
+                let mut message = parse_message(&normalized)?;
+                message.timestamp = extract_timestamp(value);
+                return Some(message);
             }
             return None;
         } else if root_type == "file-history-snapshot" {
@@ -86,7 +98,22 @@ pub(crate) fn parse_message(value: &Value) -> Option<HistoryMessage> {
     if role == "user" && is_tool_result_message(value) {
         role = "tool".to_string();
     }
-    let content = extract_content(value)?;
+    // Tool-only and thinking-only Claude messages have no ordinary flattened text.
+    // Build their display content from recognized blocks instead of discarding the row.
+    let content = extract_content(value).or_else(|| {
+        let content = extract_message_parts(value, &role, "")
+            .into_iter()
+            .filter(|part| {
+                matches!(
+                    part.kind.as_str(),
+                    "tool_call" | "tool_result" | "reasoning"
+                )
+            })
+            .map(|part| part.content)
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!content.trim().is_empty()).then_some(content)
+    })?;
     if content.trim().is_empty() {
         return None;
     }
@@ -564,6 +591,38 @@ pub(super) fn message_part_call_id(value: &Value) -> Option<String> {
 
 // 按已知正文字段及 JSON 摘要回退提取非空分块内容。
 pub(super) fn extract_message_part_content(value: &Value) -> Option<String> {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if matches!(
+        kind,
+        "thinking" | "reasoning" | "reasoning_summary" | "analysis"
+    ) {
+        return ["thinking", "reasoning", "text", "summary", "content"]
+            .into_iter()
+            .filter_map(|key| value.get(key))
+            .filter_map(extract_text_from_value)
+            .find(|text| !text.trim().is_empty());
+    }
+    if matches!(
+        kind,
+        "tool_use"
+            | "tool_call"
+            | "toolcall"
+            | "function_call"
+            | "custom_tool_call"
+            | "mcp_tool_call"
+    ) {
+        let input = value.get("input").or_else(|| value.get("arguments"));
+        if let Some(input) = input {
+            // Keep full structured arguments here; each consumer owns its display budget.
+            return match input {
+                Value::String(text) => Some(text.clone()),
+                other => serde_json::to_string_pretty(other).ok(),
+            };
+        }
+    }
     [
         "text",
         "thinking",

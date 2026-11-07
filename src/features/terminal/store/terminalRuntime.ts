@@ -554,7 +554,7 @@ export function createTerminalRuntime(
         environmentType: payload.environmentType,
         receivedAt: Date.now(),
         candidates: state.sessions
-          .filter((session) => (session.kind ?? "pty") === "pty" && !session.remoteHandoff)
+          .filter((session) => (session.kind ?? "pty") === "pty")
           .map((session) => {
             const project = session.projectId
               ? projectState.projects.find((item) => item.id === session.projectId) ?? null

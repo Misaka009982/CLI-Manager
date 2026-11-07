@@ -205,8 +205,21 @@ pub(super) struct ClientWriter {
 
 impl ClientWriter {
     // 启动独立写线程，空队列时等待通知，取帧后释放队列锁再执行网络 IO。
-    // 关闭标记使线程停止而非排空队列；发送失败退出后不会回写 shared.closed。
+    // 发送等待最多五秒；退出回写 closed，使 reader 和请求执行器停止向失效 writer 入队。
     pub(super) fn new(transport: ClientTransport) -> Arc<Self> {
+        let timeout = Some(std::time::Duration::from_secs(5));
+        match &transport {
+            ClientTransport::Ndjson(stream) => {
+                if let Ok(stream) = stream.lock() {
+                    let _ = stream.set_write_timeout(timeout);
+                }
+            }
+            ClientTransport::WebSocket(socket) => {
+                if let Ok(socket) = socket.lock() {
+                    let _ = socket.get_ref().set_write_timeout(timeout);
+                }
+            }
+        }
         let websocket = transport.is_websocket();
         let shared = Arc::new((
             Mutex::new(ClientWriterState {
@@ -244,6 +257,13 @@ impl ClientWriter {
                     log::debug!("daemon client writer stopped: {err}");
                     break;
                 }
+            }
+            if let Ok(mut state) = thread_shared.0.lock() {
+                state.closed = true;
+                state.control.clear();
+                state.output.clear();
+                state.output_bytes = 0;
+                thread_shared.1.notify_all();
             }
             transport.close();
         });
@@ -327,6 +347,14 @@ impl ClientWriter {
             state.closed = true;
             changed.notify_all();
         }
+    }
+
+    pub(super) fn is_closed(&self) -> bool {
+        self.shared
+            .0
+            .lock()
+            .map(|state| state.closed)
+            .unwrap_or(true)
     }
 }
 

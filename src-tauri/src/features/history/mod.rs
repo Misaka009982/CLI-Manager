@@ -1,4 +1,14 @@
 mod diagnostics;
+mod live_transcript;
+mod live_transcript_projection;
+mod live_transcript_reader;
+#[tauri::command]
+pub async fn history_read_live_transcript(
+    app: tauri::AppHandle,
+    request: live_transcript::TranscriptRequest,
+) -> Result<live_transcript_reader::TranscriptPage, String> {
+    live_transcript::history_read_live_transcript(app, request).await
+}
 use diagnostics::{
     log_history_detail_oom_diagnostic,
     log_history_stats_oom_diagnostic,
@@ -79,6 +89,7 @@ pub(crate) use index_cache::{
 };
 mod session_detail;
 mod session_query;
+pub mod detail_page;
 mod codex_lookup;
 pub(crate) use session_detail::build_session_detail;
 use session_detail::{
@@ -256,8 +267,8 @@ const OOM_HISTORY_DETAIL_WARN_BYTES: usize = 10 * 1024 * 1024;
 const OOM_HISTORY_STATS_WARN_BYTES: usize = 5 * 1024 * 1024;
 const OOM_HISTORY_MESSAGES_WARN_COUNT: usize = 2_000;
 const CODEX_HISTORY_INDEX_TEXT_MAX_CHARS: usize = 4_000;
-// 7：Codex 会话用量口径变更（逐响应 token_usage_record 去重），旧版本物化的 catalog 行需重算。
-const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 7;
+// 8：补齐 Codex 工具/摘要与 Claude 纯过程消息，旧物化消息顺序和摘要计数需重算。
+const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 8;
 const HISTORY_INDEX_V2_ADAPTER_MODEL_VERSION: i64 = 1;
 const OPENCODE_SESSION_LOCATOR_MARKER: &str = "#session=";
 const DAEMON_READY_WAIT_ATTEMPTS: usize = 60;
@@ -456,27 +467,37 @@ pub async fn history_get_session(
             grok_session_root.clone(),
         )
         .with_kimi_config_dir(kimi_config_dir.clone());
-        if catalog::is_dirty() {
-            let _ = catalog::ensure_refresh(app.clone(), roots.clone(), false, true).await;
+        let catalog_dirty = catalog::is_dirty();
+        if catalog_dirty {
+            let refresh_app = app.clone();
+            let refresh_roots = roots.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = catalog::ensure_refresh(refresh_app, refresh_roots, false, false).await;
+            });
         }
-        match catalog::get_session_detail_from_v2(
-            &roots,
-            &file_path,
-            &source_normalized,
-            &project_key,
-        )
-        .await
-        {
-            Ok(Some(detail)) => {
-                log_history_detail_oom_diagnostic(
-                    "history_get_session_v2",
-                    &detail,
-                    started_at.elapsed().as_millis(),
-                );
-                return Ok(detail);
+        // A mutation dirties the shared catalog, not the requested transcript.
+        // Read that file directly instead of waiting for unrelated FTS replacement.
+        // OpenCode uses a database locator and retains its catalog/provider path.
+        if !catalog_dirty || source_normalized == "opencode" {
+            match catalog::get_session_detail_from_v2(
+                &roots,
+                &file_path,
+                &source_normalized,
+                &project_key,
+            )
+            .await
+            {
+                Ok(Some(detail)) => {
+                    log_history_detail_oom_diagnostic(
+                        "history_get_session_v2",
+                        &detail,
+                        started_at.elapsed().as_millis(),
+                    );
+                    return Ok(detail);
+                }
+                Ok(None) => {}
+                Err(err) => warn!("history v2 detail fallback: {err}"),
             }
-            Ok(None) => {}
-            Err(err) => warn!("history v2 detail fallback: {err}"),
         }
     }
     if source_normalized == "opencode" {

@@ -4,7 +4,7 @@
 
 Apply this contract when changing SSH host persistence, remote project creation, remote directory queries, terminal launch, PTY/daemon restore, project capability routing, or project sync/import behavior.
 
-SSH projects support remote terminals plus explicit Claude/Codex Agent Hook integration, read-only history, same-source remote resume, Codex remote handoff through cc-connect, and a full remote Git panel routed through the SSH Agent. Local and WSL projects retain their existing capabilities. Remote files, Worktree, historical statistics, provider switching, external terminal launch, and remote resource monitoring remain separate implementations.
+SSH projects support remote terminals plus explicit Claude/Codex Agent Hook integration, read-only history, same-source remote resume, and a full remote Git panel routed through the SSH Agent. Local and WSL projects retain their existing capabilities. Remote files, Worktree, historical statistics, provider switching, external terminal launch, and remote resource monitoring remain separate implementations.
 
 ## 2. Signatures
 
@@ -52,12 +52,6 @@ pub async fn ssh_agent_hook_apply(...) -> Result<HookConfigReport, String>;
 pub fn ssh_config_default_directory() -> Result<String, String>;
 pub async fn ssh_config_import_preview(config_dir: String)
     -> Result<SshConfigImportPreview, String>;
-pub async fn cc_connect_handoff_preflight(request: CcConnectHandoffStartRequest)
-    -> Result<(), String>;
-pub async fn cc_connect_handoff_start(request: CcConnectHandoffStartRequest)
-    -> Result<CcConnectHandoffStatus, String>;
-pub async fn cc_connect_handoff_cancel()
-    -> Result<CcConnectHandoffStatus, String>;
 ```
 
 ### Terminal launch
@@ -203,22 +197,9 @@ Only the exact value `1` enables control-terminal input. One-shot probes, direct
 - The system resources panel is local-only and must be labelled `Local Resources` / `本机资源` for SSH sessions.
 - SSH provider fields stay null/ignored in the launch plan. Hook inspect/install never reads cc-switch or discovers remote provider data.
 
-### cc-connect remote handoff
+### Retired messaging integration
 
-- SSH handoff is Codex-only and requires a stopped task, a registered SSH project, and a matching host profile. The `cliSessionId` normally comes from the remote Hook; when it is missing, the desktop may bind it only from a unique, recent SSH Codex history match supplied by the registered remote Agent. SSH Worktrees and WSL sessions remain unsupported.
-- Missing-ID recovery must respect how Codex was launched: an explicit `resume <sessionId>` binds only that ID; `resume --last` binds only the uniquely latest updated matching remote project/source/transport session and does not apply fresh-session creation time; a fresh launch uses terminal/daemon creation time plus recent terminal activity. All modes require non-empty history and an ID not already owned by another open terminal. Interactive picker resume, zero matches, ties, and multiple fresh matches fail closed; the desktop must never guess between remote threads.
-- Handoff authentication must be unattended: SSH Config, Agent, identity file, or `credential_ref`. `password_prompt` and `interactive` must fail before the desktop PTY is suspended.
-- Run `cc_connect_handoff_preflight` before releasing the desktop PTY. It must validate the selected platform conversation, cc-connect version, host/jump/proxy/config references, saved credential, remote directory, and remote Codex app-server startup without loading or resuming the selected thread. Handoff requires an authoritative stopped state: Hook/daemon reports `done` or `failed`, or the PTY reports `exited` or `error`. Missing Hook state fails closed. The managed proxy continues to reject fresh threads and Session ID drift when cc-connect takes ownership.
-- cc-connect keeps its session files in a deterministic local placeholder under the CLI-Manager data directory. The remote POSIX path is transport metadata and must never be passed to local filesystem APIs.
-- The settings-side cc-connect profile is project-neutral. The desktop-pet SSH session supplies the authoritative registered project, host, POSIX work directory, Session ID, and Provider context for handoff; a previously selected local/default project must not participate in SSH target validation or startup.
-- The settings-side cc-connect profile is project-neutral. The desktop-pet SSH session supplies the authoritative registered project, host, POSIX work directory, Session ID, and Provider context for handoff; a previously selected local/default project must not participate in SSH target validation or startup.
-- The managed Codex proxy launches OpenSSH with the same validated transport settings as the SSH terminal, changes to the registered remote directory, exports the project environment plus effective `CODEX_HOME`, injects a scoped `safe.directory`, and starts remote `codex app-server` over stdio.
-- The managed Codex proxy resolves `codex` through the same interactive login-shell environment as the SSH terminal so NVM and equivalent user-managed tool paths remain available. Shell startup stdout must be redirected to stderr until `codex` is executed, then the app-server stdout must be restored to the original SSH stdout; profile banners and initialization output must never enter the JSON-RPC stream.
-- The serialized launch environment may contain only the credential reference. Password values remain in the local credential store and are delivered through the one-shot AskPass broker.
-- During SSH handoff, the proxy rewrites only matching `thread/resume` requests to the registered remote directory and rejects fresh-thread or session-drift requests.
-- Remote app-server turn, approval, completion, and non-retrying error events are converted locally into the existing handoff Hook events. Telegram, Feishu, Weixin, and WeCom therefore share the same progress, permission, completion, and failure notification path without a remote Hook installation.
-- Persist handoff transport, SSH host ID, remote path, and `agent=codex` in the schema-version-2 record. Schema v1 records migrate in memory with Codex as the default; unknown versions fail closed. Adding local Claude/Pi/OpenCode handoff must not widen this SSH Codex-only boundary.
-- On cancellation, re-resolve a structured SSH PTY launch and run `codex resume --no-alt-screen <cliSessionId>` on the same registered host and path. If the project host/path changed, fail closed and keep the recovery lock visible.
+- cc-connect handoff is removed. SSH terminals, authentication, agent installation, history, files, Git and Hook contracts remain unchanged.
 
 ### Sync
 

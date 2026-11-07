@@ -1,4 +1,4 @@
-//! Native Codex app-server shim used by cc-connect on Windows.
+//! Shared native Codex app-server shim for Windows clients.
 
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 

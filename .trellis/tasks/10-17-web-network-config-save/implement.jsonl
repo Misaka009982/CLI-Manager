@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/web-service-contracts.md","reason":"Preserve explicit HTTP trust and Origin semantics"}
+{"file":".trellis/spec/frontend/ai-architecture-contracts.md","reason":"Feature boundary and strict checks"}

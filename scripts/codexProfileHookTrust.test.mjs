@@ -43,7 +43,7 @@ test("actual command wins over provider fallback and remote/transcript never bor
   assert.equal(profileApi.codexHookProfileForSession({ ...local, startupCmd: "codex" }), null);
   assert.equal(profileApi.codexHookProfileForSession({ ...local, startupCmd: undefined }), "supplier");
   for (const patch of [{ environmentType: "wsl" }, { environmentType: "ssh" }, { sshHostId: "ssh" },
-    { kind: "subagent-transcript" }, { shell: "wsl" }, { wslDistroName: "Ubuntu" }, { remoteHandoff: {} }]) {
+    { kind: "subagent-transcript" }, { shell: "wsl" }, { wslDistroName: "Ubuntu" }]) {
     assert.equal(profileApi.codexHookProfileForSession({ ...local, ...patch }), null);
   }
   globalThis.terminalState = { sessions: [local], activeSessionId: "one" };

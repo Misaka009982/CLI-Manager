@@ -25,6 +25,7 @@ import { getCurrentLanguage, translateCurrent } from "../../../shared/i18n/index
 import { getHistoryPathArgsSync } from "../../history/api/historyPathArgs";
 import { batchWebTerminalFrames } from "../../../shared/lib/webTerminalFrames";
 import { startWebBridgePolling } from "../../../shared/lib/webBridgePolling";
+import { createWebOperationLanes } from "../../../shared/lib/webOperationLanes";
 import {
   webDeviceApi,
   type WebHistorySessionSummary,
@@ -530,12 +531,14 @@ async function executeOperation(operation: WebDeviceOperation) {
   }
 }
 
+const operationLanes = createWebOperationLanes(executeOperation, (error) => logWarn("Web operation lane failed", error));
+
 async function drainOperations() {
   if (drainingOperations) return;
   drainingOperations = true;
   try {
     const operations = await webDeviceApi.takeOperations();
-    for (const operation of operations) await executeOperation(operation);
+    operationLanes.enqueue(operations);
   } catch (caught) {
     logWarn("Failed to drain Web device operations", caught);
   } finally {
@@ -585,7 +588,7 @@ async function publishWorkspace(workspaceOnly = false) {
     });
     const terminalState = useTerminalStore.getState();
     const terminals = terminalState.sessions
-      .filter((session) => (!session.kind || session.kind === "pty") && session.projectId && session.environmentType !== "ssh" && !session.remoteHandoff)
+      .filter((session) => (!session.kind || session.kind === "pty") && session.projectId && session.environmentType !== "ssh")
       .map((session) => ({ sessionId: session.id, projectId: session.projectId!, worktreeId: session.worktreeId ?? null, title: session.title }));
     const workspace: WebWorkspaceSnapshot = {
       terminals,

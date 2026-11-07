@@ -18,6 +18,7 @@ Read the domain contract that owns the code being changed; do not load every gui
 | [AI Architecture Contracts](./ai-architecture-contracts.md) | 2000-line limit, feature boundaries, standalone checks, shrinking migration baseline | Active |
 | [Frontend Code Comment Contracts](./code-comment-contracts.md) | 前端函数与方法的必要注释、开发门禁及审查要求 | Active |
 | [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | Active |
+| [Settings Visual Contracts](./settings-visual-contracts.md) | Settings-only theme scope, Portal styling, grouped rows and compact navigation | Active |
 | [Hook Guidelines](./hook-guidelines.md) | Hook ordering around mounted-but-hidden UI | Active |
 | [State Management](./state-management.md) | Local state, global state, server state | Active |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Active |
@@ -26,6 +27,8 @@ Read the domain contract that owns the code being changed; do not load every gui
 | [History Session Contracts](./history-session-contracts.md) | History favorites, metadata, and snapshot fallback contracts | Active |
 | [Workspace Session Restore Contracts](./workspace-session-restore-contracts.md) | 关闭后恢复工作区终端会话：TUI 走 resume、shell 贴 scrollback、节流落盘与启动问询 | Active |
 | [Startup Command Text Contracts](./startup-command-text-contracts.md) | 多行命令、转义/引号边界、本地与 SSH 共同准备及真实行为回归 | Active |
+| [Terminal Text Submission Contracts](./terminal-text-submission-contracts.md) | 模板正文与发送回车的粘贴边界、实时终端模式、精确会话及挂载生命周期 | Active |
+| [Terminal Keyboard Contracts](./terminal-keyboard-contracts.md) | 换行设置语义映射、Kitty 协商、松键/IME、双屏快照和回顶快捷键 | Active |
 | [Background Task Continuation Contracts](./background-task-continuation-contracts.md) | 运行任务退出守卫、daemon 后台继续、托盘最小化与通知边界 | Active |
 | [Terminal Output Scheduling Contracts](../backend/terminal-output-scheduling-contracts.md) | Daemon live-frame budget and frontend cross-terminal xterm scheduling contract | Active |
 | [Statusline Editor Contracts](./statusline-editor-contracts.md) | Claude/Codex 独立编辑状态、共享终端主题预览与响应式布局 | Active |

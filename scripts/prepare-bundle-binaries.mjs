@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildAndInstallHelperBinaries, helperProfile, helperTargetRoot } from "./prepare-helper-binaries.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const targetRoot = path.join(repoRoot, "src-tauri", "target");
@@ -35,6 +36,10 @@ function runNpm(args, label) {
 }
 
 if (targetPlatform === "windows" || targetPlatform === "win32") {
+  await buildAndInstallHelperBinaries({
+    targetRoot: helperTargetRoot(),
+    profile: helperProfile(),
+  });
   runNpm(["run", "build:pet-e"], "Desktop Pet E build");
   run(process.execPath, ["scripts/prepare-pet-e-runtime.mjs"], "Desktop Pet E resource preparation");
   process.exit(0);

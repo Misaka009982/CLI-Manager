@@ -268,8 +268,14 @@ fn build_session_detail_aggregates_subtasks_for_realtime_stats() {
 
     assert_eq!(detail.session_id, "session-1");
     assert_eq!(detail.cwd.as_deref(), Some("D:\\work\\CLI-Manager"));
-    assert_eq!(detail.messages.len(), 2);
-    assert_eq!(detail.message_count, 2);
+    // Both pure tool messages now survive alongside the two ordinary replies.
+    assert_eq!(detail.messages.len(), 4);
+    assert_eq!(detail.message_count, 4);
+    assert_eq!(
+        detail.messages.iter().flat_map(|message| &message.parts)
+            .filter(|part| part.kind == "tool_call").count(),
+        2
+    );
     assert_eq!(detail.usage.input_tokens, 140);
     assert_eq!(detail.usage.output_tokens, 60);
     assert_eq!(detail.usage.cache_read_tokens, 20);

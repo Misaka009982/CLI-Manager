@@ -2,6 +2,8 @@
 
 > The Web application uses a macOS-inspired frosted-glass, clean white visual language.
 
+Scope: this visual contract owns Classic Web (`apps/web`). The independent optional client at `/tap/` owns its quiet neutral/violet identity in `apps/web-tap/DESIGN.md`; do not impose either client's component styling or application state on the other. Both still obey the shared Web service, authentication, native terminal and accessibility contracts.
+
 ---
 
 ## Core Direction
@@ -84,4 +86,3 @@ Applying transparent glass to every card reduces hierarchy and makes dense conte
 ```
 
 Use glass for layered chrome and stable near-opaque surfaces for primary content.
-

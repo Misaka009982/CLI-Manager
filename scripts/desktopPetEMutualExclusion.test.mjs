@@ -9,10 +9,13 @@ test("Desktop Pet E and the existing pet are mutually exclusive without clearing
   const existingPage = read("../src/features/settings/components/pages/DesktopPetSettingsPage.tsx");
   const ePage = read("../src/features/settings/components/pages/DesktopPetESettingsPage.tsx");
 
+  const preferences = read("../src/shared/preferences/desktopPetEPreferences.ts");
   assert.match(settings, /desktopPetE:\s*\{ \.\.\.DEFAULT_DESKTOP_PET_E_SETTINGS \}/);
-  assert.match(settings, /desktop_pet_mutual_exclusion/);
-  assert.match(settings, /desktop_pet_e_mutual_exclusion/);
-  assert.match(settings, /entries\.desktopPetE = \{ \.\.\.entries\.desktopPetE, enabled: false \}/);
+  assert.match(settings, /prepareDesktopPetSettingUpdate\(key, value, get\(\)\)/);
+  assert.match(preferences, /desktop_pet_mutual_exclusion/);
+  assert.match(preferences, /desktop_pet_e_mutual_exclusion/);
+  assert.match(settings, /applyDesktopPetEPreferences\(entries, persistSetting\)/);
+  assert.match(preferences, /entries\.desktopPetE = \{ \.\.\.entries\.desktopPetE, enabled: false \}/);
   assert.match(existingPage, /disabled=\{desktopPetEEnabled && !desktopPet\.enabled\}/);
   assert.match(ePage, /const enableBlockedByExistingPet = desktopPet\.enabled && !desktopPetE\.enabled/);
   assert.doesNotMatch(settings, /desktopPet\s*=\s*DEFAULT_DESKTOP_PET_E_SETTINGS/);

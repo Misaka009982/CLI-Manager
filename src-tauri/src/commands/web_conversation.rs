@@ -966,7 +966,7 @@ fn wsl_context(request: &StartRequest) -> Result<Option<(String, String)>, Strin
 }
 
 fn resolve_local_launcher(request: &StartRequest) -> Result<String, String> {
-    let path = super::cc_connect::resolve_local_agent_program(
+    let path = crate::agent_launcher::resolve_local_agent_program(
         &request.launcher,
         std::path::Path::new(&request.cwd),
     )

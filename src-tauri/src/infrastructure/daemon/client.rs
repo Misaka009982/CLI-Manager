@@ -18,7 +18,7 @@ use crate::pty::manager::PtyProcessStatus;
 use crate::ssh_launch::SshLaunchPlan;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
@@ -44,6 +44,7 @@ fn windows_daemon_creation_flags() -> u32 {
 pub struct DaemonClient {
     info: DaemonInfo,
     writer: Mutex<TcpStream>,
+    shutdown_stream: TcpStream,
     pending: Mutex<HashMap<u64, SyncSender<DaemonFrame>>>,
     next_id: AtomicU64,
     connected: Arc<AtomicBool>,
@@ -94,6 +95,19 @@ impl DaemonClient {
     // 读取接收线程维护的连接状态标记，不主动探测网络。
     pub fn is_connected(&self) -> bool {
         self.connected.load(Ordering::SeqCst)
+    }
+
+    /// Mark the control channel unusable after an I/O failure or timeout.
+    /// The bridge will drop this client on its next `get`, allowing callers
+    /// to establish a fresh daemon connection instead of reusing a stale
+    /// endpoint.
+    pub fn mark_disconnected(&self) {
+        self.connected.store(false, Ordering::SeqCst);
+        // A dedicated handle interrupts reader/write waits without taking the potentially busy writer lock.
+        let _ = self.shutdown_stream.shutdown(Shutdown::Both);
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.clear();
+        }
     }
 
     /// 连接并完成鉴权握手；成功后启动推送分发线程。
@@ -149,6 +163,7 @@ impl DaemonClient {
 
         let client = Arc::new(DaemonClient {
             info,
+            shutdown_stream: writer.try_clone().map_err(|err| format!("daemon shutdown handle failed: {err}"))?,
             writer: Mutex::new(writer),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -301,7 +316,7 @@ impl DaemonClient {
                 writer
                     .write_all(encode_frame(frame).as_bytes())
                     .map_err(|err| {
-                        self.connected.store(false, Ordering::SeqCst);
+                        self.mark_disconnected();
                         format!("daemon write failed: {err}")
                     })
             });
@@ -311,9 +326,13 @@ impl DaemonClient {
             }
             return Err(error);
         }
-        let reply = rx
-            .recv_timeout(timeout)
-            .map_err(|err| format!("daemon reply timeout: {err}"));
+        let reply = rx.recv_timeout(timeout).map_err(|err| {
+            // A request timeout means the control stream can no longer be
+            // trusted.  Leave the bridge in a recoverable state so the next
+            // endpoint/PTY request can respawn and reconnect the daemon.
+            self.mark_disconnected();
+            format!("daemon reply timeout: {err}")
+        });
         if let Ok(mut pending) = self.pending.lock() {
             pending.remove(&id);
         }
@@ -380,6 +399,26 @@ impl DaemonClient {
     pub fn shutdown_if_idle(&self) -> Result<(), String> {
         let id = self.next_request_id();
         self.expect_ok(&ClientFrame::Shutdown { id }, id)
+    }
+
+    /// Stop routing and close every PTY before terminating the daemon.
+    /// This is used only for the explicit discard-and-exit path.
+    pub fn force_shutdown(&self) -> Result<(), String> {
+        let routing_id = self.next_request_id();
+        match self.request(routing_id, &ClientFrame::RoutingStop { id: routing_id })? {
+            DaemonFrame::RoutingEvent { event } if event.error.is_none() => {}
+            DaemonFrame::RoutingEvent { event } => {
+                let message = event
+                    .error
+                    .map(|error| error.code)
+                    .unwrap_or_else(|| "routing stop failed".to_string());
+                return Err(message);
+            }
+            other => return Err(format!("daemon unexpected routing stop reply: {other:?}")),
+        }
+        let close_id = self.next_request_id();
+        self.expect_ok(&ClientFrame::CloseAll { id: close_id }, close_id)?;
+        self.shutdown_if_idle()
     }
 
     // 按远程请求类别选择应答等待时限，发送 SSH Agent 请求并返回其载荷。
@@ -504,10 +543,25 @@ fn daemon_executable_path() -> Result<std::path::PathBuf, String> {
 
 // 以 __daemon 子命令启动当前程序，丢弃标准流；Unix 使用独立会话，Windows 隐藏窗口。
 fn spawn_daemon_process() -> Result<(), String> {
-    let exe = daemon_executable_path()?;
+    let current_exe = daemon_executable_path()?;
+    let helper_name = if cfg!(target_os = "windows") {
+        "cli-manager-daemon.exe"
+    } else {
+        "cli-manager-daemon"
+    };
+    let helper = current_exe
+        .parent()
+        .map(|parent| parent.join(helper_name))
+        .filter(|path| path.is_file());
+    let (exe, use_self_dispatch) = match helper {
+        Some(path) => (path, false),
+        None => (current_exe, true),
+    };
     let mut command = std::process::Command::new(&exe);
+    if use_self_dispatch {
+        command.arg("__daemon");
+    }
     command
-        .arg("__daemon")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -567,6 +621,54 @@ fn read_line_bounded(reader: &mut BufReader<TcpStream>) -> Option<String> {
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
+
+    fn synthetic_control_pair() -> (DaemonClient, TcpStream) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(address).unwrap();
+        let (peer, _) = listener.accept().unwrap();
+        let client = DaemonClient {
+            info: DaemonInfo { port: address.port(), ws_port: 0, hook_port: 0, token: "synthetic".into(), pid: 0,
+                version: "test".into(), protocol_version: 0, binary_protocol_version: 0, features: vec![] },
+            shutdown_stream: stream.try_clone().unwrap(),
+            writer: Mutex::new(stream), pending: Mutex::new(HashMap::new()), next_id: AtomicU64::new(1),
+            connected: Arc::new(AtomicBool::new(true)),
+        };
+        (client, peer)
+    }
+
+    #[test]
+    fn timeout_closes_the_control_socket_and_wakes_other_requests() {
+        let (client, peer) = synthetic_control_pair();
+        peer.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+        let (tx, other) = sync_channel(1);
+        client.pending.lock().unwrap().insert(99, tx);
+        let error = client.request_with_timeout(1, &ClientFrame::List { id: 1 }, Duration::from_millis(10)).unwrap_err();
+        assert!(error.contains("timeout"));
+        assert!(!client.is_connected());
+        assert!(matches!(other.recv_timeout(Duration::from_millis(50)), Err(std::sync::mpsc::RecvTimeoutError::Disconnected)));
+        let mut reader = BufReader::new(peer);
+        let mut request = String::new();
+        reader.read_line(&mut request).unwrap();
+        let mut byte = [0];
+        // EOF, not a still-open socket with an orphaned reader thread.
+        assert_eq!(reader.read(&mut byte).unwrap(), 0);
+    }
+
+    #[test]
+    fn disconnect_interrupts_io_without_waiting_for_the_writer_mutex() {
+        let (client, mut peer) = synthetic_control_pair();
+        let guard = client.writer.lock().unwrap();
+        let (done, received) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| { client.mark_disconnected(); done.send(()).unwrap(); });
+            let outcome = received.recv_timeout(Duration::from_millis(500));
+            drop(guard);
+            assert!(outcome.is_ok(), "disconnect must not wait for the writer mutex");
+        });
+        peer.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+        assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+    }
 
     #[test]
     // 验证 Windows daemon 不启用 detached 或新进程组标志。

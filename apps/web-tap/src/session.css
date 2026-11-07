@@ -1,0 +1,225 @@
+/* Session: terminal stage, read-only conversation, key strip, composer and status row. */
+.tap-session { display: none; height: 100%; min-height: 0; flex-direction: column; container: session / inline-size; }
+.tap-session.is-visible { display: flex; }
+.tap-session { --column: min(100%, max(760px, 78cqi), 1180px); }
+.tap-session.is-chat { --column: min(100%, 800px); }
+.tap-session-content { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+
+/* Terminal */
+.tap-terminal-panel { height: 100%; padding: 12px 16px 0; }
+.tap-terminal {
+  position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; padding: 10px 4px 6px 14px;
+  border: 1px solid var(--term-border); border-radius: 12px; background: var(--term-bg); transition: box-shadow 150ms;
+}
+.tap-terminal.is-direct { box-shadow: 0 0 0 3px color-mix(in oklch, var(--brand) 30%, transparent); }
+.tap-terminal-screen { position: relative; flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+/* The mirrored grid keeps its intrinsic size; this viewport, not the PTY, fits the panel. */
+.tap-terminal-screen .xterm { width: max-content; min-width: 100%; height: auto; }
+.tap-terminal-screen :is(.xterm, .xterm-viewport, .xterm-scrollable-element) { background-color: var(--term-bg) !important; }
+.tap-terminal-reader {
+  position: absolute; inset: 0; padding: 10px 12px 24px 14px; overflow: auto; overscroll-behavior: contain; color: #e4e4e7;
+  font-family: "Tap Mono", var(--mono); line-height: 1.45; -webkit-user-select: text; user-select: text;
+}
+.tap-terminal-reader > div { white-space: pre-wrap; overflow-wrap: anywhere; }
+.tap-terminal-reader > div.is-rule { white-space: pre; overflow: hidden; color: #8b8a95; }
+.tap-terminal-chips { position: absolute; z-index: 2; top: 8px; right: 8px; display: flex; gap: 6px; }
+.tap-terminal-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 13px;
+  border: 1px solid oklch(1 0 0 / .12); background: oklch(.25 .012 285 / .88); color: #d4d4d8; font-size: 12px;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.tap-terminal-chip.is-direct { border-color: color-mix(in oklch, oklch(.72 .14 280) 55%, transparent); color: oklch(.82 .1 280); }
+.tap-terminal-failed {
+  position: absolute; z-index: 3; top: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
+  padding: 5px 6px 5px 12px; border-radius: 16px; background: #352d21; color: #f1c779; font-size: 12px; white-space: nowrap;
+}
+.tap-terminal-failed button { padding: 2px 8px; border-radius: 10px; background: oklch(1 0 0 / .1); color: inherit; }
+
+/* Conversation */
+.tap-chat-panel { height: 100%; }
+.tap-chat-wrap { position: relative; height: 100%; }
+.tap-chat { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 28px 24px 64px; }
+.tap-chat-column { width: var(--column); margin: 0 auto; font-size: var(--chat-text, 15px); line-height: 1.8; }
+.tap-chat-list { display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.tap-turn { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.tap-turn + .tap-turn { margin-top: 24px; }
+.tap-user { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.tap-bubble {
+  max-width: min(86%, 620px); padding: 9px 14px; border-radius: 12px; background: var(--bubble); color: var(--bubble-fg);
+  line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.tap-bubble.is-clamped { display: -webkit-box; -webkit-line-clamp: 12; -webkit-box-orient: vertical; overflow: hidden; }
+.tap-bubble-more { padding: 2px 6px; color: var(--bubble-link); font-size: 12px; }
+.tap-fold {
+  display: flex; align-items: center; gap: 6px; align-self: stretch; min-height: 24px; color: var(--muted-fg); font-size: 12.5px; text-align: left;
+}
+.tap-fold::after { content: ""; flex: 1; height: 1px; margin-left: 6px; background: var(--border); }
+.tap-fold:disabled { opacity: 1; cursor: default; }
+.tap-fold svg { transition: transform 150ms ease; }
+.tap-fold svg.is-open { transform: rotate(90deg); }
+.tap-fold-model { color: var(--fg-2); }
+.tap-process { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.tap-process[hidden], .tap-activity-body[hidden] { display: none; }
+.tap-activity { min-width: 0; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); overflow: hidden; }
+.tap-activity-toggle { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 40px; padding: 8px 10px; text-align: left; font-size: 12.5px; }
+.tap-activity-toggle > svg { flex-shrink: 0; }
+.tap-activity-toggle > svg:first-child { transition: transform 150ms ease; }
+.tap-activity-toggle > svg.is-open { transform: rotate(90deg); }
+.tap-activity-toggle > span { min-width: 0; overflow-wrap: anywhere; }
+.tap-activity-toggle > small { flex-shrink: 0; margin-left: auto; color: var(--muted-fg); }
+.tap-activity-toggle:hover { background: var(--muted); }
+.tap-activity-body { padding: 0 12px 12px; border-top: 1px solid var(--border); }
+.tap-activity-part > p { margin: 10px 0 5px; font-size: 12px; color: var(--muted-fg); }
+.tap-activity-part pre { max-width: 100%; max-height: 360px; margin: 10px 0 0; padding: 10px; overflow: auto;
+  background: var(--bg); border-radius: 6px; font: 12px/1.65 var(--mono); white-space: pre; tab-size: 4; overscroll-behavior: contain; }
+.tap-activity-part pre code { font: inherit; }
+.tap-message { min-width: 0; overflow-wrap: anywhere; }
+.tap-message > :first-child { margin-top: 0; }
+.tap-message > :last-child { margin-bottom: 0; }
+.tap-message p, .tap-message ul, .tap-message ol, .tap-message blockquote, .tap-table, .tap-code-block { margin: 0 0 1em; }
+.tap-message h1, .tap-message h2, .tap-message h3, .tap-message h4 { margin: 1.1em 0 .4em; font-size: 1em; font-weight: 600; line-height: 1.4; }
+.tap-message h1 { font-size: 1.25em; }
+.tap-message h2 { font-size: 1.125em; }
+.tap-message ul { padding-left: 1.4em; list-style: disc; }
+.tap-message ol { padding-left: 1.9em; list-style: decimal; }
+.tap-message li > ul { list-style: circle; }
+.tap-message li::marker { color: var(--muted-fg); }
+.tap-message li + li { margin-top: .3em; }
+.tap-message :not(pre) > code { padding: .1em .35em; border-radius: 5px; background: var(--muted); font: .88em var(--mono); }
+.tap-code-block { min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.tap-code-head { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: var(--muted); font: 12px/1.5 var(--sans); }
+.tap-code-fold { display: inline-flex; align-items: center; gap: 6px; min-width: 0; min-height: 28px; text-align: left; }
+.tap-code-fold span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tap-code-copy { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; flex-shrink: 0; border-radius: 5px; }
+.tap-code-copy:hover { background: var(--border); }
+.tap-code-feedback { margin-left: auto; color: var(--muted-fg); font-size: 11px; }
+.tap-message pre {
+  max-width: 100%; margin: 0; padding: 14px 16px; overflow-x: auto; overscroll-behavior-x: contain;
+  color: var(--fg); font: .87em/1.65 var(--mono); white-space: pre; overflow-wrap: normal; tab-size: 4;
+}
+.tap-message pre code { font: inherit; }
+.tap-table { max-width: 100%; overflow-x: auto; }
+.tap-table table { border-collapse: collapse; font-size: .92em; }
+.tap-table th, .tap-table td { padding: 5px 10px; border: 1px solid var(--border); text-align: left; }
+.tap-table th { background: var(--surface); font-weight: 600; }
+.tap-message blockquote { padding-left: 12px; border-left: 3px solid var(--border-strong); color: var(--fg-2); }
+.tap-message a { color: var(--brand); }
+.tap-truncated { display: block; color: var(--muted-fg); font-size: 12px; }
+.tap-turn-foot {
+  display: flex; align-items: center; gap: 2px; height: 26px; margin: -4px 0 0 -5px; color: var(--muted-fg);
+  font-size: 11.5px; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.tap-turn-foot button { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 7px; color: var(--muted-fg); }
+.tap-meta { display: inline-flex; align-items: center; height: 24px; padding: 0 4px; text-box: trim-both cap alphabetic; }
+.tap-meta + .tap-meta::before { content: ""; width: 3px; height: 3px; margin-right: 5px; border-radius: 50%; background: currentColor; opacity: .45; }
+@media (hover: hover) { .tap-turn-foot button:hover, .tap-fold:hover:not(:disabled) { color: var(--fg); } .tap-turn-foot button:hover { background: var(--muted); } }
+.tap-chat-empty { max-width: 30em; margin: 48px auto; color: var(--muted-fg); font-size: 13px; line-height: 1.7; text-align: center; }
+.tap-chat-notice {
+  display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; margin: 16px 0; padding: 12px 14px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface); color: var(--muted-fg); font-size: 12.5px; line-height: 1.6;
+}
+.tap-chat-notice > svg { margin-top: 3px; }
+.tap-chat-notice p { flex: 1; min-width: 12em; }
+.tap-chat-notice.is-error { color: color-mix(in oklch, var(--warning) 65%, var(--fg)); }
+.tap-load-older { display: flex; justify-content: center; align-items: center; height: 32px; margin-bottom: 8px; color: var(--muted-fg); }
+.tap-load-older button { padding: 3px 12px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted-fg); font-size: 12px; }
+.tap-jump {
+  position: absolute; right: 26px; bottom: 12px; z-index: 4; display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border: 1px solid var(--border); border-radius: 50%; background: var(--bg); color: var(--fg-2);
+  box-shadow: var(--shadow-float); animation: tap-pop 180ms var(--ease);
+}
+.tap-jump i { position: absolute; top: -1px; right: -1px; width: 9px; height: 9px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 2px var(--bg); }
+
+/* Dock: key strip, composer, status row */
+.tap-dock { padding: 10px 16px 10px; }
+.tap-session.is-chat .tap-dock { width: min(100%, calc(var(--column) + 32px)); margin: 0 auto; }
+.tap-keybar { max-width: 640px; margin: 0 auto 8px; }
+.tap-keyrow { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.tap-keyrow + .tap-keyrow { margin-top: 6px; }
+.tap-keycap {
+  display: flex; align-items: center; justify-content: center; min-width: 0; height: 30px; padding: 0 2px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--bg); color: var(--fg-2); font: 12.5px var(--mono); touch-action: none;
+}
+.tap-keycap:active:not(:disabled) { background: var(--muted); border-color: var(--border-strong); }
+.tap-keycap.is-enter { color: var(--brand); }
+.tap-keycap.is-latched { border-color: color-mix(in oklch, var(--brand) 55%, transparent); background: var(--brand-soft); color: var(--brand); }
+.tap-composer-wrap { position: relative; }
+.tap-inline-error {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 7px 8px 7px 12px; border-radius: 10px;
+  background: var(--warning-soft); color: color-mix(in oklch, var(--warning) 65%, var(--fg)); font-size: 12.5px; line-height: 1.5;
+}
+.tap-inline-error span { flex: 1; }
+.tap-inline-error button { padding: 2px 6px; border-radius: 6px; color: inherit; font-weight: 500; }
+.tap-composer {
+  border: 1px solid var(--border); border-radius: 16px; background: var(--bg); box-shadow: var(--shadow-float);
+  transition: border-color 200ms, box-shadow 200ms;
+}
+.tap-composer:focus-within {
+  border-color: color-mix(in oklch, var(--brand) 45%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--brand) 12%, transparent), var(--shadow-float);
+}
+.tap-composer.is-disabled { border-color: var(--border-strong); box-shadow: none; }
+.tap-composer textarea {
+  display: block; width: 100%; min-height: 44px; max-height: min(168px, 32vh); padding: 12px 14px 4px; border: 0; background: none;
+  outline: none; resize: none; font-size: 14px; line-height: 1.55;
+}
+.tap-composer textarea::placeholder { color: var(--muted-fg); }
+.tap-composer-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 8px 8px; }
+.tap-composer-tools, .tap-composer-send { display: flex; align-items: center; gap: 2px; }
+.tap-tool {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 8px; border-radius: 7px;
+  color: var(--muted-fg); font-size: 12.5px;
+}
+.tap-tool.is-icon { width: 30px; padding: 0; }
+.tap-tool-seam { width: 1px; height: 16px; margin: 0 4px; background: var(--border); }
+.tap-send {
+  display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%;
+  background: var(--brand); color: var(--brand-fg);
+}
+.tap-send:disabled { opacity: .35; }
+@media (hover: hover) {
+  .tap-tool:hover:not(:disabled) { background: var(--muted); color: var(--fg); }
+  .tap-send:hover:not(:disabled) { background: color-mix(in oklch, var(--brand) 88%, black); }
+  .tap-keycap:hover:not(:disabled) { background: var(--muted); }
+  .tap-dock-chip:hover { background: var(--muted); }
+}
+.tap-dock-status {
+  display: flex; align-items: center; gap: 8px; min-height: 26px; margin-top: 4px; color: var(--muted-fg); font-size: 12px;
+  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden;
+}
+.tap-dock-status:empty { display: none; }
+.tap-dock-size { font: 11.5px var(--mono); }
+.tap-dock-lost { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-2); }
+.tap-dock-lost i { width: 6px; height: 6px; border-radius: 50%; background: var(--danger); animation: tap-blink 1.2s ease-in-out infinite; }
+.tap-dock-chip { display: inline-flex; align-items: center; gap: 5px; min-width: 0; height: 26px; padding: 0 7px; border-radius: 13px; color: var(--muted-fg); }
+.tap-dock-chip span { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; }
+.tap-dock-chip.is-branch span { max-width: 10rem; font-family: var(--mono); font-size: 11.5px; }
+.tap-dock-chip small { font-size: 11px; }
+.tap-dock-chip.is-changes { gap: 6px; }
+
+@keyframes tap-pop { from { opacity: 0; transform: translateY(6px); } }
+
+@media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
+  .tap-terminal-panel { padding: 6px 6px 0; }
+  .tap-terminal { padding: 6px 2px 2px 8px; border-radius: 10px; }
+  .tap-terminal-reader { padding: 6px 8px 20px; }
+  .tap-chat { padding: 10px 12px 64px; }
+  .tap-chat-list { gap: 10px; }
+  .tap-bubble { max-width: 88%; }
+  .tap-jump { right: 16px; bottom: 10px; }
+  .tap-dock { padding: 6px 6px max(6px, env(safe-area-inset-bottom)); }
+  .tap-keybar { margin-bottom: 6px; }
+  .tap-keyrow { gap: 4px; }
+  .tap-keyrow + .tap-keyrow { margin-top: 4px; }
+  .tap-keycap { height: 32px; border-radius: 7px; font-size: 12px; }
+  .tap-composer { border-radius: 14px; }
+  .tap-composer textarea { min-height: 36px; padding: 9px 12px 2px; font-size: 15px; }
+  .tap-composer-row { padding: 0 6px 6px; }
+  .tap-tool { width: var(--hit); height: var(--hit); padding: 0; }
+  .tap-tool span { display: none; }
+  .tap-send { width: var(--hit); height: var(--hit); }
+  .tap-dock-status { margin-top: 2px; padding: 0 4px; }
+  .tap-dock-chip.is-branch span { max-width: 6.5rem; }
+}
+@media (max-height: 560px) { .tap-dock-status { display: none; } }
+.tap-terminal-screen .xterm .xterm-scrollable-element > .scrollbar > .slider { background: oklch(1 0 0 / .14) !important; border-radius: 3px; }

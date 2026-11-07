@@ -1,5 +1,19 @@
 # PTY Daemon Contracts (Phase 2: 守护进程)
 
+## Cursor seek index (TEMP, 2026-11-01)
+
+- Spool keeps the same 16-byte whole-frame format. A per-session sparse `(sequence, offset)` index samples every 128 frames, coarsens at 8192 samples, and is counted in resident-byte accounting.
+- Successful append updates the seek hint; successful replacement rebuilds it. Readers verify file length/mtime and monotonically increasing sequence coverage before seeking. Any invalid hint falls back to the authoritative sequential reader, without changing truncation or ACK semantics.
+- This replaces repeated prefix-header scans for known private spools, not a segmented storage-format migration. Attach still returns the complete bounded replay; checkpoint/ring/spool quotas remain separate.
+
+## Memory and spool failure ownership (2026-11-01)
+
+- The 2 MiB ring payload limit also holds when spool is unavailable. Retain a bounded whole-frame suffix, mark `replay_truncated`, invalidate the older checkpoint/prefix, and preserve existing attach warning/reset behavior; never fall back to unbounded RAM or stop running PTYs. Frame counts are capped separately so tiny outputs do not retain unlimited metadata.
+- A failed append rolls back to the committed file length; a later append first repairs a partial tail. Failed compaction does not allow unlimited disk growth. Successful compaction reclaims to 80% of the 10 MiB cap, avoiding a full rewrite per subsequent frame; a backup preserves the old spool during replacement.
+- ACK refill reads only a sequence-filtered suffix with a 512 KiB read batch (plus one indivisible frame), excluding checkpoints. Header scanning and attach's full bounded replay remain separate from a future segmented-spool optimization.
+- All sessions of one host share an additional 128 MiB checkpoint payload quota; rejected replacements preserve previous snapshots, successful replacements/drop release quota. Ring bytes, checkpoint bytes and frame metadata are counted for exited-session governance. Ring/checkpoint budgets are not a total heap limit: transport, temporary replay clones, base64 and OS/PTY allocations remain separate.
+- Regression: `replay_storage_tests.rs`, existing `session_buffer_*`, ACK flow-control, attach barrier and `recovery_tests.rs`; use synthetic paths and small quotas, never real disk-full/OOM.
+
 > Issue #123 Phase 2。把 PTY 宿主从主进程抽为独立守护进程 `cli-manager-daemon`：UI 是客户端，应用真退出后任务继续跑，重启 attach 回放。前置 Phase 1（`background-task-continuation-contracts.md`）已上线。**本契约经用户确认后方可实施。**
 
 ## Scenario: Reserve the Local Routing Control Plane
@@ -122,6 +136,8 @@ WebView -> Tauri routing command -> validate + persist provider DB
 - `close`/`close_all` 在发送请求前建立本地 tombstone 并释放输出所有权；即使请求超时或断线，也不得在重连时重新 attach 已由 UI 关闭的会话。daemon 关闭路径必须同步移除 attach、ACK、sequence 与 attach-barrier 状态。
 - `pty_reconcile_active_sessions` 的 UI active list 只用于诊断，不得关闭 daemon 后台会话；后台会话只由显式 close/close_all、PTY 退出治理或确定的 daemon 孤儿清理终止。
 - `pty_daemon_sessions` 必须区分“daemon 可用且会话为空”和“daemon 不可用/查询失败”：前者返回 `Ok([])`，后者返回 `Err`。启动恢复、后台任务列表等调用者可 catch 后降级为空；退出守卫只能在真实取得列表后认为 daemon 会话已检查。
+- 控制 TCP 失效时 `mark_disconnected` 必须通过独立 socket handle 执行 shutdown，解除 reader/write 等待并清 pending，不得只清桥接标记。会话协调、状态和列表查询复用 `ensure_daemon` 串行恢复；列表保留启动就绪等待，恢复失败返回错误，不自动重放原请求或新建 PTY。
+- reconcile/status/list/legacy/shutdown/force-shutdown/upgrade 的阻塞控制 I/O 使用最多四个 blocking worker，permit 由 worker 持有直至真正结束。普通 shutdown 不为关闭而创建 daemon；显式 discard 的 force shutdown 保留既有恢复与关闭策略。
 - 真正退出且 daemon 列表检查成功时，前端必须先 `close_all` 再请求 `pty_daemon_shutdown_if_idle`；列表检查失败时只能关闭当前前台 PTY，再请求 shutdown 作为最终存活性判定。shutdown 返回 `false` 表示无 daemon，可继续退出；shutdown 抛错表示仍有活动会话或控制链路不可信，必须取消 `app_exit` 并恢复退出遮罩。`close_all` 抛错后仍要尝试 shutdown：shutdown 成功表示 daemon 已确认无 alive 会话。转入后台路径禁止调用 close/close_all/shutdown。
 
 ### 4. Validation & Error Matrix
@@ -145,7 +161,7 @@ WebView -> Tauri routing command -> validate + persist provider DB
 - Good: daemon 启动后用户安装新 CLI，新 PTY 的 `PATH` 立即包含新用户路径，同时保留 daemon 临时工具目录；项目显式 `PATH` 仍完全接管。
 - Good: 无任务真实退出执行 close_all + shutdown；shutdown 确认后才调用 app_exit，后台继续模式完全不触碰 PTY/daemon。
 - Base: 新会话由 Tauri command 生成 session id 并完成 provider/hook env，随后 WebSocket create 在启动 PTY 前注册当前客户端；create/write/resize/output/close 全部直连 PtyHost。
-- Base: daemon 不存在时 `pty_daemon_sessions` 报不可用，shutdown 返回 false，前端可正常退出。
+- Base: daemon 不可用时 `pty_daemon_sessions` 等待就绪后尝试既有恢复，仍失败则报错；普通 shutdown 不新建 daemon，返回 false，前端沿用未知会话保护策略。
 - Bad: 收到 binary output 后立刻 ACK，而不是等 `terminal.write(..., callback)` → xterm 尚未解析时 daemon 继续灌入，内存失控。
 - Bad: WebSocket 重连后无 sequence 过滤地重放完整 ring → 用户看到重复输出。
 - Bad: 最新用户 `PATH` 整值覆盖 daemon `PATH` → 应用启动时注入的临时工具目录丢失。
@@ -295,6 +311,57 @@ command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_W
 command.creation_flags(CREATE_NO_WINDOW);
 ```
 
+
+## Scenario: Recover attach failures and isolate blocked host requests (V1.4.5)
+
+### 1. Scope / Trigger
+
+修改 `PtyHostSocket` 恢复流程、daemon reader/dispatch、会话表治理或慢请求诊断时适用。
+
+### 2. Signatures
+
+- 公共 `attach(sessionId, replayFromStart?, resumeAfterSequence?) -> Promise<PtyHostAttachResult>` 保留 boolean 失败约定；内部单次尝试保留 timeout/missing/remote/cancelled 类别。
+- `RequestQueue::submit(key, client, request, operation, bytes, work) -> bool`：false 必须断开客户端，不能当成已执行。
+- `session_metadata() -> Result<Vec<SessionMeta>, &'static str>`：忙或不可读时返回错误，禁止返回遗漏会话的成功列表。
+
+### 3. Contracts
+
+- 恢复意图独立于 socket OPEN；每 transport 只有一个恢复流程与一个 timer，同会话最多一个 attach 在途。首次断连 250ms，失败后 1/2/5 秒退避，5 秒封顶；每轮最多四个 attach。
+- 仅已建立会话进入自动恢复；首次 attach 失败由调用方清理。精确 `session not found` 是终止结果；锁中毒、客户端断开或其他临时错误不得伪装 missing。
+- 二进制 replay 没有 request id。attach 超时后须撤销连接并以 committed sequence 重连，禁止在旧连接中把迟到 replay 拼入下一次恢复。auth_ok 前不得发送业务请求。
+- close/closeAll/dispose/reset 取消对应恢复意图；连接和生命周期代次隔离旧应答、旧事件及迟到监听器。关闭不自动重跑 create/用户输入。
+- 宿主固定四个 worker；所有客户端同会话 key 共用 FIFO。队列最多 256 项/16 MiB，每客户端最多 64 项；断连清除该客户端排队操作。正在执行的系统调用不强杀，四个 worker 全部阻塞时业务操作仍可能等待，心跳独立于该队列。
+- CloseAll/Detach/Shutdown 使用全局顺序屏障，不能越过之前的会话任务；Ping/List/Reconcile 在 reader 上快速响应。SSH/routing/status 使用独立 key。JSON/binary 输入、checkpoint、ACK 和 attach 使用同一会话队列。
+- buffer 治理先克隆会话引用、释放表锁，再 try_lock 检查 entry；忙会话按单会话容量上界计费，移除前核对 Arc 身份与 exited 状态，绝不移除活跃会话。
+- writer 网络写等待最多 5 秒，失败后标记 closed 并清空队列；全局 clients 锁内仅入队，不执行网络写。
+- 独立 reporter 每 5 秒查看在途任务，持续慢请求每 30 秒最多一批。只写静态操作/阶段、client/request 数字、session 散列、耗时、队列数量/字节，不写原始请求正文；使用既有滚动 writer，release/dev 分别为 `pty-host.log` / `pty-host.dev.log`，写失败不阻断请求。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 结果 |
+| --- | --- |
+| 已有会话 attach 返回临时错误 | 保留恢复集合，日志 partial，继续退避 |
+| attach 超时 | 换连接隔离迟到回放；旧会话仍待恢复 |
+| 明确 session missing | 移除恢复集合，不再重试 |
+| A entry 被持有 | 缓冲治理立即返回；同连接 Ping/B attach 仍可推进 |
+| List 有忙会话 | 返回错误，不伪造空/部分列表 |
+| 输入队列满或 writer 已失效 | 断开该连接，不执行或自动重放未接收的输入 |
+
+### 5. Good / Base / Bad Cases
+
+- Good：A attach 阻塞，B 和 Ping 先返回；释放 A 后 Attached/replay/live 顺序完整。
+- Base：临时恢复失败持续重试，所有会话恢复或明确终结后才记录 completed。
+- Bad：仅放宽心跳时间、每请求无限 spawn、把 pending 错误吞成 false 后直接记录 completed。
+
+### 6. Tests Required
+
+`scripts/ptyHostSocket.test.mjs` 覆盖超时/临时错误、missing、多会话、单流程、生命周期取消与日志脱敏；`server/recovery_tests.rs` 覆盖受控锁阻塞与 writer 失败；`request_queue/tests.rs` 覆盖 FIFO/全局屏障、容量与取消、在途诊断脱敏。回归 server/protocol、TerminalProcessManager、replay/remount、类型/编译与严格架构检查。
+
+### 7. Wrong vs Correct
+
+Wrong：持 `sessions` 表锁遍历并阻塞等待每个 entry；reader 直接执行可能无限等待的 PTY write。
+
+Correct：表锁只取共享引用；同会话请求经有界 FIFO worker 执行，reader 保持心跳响应，entry 慢操作可由独立诊断观察。
 
 ## Opt-in actual-user Conda PATH regression
 

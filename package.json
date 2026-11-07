@@ -1,11 +1,12 @@
 {
   "name": "cli-manager",
   "private": true,
-  "version": "1.4.4",
+  "version": "1.5.0",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "workspaces": [
-    "apps/web"
+    "apps/web",
+    "apps/web-tap"
   ],
   "scripts": {
     "check:architecture": "node ./scripts/architecture.mjs",
@@ -14,16 +15,21 @@
     "build": "tsc && vite build",
     "build:pet-e": "npm --prefix pet-e run build",
     "test:codex-proxy:e2e": "node ./scripts/codexAppServerProxy.e2e.test.mjs",
-    "test:pet-e:contracts": "node --test scripts/desktopPetEActivation.test.mjs scripts/desktopPetEAgentBridge.test.mjs scripts/desktopPetEIntegration.test.mjs scripts/desktopPetEMutualExclusion.test.mjs scripts/desktopPetEProtocol.test.mjs scripts/desktopPetERecovery.test.mjs scripts/desktopPetESettings.test.mjs scripts/desktopPetEState.test.mjs scripts/desktopPetStatus.test.mjs scripts/desktopPetETerminalPrompt.test.mjs scripts/grokDesktopPetHook.test.mjs scripts/petEPackage.test.mjs scripts/piDesktopPetHook.test.mjs scripts/piSessionLifecycle.test.mjs scripts/piHookLifecycle.test.mjs pet-e/test/codex-pet.test.mjs pet-e/test/renderer.test.mjs pet-e/test/security.test.mjs",
+    "test:pet-e:contracts": "node --test scripts/desktopPetEActivation.test.mjs scripts/desktopPetEAgentBridge.test.mjs scripts/desktopPetEIntegration.test.mjs scripts/desktopPetEMutualExclusion.test.mjs scripts/desktopPetEProtocol.test.mjs scripts/desktopPetERecovery.test.mjs scripts/desktopPetESettings.test.mjs scripts/desktopPetEState.test.mjs scripts/desktopPetStatus.test.mjs scripts/desktopPetETerminalPrompt.test.mjs scripts/grokDesktopPetHook.test.mjs scripts/petEPackage.test.mjs scripts/piDesktopPetHook.test.mjs scripts/piCustomQuestion.test.mjs scripts/piSessionLifecycle.test.mjs scripts/piHookLifecycle.test.mjs pet-e/test/codex-pet.test.mjs pet-e/test/renderer.test.mjs pet-e/test/security.test.mjs",
     "test:pet-e:integration": "node ./scripts/desktopPetEIntegration.test.mjs",
     "test:pet-e:package": "node ./scripts/petEPackage.test.mjs",
     "test:pet-e:recovery": "node ./scripts/desktopPetERecovery.test.mjs",
+    "test:pi:sdk": "node --test scripts/piHookSdk.test.mjs",
     "test:tauri-dev-proxy": "node ./scripts/tauriCliDevProxy.test.mjs",
     "tauri:clean:dev": "cargo clean --manifest-path src-tauri/Cargo.toml --profile dev",
     "tauri:clean": "cargo clean --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
     "web:dev": "npm run dev --workspace @cli-manager/web",
-    "web:build": "npm run build --workspace @cli-manager/web",
+    "web:build": "npm run build --workspace @cli-manager/web && npm run tap:build",
+    "tap:dev": "npm run dev --workspace @cli-manager/web-tap",
+    "tap:build": "npm run build --workspace @cli-manager/web-tap",
+    "tap:typecheck": "npm run typecheck --workspace @cli-manager/web-tap",
+    "tap:test": "npm run test --workspace @cli-manager/web-tap",
     "web:typecheck": "npm run typecheck --workspace @cli-manager/web",
     "web:server:check": "cargo check --manifest-path apps/server/Cargo.toml",
     "web:server:test": "cargo test --manifest-path apps/server/Cargo.toml",

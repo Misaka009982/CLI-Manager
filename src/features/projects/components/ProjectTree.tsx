@@ -5,7 +5,7 @@ import type { Project, TerminalScope, TreeNode as TNode } from "../../../shared/
 import { SidebarSkeleton } from "../../../shared/ui/Skeleton";
 import { EmptyState } from "../../../shared/ui/EmptyState";
 import { Popover, PopoverAnchor, PopoverContent } from "../../../shared/ui/popover";
-import { Folder, Pin, Plus, Terminal } from "../../../shared/ui/icons";
+import { Folder, Pin, Plus, Terminal } from "../../../shared/ui/homeIcons";
 import { CliToolIcon } from "../../../shared/ui/CliToolIcon";
 import { WorktreeIcon } from "../../../shared/ui/WorktreeIcon";
 import { TreeNodeItem } from "./TreeNodeItem";
@@ -655,7 +655,7 @@ export function ProjectTree({
 
   if (initialLoading) {
     return (
-      <div className="h-full overflow-y-auto overflow-x-hidden px-1.5 pb-2 pt-1">
+      <div className="ui-autohide-scroll h-full overflow-y-auto overflow-x-hidden px-1.5 pb-2 pt-1">
         <SidebarSkeleton />
       </div>
     );
@@ -665,7 +665,7 @@ export function ProjectTree({
     const buttonSize = density === "compact" ? "h-7 w-7" : "h-8 w-8";
     const collapsedTree = pinnedFilterActive ? [] : tree;
     return (
-      <div className={`h-full overflow-y-auto overflow-x-hidden ${density === "compact" ? "px-0.5 pb-1.5 pt-0.5" : "px-1 pb-2 pt-1"}`}>
+      <div className={`ui-autohide-scroll h-full overflow-y-auto overflow-x-hidden ${density === "compact" ? "px-0.5 pb-1.5 pt-0.5" : "px-1 pb-2 pt-1"}`}>
         {collapsedTree.length === 0 && visiblePinnedProjects.length === 0 ? (
           <div className={`flex flex-col items-center text-text-muted ${density === "compact" ? "gap-1.5 py-2.5" : "gap-2 py-3"}`}>
             <Terminal size={20} strokeWidth={1.2} className="opacity-50" />
@@ -716,11 +716,11 @@ export function ProjectTree({
   return (
     <div className={`${embedded ? "" : "flex h-full flex-col overflow-hidden"} overflow-x-hidden ${density === "compact" ? "px-1 pb-1.5 pt-0.5" : "px-1.5 pb-2 pt-1"}`}>
       {/* 置顶区：独立滚动容器，上限占可用高度 30%，超出部分在此区域内滚动。 */}
-      {splitPinnedRegion && <div className="ui-sidebar-pinned-scroll">{pinnedSection}</div>}
+      {splitPinnedRegion && <div className="ui-autohide-scroll ui-sidebar-pinned-scroll">{pinnedSection}</div>}
       {splitPinnedRegion && <div className="ui-sidebar-region-divider" role="separator" />}
 
       {/* 列表区：独立滚动容器，分区时至少占 70%；未分区时承载置顶区与列表的全部内容。 */}
-      <div className={embedded ? undefined : "ui-sidebar-main-scroll"}>
+      <div className={embedded ? undefined : "ui-autohide-scroll ui-sidebar-main-scroll"}>
         {!splitPinnedRegion && pinnedSection}
         {!splitPinnedRegion && pinnedEmptyState}
 
@@ -830,7 +830,7 @@ export function ProjectTree({
                     onClick={onSelectAllTerminalScope}
                   >
                     <span className="ui-tree-leading-icon">
-                      <Terminal size={14} strokeWidth={1.5} />
+                      <Terminal size={16} strokeWidth={1.5} />
                     </span>
                     <span className="truncate font-medium">{t("sidebar.tree.allTerminals")}</span>
                   </button>
@@ -919,12 +919,12 @@ function CollapsedProjectButton({ node, sizeClass, pinned = false }: { node: TNo
       onContextMenu={(e) => actions.onContextMenuProject(e, p)}
     >
       <span className="ui-tree-collapsed-icon pointer-events-none" aria-hidden="true">
-        <NodeAppearanceIcon
+        <NodeAppearanceIcon homeStyle
           mark={appearance.emoji}
           iconKey={appearance.iconKey}
           cliTool={p.cli_tool}
           fallback="terminal"
-          size={15}
+          size={19}
         />
       </span>
       {terminalCount > 0 && <span className="ui-tree-collapsed-badge">{terminalCount > 99 ? "99+" : terminalCount}</span>}
@@ -993,11 +993,11 @@ function CollapsedGroupButton({
           onContextMenu={(e) => actions.onContextMenuGroup(e, g.id, g.name)}
         >
           <span className="ui-tree-collapsed-icon" aria-hidden="true">
-            <NodeAppearanceIcon
+            <NodeAppearanceIcon homeStyle
               mark={groupAppearance.emoji}
               iconKey={groupAppearance.iconKey}
               fallback="folder"
-              size={16}
+              size={19}
             />
           </span>
           {count > 0 && <span className="ui-tree-collapsed-badge">{count > 99 ? "99+" : count}</span>}
@@ -1044,7 +1044,7 @@ function renderFlyoutNodes(nodes: TNode[], depth: number, actions: TreeActions, 
             className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-on-surface-variant"
             style={{ paddingLeft: padLeft }}
           >
-            <Folder size={13} strokeWidth={1.5} className="shrink-0" />
+            <Folder size={19} strokeWidth={1.5} className="shrink-0" />
             <span className="truncate">{child.group.name}</span>
           </div>
           {renderFlyoutNodes(child.children, depth + 1, actions, onPick)}
@@ -1091,9 +1091,9 @@ function renderFlyoutNodes(nodes: TNode[], depth: number, actions: TreeActions, 
       >
         <span className="ui-tree-leading-icon flex shrink-0 items-center">
           {cliIcon ? (
-            <CliToolIcon icon={cliIcon} size={13} />
+            <CliToolIcon icon={cliIcon} size={15} />
           ) : (
-            <Terminal size={13} strokeWidth={1.5} />
+            <Terminal size={15} strokeWidth={1.5} />
           )}
         </span>
         <span className="flex-1 truncate">{p.name}</span>
@@ -1126,7 +1126,7 @@ function DragGhost({ activeId, tree }: { activeId: string; tree: TNode[] }) {
   const node = findNodeById(tree, activeId);
   if (!node) return null;
   const label = node.type === "group" ? node.group.name : node.type === "worktree" ? node.worktree.name : node.project.name;
-  const icon = node.type === "group" ? <Folder size={14} strokeWidth={1.5} /> : node.type === "worktree" ? <WorktreeIcon className="h-3.5 w-3.5" /> : <Terminal size={14} strokeWidth={1.5} />;
+  const icon = node.type === "group" ? <Folder size={16} strokeWidth={1.5} /> : node.type === "worktree" ? <WorktreeIcon className="h-3.5 w-3.5" /> : <Terminal size={16} strokeWidth={1.5} />;
   return (
     <div className="ui-tree-drag-ghost flex items-center gap-2 rounded-xl border border-border bg-surface-container-high px-3 py-1.5 text-[12px] font-medium shadow-lg">
       <span className="text-on-surface-variant">{icon}</span>

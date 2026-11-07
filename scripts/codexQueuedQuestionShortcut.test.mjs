@@ -5,6 +5,19 @@ import vm from "node:vm";
 import ts from "typescript";
 
 const source = readFileSync(new URL("../src/features/terminal/hooks/useXTermController.ts", import.meta.url), "utf8");
+// 回调依赖的 IME 守卫在独立模块里；先把真实实现装进 VM，避免用桩掩盖接线。
+const imeGuardSource = readFileSync(
+  new URL("../src/features/terminal/lib/terminalImeKeyGuard.ts", import.meta.url),
+  "utf8",
+);
+const imeGuardModule = { exports: {} };
+vm.runInNewContext(
+  ts.transpileModule(imeGuardSource, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText,
+  { module: imeGuardModule, exports: imeGuardModule.exports },
+);
+const { shouldSwallowImeCompositionKeydown } = imeGuardModule.exports;
 const ast = ts.createSourceFile("useXTermController.ts", source, ts.ScriptTarget.Latest, true);
 let callback;
 function visit(node) {
@@ -25,6 +38,8 @@ function harness(codex, hasDraft) {
   const module = { exports: null };
   vm.runInNewContext(compiled, {
     module, terminal, osPlatformRef: { current: "windows" },
+    isComposingRef: { current: false },
+    shouldSwallowImeCompositionKeydown,
     getSessionToolContext: () => sessionContext,
     isCodexSession: (context, target) => {
       assert.equal(context, sessionContext);

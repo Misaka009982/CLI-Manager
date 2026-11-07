@@ -24,6 +24,61 @@ const output = ts.transpileModule(source, {
 const outputPath = join(tempDir, "protocol.mjs");
 writeFileSync(outputPath, output, "utf8");
 const protocol = await import(pathToFileURL(outputPath).href);
+const preferencesSource = readFileSync(new URL("../src/shared/preferences/desktopPetEPreferences.ts", import.meta.url), "utf8");
+const preferencesOutput = ts.transpileModule(preferencesSource, {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+}).outputText.replaceAll('from "../lib/desktopPetE"', 'from "./protocol.mjs"');
+const preferencesPath = join(tempDir, "preferences.mjs");
+writeFileSync(preferencesPath, preferencesOutput, "utf8");
+const preferences = await import(pathToFileURL(preferencesPath).href);
+
+test("折叠偏好迁移独立保留默认值且不混入桥接设置", () => {
+  for (const value of [undefined, null, "invalid", { petPicker: "yes" }]) {
+    assert.deepEqual(preferences.migrateDesktopPetESettingsSectionsExpanded(value), { petPicker: false });
+  }
+  assert.deepEqual(preferences.migrateDesktopPetESettingsSectionsExpanded({ petPicker: true, unknown: true }), { petPicker: true });
+  assert.deepEqual(preferences.migrateDesktopPetESettings(undefined), protocol.DEFAULT_DESKTOP_PET_E_SETTINGS);
+  assert.equal("petPicker" in preferences.migrateDesktopPetESettings({ petPicker: true }), false);
+});
+
+test("加载旧双开设置时只停用宠物E并保留样式偏好", () => {
+  const entries = {
+    desktopPet: { enabled: true },
+    desktopPetE: { ...protocol.DEFAULT_DESKTOP_PET_E_SETTINGS, enabled: true, size: 140, petId: "codex.kuromuse" },
+    desktopPetESettingsSectionsExpanded: { petPicker: true },
+  };
+  const persisted = [];
+  preferences.applyDesktopPetEPreferences(entries, (key, value) => persisted.push({ key, value }));
+  assert.equal(entries.desktopPet.enabled, true);
+  assert.equal(entries.desktopPetE.enabled, false);
+  assert.equal(entries.desktopPetE.size, 140);
+  assert.equal(entries.desktopPetE.petId, "codex.kuromuse");
+  assert.deepEqual(entries.desktopPetESettingsSectionsExpanded, { petPicker: true });
+  assert.deepEqual(persisted, [{ key: "desktopPetE", value: entries.desktopPetE }]);
+  preferences.applyDesktopPetEPreferences(entries, (key, value) => persisted.push({ key, value }));
+  assert.equal(persisted.length, 1, "重复加载不重复写入互斥修正");
+});
+
+test("独立偏好入口在写盘前检查双向互斥并保留已有偏好", () => {
+  const settings = {
+    desktopPet: { enabled: true },
+    desktopPetE: { ...protocol.DEFAULT_DESKTOP_PET_E_SETTINGS, petId: "codex.kuromuse", size: 130 },
+  };
+  assert.throws(() => preferences.prepareDesktopPetSettingUpdate("desktopPetE", { enabled: true }, settings), /desktop_pet_e_mutual_exclusion/);
+  assert.equal(settings.desktopPetE.enabled, false);
+  const enabled = preferences.prepareDesktopPetSettingUpdate("desktopPetE", { enabled: true }, {
+    ...settings, desktopPet: { enabled: false },
+  });
+  assert.equal(enabled.petId, "codex.kuromuse");
+  assert.equal(enabled.size, 130);
+  assert.throws(() => preferences.prepareDesktopPetSettingUpdate("desktopPet", { enabled: true }, {
+    ...settings, desktopPetE: enabled,
+  }), /desktop_pet_mutual_exclusion/);
+  const disabled = { enabled: false };
+  assert.equal(preferences.prepareDesktopPetSettingUpdate("desktopPet", disabled, { ...settings, desktopPetE: enabled }), disabled);
+  const unrelated = { value: "unchanged" };
+  assert.equal(preferences.prepareDesktopPetSettingUpdate("theme", unrelated, settings), unrelated);
+});
 
 test("Desktop Pet E settings have local, deterministic defaults", () => {
   assert.deepEqual(protocol.normalizeDesktopPetESettings(undefined), {

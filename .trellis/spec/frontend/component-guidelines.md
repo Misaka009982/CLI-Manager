@@ -1450,22 +1450,29 @@ terminal.options.theme = isTransparent ? applyTransparency(theme) : theme;
 
 **Cause**: Codex is launched from the current shell cursor position instead of a clean viewport. The problem is the pre-launch screen state, not xterm scrollbar CSS, Codex `--no-alt-screen`, `TERM=dumb`, or terminal recreation.
 
-**Fix**: Before direct Codex launches, send form feed (`\x0c`, Ctrl+L) to the PTY, then execute the command. Apply this to both automatic startup commands and manually typed direct `codex` commands on Enter. Keep the match narrow: direct commands such as `codex`, `codex.cmd`, `codex.exe`, and `codex.ps1` only.
+**Fix**: Before direct Codex launches, clear the screen through a mechanism the target shell actually supports, then execute the command. Apply this to both automatic startup commands and manually typed direct `codex` commands on Enter. Keep the match narrow: direct commands such as `codex`, `codex.cmd`, `codex.exe`, and `codex.ps1` only.
+
+- Shells with a line-editor Ctrl+L binding (PowerShell/PSReadLine, pwsh, Git Bash/bash, zsh, fish, WSL): send form feed (`\x0c`) before the command.
+- `cmd.exe` has **no** Ctrl+L binding — it echoes the byte as `^L` and splices it into the command line (`^Lcodex --no-daemon`). Chain the built-in instead: `cls & codex ...`.
+- Unspecified shell (`null`) is safe: the backend falls back to PowerShell on Windows (`pty/manager.rs` `default_shell_key`), not to the `defaultShell` setting.
 
 **Wrong**:
 
 ```typescript
-invoke("pty_write", { sessionId, data: `${command}\r` });
+invoke("pty_write", { sessionId, data: `${command}\r` });            // old output stays above the TUI
+invoke("pty_write", { sessionId, data: `\x0c${command}\r` });        // unconditional: shows ^L in cmd
 ```
 
 **Correct**:
 
 ```typescript
-const clearBeforeLaunch = isDirectCodexStartupCommand(command) ? "\x0c" : "";
+const clearBeforeLaunch = isDirectCodexStartupCommand(command)
+  ? (shell === "cmd" ? "cls & " : "\x0c")
+  : "";
 invoke("pty_write", { sessionId, data: `${clearBeforeLaunch}${command}\r` });
 ```
 
-**Prevention**: When a TUI appears to scroll inside a partial screen, reproduce with prior shell output still visible. If old output remains above the TUI, fix the launch input sequence before changing scrollbar styles, TERM, alternate-screen flags, or xterm construction.
+**Prevention**: When a TUI appears to scroll inside a partial screen, reproduce with prior shell output still visible. If old output remains above the TUI, fix the launch input sequence before changing scrollbar styles, TERM, alternate-screen flags, or xterm construction. Never send a bare control byte as input to "clear" without checking every supported shell (the scenario matrix's "Runtime environment" row) interprets it — a shell without that binding turns it into visible, executable command text.
 
 ### Common Mistake: Making user-facing clear screen depend on only one side of the PTY boundary
 
@@ -1698,7 +1705,7 @@ On a light terminal theme, a CLI that renders with its own dark theme paints mes
 
 ### Convention: Mouse-aware TUIs receive unmodified mouse reports
 
-**What**: xterm instances must use the shared `TerminalMouseInteraction` policy. When a PTY application enables mouse reporting, ordinary click, drag, and move events go to that application; users hold Shift to select terminal text. This is separate from the unsupported click-to-caret behavior above.
+**What**: Desktop xterm instances must use the shared `TerminalMouseInteraction` policy. When a PTY application enables mouse reporting, ordinary click, drag, and move events go to that application; users hold Shift on Windows/Linux or Option on macOS to select terminal text. This is separate from the unsupported click-to-caret behavior above.
 
 **Why**: Full-screen TUIs such as Grok render their own scrollback and scrollbar inside terminal cells. Setting `mouseEventsRequireAlt: true` makes those controls look clickable while silently withholding the mouse reports unless Alt is held. Wheel events are unaffected, which can hide the mismatch during testing.
 
@@ -1722,10 +1729,12 @@ const terminal = new Terminal({
 
 - Keep the policy generic; do not detect Grok or another CLI by process name.
 - A shell that has not enabled mouse reporting keeps normal xterm text selection behavior.
-- A mouse-aware TUI receives ordinary mouse reports; Shift remains the selection modifier.
+- A mouse-aware TUI receives ordinary mouse reports. Set `macOptionClickForcesSelection: true`: xterm defaults it to false, and macOS does not use the Windows/Linux Shift override. The local browser platform, not the remote PTY OS, owns the selection modifier.
+- Set `altClickMovesCursor: false` alongside the Option override. Otherwise xterm's default short Alt/Option-click path can emit cursor-movement keys on mouse-up even when mouse reporting itself was suppressed. Click-to-caret remains unsupported.
 - Mouse policy belongs in `src/features/terminal/browser/TerminalMouseInteraction.ts`; `XTermTerminal` only assembles it.
+- Do not disable mouse tracking or change snapshot modes to recover selection; selection gestures must stay local while normal TUI mouse reports remain intact.
 
-**Tests**: Run `node --test scripts/terminalMouseInteraction.test.mjs` and `npx tsc --noEmit`; manually verify Grok fullscreen click/drag/wheel, Shift+drag selection in a mouse-aware TUI, and ordinary shell selection.
+**Tests**: Run `node --test scripts/terminalMouseInteraction.test.mjs` and `scripts/terminalSnapshotMouse.browser.mjs` (with `PLAYWRIGHT_MODULE` pointing to an installed Playwright runtime), plus `npx tsc --noEmit`. The browser fixture must use production options and real drag events, load xterm after setting the platform, and assert selected text, visible renderer highlight and zero selection-gesture bytes across tracking/encoding modes, normal/alternate screens and original/restored terminals. Include short Option clicks to catch accidental cursor-key injection. Preserve ordinary mouse and wheel reporting. Platform simulation is not macOS WebKit or native clipboard acceptance; manually verify macOS Option+drag/Cmd+C, Windows/Linux Shift+drag and fullscreen TUI controls.
 
 ### Convention: xterm Windows PTY and paste handling
 

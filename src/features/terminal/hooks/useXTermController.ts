@@ -5,10 +5,15 @@ import {
 import { Terminal, type IBufferRange, type ILink, type IViewportRange } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { canAnswerTerminalQuery, installTerminalQueryPolicy } from "../../../shared/lib/terminalQueryPolicy";
+import { createTerminalKeyboardOptions } from "../../../shared/lib/terminalKeyboardProtocol";
+import { serializeTerminalWithKeyboardState } from "../../../shared/lib/terminalKeyboardSnapshot";
+import { createTerminalKeyRouting, isTerminalNewlineComposition } from "../../../shared/lib/terminalKeyRouting";
+import { applyTerminalScrollShortcut } from "../../../shared/lib/terminalScrollShortcuts";
 import { installTerminalUnicode } from "../../../shared/lib/terminalUnicode";
 import { ImageAddon } from "@xterm/addon-image";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import { restoreTerminalSnapshot, serializeTerminalSnapshot } from "../../../shared/lib/terminalSnapshot";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { useShallow } from "zustand/shallow";
@@ -32,6 +37,7 @@ import { useTerminalDisplay } from "./useTerminalDisplay";
 import { useTerminalInput, type TerminalSuggestionGhostState } from "./useTerminalInput";
 import { registerDesktopViewport } from "../../../shared/lib/terminalSizeOwnership";
 import { resolveClaudeImeCompositionAnchor } from "../lib/terminalImeAnchor";
+import { shouldSwallowImeCompositionKeydown } from "../lib/terminalImeKeyGuard";
 import { copyTextToClipboard, readTextFromClipboard } from "../../../shared/platform/systemClipboard";
 import { formatOsc52Reply } from "../lib/terminalOscParse";
 import { eventToCombo } from "../../workspace/api/useKeyboardShortcuts";
@@ -406,7 +412,6 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
     fitAddonRef,
     isVisibleRef,
     isComposingRef,
-    lowMemoryMode,
     disableHardwareAcceleration,
     disableWebglForSessionRef: codexSessionDetectedRef,
     linuxGraphicsDisableWebgl,
@@ -894,6 +899,7 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
         .catch(() => showKind("missing"));
     };
     const terminal = new Terminal({
+      ...createTerminalKeyboardOptions(),
       ...createTerminalMouseInteractionOptions(),
       cols: 80,
       rows: 24,
@@ -1072,7 +1078,7 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
     baseDisposables.push(linkHoverIcon);
     // 注册定时节流落盘的快照来源：让崩溃/强杀也能恢复到最近一次落盘的画面。
     const serializeAfterWriteBarrier = (signal: AbortSignal) => serializeTerminalAfterWrite(
-      terminal, () => serializeAddon.serialize(), signal,
+      terminal, () => serializeTerminalWithKeyboardState(terminal, () => serializeTerminalSnapshot(terminal, serializeAddon)), signal,
     );
     const unregisterSnapshotSource = registerTerminalSnapshotSource(
       sessionId,
@@ -1085,11 +1091,13 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
           serialized,
         );
       },
+      (signal) => serializeTerminalAfterWrite(terminal, () => serializeTerminalWithKeyboardState(
+        terminal, () => serializeTerminalSnapshot(terminal, serializeAddon, 2000)), signal),
     );
     baseDisposables.push(searchAddon.onDidChangeResults(handleSearchResults));
 
     const initialWebglReady = syncWebglRenderer(terminal, baseTheme);
-    if (initialWebglReady) {
+    if (initialWebglReady || !isVisibleRef.current) {
       if (!canUseTerminalImageAddonWasm()) {
         if (!terminalImageAddonFallbackLogged) {
           terminalImageAddonFallbackLogged = true;
@@ -1121,7 +1129,8 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
     applyCodexCursorVisibility(terminal);
     scheduleFit(true);
     const sessionSnapshot = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
-    const initialTerminalOutput = sessionSnapshot?.initialTerminalOutput;
+    const initialTerminalOutput = useTerminalStore.getState().daemonAttachPendingSessionIds.has(sessionId)
+      ? undefined : sessionSnapshot?.initialTerminalOutput;
     const writeDeferredStartup = () => {
       if (!sessionSnapshot?.deferStartupUntilInitialOutput || !sessionSnapshot.startupCmd) return;
       terminalProcessManager.write(
@@ -1144,7 +1153,9 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
         if (terminalRef.current !== terminal) return;
         snapshotBeforeUnmountRef.current = () => {
           try {
-            useTerminalStore.getState().updateSessionTerminalSnapshot(sessionId, serializeAddon.serialize());
+            useTerminalStore.getState().updateSessionTerminalSnapshot(
+              sessionId, serializeTerminalWithKeyboardState(terminal, () => serializeTerminalSnapshot(terminal, serializeAddon, 2000)),
+            );
           } catch (err) {
             logError("Failed to snapshot terminal buffer before dispose", { sessionId, err });
           }
@@ -1183,7 +1194,7 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
         ) {
           terminal.resize(dimensions.cols, dimensions.rows);
         }
-        const restoredOutput = displayTransformOutputRef.current(initialTerminalOutput);
+        const restoredOutput = displayTransformOutputRef.current(restoreTerminalSnapshot(initialTerminalOutput));
         const restoredCursor = shouldHideCodexCursor(terminal) ? "\x1b[?25l" : "\x1b[?25h";
         terminal.write(`${restoredOutput}\x1b[?6l\x1b[r\x1b[0m${restoredCursor}\x1b[999B\r\n`, () => {
           if (terminalRef.current !== terminal) return;
@@ -1254,7 +1265,24 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
     };
     contextMenuTarget.addEventListener("contextmenu", onContextMenu);
 
-    terminal.attachCustomKeyEventHandler((e) => {
+    const keyRouting = createTerminalKeyRouting(terminal, (data, userInput, kind) => {
+      // Preserve legacy direct writes: LF through onData would replace selected input.
+      if (kind === "legacy") {
+        terminalProcessManager.write(sessionId, data).catch((err) => reportPtyWriteError("newline", err));
+      } else {
+        terminal.input(data, userInput);
+      }
+    });
+    const releaseMappedKeys = () => keyRouting.release();
+    terminal.textarea?.addEventListener("blur", releaseMappedKeys);
+    window.addEventListener("blur", releaseMappedKeys);
+    baseDisposables.push({ dispose: () => {
+      terminal.textarea?.removeEventListener("blur", releaseMappedKeys);
+      window.removeEventListener("blur", releaseMappedKeys);
+      keyRouting.dispose();
+    } });
+    // IME guard runs before held-key routing, preventing premature composition commits.
+    terminal.attachCustomKeyEventHandler(keyRouting.wrap((e) => {
       const isMacSelectAll = (
         osPlatformRef.current === "macos" ||
         (osPlatformRef.current === "unknown" && navigator.platform.toLowerCase().includes("mac"))
@@ -1325,7 +1353,7 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
         if (newlineDecision.action === "write") {
           e.preventDefault();
           markAttentionInputHandled();
-          terminalProcessManager.write(sessionId, newlineDecision.data).catch((err) => reportPtyWriteError("newline", err));
+          keyRouting.newline(e, newlineDecision.data);
           return false;
         }
         if (newlineDecision.action === "swallow") {
@@ -1385,25 +1413,11 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
           return false;
         }
       }
-      if (e.type === "keydown" && terminal.buffer.active.type === "normal") {
-        const scrollShortcuts = useSettingsStore.getState().keyboardShortcuts;
-        const combo = eventToCombo(e);
-        if (scrollShortcuts.scrollToBottom.trim() && combo === scrollShortcuts.scrollToBottom) {
-          e.preventDefault();
-          terminal.scrollToBottom();
-          setIsScrolledAwayFromBottom(false);
-          return false;
-        }
-        if (scrollShortcuts.pageUp.trim() && combo === scrollShortcuts.pageUp) {
-          e.preventDefault();
-          terminal.scrollPages(-1);
-          return false;
-        }
-        if (scrollShortcuts.pageDown.trim() && combo === scrollShortcuts.pageDown) {
-          e.preventDefault();
-          terminal.scrollPages(1);
-          return false;
-        }
+      if (e.type === "keydown" && applyTerminalScrollShortcut(
+        terminal, eventToCombo(e), useSettingsStore.getState().keyboardShortcuts,
+      )) {
+        e.preventDefault();
+        return false;
       }
       if (e.type === "keydown" && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "v") {
         e.preventDefault();
@@ -1469,7 +1483,8 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
         return false;
       }
       return true;
-    });
+    }, (e) => shouldSwallowImeCompositionKeydown(e, isComposingRef.current)
+      || isTerminalNewlineComposition(e, isComposingRef.current)));
 
     const maybeLogCodexImeDuplicate = (data: string) => {
       if (!isCodexSession()) return;
@@ -1611,6 +1626,8 @@ export function useXTermController({ sessionId, isActive = true, isVisible = tru
     return () => {
       detachPasteAndDrop();
       contextMenuTarget.removeEventListener("contextmenu", onContextMenu);
+      // Release while onData is still attached when a live PTY outlives its view.
+      keyRouting.release();
       disposeTerminalSubsystem(inputDisposables);
       disposeTerminalSubsystem(displayDisposables);
       cancelScheduledFit();

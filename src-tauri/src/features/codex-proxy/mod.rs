@@ -17,13 +17,11 @@ use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const HELPER_SUBCOMMAND: &str = "__codex_app_server_proxy";
-pub(crate) const PROXY_EXECUTABLE_ENV: &str = "CLI_MANAGER_CODEX_APP_SERVER_PROXY";
 pub(crate) const EXPECTED_SESSION_ID_ENV: &str = "CLI_MANAGER_CODEX_EXPECTED_SESSION_ID";
 pub(crate) const CODEX_LAUNCHER_ENV: &str = "CLI_MANAGER_CODEX_LAUNCHER";
 pub(crate) const CODEX_LAUNCHER_ARGS_ENV: &str = "CLI_MANAGER_CODEX_LAUNCHER_ARGS";
@@ -40,7 +38,7 @@ pub(crate) const CODEX_MODEL_PROVIDER_ENV: &str = "CLI_MANAGER_CODEX_MODEL_PROVI
 pub(crate) const CODEX_SSH_LAUNCH_ENV: &str = "CLI_MANAGER_CODEX_SSH_LAUNCH";
 pub(crate) const CODEX_PROTOCOL_TRACE_PATH_ENV: &str = "CLI_MANAGER_CODEX_PROTOCOL_TRACE_PATH";
 
-// A resumed Codex thread can legitimately exceed cc-connect's 10 MB scanner limit.
+// A resumed Codex thread can contain large history; retain the existing protocol budget.
 // Keep a finite ceiling so a broken child cannot exhaust the host process indefinitely.
 const MAX_PROTOCOL_LINE_BYTES: usize = 512 * 1024 * 1024;
 const MAX_CODEX_LAUNCHER_ARGS: usize = 64;
@@ -53,10 +51,7 @@ const MAX_CODEX_CHILD_ARGUMENT_UTF16_UNITS: usize = 20 * 1024;
 const MAX_PROTOCOL_TRACE_PENDING_REQUESTS: usize = 64;
 const MAX_PENDING_RESUMES: usize = 64;
 const STRICT_RESUME_ERROR_CODE: i64 = -32091;
-const SSH_HANDOFF_HOOK_QUEUE_CAPACITY: usize = 32;
 const MAX_AGENT_REQUEST_WORKERS: usize = 32;
-const LOCAL_HANDOFF_DELIVERY_INSTRUCTION: &str = "CLI-Manager remote handoff: deliver output files with `cc-connect send --file <absolute-path>` and output images with `cc-connect send --image <absolute-path>`.";
-const LOCAL_HANDOFF_DELIVERY_CONTEXT_KEY: &str = "cli-manager.remote-handoff.delivery";
 
 #[derive(Debug, Deserialize)]
 struct RpcProbe {
@@ -120,45 +115,6 @@ enum ClientLineAction {
     Reject(Vec<u8>),
 }
 
-struct SshHandoffHookForwarder {
-    sender: SyncSender<Value>,
-    tab_id: String,
-    expected_thread_id: Option<String>,
-}
-
-impl SshHandoffHookForwarder {
-    // 有有效 Tab 标识时创建有界 Hook 队列，并启动后台线程尝试发送事件。
-    fn from_environment(expected_thread_id: Option<String>) -> Option<Self> {
-        let tab_id = env::var("CLI_MANAGER_TAB_ID")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())?;
-        let (sender, receiver) = sync_channel::<Value>(SSH_HANDOFF_HOOK_QUEUE_CAPACITY);
-        std::thread::spawn(move || {
-            while let Ok(payload) = receiver.recv() {
-                let _ = crate::hook_client::try_notify_prepared_payload(&payload);
-            }
-        });
-        Some(Self {
-            sender,
-            tab_id,
-            expected_thread_id,
-        })
-    }
-
-    // 将服务器行转换为 Hook 事件后非阻塞入队；队列满或关闭时丢弃该事件。
-    fn inspect_server_line(&self, line: &[u8]) {
-        let Some(payload) =
-            ssh_handoff_hook_payload(line, &self.tab_id, self.expected_thread_id.as_deref())
-        else {
-            return;
-        };
-        match self.sender.try_send(payload) {
-            Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SshCodexLaunch {
@@ -171,14 +127,6 @@ pub(crate) struct SshCodexLaunch {
 }
 
 impl SshCodexLaunch {
-    // 校验 SSH 启动计划后序列化为 JSON，再编码为 Base64。
-    pub(crate) fn encode(&self) -> Result<String, String> {
-        self.validate()?;
-        let payload = serde_json::to_vec(self)
-            .map_err(|err| format!("serialize SSH Codex launch failed: {err}"))?;
-        Ok(BASE64_STANDARD.encode(payload))
-    }
-
     // 从可选环境变量解码 SSH 启动计划，反序列化并校验；缺失时返回 None。
     fn from_environment() -> Result<Option<Self>, String> {
         let Some(encoded) = optional_unicode_env(CODEX_SSH_LAUNCH_ENV)? else {
@@ -369,9 +317,6 @@ fn run_proxy(child_args: &[String]) -> Result<i32, String> {
     let input_trace_state = Arc::clone(&trace_state);
     let input_output = Arc::clone(&parent_output);
     let input_trace_path = protocol_trace_path.clone();
-    let hook_forwarder = ssh_launch
-        .as_ref()
-        .and_then(|_| SshHandoffHookForwarder::from_environment(expected_thread_id.clone()));
     let remote_work_dir = ssh_launch.as_ref().map(|launch| launch.remote_path.clone());
     let input_child_stdin = Arc::clone(&child_stdin);
     let input_expected_thread_id = expected_thread_id.clone();
@@ -398,7 +343,6 @@ fn run_proxy(child_args: &[String]) -> Result<i32, String> {
         child_stdout,
         &pending,
         &parent_output,
-        hook_forwarder.as_ref(),
         &child_stdin,
         expected_thread_id.as_deref(),
         protocol_trace_path.as_deref(),
@@ -905,10 +849,8 @@ fn forward_parent_input<W: Write>(
 ) -> Result<(), String> {
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
-    let mut delivery_instruction_pending =
-        expected_thread_id.is_some() && remote_work_dir.is_none();
     while let Some(line) = read_protocol_line(&mut reader, MAX_PROTOCOL_LINE_BYTES)
-        .map_err(|err| format!("read cc-connect request failed: {err}"))?
+        .map_err(|err| format!("read app-server client request failed: {err}"))?
     {
         trace_client_protocol_line(protocol_trace_path, trace_state, &line);
         let action = {
@@ -921,7 +863,6 @@ fn forward_parent_input<W: Write>(
                 expected_model_provider,
                 remote_work_dir,
                 &mut pending,
-                &mut delivery_instruction_pending,
             )
         };
         match action {
@@ -1080,7 +1021,6 @@ fn forward_child_output<R: io::Read, W: Write + Send + 'static>(
     child_stdout: R,
     pending: &Arc<Mutex<HashMap<String, PendingResume>>>,
     parent_output: &Arc<Mutex<io::Stdout>>,
-    hook_forwarder: Option<&SshHandoffHookForwarder>,
     child_stdin: &Arc<Mutex<Option<W>>>,
     expected_thread_id: Option<&str>,
     protocol_trace_path: Option<&Path>,
@@ -1092,15 +1032,10 @@ fn forward_child_output<R: io::Read, W: Write + Send + 'static>(
         .map_err(|err| format!("read real Codex response failed: {err}"))?
     {
         trace_server_protocol_line(protocol_trace_path, trace_state, &line);
-        if let Some(forwarder) = hook_forwarder {
-            forwarder.inspect_server_line(&line);
-        }
         if let Some(request) = codex_agent_request(&line, expected_thread_id) {
-            if hook_forwarder.is_none() {
-                let _ = crate::hook_client::try_notify_prepared_payload(&request.hook_payload);
-            }
+            let _ = crate::hook_client::try_notify_prepared_payload(&request.hook_payload);
             if agent_workers
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                     (current < MAX_AGENT_REQUEST_WORKERS).then_some(current + 1)
                 })
                 .is_err()
@@ -1228,14 +1163,13 @@ fn append_protocol_trace(path: Option<&Path>, stage: &str) {
     let _ = writeln!(file, "[{timestamp_ms}] [codex-proxy] stage={stage}");
 }
 
-// 检查接管请求，拒绝新会话和恢复漂移，按需改写恢复参数并注入一次性交付上下文。
+// 校验恢复身份和供应商，按需改写恢复参数；不注入消息平台指令。
 fn inspect_client_line(
     line: &[u8],
     expected_thread_id: Option<&str>,
     expected_model_provider: Option<&str>,
     remote_work_dir: Option<&str>,
     pending: &mut HashMap<String, PendingResume>,
-    delivery_instruction_pending: &mut bool,
 ) -> ClientLineAction {
     let Ok(mut message) = serde_json::from_slice::<Value>(trim_line_ending(line)) else {
         return ClientLineAction::Forward(line.to_vec());
@@ -1244,16 +1178,6 @@ fn inspect_client_line(
         return ClientLineAction::Forward(line.to_vec());
     };
     let method = method.to_string();
-
-    if method == "turn/start"
-        && *delivery_instruction_pending
-        && expected_thread_id.is_some()
-        && remote_work_dir.is_none()
-        && inject_local_handoff_delivery_context(&mut message)
-    {
-        *delivery_instruction_pending = false;
-        return ClientLineAction::Forward(json_line(&message));
-    }
 
     let Some(id) = message.get("id") else {
         return ClientLineAction::Forward(line.to_vec());
@@ -1340,107 +1264,6 @@ fn inspect_client_line(
     } else {
         ClientLineAction::Forward(line.to_vec())
     }
-}
-
-// 仅在有文本输入且上下文结构可写时加入应用级交付说明，保留用户输入。
-fn inject_local_handoff_delivery_context(message: &mut Value) -> bool {
-    let has_text_input = message
-        .pointer("/params/input")
-        .and_then(Value::as_array)
-        .is_some_and(|inputs| {
-            inputs.iter().any(|input| {
-                input.get("type").and_then(Value::as_str) == Some("text")
-                    && input.get("text").is_some_and(Value::is_string)
-            })
-        });
-    if !has_text_input {
-        return false;
-    }
-    let Some(params) = message.get_mut("params").and_then(Value::as_object_mut) else {
-        return false;
-    };
-    let additional_context = params
-        .entry("additionalContext".to_string())
-        .or_insert_with(|| Value::Object(Default::default()));
-    if additional_context.is_null() {
-        *additional_context = Value::Object(Default::default());
-    }
-    let Some(additional_context) = additional_context.as_object_mut() else {
-        return false;
-    };
-    additional_context.insert(
-        LOCAL_HANDOFF_DELIVERY_CONTEXT_KEY.to_string(),
-        json!({
-            "kind": "application",
-            "value": LOCAL_HANDOFF_DELIVERY_INSTRUCTION,
-        }),
-    );
-    true
-}
-
-// 将匹配会话的服务器活动、审批和终止事件转换为 Hook，忽略重试错误与其他事件。
-fn ssh_handoff_hook_payload(
-    line: &[u8],
-    tab_id: &str,
-    expected_thread_id: Option<&str>,
-) -> Option<Value> {
-    let message = serde_json::from_slice::<Value>(trim_line_ending(line)).ok()?;
-    let method = message.get("method").and_then(Value::as_str)?;
-    let params = message.get("params").and_then(Value::as_object)?;
-    let session_id = first_protocol_string(
-        params,
-        &["threadId", "thread_id", "conversationId", "conversation_id"],
-    )
-    .or(expected_thread_id)?;
-    if expected_thread_id.is_some_and(|expected| session_id != expected) {
-        return None;
-    }
-
-    let event = match method {
-        "turn/started" => "UserPromptSubmit",
-        "turn/completed" => match params
-            .get("turn")
-            .and_then(Value::as_object)
-            .and_then(|turn| turn.get("status"))
-            .and_then(Value::as_str)
-        {
-            Some("failed") => "StopFailure",
-            Some("completed" | "interrupted") => "Stop",
-            _ => return None,
-        },
-        "error"
-            if !params
-                .get("willRetry")
-                .and_then(Value::as_bool)
-                .unwrap_or(false) =>
-        {
-            "StopFailure"
-        }
-        "item/commandExecution/requestApproval"
-        | "item/fileChange/requestApproval"
-        | "item/permissions/requestApproval"
-        | "item/tool/requestUserInput"
-        | "tool/requestUserInput"
-        | "mcpServer/elicitation/request"
-        | "applyPatchApproval"
-        | "execCommandApproval" => "PermissionRequest",
-        _ => return None,
-    };
-    let tool_use_id = first_protocol_string(
-        params,
-        &["itemId", "item_id", "approvalId", "approval_id", "callId", "call_id"],
-    );
-    Some(json!({
-        "tabId": tab_id,
-        "source": "codex",
-        "event": event,
-        "sessionId": session_id,
-        "toolUseId": tool_use_id,
-        "environmentType": "ssh",
-        "goalStatus": if event == "Stop" { json!("none") } else { Value::Null },
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-        "remoteEventId": uuid::Uuid::new_v4().to_string(),
-    }))
 }
 
 // 仅对已跟踪请求的非通知响应消费待恢复状态并生成压缩结果。
@@ -1629,7 +1452,7 @@ fn write_parent_line(output: &Arc<Mutex<io::Stdout>>, line: &[u8]) -> Result<(),
     output
         .write_all(line)
         .and_then(|_| output.flush())
-        .map_err(|err| format!("write cc-connect response failed: {err}"))
+        .map_err(|err| format!("write app-server client response failed: {err}"))
 }
 
 #[cfg(test)]

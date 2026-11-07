@@ -49,8 +49,7 @@ export function isPersistableSession(session: TerminalSession | undefined): bool
 }
 
 export function hasBackendPty(session: TerminalSession): boolean {
-  return !session.remoteHandoff
-    && session.kind !== "subagent-transcript"
+  return session.kind !== "subagent-transcript"
     && session.kind !== "file-editor"
     && session.kind !== "worktree-conflict";
 }

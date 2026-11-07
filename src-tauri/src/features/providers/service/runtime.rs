@@ -3,8 +3,6 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 
 use super::{global, open_connection, repository};
-use std::fs;
-use std::path::Path;
 use toml_edit::DocumentMut;
 
 pub(crate) struct CodexProviderProfile {
@@ -31,7 +29,6 @@ impl CodexProviderProfile {
 
 pub(crate) struct CodexProviderRuntimeConfig {
     pub(crate) profile: CodexProviderProfile,
-    pub(crate) env_key: String,
     pub(crate) secret_value: String,
     pub(crate) base_url: String,
     pub(crate) model: Option<String>,
@@ -187,7 +184,6 @@ pub(crate) fn parse_runtime_config(
 
     Ok(CodexProviderRuntimeConfig {
         profile,
-        env_key,
         secret_value,
         base_url,
         model,
@@ -256,19 +252,6 @@ fn set_profile_env_key(
         .ok_or_else(|| "provider_config_invalid: missing_codex_model_provider".to_string())?;
     provider.insert("env_key", toml_edit::value(env_key));
     Ok(())
-}
-
-// 写入同名生成 profile，但保留 Codex 已保存的 Hook 确认/禁用状态，不导入供应商信任。
-pub(crate) fn write_codex_profile_to_dir(
-    codex_dir: &Path,
-    profile: &CodexProviderProfile,
-) -> Result<(), String> {
-    fs::create_dir_all(codex_dir).map_err(|err| format!("profile_write_failed: {err}"))?;
-    super::codex_profile::write_preserving_hook_state(
-        &codex_dir.join(format!("{}.config.toml", profile.profile_name)),
-        &profile.profile_text,
-    )
-    .map_err(|err| format!("profile_write_failed: {err}"))
 }
 
 // 将供应商 ID 转为至多四十字符的安全短名并附加原始 ID 的十位 SHA-256 前缀，空短名回退 provider。
@@ -630,7 +613,6 @@ request_max_retries = 8
         assert_eq!(runtime.base_url, "https://api.example.com/v1");
         assert_eq!(runtime.model.as_deref(), Some("gpt-test"));
         assert_eq!(runtime.wire_api.as_deref(), Some("responses"));
-        assert_eq!(runtime.env_key, "OPENAI_API_KEY");
         assert_eq!(runtime.secret_value, "sk-secret");
         assert_eq!(runtime.profile.model_provider, "cloud");
         assert!(runtime
@@ -655,12 +637,14 @@ request_max_retries = 8
 
         assert_eq!(runtime.base_url, "https://config.example.com");
         assert_eq!(runtime.model.as_deref(), Some("gpt-config"));
-        assert!(runtime.env_key.starts_with("CLI_MANAGER_CODEX_PROVIDER_"));
+        let document = runtime.profile.profile_text.parse::<toml_edit::DocumentMut>().unwrap();
+        let env_key = document["model_providers"][&runtime.profile.model_provider]["env_key"].as_str().unwrap();
+        assert!(env_key.starts_with("CLI_MANAGER_CODEX_PROVIDER_"));
         assert_eq!(runtime.profile.model_provider, "cloud");
         assert!(runtime
             .profile
             .profile_text
-            .contains(&format!("env_key = \"{}\"", runtime.env_key)));
+            .contains(&format!("env_key = \"{}\"", env_key)));
         assert!(!runtime.profile.profile_text.contains("sk-secret"));
     }
 }

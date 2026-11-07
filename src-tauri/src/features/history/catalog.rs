@@ -10,6 +10,8 @@ use queries::{
 pub(super) use queries::{list_sessions, search_sessions};
 mod session_detail;
 pub(super) use session_detail::get_session_detail_from_v2;
+pub(super) use session_detail::{get_session_page_from_v2, HistoryDetailWindow};
+pub(crate) use session_detail::HistorySessionPage;
 #[cfg(test)]
 use session_detail::get_session_detail_from_v2_with_conn;
 mod remote_sync;
@@ -36,7 +38,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex as AsyncMutex;
 
 const CATALOG_DB_FILE: &str = "history-catalog.db";
-const CATALOG_PARSER_VERSION: i64 = 3;
+const CATALOG_PARSER_VERSION: i64 = 4;
 const HISTORY_INDEX_SCHEMA_VERSION: i64 = 6;
 const HISTORY_INDEX_MODEL_VERSION: i64 = 1;
 const CATALOG_REFRESH_TTL_MS: i64 = 10_000;

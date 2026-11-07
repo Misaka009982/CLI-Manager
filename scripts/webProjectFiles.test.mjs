@@ -7,12 +7,16 @@ const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const moduleUrl = (source) => `data:text/javascript,${encodeURIComponent(ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText)}`;
-const requestIdUrl = moduleUrl(read("../apps/web/src/requestId.ts"));
+const requestIdUrl = moduleUrl(read("../src/shared/lib/webRequestId.ts"));
 const eventsUrl = moduleUrl(read("../apps/web/src/fileOperationEvents.ts"));
 const cacheUrl = moduleUrl(read("../apps/web/src/projectDirectoryCache.ts"));
+const socketUrl = moduleUrl(read("../src/shared/lib/webBrowserSocket.ts"));
+const httpUrl = moduleUrl(read("../src/shared/lib/webBrowserHttp.ts"));
 const clientUrl = moduleUrl(read("../apps/web/src/webClient.ts")
   .replace('"./fileOperationEvents"', JSON.stringify(eventsUrl))
-  .replace('"./projectDirectoryCache"', JSON.stringify(cacheUrl)));
+  .replace('"./projectDirectoryCache"', JSON.stringify(cacheUrl))
+  .replace('"../../../src/shared/lib/webBrowserSocket"', JSON.stringify(socketUrl))
+  .replace('"../../../src/shared/lib/webBrowserHttp"', JSON.stringify(httpUrl)));
 const filesUrl = moduleUrl(
   read("../apps/web/src/projectFiles.ts").replace('"./requestId"', JSON.stringify(requestIdUrl))
     .replace('"./webClient"', JSON.stringify(clientUrl))

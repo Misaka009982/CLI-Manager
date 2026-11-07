@@ -1,0 +1,36 @@
+.tap-completion {
+  position: absolute; z-index: 15; bottom: calc(100% + 8px); inset-inline: 0; display: flex; flex-direction: column;
+  max-height: min(360px, calc(var(--vv-height, 100dvh) * .48)); min-height: 0; overflow: hidden; border: 1px solid var(--border-strong);
+  border-radius: 12px; background: var(--bg); color: var(--fg); box-shadow: var(--shadow-overlay);
+}
+.tap-completion-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; font-size: 12px; font-weight: 600; }
+.tap-completion-heading > div { display: flex; align-items: center; gap: 8px; }
+.tap-completion-heading button, .tap-completion-footer button, .tap-completion-state button {
+  display: inline-flex; align-items: center; padding: 4px; color: var(--brand); border-radius: 4px;
+}
+.tap-completion-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 4px; }
+.tap-completion-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px; border-radius: 7px; text-align: left; }
+.tap-completion-item > svg { flex: 0 0 auto; color: var(--muted-fg); }
+.tap-completion-item > span { min-width: 0; flex: 1; }
+.tap-completion-item b { display: block; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); }
+.tap-completion-item small { display: block; color: var(--muted-fg); font-size: 11.5px; line-height: 1.5; }
+.tap-completion-item[aria-selected="true"] { background: var(--brand-soft); }
+.tap-completion-item[aria-selected="true"] > svg { color: var(--brand); }
+.tap-completion-footer { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border); }
+.tap-completion-footer span { flex: 1; color: var(--muted-fg); font-size: 11px; line-height: 1.5; }
+.tap-completion-footer button { flex-shrink: 0; font-size: 11px; }
+.tap-completion-state { margin: 0; padding: 10px 12px; font-size: 12px; color: var(--muted-fg); }
+.tap-completion-state button { margin-left: 6px; }
+.tap-completion-hint { margin: 0; padding: 0 14px 6px; color: var(--muted-fg); font-size: 11px; }
+@media (hover: hover) { .tap-completion-item:hover { background: var(--muted); } }
+@media (max-width: 760px) { .tap-completion-item { min-height: 44px; } }
+
+/* The same PTY renderer opens below the conversation; its menu belongs to the running CLI. */
+.tap-session-content.has-native-command { display: flex; flex-direction: column; }
+.has-native-command > .tap-chat-panel { order: 0; flex: 1 1 28%; min-height: 0; height: auto; }
+.has-native-command > .tap-terminal-panel { order: 1; flex: 1 1 72%; display: flex; flex-direction: column; gap: 8px; min-height: 0; height: auto; padding-top: 6px; }
+.has-native-command .tap-terminal { flex: 1; height: auto; }
+.tap-native-command-heading { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.tap-native-command-heading > div { flex: 1; min-width: 180px; }
+.tap-native-command-heading p { margin: 2px 0 0; color: var(--muted-fg); font-size: 11px; line-height: 1.4; }
+.tap-native-command-heading button { padding: 6px 8px; color: var(--brand); border: 1px solid var(--border); border-radius: 6px; }

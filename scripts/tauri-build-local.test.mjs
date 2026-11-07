@@ -61,3 +61,11 @@ test("local wiring preserves official release optimization and signed artifacts"
   assert.equal(config.bundle.createUpdaterArtifacts, true);
   assert.match(cargo, /\[profile\.release\]\s+lto = "fat"\s+codegen-units = 1/);
 });
+
+test("Tap resources use a directory mapping that preserves nested assets and fonts", () => {
+  const config = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url)));
+  const tapResources = Object.entries(config.bundle.resources)
+    .filter(([source]) => source.startsWith("../apps/web/dist/tap"));
+  // Tauri flattens glob matches to file names; mapping the directory preserves its subtree.
+  assert.deepEqual(tapResources, [["../apps/web/dist/tap", "apps/web/dist/tap"]]);
+});

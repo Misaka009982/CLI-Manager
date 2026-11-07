@@ -164,6 +164,7 @@ export function HostHome(props: HostHomeProps) {
           </div>
         </div>
         <div className="host-home-actions">
+          <a className="host-account" href="/tap/">{props.t("tapWorkspace")}</a>
           <span className={`browser-status ${props.socketState}`}>
             {props.socketState === "open" ? <Wifi size={16} /> : <WifiOff size={16} />}
             {props.t(
@@ -920,6 +921,7 @@ export function Workbench(props: WorkbenchProps) {
           <Files size={18} />
           {t("projectFiles")}
         </button>
+        <a className="secondary-button" href="/tap/">{t("tapWorkspace")}</a>
         <h2>{t("capabilities")}</h2>
         <div className="capability-list">
           {selectedDevice?.capabilities.length ? (

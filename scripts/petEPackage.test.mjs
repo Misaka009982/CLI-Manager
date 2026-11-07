@@ -146,6 +146,16 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   assert.match(prepareBundle, /process\.env\.ComSpec \|\| "cmd\.exe"/);
   assert.match(prepareBundle, /\["\/d", "\/s", "\/c", "npm\.cmd", \.\.\.args\]/);
   assert.doesNotMatch(prepareBundle, /run\(npmCommand/);
+  // Windows 的早退必须在上游 helper、宠物构建和运行时资源全部准备之后。
+  const windowsBranch = prepareBundle.slice(prepareBundle.indexOf('if (targetPlatform === "windows"'),
+    prepareBundle.indexOf('if (targetPlatform !== "darwin"'));
+  const helperBuild = windowsBranch.indexOf("await buildAndInstallHelperBinaries(");
+  const petBuild = windowsBranch.indexOf('runNpm(["run", "build:pet-e"]');
+  const petRuntime = windowsBranch.indexOf('"scripts/prepare-pet-e-runtime.mjs"');
+  const earlyExit = windowsBranch.indexOf("process.exit(0)");
+  assert.ok(helperBuild >= 0 && helperBuild < petBuild && petBuild < petRuntime && petRuntime < earlyExit);
+  assert.match(portable, /apps\/web\/dist\/tap\/index\.html/);
+  assert.match(portable, /\$petEResourceDir, \(Join-Path \$webDistDir "assets"\), \(Join-Path \$webDistDir "tap\/assets"\)/);
   assert.match(prepare, /CLI_MANAGER_PET_E_RUNTIME_ARCHIVE/);
   // 期望的 manifest（含 sha256）已集中到 verify-pet-e-package.mjs，prepare 从那里导入并逐项比对；
   // 旧断言把哈希当成 prepare 自己的字面量，从抽取到公共模块后就一直未命中。

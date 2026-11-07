@@ -9,11 +9,14 @@ import vm from "node:vm";
 import { randomUUID } from "node:crypto";
 import ts from "typescript";
 
-// 可选集成测试：在隔离目录安装官方固定版本，不改变项目依赖或用户的全局 Pi。
-const sdkRoot = process.env.PI_SDK_DIR ?? join(tmpdir(), "cli-manager-pi-1.2.0-probe");
+// 可选官方集成：PI_SDK_DIR 指向已有的 1.5.0 安装根目录；此脚本不安装或更新 Pi。
+const sdkRoot = process.env.PI_SDK_DIR ?? join(tmpdir(), "cli-manager-pi-1.5.0-probe");
 const packageRoot = join(sdkRoot, "node_modules/@earendil-works");
 const manifest = join(packageRoot, "pi-coding-agent/package.json");
 const available = existsSync(manifest);
+if (process.env.PI_SDK_DIR !== undefined) assert.ok(available, "PI_SDK_DIR 必须指向含 node_modules 的完整 Pi 1.5.0 安装目录");
+if (available) assert.equal(JSON.parse(readFileSync(manifest, "utf8")).version, "1.5.0", "官方 SDK 回归固定为 Pi 1.5.0");
+const sdkSkip = available ? false : "未提供 Pi 1.5.0 SDK；此项跳过不代表兼容验收通过";
 const require = createRequire(import.meta.url);
 // fork 模板还从 Pi 虚拟模块与 node:crypto 引入；仅桩这两个边界，不要求安装 Pi。
 const schema = () => ({});
@@ -40,8 +43,36 @@ const code = ts.transpileModule(template, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-test("official Pi 1.2.0: standard continuation, deferred run, abort and final error", { skip: !available }, async () => {
-  assert.equal(JSON.parse(readFileSync(manifest, "utf8")).version, "1.2.0");
+test("官方 Pi 1.5.0 用真实 TypeBox 与 pi-schema 校验托管问答参数", { skip: sdkSkip }, async () => {
+  const ai = await import(pathToFileURL(join(packageRoot, "pi-ai/dist/index.js")).href);
+  const sdkRequire = createRequire(manifest);
+  const { Type } = await import(pathToFileURL(sdkRequire.resolve("typebox")).href);
+  const sandbox = vm.createContext({
+    exports: {}, require: (name) => name === "typebox" ? { Type } : requireStub(name),
+  });
+  vm.runInContext(`${code}\nexports.schemas = { question: QuestionParams, questionnaire: QuestionnaireParams };`, sandbox);
+  const validate = (name, args) => ai.validateToolArguments({
+    name, description: "托管问答兼容回归", parameters: sandbox.exports.schemas[name],
+  }, { type: "toolCall", id: "schema-probe", name, arguments: args });
+
+  const single = validate("question", {
+    question: "继续？", options: { label: "继续", description: null },
+  });
+  assert.equal(single.options.length, 1, "官方校验将单值转为数组");
+  assert.equal(single.options[0].label, "继续");
+  assert.equal(single.options[0].description, undefined, "可选 null 不作为字符串送到界面");
+  const multi = validate("questionnaire", { questions: [{
+    id: "scope", prompt: "选择范围", allowOther: "false",
+    options: [{ value: "local", label: "本地" }],
+  }] });
+  assert.equal(multi.questions[0].allowOther, false);
+  assert.equal(multi.questions[0].options[0].value, "local");
+  assert.throws(() => validate("question", { question: "继续？", options: [{}] }));
+  assert.throws(() => validate("questionnaire", { questions: [{ id: "scope", options: [] }] }));
+});
+
+test("official Pi 1.5.0: standard continuation, deferred run, abort and final error", { skip: sdkSkip }, async () => {
+  assert.equal(JSON.parse(readFileSync(manifest, "utf8")).version, "1.5.0");
   const sdk = await import(pathToFileURL(join(packageRoot, "pi-coding-agent/dist/index.js")).href);
   const ai = await import(pathToFileURL(join(packageRoot, "pi-ai/dist/index.js")).href);
   const scenarios = ["normal", "tool-cycle", "before-settle", "follow-up", "deferred", "abort", "error", "retry-success", "compaction"];
