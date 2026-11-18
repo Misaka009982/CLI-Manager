@@ -39,7 +39,8 @@ test("file menus portal outside clipping sidebar and panel ancestors", () => {
     sidebar,
     /<div ref=\{setMenuPortalContainer\} className="ui-file-explorer-sidebar/,
   );
-  assert.equal((sidebar.match(/portalContainer=\{menuPortalContainer\}/g) ?? []).length, 4);
+  assert.equal((sidebar.match(/portalContainer=\{menuPortalContainer\}/g) ?? []).length, 5);
+  assert.match(sidebar, /<FolderTreeSortMenu project=\{project\} paths=\{chainPaths\} portalContainer=\{menuPortalContainer\}/);
 });
 
 test("Radix menu content remains measurable by its Popper wrapper", () => {

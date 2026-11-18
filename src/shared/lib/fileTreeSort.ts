@@ -116,16 +116,20 @@ function compareFileTreeEntries(
 /**
  * 递归排序文件树：每层目录优先，目录内部再按当前维度排序。
  * 排序数组副本并重建已加载的非空子树；未加载的节点保持原引用。
+ * 目录规则只在进入其 children 时生效，不改变该目录在父级中的位置。
  */
 export function sortFileTreeEntries(
   entries: readonly ProjectFileEntry[],
   settings: FileTreeSortSettings,
+  resolveDirectory?: (path: string, inherited: FileTreeSortSettings) => FileTreeSortSettings,
 ): ProjectFileEntry[] {
   return [...entries]
     .sort((left, right) => compareFileTreeEntries(left, right, settings))
     .map((entry) => (
       entry.children && entry.children.length > 0
-        ? { ...entry, children: sortFileTreeEntries(entry.children, settings) }
+        ? { ...entry, children: sortFileTreeEntries(entry.children,
+          entry.kind === "directory" ? resolveDirectory?.(entry.path, settings) ?? settings : settings,
+          resolveDirectory) }
         : entry
     ));
 }

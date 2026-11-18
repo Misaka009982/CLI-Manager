@@ -1,6 +1,6 @@
-import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, Check, Clock, Hash } from "../../../shared/ui/icons";
+import { ArrowDown, ArrowUp, Check, Clock, Folder, Hash } from "../../../shared/ui/icons";
 import { useI18n, type TranslationKey } from "../../../shared/i18n/index";
 import { Popover, PopoverContent, PopoverTrigger } from "../../../shared/ui/popover";
 import type {
@@ -15,6 +15,15 @@ interface FileTreeSortMenuProps {
   onChange: (change: FileTreeSortChange) => Promise<void>;
   /** 面板模式下复用文件面板的菜单挂载点，保证配色变量生效。 */
   portalContainer?: HTMLElement | null;
+  disabled?: boolean;
+  folder?: {
+    paths: readonly string[];
+    path: string;
+    onPathChange: (path: string) => void;
+    sourceLabel: string;
+    explicit: boolean;
+    onReset: () => Promise<void>;
+  };
 }
 
 const SORT_KEYS: Array<{ value: FileTreeSortKey; labelKey: TranslationKey; icon: ReactNode }> = [
@@ -62,32 +71,47 @@ function SortMenuButton({
  * 文件树排序菜单：维度（名称/修改日期）与方向（升/降）各自单选。
  * 仅影响文件树本身的渲染顺序，不改动后端排序或搜索结果。
  */
-export function FileTreeSortMenu({ settings, onChange, portalContainer }: FileTreeSortMenuProps) {
+export function FileTreeSortMenu({ settings, onChange, portalContainer, disabled = false, folder }: FileTreeSortMenuProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  // 每次打开恢复可见末级；保存中仍允许关闭并聚焦箭头，但不能再次打开。
+  const changeOpen = (next: boolean) => {
+    if (next && (disabled || savingRef.current)) return;
+    setOpen(next);
+    if (folder) folder.onPathChange(folder.paths[folder.paths.length - 1]);
+  };
 
   const currentKeyLabel = t(settings.key === "date" ? "files.sort.byDate" : "files.sort.byName");
   const directionLabel = (direction: FileTreeSortDirection) => t(settings.key === "date"
     ? direction === "descending" ? "files.sort.newestFirst" : "files.sort.oldestFirst"
     : direction === "descending" ? "files.sort.descending" : "files.sort.ascending");
-  const tooltip = `${t("files.sort.label")} · ${currentKeyLabel} · ${directionLabel(settings.direction)}`;
+  const menuLabel = folder ? t("files.sort.folder", { path: folder.path }) : t("files.sort.label");
+  const tooltip = `${menuLabel} · ${currentKeyLabel} · ${directionLabel(settings.direction)}${folder ? ` · ${folder.sourceLabel}` : ""}`;
 
-  const selectSort = async (change: FileTreeSortChange) => {
-    if (savingRef.current) return;
+  // 保存前固定回调目标；卸载后的回执不能关闭新作用域菜单或弹出旧错误。
+  const saveSort = async (save: () => Promise<void>) => {
+    if (disabled || savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
     try {
-      await onChange(change);
-      setOpen(false);
+      await save();
+      if (mountedRef.current) changeOpen(false);
     } catch (error) {
-      toast.error(t("files.sort.saveFailed"), { description: String(error) });
+      if (mountedRef.current) toast.error(t("files.sort.saveFailed"), { description: String(error) });
     } finally {
       savingRef.current = false;
-      setSaving(false);
+      if (mountedRef.current) setSaving(false);
     }
   };
+  const selectSort = (change: FileTreeSortChange) => saveSort(() => onChange(change));
 
   const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
@@ -107,38 +131,57 @@ export function FileTreeSortMenu({ settings, onChange, portalContainer }: FileTr
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={changeOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="ui-file-tooltip ui-icon-action"
+          className={folder ? "ui-file-tooltip ui-icon-action ui-folder-sort-trigger" : "ui-file-tooltip ui-icon-action"}
+          data-sort-overridden={folder?.explicit ? "true" : undefined}
+          data-sort-direction={settings.direction}
           data-tooltip={tooltip}
           aria-label={tooltip}
           aria-haspopup="menu"
           aria-expanded={open}
           aria-busy={saving}
-          disabled={saving}
+          aria-disabled={disabled || saving || undefined}
+          disabled={disabled || (!folder && saving)}
         >
           {settings.direction === "descending" ? <ArrowDown size={13} aria-hidden="true" /> : <ArrowUp size={13} aria-hidden="true" />}
         </button>
       </PopoverTrigger>
       <PopoverContent
+        ref={contentRef}
         align="end"
         side="bottom"
         collisionPadding={8}
         portalContainer={portalContainer}
         role="menu"
-        aria-label={t("files.sort.label")}
+        aria-label={menuLabel}
         aria-busy={saving}
         className="workspace-layout-menu ui-glass w-60 max-w-[calc(100vw-16px)] p-1.5"
         onKeyDown={handleMenuKeyDown}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
-          (event.currentTarget as HTMLElement | null)
-            ?.querySelector<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)')
-            ?.focus();
+          contentRef.current?.querySelector<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)')?.focus();
         }}
       >
+        {folder && (
+          <>
+            <div className="px-2 py-1 text-xs break-all" title={folder.path}>{folder.path}</div>
+            <div className="px-2 pb-1 text-xs text-text-muted" role="status">{folder.sourceLabel}</div>
+            {folder.paths.length > 1 && (
+              <div role="group" aria-label={t("files.sort.target")}>
+                <div className="workspace-layout-menu-section">{t("files.sort.target")}</div>
+                {folder.paths.map((path) => (
+                  <SortMenuButton key={path} icon={<Folder size={14} aria-hidden="true" />}
+                    checked={folder.path === path} disabled={disabled || saving} onClick={() => folder.onPathChange(path)}>
+                    {path}
+                  </SortMenuButton>
+                ))}
+              </div>
+            )}
+          </>
+        )}
         <div role="group" aria-label={t("files.sort.label")}>
           <div className="workspace-layout-menu-section">{t("files.sort.label")}</div>
           {SORT_KEYS.map((option) => (
@@ -146,7 +189,7 @@ export function FileTreeSortMenu({ settings, onChange, portalContainer }: FileTr
               key={option.value}
               icon={option.icon}
               checked={settings.key === option.value}
-              disabled={saving}
+              disabled={disabled || saving}
               onClick={() => void selectSort({ key: option.value })}
             >
               {t(option.labelKey)}
@@ -160,13 +203,19 @@ export function FileTreeSortMenu({ settings, onChange, portalContainer }: FileTr
               key={option.value}
               icon={option.icon}
               checked={settings.direction === option.value}
-              disabled={saving}
+              disabled={disabled || saving}
               onClick={() => void selectSort({ direction: option.value })}
             >
               {directionLabel(option.value)}
             </SortMenuButton>
           ))}
         </div>
+        {folder && (
+          <button type="button" role="menuitem" className="workspace-layout-menu-item ui-focus-ring"
+            disabled={disabled || saving || !folder.explicit} onClick={() => void saveSort(folder.onReset)}>
+            {t("files.sort.inherit")}
+          </button>
+        )}
         {saving && <div role="status" className="px-2 py-1 text-xs text-text-muted">{t("files.sort.saving")}</div>}
       </PopoverContent>
     </Popover>

@@ -226,22 +226,25 @@ test("the file explorer renders the persisted tree sort and exposes a sort contr
   const sync = read("../src/features/sync/lib/syncSettings.ts");
   const preference = read("../src/shared/preferences/fileTreeSortPreference.ts");
 
-  assert.match(sidebar, /sortFileTreeEntries\(tree, fileTreeSort\)/);
+  assert.match(sidebar, /sortFileTreeEntries\(tree, fileTreeSort,/);
+  assert.match(sidebar, /resolveFolderTreeSort\(folderSortRules, path, inherited, sortScope\?\.ignoreCase\)/);
   assert.match(sidebar, /useSettingsStore\(\(s\) => s\.fileTreeSort\)/);
   assert.match(sidebar, /onChange=\{updateFileTreeSort\}/);
   assert.match(sidebar, /hasSearchQuery && searchMode === "files" \? searchResults : sortedTree/);
-  assert.match(preference, /createFileTreeSortUpdater\(/);
-  assert.match(preference, /useSettingsStore\.getState\(\)\.fileTreeSort/);
+  assert.match(preference, /createFileTreeSortPreferencesUpdater\(/);
+  assert.match(preference, /const state = useSettingsStore\.getState\(\)/);
+  assert.match(preference, /export const updateFileTreeSort = updater\.updateGlobal/);
   assert.match(preference, /update\("fileTreeSort", next\)/);
   assert.match(sidebar, /<FileTreeSortMenu/);
   assert.match(menu, /role="menuitemradio"/);
-  assert.match(menu, /await onChange\(change\)/);
+  assert.match(menu, /saveSort\(\(\) => onChange\(change\)\)/);
+  assert.match(menu, /await save\(\)/);
   assert.match(menu, /files\.sort\.saveFailed/);
   assert.match(menu, /aria-busy=\{saving\}/);
   assert.match(menu, /settings\.direction === "descending" \? <ArrowDown/);
   assert.match(settings, /fileTreeSort: FileTreeSortSettings/);
   assert.match(settings, /entries\.fileTreeSort = migrateFileTreeSortSettings\(entries\.fileTreeSort\)/);
-  assert.match(settings, /key === "fileTreeSort" \? migrateFileTreeSortSettings\(value\)/);
+  assert.match(settings, /key === "fileTreeSort"\s*\? migrateFileTreeSortSettings\(value\)/);
   assert.match(sync, /fileTreeSort: "preferences"/);
 });
 

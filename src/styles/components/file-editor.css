@@ -7,8 +7,33 @@
 
 .ui-file-tree-row[data-ignored="true"]:hover,
 .ui-file-tree-row[data-ignored="true"][data-selected="true"],
-.ui-file-tree-row[data-ignored="true"][data-state="open"] {
+.ui-file-tree-row[data-ignored="true"][data-state="open"],
+.ui-file-tree-row[data-ignored="true"]:has(> .ui-file-tree-row-action[data-state="open"]) {
   opacity: 0.75;
+}
+
+/* 排序按钮与行激活区域并列，保持文件名可收缩且操作位不遮挡 Git 标记。 */
+.ui-file-tree-row-action {
+  cursor: pointer;
+}
+
+.ui-file-tree-row .ui-folder-sort-trigger {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+.ui-file-tree-row .ui-folder-sort-trigger[data-sort-overridden="true"] {
+  color: var(--primary);
+}
+
+.ui-file-tree-row .ui-folder-sort-trigger:focus-visible,
+.ui-file-tree-row-action:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
 }
 
 .ui-file-drag-preview {

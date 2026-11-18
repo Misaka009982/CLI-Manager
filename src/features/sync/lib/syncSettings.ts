@@ -127,6 +127,7 @@ export const SETTING_BACKUP_POLICY = {
   terminalTabHoverInfoEnabled: "preferences",
   fileExplorerIgnoredPaths: "preferences",
   fileTreeSort: "preferences",
+  fileTreeSortOverrides: "preferences",
   batchLaunchGroupInPane: "preferences",
   batchLaunchPaneDirection: "preferences",
   projectScopedTerminalViewEnabled: "preferences",

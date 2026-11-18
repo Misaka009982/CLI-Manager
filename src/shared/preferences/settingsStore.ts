@@ -107,6 +107,7 @@ import {
   migrateFileTreeSortSettings,
   type FileTreeSortSettings,
 } from "../lib/fileTreeSort";
+import { migrateFileTreeSortOverrides, type FileTreeSortOverrides } from "../lib/fileTreeSortOverrides";
 
 export const HISTORY_SMART_TITLE_CUSTOM_PROMPT_MAX_BYTES = 4096;
 
@@ -524,6 +525,8 @@ export interface Settings {
   fileExplorerIgnoredPaths: FileExplorerIgnoredPaths;
   /** 文件面板文件树的排序偏好（按名称/修改日期 + 升/降序）。 */
   fileTreeSort: FileTreeSortSettings;
+  /** 项目及实际根隔离的目录覆盖；缺失目录规则时继承最近祖先或全局默认。 */
+  fileTreeSortOverrides: FileTreeSortOverrides;
   /** 批量启动分组时，同一分组终端放在同一个 pane 中（多 tab），不同分组创建在不同 pane。默认关闭。 */
   batchLaunchGroupInPane: boolean;
   /** 批量启动分屏方向：vertical（上下分屏） / horizontal（左右分屏）。默认 horizontal。 */
@@ -751,6 +754,7 @@ const DEFAULTS: Settings = {
   terminalTabHoverInfoEnabled: true,
   fileExplorerIgnoredPaths: {},
   fileTreeSort: { ...DEFAULT_FILE_TREE_SORT },
+  fileTreeSortOverrides: {},
   batchLaunchGroupInPane: false,
   batchLaunchPaneDirection: "horizontal",
   projectScopedTerminalViewEnabled: false,
@@ -1819,6 +1823,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         : DEFAULTS.gitDiffContextLines;
     entries.fileExplorerIgnoredPaths = migrateFileExplorerIgnoredPaths(entries.fileExplorerIgnoredPaths);
     entries.fileTreeSort = migrateFileTreeSortSettings(entries.fileTreeSort);
+    entries.fileTreeSortOverrides = migrateFileTreeSortOverrides(entries.fileTreeSortOverrides);
     entries.batchLaunchGroupInPane =
       typeof entries.batchLaunchGroupInPane === "boolean"
         ? entries.batchLaunchGroupInPane
@@ -1901,7 +1906,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   update: async (key, value) => {
     const nextValue = key === "fileTreeSort"
       ? migrateFileTreeSortSettings(value)
-      : prepareDesktopPetSettingUpdate(key, value, get());
+      : key === "fileTreeSortOverrides"
+        ? migrateFileTreeSortOverrides(value)
+        : prepareDesktopPetSettingUpdate(key, value, get());
     const s = await getStore();
     await s.set(key, nextValue);
     set({ [key]: nextValue } as Partial<SettingsStore>);

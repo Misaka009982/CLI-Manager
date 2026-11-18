@@ -44,6 +44,9 @@ import { useSettingsStore } from "../../../shared/preferences/settingsStore";
 import { updateFileTreeSort } from "../../../shared/preferences/fileTreeSortPreference";
 import { sortFileTreeEntries } from "../../../shared/lib/fileTreeSort";
 import { FileTreeSortMenu } from "../components/FileTreeSortMenu";
+import { FolderTreeSortMenu } from "../components/FolderTreeSortMenu";
+import { fileTreeSortScope } from "../lib/fileTreeSortScope";
+import { resolveFolderTreeSort } from "../../../shared/lib/fileTreeSortOverrides";
 import { useTerminalStore } from "../../terminal/state";
 import { useSshHostStore } from "../../remote/api/sshHostStore";
 import { STATUS_CONFIG } from "../../git/api/GitStatusIcon";
@@ -532,18 +535,19 @@ function FileNode({
   return (
     <div>
       <ContextMenu>
+        <div className="ui-file-tree-row flex w-full items-center gap-1.5 rounded px-1 py-1 text-left text-[12px]"
+          data-selected={selected.some((item) => item.path === displayEntry.path) ? "true" : "false"}
+          data-ignored={isIgnored ? "true" : "false"}
+          data-file-tree-path={displayEntry.path}
+          data-file-drop-target-path={displayEntry.kind === "directory" ? displayEntry.path : parentPath(displayEntry.path)}
+          style={{ paddingLeft }}>
         <ContextMenuTrigger asChild>
           <div
             role="button"
             tabIndex={0}
-            className="ui-file-tree-row flex w-full items-center gap-1.5 rounded px-1 py-1 text-left text-[12px]"
+            className="ui-file-tree-row-action flex min-w-0 flex-1 items-center gap-1.5 text-left"
             aria-pressed={selected.some((item) => item.path === displayEntry.path)}
-            data-selected={selected.some((item) => item.path === displayEntry.path) ? "true" : "false"}
-            data-ignored={isIgnored ? "true" : "false"}
-            data-file-tree-path={displayEntry.path}
-            data-file-drop-target-path={displayEntry.kind === "directory" ? displayEntry.path : parentPath(displayEntry.path)}
             draggable={false}
-            style={{ paddingLeft }}
             onContextMenu={(event) => {
               event.stopPropagation();
               if (!selected.some((item) => item.path === displayEntry.path)) selectEntry(displayEntry);
@@ -611,6 +615,8 @@ function FileNode({
             )}
           </div>
         </ContextMenuTrigger>
+        {isDir && <FolderTreeSortMenu project={project} paths={chainPaths} portalContainer={menuPortalContainer} />}
+        </div>
         <ContextMenuContent className="file-explorer-menu" portalContainer={menuPortalContainer}>
           <LiveServerFileMenuItem project={project} entry={displayEntry} />
           {!readOnly && isDir && (
@@ -801,6 +807,8 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const setClipboard = useFileExplorerStore((s) => s.setClipboard);
   const fileExplorerIgnoredPaths = useSettingsStore((s) => s.fileExplorerIgnoredPaths);
   const fileTreeSort = useSettingsStore((s) => s.fileTreeSort);
+  const sortScope = useMemo(() => fileTreeSortScope(project), [project]);
+  const folderSortRules = useSettingsStore((s) => sortScope ? s.fileTreeSortOverrides[sortScope.key] : undefined);
   const updateSetting = useSettingsStore((s) => s.update);
   const [inputAction, setInputAction] = useState<InputAction | null>(null);
   const [inputValue, setInputValue] = useState("");
@@ -901,7 +909,9 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const hasSearchQuery = Boolean(searchQuery.trim());
 
   // 排序只作用于文件树；文件搜索结果沿用后端顺序。
-  const sortedTree = useMemo(() => sortFileTreeEntries(tree, fileTreeSort), [tree, fileTreeSort]);
+  const sortedTree = useMemo(() => sortFileTreeEntries(tree, fileTreeSort,
+    (path, inherited) => resolveFolderTreeSort(folderSortRules, path, inherited, sortScope?.ignoreCase).settings,
+  ), [tree, fileTreeSort, folderSortRules, sortScope]);
   const visibleRows = hasSearchQuery && searchMode === "files" ? searchResults : sortedTree;
   const gitChangeByPath = useMemo(() => new Map(gitChanges.map((change) => [change.path, change])), [gitChanges]);
   const dirtyFilePathList = useMemo(
