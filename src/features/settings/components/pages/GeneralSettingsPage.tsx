@@ -1,10 +1,8 @@
 import { SettingsSection, SettingsRow } from "../SettingsPrimitives";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Badge,
   Box,
   Button,
-  Card,
   Group,
   NumberInput,
   SegmentedControl,
@@ -41,16 +39,10 @@ import {
   normalizeFontFamilyStack,
   type SystemFontFamily,
 } from "../../../../shared/platform/systemFonts";
-import { resolveCcusageWslTarget, useCcusageStore } from "../../../stats/api/ccusageStore";
 import { getOsPlatform } from "../../../../shared/platform/shell";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../../shared/ui/dialog";
 import { FontFamilySelect } from "../FontFamilySelect";
 import { DataStorageSection } from "./DataStorageSection";
 import { PerformanceSettingsSection } from "./PerformanceSettingsSection";
-
-const WSL_BUN_INSTALL_COMMAND = "curl -fsSL https://bun.net.cn/install | bash";
-const WSL_CCUSAGE_INSTALL_COMMAND = "~/.bun/bin/bun install -g ccusage";
-const WSL_VERIFY_COMMAND = "~/.bun/bin/bun --version && ~/.bun/bin/bunx ccusage --help";
 
 const LIGHT_PALETTE_OPTIONS: {
   value: LightThemePalette;
@@ -58,6 +50,24 @@ const LIGHT_PALETTE_OPTIONS: {
   descriptionKey: TranslationKey;
   swatches: [string, string, string];
 }[] = [
+  {
+    value: "code-daylight",
+    labelKey: "settings.palette.light.codeDaylight.label",
+    descriptionKey: "settings.palette.light.codeDaylight.description",
+    swatches: ["#f5f7fa", "#24292f", "#0969da"],
+  },
+  {
+    value: "nord-snow",
+    labelKey: "settings.palette.light.nordSnow.label",
+    descriptionKey: "settings.palette.light.nordSnow.description",
+    swatches: ["#eceff4", "#2e3440", "#356779"],
+  },
+  {
+    value: "rose-dawn",
+    labelKey: "settings.palette.light.roseDawn.label",
+    descriptionKey: "settings.palette.light.roseDawn.description",
+    swatches: ["#faf4ed", "#464261", "#96506b"],
+  },
   {
     value: "warm-paper",
     labelKey: "settings.palette.light.warmPaper.label",
@@ -120,6 +130,24 @@ const DARK_PALETTE_OPTIONS: {
   descriptionKey: TranslationKey;
   swatches: [string, string, string];
 }[] = [
+  {
+    value: "code-midnight",
+    labelKey: "settings.palette.dark.codeMidnight.label",
+    descriptionKey: "settings.palette.dark.codeMidnight.description",
+    swatches: ["#1f1f1f", "#e3e3e3", "#75bfff"],
+  },
+  {
+    value: "nord-frost",
+    labelKey: "settings.palette.dark.nordFrost.label",
+    descriptionKey: "settings.palette.dark.nordFrost.description",
+    swatches: ["#2e3440", "#eceff4", "#88c0d0"],
+  },
+  {
+    value: "rose-moon",
+    labelKey: "settings.palette.dark.roseMoon.label",
+    descriptionKey: "settings.palette.dark.roseMoon.description",
+    swatches: ["#232136", "#e0def4", "#ebbcba"],
+  },
   {
     value: "night-indigo",
     labelKey: "settings.palette.dark.nightIndigo.label",
@@ -184,6 +212,9 @@ function clampUiFontSize(value: number) {
 }
 
 const LIGHT_TEXT_COLORS: Record<LightThemePalette, string> = {
+  "code-daylight": "#24292f",
+  "nord-snow": "#2e3440",
+  "rose-dawn": "#464261",
   "warm-paper": "#2e3336",
   "cream-green": "#25302a",
   "ink-red": "#1f1f1c",
@@ -196,6 +227,9 @@ const LIGHT_TEXT_COLORS: Record<LightThemePalette, string> = {
 };
 
 const DARK_TEXT_COLORS: Record<DarkThemePalette, string> = {
+  "code-midnight": "#e3e3e3",
+  "nord-frost": "#eceff4",
+  "rose-moon": "#e0def4",
   "night-indigo": "#c0caf5",
   "forest-night": "#d8e5dc",
   "graphite-red": "#e6dfdb",
@@ -219,6 +253,9 @@ function getDefaultUiTextColor(
 // 用纯映射而非 getComputedStyle：data-theme/data-*-palette 由 App.tsx 的 effect 在
 // render 之后才更新，render 期间读 computed style 会在切换主题/配色时拿到旧背景色。
 const LIGHT_BG_COLORS: Record<LightThemePalette, string> = {
+  "code-daylight": "#f5f7fa",
+  "nord-snow": "#eceff4",
+  "rose-dawn": "#faf4ed",
   "warm-paper": "#f9f9fb",
   "cream-green": "#f7faf7",
   "ink-red": "#f7f6f4",
@@ -231,6 +268,9 @@ const LIGHT_BG_COLORS: Record<LightThemePalette, string> = {
 };
 
 const DARK_BG_COLORS: Record<DarkThemePalette, string> = {
+  "code-midnight": "#1f1f1f",
+  "nord-frost": "#2e3440",
+  "rose-moon": "#232136",
   "night-indigo": "#1a1b26",
   "forest-night": "#111714",
   "graphite-red": "#171616",
@@ -386,25 +426,16 @@ export function GeneralSettingsPage() {
   const settingsIconStyle = useSettingsStore((s) => s.settingsIconStyle);
   const uiFontSize = useSettingsStore((s) => s.uiFontSize);
   const uiTextColor = useSettingsStore((s) => s.uiTextColor);
-  const ccusageAnalyticsEnabled = useSettingsStore((s) => s.ccusageAnalyticsEnabled);
-  const ccusageUseWsl = useSettingsStore((s) => s.ccusageUseWsl);
   const windowsExplorerContextMenuEnabled = useSettingsStore((s) => s.windowsExplorerContextMenuEnabled);
-  const claudeHookConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
-  const codexHookConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
   const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const update = useSettingsStore((s) => s.update);
-  const ccusageToolStatus = useCcusageStore((s) => s.toolStatus);
-  const ccusageCheckingStatus = useCcusageStore((s) => s.checkingStatus);
-  const ccusageError = useCcusageStore((s) => s.error);
-  const checkCcusageStatus = useCcusageStore((s) => s.checkStatus);
   const normalizedUiFontFamily = normalizeFontFamilyStack(uiFontFamily, UI_FONT_FALLBACK);
   const [uiFontSizeDraft, setUiFontSizeDraft] = useState(uiFontSize);
   const [uiTextColorDraft, setUiTextColorDraft] = useState(uiTextColor);
   const [systemFonts, setSystemFonts] = useState<SystemFontFamily[]>([]);
   const [systemFontsLoading, setSystemFontsLoading] = useState(false);
   const [systemFontsError, setSystemFontsError] = useState<string | null>(null);
-  const [ccusageWslDialogOpen, setCcusageWslDialogOpen] = useState(false);
   const [isWindows, setIsWindows] = useState<boolean | null>(null);
   const themeOptions = useMemo<{ value: ThemeMode; label: string }[]>(
     () => [
@@ -453,68 +484,6 @@ export function GeneralSettingsPage() {
   useEffect(() => {
     setUiTextColorDraft(uiTextColor);
   }, [uiTextColor]);
-
-  const fallbackWslDistro = ccusageToolStatus?.wsl?.distro ?? null;
-  const wslTarget = useMemo(
-    () => resolveCcusageWslTarget(claudeHookConfigDir, codexHookConfigDir, fallbackWslDistro),
-    [claudeHookConfigDir, codexHookConfigDir, fallbackWslDistro]
-  );
-  const hasWslSignal = Boolean(wslTarget.distro) || wslTarget.conflicts.length > 0;
-  const matchedWslStatus =
-    wslTarget.distro && ccusageToolStatus?.wsl?.distro === wslTarget.distro ? ccusageToolStatus.wsl : null;
-  const wslStatusMeta = useMemo(() => {
-    if (wslTarget.conflicts.length > 0) {
-      return {
-        color: "red",
-        labelKey: "settings.general.ccusageWslStatusConflict" as const,
-        descriptionKey: "settings.general.ccusageWslStatusConflictDescription" as const,
-      };
-    }
-    if (!wslTarget.distro) {
-      return {
-        color: "gray",
-        labelKey: "settings.general.ccusageWslStatusUnavailable" as const,
-        descriptionKey: "settings.general.ccusageWslStatusUnavailableDescription" as const,
-      };
-    }
-    if (ccusageCheckingStatus && !matchedWslStatus) {
-      return {
-        color: "blue",
-        labelKey: "settings.general.ccusageWslStatusChecking" as const,
-        descriptionKey: "settings.general.ccusageWslStatusCheckingDescription" as const,
-      };
-    }
-    if (matchedWslStatus?.bunxAvailable) {
-      return {
-        color: "green",
-        labelKey: "settings.general.ccusageWslStatusReady" as const,
-        descriptionKey: "settings.general.ccusageWslStatusReadyDescription" as const,
-      };
-    }
-    return {
-      color: "yellow",
-      labelKey: "settings.general.ccusageWslStatusManual" as const,
-      descriptionKey: "settings.general.ccusageWslStatusManualDescription" as const,
-    };
-  }, [ccusageCheckingStatus, matchedWslStatus, wslTarget.conflicts.length, wslTarget.distro]);
-
-  useEffect(() => {
-    if (!ccusageUseWsl && !hasWslSignal) return;
-    void checkCcusageStatus().catch(() => {});
-  }, [checkCcusageStatus, ccusageUseWsl, hasWslSignal, claudeHookConfigDir, codexHookConfigDir]);
-
-  const refreshCcusageWslStatus = () => {
-    void checkCcusageStatus().catch(() => {});
-  };
-
-  const copyWslCommand = async (command: string) => {
-    try {
-      await navigator.clipboard.writeText(command);
-      toast.success(t("settings.general.ccusageWslCopied"));
-    } catch (err) {
-      toast.error(t("settings.general.ccusageWslCopyFailed"), { description: String(err) });
-    }
-  };
 
   const defaultUiTextColor = getDefaultUiTextColor(resolvedTheme, lightThemePalette, darkThemePalette);
   const normalizedUiTextColorDraft = uiTextColorDraft.trim();
@@ -821,78 +790,6 @@ export function GeneralSettingsPage() {
       <SettingsSection title={t("settings.general.usageAnalysis")}>
         <Stack gap="sm">
             <SettingsRow
-              title={t("settings.general.ccusageDashboard")}
-              description={t("settings.general.ccusageDashboardDescription")}
-            >
-              <Switch
-                  color="cliPrimary"
-                  checked={ccusageAnalyticsEnabled}
-                  onChange={(event) => {
-                    const checked = event.currentTarget.checked;
-                    void (async () => {
-                      await update("ccusageAnalyticsEnabled", checked);
-                      if (!checked && ccusageUseWsl) {
-                        await update("ccusageUseWsl", false);
-                      }
-                    })();
-                  }}
-                  aria-label={
-                    ccusageAnalyticsEnabled
-                      ? t("settings.general.disableCcusageDashboard")
-                      : t("settings.general.enableCcusageDashboard")
-                  }
-                />
-            </SettingsRow>
-            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
-              <Group justify="space-between" align="center" gap="md" wrap="nowrap">
-                <Box>
-                  <Text size="xs" c="var(--on-surface-variant)">
-                    {t("settings.general.ccusageUseWsl")}
-                  </Text>
-                  <Text mt={4} size="xs" lh={1.55} c="var(--text-muted)">
-                    {t("settings.general.ccusageUseWslDescription")}
-                  </Text>
-                </Box>
-                <Group gap="xs" align="center" wrap="nowrap">
-                  <Button
-                    variant="light"
-                    color={wslStatusMeta.color}
-                    size="compact-sm"
-                    onClick={() => {
-                      setCcusageWslDialogOpen(true);
-                      refreshCcusageWslStatus();
-                    }}
-                    aria-label={t("settings.general.ccusageWslButton")}
-                  >
-                    <Group gap={6} wrap="nowrap">
-                      <Text span size="11px" fw={600}>
-                        {t("settings.general.ccusageWslButton")}
-                      </Text>
-                      <Badge variant="light" color={wslStatusMeta.color} size="xs">
-                        {t(wslStatusMeta.labelKey)}
-                      </Badge>
-                    </Group>
-                  </Button>
-                  <Switch
-                    color="cliPrimary"
-                    checked={ccusageUseWsl}
-                    disabled={!ccusageAnalyticsEnabled}
-                    onChange={(event) => void update("ccusageUseWsl", event.currentTarget.checked)}
-                    aria-label={
-                      ccusageUseWsl
-                        ? t("settings.general.disableCcusageUseWsl")
-                        : t("settings.general.enableCcusageUseWsl")
-                    }
-                  />
-                </Group>
-              </Group>
-              {!ccusageAnalyticsEnabled && (
-                <Text mt="sm" size="xs" lh={1.55} c="var(--text-muted)">
-                  {t("settings.general.ccusageUseWslRequiresDashboard")}
-                </Text>
-              )}
-            </Card>
-            <SettingsRow
               title={t("settings.general.showStatsButton")}
               description={t("settings.general.showStatsButtonDescription")}
             >
@@ -916,91 +813,6 @@ export function GeneralSettingsPage() {
       <PerformanceSettingsSection />
       <DataStorageSection />
 
-      <Dialog open={ccusageWslDialogOpen} onOpenChange={setCcusageWslDialogOpen}>
-        <DialogContent className="settings-scope settings-radix-dialog max-w-[680px]">
-          <DialogHeader>
-            <DialogTitle>{t("settings.general.ccusageWslDialogTitle")}</DialogTitle>
-            <DialogDescription>{t("settings.general.ccusageWslDialogDescription")}</DialogDescription>
-          </DialogHeader>
-
-          <Stack gap="sm">
-            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
-              <Group justify="space-between" align="flex-start" gap="sm">
-                <Box>
-                  <Text size="xs" fw={600} c="var(--on-surface)">
-                    {t("settings.general.ccusageWslDetectedTarget")}
-                  </Text>
-                  <Text mt={4} size="xs" c="var(--text-muted)">
-                    {wslTarget.distro ?? t("settings.general.ccusageWslTargetUnavailable")}
-                  </Text>
-                </Box>
-                <Badge variant="light" color={wslStatusMeta.color}>
-                  {t(wslStatusMeta.labelKey)}
-                </Badge>
-              </Group>
-              <Text mt="sm" size="xs" lh={1.6} c="var(--text-muted)">
-                {t(
-                  wslStatusMeta.descriptionKey,
-                  wslTarget.conflicts.length > 0
-                    ? { distros: wslTarget.conflicts.join(", ") }
-                    : wslTarget.distro
-                      ? { distro: wslTarget.distro }
-                      : undefined
-                )}
-              </Text>
-              {matchedWslStatus && (
-                <Text mt="sm" size="xs" c="var(--text-muted)">
-                  {t("ccusage.wslToolVersions", {
-                    distro: matchedWslStatus.distro,
-                    bun: matchedWslStatus.bunVersion ?? t("ccusage.notDetected"),
-                    bunx: matchedWslStatus.bunxVersion ?? t("ccusage.notDetected"),
-                  })}
-                </Text>
-              )}
-              {ccusageError && hasWslSignal && (
-                <Text mt="sm" size="xs" c="var(--danger)">
-                  {ccusageError}
-                </Text>
-              )}
-            </Card>
-
-            <Text size="xs" lh={1.6} c="var(--text-muted)">
-              {t("settings.general.ccusageWslConfigHint")}
-            </Text>
-
-            {[
-              { title: t("settings.general.ccusageWslCommandBun"), command: WSL_BUN_INSTALL_COMMAND },
-              { title: t("settings.general.ccusageWslCommandCcusage"), command: WSL_CCUSAGE_INSTALL_COMMAND },
-              { title: t("settings.general.ccusageWslCommandVerify"), command: WSL_VERIFY_COMMAND },
-            ].map((item) => (
-              <Card key={item.title} className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
-                <Group justify="space-between" align="center" gap="sm">
-                  <Text size="xs" fw={600} c="var(--on-surface)">
-                    {item.title}
-                  </Text>
-                  <Button size="compact-xs" variant="light" onClick={() => void copyWslCommand(item.command)}>
-                    {t("settings.general.ccusageWslCopy")}
-                  </Button>
-                </Group>
-                <Box
-                  component="pre"
-                  mt="sm"
-                  className="overflow-x-auto rounded-md border border-border bg-bg-primary px-3 py-2 text-[12px] leading-6 text-text-secondary"
-                >
-                  {item.command}
-                </Box>
-              </Card>
-            ))}
-          </Stack>
-
-          <DialogFooter>
-            <Button variant="default" onClick={refreshCcusageWslStatus} loading={ccusageCheckingStatus}>
-              {t("settings.general.ccusageWslRefreshStatus")}
-            </Button>
-            <Button onClick={() => setCcusageWslDialogOpen(false)}>{t("common.close")}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </Stack>
   );
 }

@@ -21,6 +21,8 @@ const sharedAgentStore = readFileSync(new URL("../src/features/terminal/api/desk
 const petRenderer = readFileSync(new URL("../pet-e/src/renderer/app.ts", import.meta.url), "utf8");
 const agentProtocol = readFileSync(new URL("../pet-e/src/bridge/protocol.ts", import.meta.url), "utf8");
 const terminalTabs = readFileSync(new URL("../src/features/terminal/hooks/useTerminalTabsController.tsx", import.meta.url), "utf8");
+const tabNotificationHook = readFileSync(new URL("../src/features/terminal/hooks/useDesktopPetETabNotifications.ts", import.meta.url), "utf8");
+const tabNotificationProjection = readFileSync(new URL("../src/features/terminal/lib/desktopPetETabNotifications.ts", import.meta.url), "utf8");
 const terminalStore = readFileSync(new URL("../src/features/terminal/store/terminalStore.ts", import.meta.url), "utf8");
 // attachDaemonSession 的 options 类型声明在上游拆出的 terminalStoreTypes.ts 中。
 const terminalStoreTypes = readFileSync(new URL("../src/features/terminal/types/terminalStoreTypes.ts", import.meta.url), "utf8");
@@ -101,7 +103,9 @@ test("pet and owning session share pending actions without lifecycle cancellatio
   assert.match(sharedAgentStore, /cursor\?\.closed && cursor\.pendingActionId/);
   // 会话侧不再叠加问题组弹窗：终端内由 CLI 自身的交互界面回答，只保留 tab 级提醒。
   assert.doesNotMatch(terminalTabs, /DesktopPetESessionActionPanel/);
-  assert.match(terminalTabs, /next\[sessionId\] = "attention"/);
+  assert.match(terminalTabs, /useDesktopPetETabNotifications\(/);
+  assert.match(tabNotificationHook, /withDesktopPetEPendingAttention/);
+  assert.match(tabNotificationProjection, /next\[sessionId\] = "attention"/);
   assert.match(terminalTabs, /for \(const sessionId of pendingActions\.keys\(\)\)[\s\S]*next\.add\(sessionId\)/);
   assert.doesNotMatch(coordinator, /desktop_pet_e_agent_cancel/);
   assert.doesNotMatch(coordinator, /pet-interaction-unavailable|pet-closed|terminal-fallback/);

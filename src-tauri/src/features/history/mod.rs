@@ -267,8 +267,9 @@ const OOM_HISTORY_DETAIL_WARN_BYTES: usize = 10 * 1024 * 1024;
 const OOM_HISTORY_STATS_WARN_BYTES: usize = 5 * 1024 * 1024;
 const OOM_HISTORY_MESSAGES_WARN_COUNT: usize = 2_000;
 const CODEX_HISTORY_INDEX_TEXT_MAX_CHARS: usize = 4_000;
-// 8：补齐 Codex 工具/摘要与 Claude 纯过程消息，旧物化消息顺序和摘要计数需重算。
-const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 8;
+// 9：Codex 编排嵌套工具改认 item_completed 真实执行记录与 web_search_call，读取 SKILL.md 计入 Skill，
+// 会话级 Skill 计数随会话行保存；旧物化工具行与会话行需重算。
+const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 9;
 const HISTORY_INDEX_V2_ADAPTER_MODEL_VERSION: i64 = 1;
 const OPENCODE_SESSION_LOCATOR_MARKER: &str = "#session=";
 const DAEMON_READY_WAIT_ATTEMPTS: usize = 60;
@@ -524,23 +525,15 @@ pub async fn history_get_session(
         let started_at = Instant::now();
         let roots = history_roots(claude_config_dir, codex_config_dir, grok_session_root).with_kimi_config_dir(kimi_config_dir);
         debug!(
-            "history_get_session request: source={}, project_key={}, file_path={}, claude_root={}, codex_root={}",
+            "history_get_session request: source={}, project_key={}, file_path={}, fresh={}, claude_root={}, codex_root={}",
             source,
             project_key,
             file_path,
+            fresh,
             resolve_claude_history_root(&roots).to_string_lossy(),
             resolve_codex_history_root(&roots).to_string_lossy()
         );
-        let file_ref = validate_session_file_ref(&file_path, &source, &project_key, &roots)?;
-        debug!(
-            "history_get_session reading file: source={}, project_key={}, path={}, aggregate_subtasks={}, fresh={}",
-            file_ref.source,
-            file_ref.project_key,
-            file_ref.path.to_string_lossy(),
-            aggregate_subtasks,
-            fresh
-        );
-        let detail = build_session_detail_with_roots(&file_ref, aggregate_subtasks, &roots)?;
+        let detail = read_session_detail_from_file(file_path, &source, &project_key, aggregate_subtasks, &roots)?;
         log_history_detail_oom_diagnostic(
             "history_get_session",
             &detail,
@@ -550,6 +543,28 @@ pub async fn history_get_session(
     })
     .await
     .map_err(|err| err.to_string())?
+}
+
+// 绕过 catalog 直接解析会话文件。file_ref.path 经 canonicalize 会带 verbatim 前缀（\\?\C:\...），只用于读文件；
+// 对外沿用请求路径，与列表和 v2 详情的 file_path 保持同一会话身份，否则前端会话 key 与变更比对都会失配。
+pub(super) fn read_session_detail_from_file(
+    file_path: String,
+    source: &str,
+    project_key: &str,
+    aggregate_subtasks: bool,
+    roots: &HistoryRoots,
+) -> Result<HistorySessionDetail, String> {
+    let file_ref = validate_session_file_ref(&file_path, source, project_key, roots)?;
+    debug!(
+        "history_get_session reading file: source={}, project_key={}, path={}, aggregate_subtasks={}",
+        file_ref.source,
+        file_ref.project_key,
+        file_ref.path.to_string_lossy(),
+        aggregate_subtasks
+    );
+    let mut detail = build_session_detail_with_roots(&file_ref, aggregate_subtasks, roots)?;
+    detail.file_path = file_path;
+    Ok(detail)
 }
 
 #[tauri::command]

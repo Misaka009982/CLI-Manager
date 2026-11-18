@@ -1,0 +1,30 @@
+{
+  "id": "v1.5.1-upstream-sync",
+  "name": "v1.5.1-upstream-sync",
+  "title": "同步 CLI-Manager 正式版 V1.5.1 并保留 fork 接线",
+  "description": "固定同步正式标签，保留宠物E、Pi v12、文件树排序及偏好，接齐设置迁移与便携资源；仅静态核查。",
+  "status": "in_progress",
+  "priority": "P1",
+  "creator": "pi",
+  "assignee": "pi",
+  "createdAt": "2026-11-18",
+  "completedAt": null,
+  "branch": "integrate/v1.5.1-desktop-pet-e",
+  "base_branch": "integrate/v1.5.0-desktop-pet-e",
+  "worktree_path": "D:/Project/pi-pet/CLI-Manager/.worktrees/ship-desktop-pet-e-master",
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "src/shared/preferences/appearanceSettings.ts",
+    "src/shared/preferences/settingsStore.ts",
+    "src/features/settings/api/SettingsModal.tsx",
+    "scripts/package-portable.ps1",
+    "scripts/package-portable.test.mjs",
+    "scripts/petEPackage.test.mjs"
+  ],
+  "notes": "方案落盘及本地文档审阅后，用户已明确确认完整实施、提交并普通快进推送 origin/master（含上游退役与记录迁移）。目标 644cb809，fork 起点 6395a973，共同祖先 50e0f17f；master 多出的 ebcb4537 不纳入，不创建 main、不强推、不创建 PR 或发布标签。采用单代理本地实施，当前无外部引擎配置或子代理/GitNexus工具。仅静态核查，不编译/运行测试/安装，不改主 worktree、旧未跟踪任务、本地认证数据或安装副本。",
+  "meta": {}
+}

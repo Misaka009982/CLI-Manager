@@ -24,8 +24,10 @@ await build({
       } from './src/features/settings/components/SettingsIcons';
       import { SettingsNav } from './src/features/settings/components/SettingsNav';
       import { useSettingsStore } from './src/shared/preferences/settingsStore';
+      import { LAST_SETTINGS_TABS } from './src/shared/preferences/appearanceSettings';
 
       export const navIconNames = Object.keys(SETTINGS_NAV_ICONS);
+      export const persistedTabNames = LAST_SETTINGS_TABS;
       export const glyphNames = Object.keys(SETTINGS_STRUCTURE_GLYPHS);
 
       export function renderNavIcon(name) {
@@ -77,8 +79,9 @@ await build({
 const mod = await import(pathToFileURL(file).href);
 
 test('every nav tile is a self-drawn rounded color tile with a glyph', () => {
-  assert.equal(mod.navIconNames.length, 20);
+  assert.deepEqual([...mod.navIconNames].sort(), [...mod.persistedTabNames].sort());
   assert.ok(mod.navIconNames.includes('desktop-pet-e'), 'fork 的宠物E设置入口必须有精致图标');
+  assert.ok(mod.navIconNames.includes('terminal-status-bar'), '上游的新信息栏设置入口必须与持久化导航并存');
   for (const name of mod.navIconNames) {
     const html = mod.renderNavIcon(name);
     assert.match(html, /<rect[^>]*rx="6"/, `${name} should own a rounded tile`);

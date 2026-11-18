@@ -853,6 +853,8 @@ pub fn run() {
             commands::web_server::web_server_stop,
             commands::web_server::web_server_restart,
             commands::system_resources::system_resources_get_snapshot,
+            commands::app_memory::app_memory_get_usage,
+            commands::app_memory::app_memory_optimize,
             commands::version::get_app_version,
             commands::version::get_os_platform,
             linux_graphics::app_get_graphics_diagnostics,
@@ -878,9 +880,6 @@ pub fn run() {
             commands::hook_settings::hook_settings_install_grok,
             commands::hook_settings::hook_settings_uninstall_grok,
             commands::hook_settings::hook_settings_select_dir,
-            commands::ccusage::ccusage_get_status,
-            commands::ccusage::ccusage_install_tools,
-            commands::ccusage::ccusage_refresh_report,
             commands::provider::provider_catalog_list,
             commands::provider::provider_catalog_get,
             commands::provider::provider_fetch_models,
@@ -1551,8 +1550,8 @@ mod provider_migration_tests {
             .expect("message star migration must be registered");
         assert!(scope_policy_migration.version < message_star_migration.version);
         assert!(registry
-            .iter()
-            .all(|migration| migration.version <= message_star_migration.version));
+            .windows(2)
+            .all(|pair| pair[0].version < pair[1].version));
         assert!(registry.iter().any(|migration| migration.version == 29
             && migration.description == "optimize_unified_usage_record_queries"));
     }

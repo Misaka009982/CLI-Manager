@@ -4,6 +4,7 @@ import {
   lstatSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   createReadStream,
   rmSync,
   statSync,
@@ -238,10 +239,13 @@ function parseArguments(argv) {
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArguments(argv);
   await verifyPetEPackage(options.root, { writeManifest: options.writeManifest });
-  console.log(`Desktop Pet E package verified: ${options.root}`);
+  // 诊断走 stderr，便携打包的 stdout 专门返回 ZIP 路径。
+  console.error(`Desktop Pet E package verified: ${options.root}`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// ESM 会解析真实路径，主入口比较也须兼容 Windows 大小写及 8.3 别名。
+if (process.argv[1] && existsSync(process.argv[1])
+  && path.relative(realpathSync.native(process.argv[1]), realpathSync.native(fileURLToPath(import.meta.url))) === "") {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

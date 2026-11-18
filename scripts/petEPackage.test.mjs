@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EXPECTED_RUNTIME_MANIFEST, verifyPetEPackage } from "./verify-pet-e-package.mjs";
+import { createPetEPackageFixture, fakeWindowsX64Executable } from "./helpers/petEPackageFixture.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRuntimeManifest = JSON.parse(readFileSync(path.join(repositoryRoot, "pet-e", "runtime-manifest.json"), "utf8"));
@@ -21,48 +22,10 @@ function writeFile(root, relativePath, content) {
   writeFileSync(target, content);
 }
 
-function fakeWindowsX64Executable() {
-  const executable = Buffer.alloc(512);
-  executable.writeUInt16LE(0x5a4d, 0);
-  executable.writeUInt32LE(0x80, 0x3c);
-  executable.write("PE\u0000\u0000", 0x80, "ascii");
-  executable.writeUInt16LE(0x8664, 0x84);
-  return executable;
-}
-
 function createPackageFixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "cli-manager-pet-e-package-"));
   temporaryRoots.push(root);
-  writeFile(root, "runtime-manifest.json", `${JSON.stringify(sourceRuntimeManifest)}\n`);
-  writeFile(root, "runtime/electron.exe", fakeWindowsX64Executable());
-  writeFile(root, "runtime/version", "41.10.2\n");
-  writeFile(root, "runtime/LICENSE", "Electron license\n");
-  writeFile(root, "runtime/LICENSES.chromium.html", "Chromium notices\n");
-  writeFile(root, "runtime/resources/default_app.asar", "asar\n");
-  writeFile(root, "app/package.json", `${JSON.stringify({
-    name: "cli-manager-desktop-pet-e-runtime",
-    version: "1.0.0",
-    private: true,
-    type: "module",
-    main: "main.js",
-  })}\n`);
-  for (const relativePath of [
-    "app/main.js",
-    "app/preload.cjs",
-    "app/bridge/protocol.js",
-    "app/bridge/agent-action.js",
-    "app/renderer/index.html",
-    "app/renderer/app.js",
-    "app/renderer/task-state.js",
-    "app/renderer/agent-action.js",
-    "app/renderer/styles.css",
-  ]) {
-    writeFile(root, relativePath, "static\n");
-  }
-  writeFile(root, "NOTICE.md", "notice\n");
-  writeFile(root, "LICENSES/CLI-Manager-AGPL-3.0-or-later.txt", "license\n");
-  writeFile(root, "LICENSES/README.md", "license readme\n");
-  return root;
+  return createPetEPackageFixture(root);
 }
 
 const temporaryRoots = [];
@@ -154,7 +117,9 @@ test("resource chain uses the resolver path and never stages runtime at launch",
   const petRuntime = windowsBranch.indexOf('"scripts/prepare-pet-e-runtime.mjs"');
   const earlyExit = windowsBranch.indexOf("process.exit(0)");
   assert.ok(helperBuild >= 0 && helperBuild < petBuild && petBuild < petRuntime && petRuntime < earlyExit);
-  assert.match(portable, /apps\/web\/dist\/tap\/index\.html/);
+  assert.match(portable, /\$webDistDir = Resolve-PortablePath \$WebDistDir/);
+  assert.match(portable, /@\("index\.html", "tap\/index\.html"\)/);
+  assert.match(portable, /\$petEResourceDir = Join-Path \$resourcesDir "pet-e"/);
   assert.match(portable, /\$petEResourceDir, \(Join-Path \$webDistDir "assets"\), \(Join-Path \$webDistDir "tap\/assets"\)/);
   assert.match(prepare, /CLI_MANAGER_PET_E_RUNTIME_ARCHIVE/);
   // 期望的 manifest（含 sha256）已集中到 verify-pet-e-package.mjs，prepare 从那里导入并逐项比对；

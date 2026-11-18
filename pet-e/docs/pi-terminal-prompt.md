@@ -4,7 +4,7 @@
 
 本功能以独立文件和既有宠物E文件为主，上游共有文件只保留必要的接线、字段透传与版本/文案登记。不要把校验、租期状态机、序列化或展示业务重新搬进上游大模块。
 
-本清单覆盖 Pi 只读等待、v11 会话重建复位及 v12 对 Pi 1.5.0 的兼容。只读等待最初以上游 `c07e69ee`（V1.4.3）为基线，现已同步 V1.5.0（`50e0f17f`）；不重构此前的宠物E集成。
+本清单覆盖 Pi 只读等待、v11 会话重建复位及 v12 对 Pi 1.5.0 的兼容。只读等待最初以上游 `c07e69ee`（V1.4.3）为基线，现已同步正式版 V1.5.1（`644cb809`）；不重构此前的宠物E集成。
 
 ### 外挂主体：随 fork 保留，不与上游同名文件合并
 
@@ -85,6 +85,15 @@ terminalPrompt: { instanceId, id, sequence, active, kind, title? }
 - 只服从宠物总开关，不依赖 `notificationsEnabled` / `agentInteractionEnabled`。普通通知不计黄灯，等待状态不进入红蓝终态历史。
 - 升级应用后确认 Pi 托管扩展为 v12，再重新加载 Pi；应用/daemon 回调地址变化时须新建终端。没有正式 UI 事件的旧 Pi 不承诺自绘问卷支持，既有标准控件代答保留。
 - V1.4.4 起模板同时上报上游运行身份 `pi = { instanceId, instanceStartedAt, sequence, runId }`：根 Pi 在工厂阶段持有进程租约并写入 `CLI_MANAGER_PI_OWNER`，嵌套子进程/同进程 SDK 子会话不得接管父 Tab；结束区分 `Stop` / `Interrupt` / `StopFailure`，并由后端接纳门在 sink 副作用前拒绝重复、迟到与已退役实例。上游若把运行身份改为其它字段名或增加新终端事件，需同步移植进 fork 模板与 `PiHookIdentity`。
+
+## V1.5.1 同步接点（Pi 模板保持 v12）
+
+- 固定合入正式版 `644cb809`，不纳入标签后的历史页面信息栏隐藏修复。Hook、daemon 私有旁路及 Pi 外部模板本轮未改，保留 12/12 版本与 2 秒超时；仅应用版本变化不要求重装已有 v12 Hook。
+- 上游将外观类型与导航有效值移到 `src/shared/preferences/appearanceSettings.ts`：`LastSettingsTab` 和 `LAST_SETTINGS_TABS` 都须保留 `desktop-pet-e`，并与 `SettingsModal.tsx`、`SettingsIcons.tsx` 对齐。偏好迁移/互斥仍由 `desktopPetEPreferences.ts` 负责，`settingsStore.ts` 保留显式接线及原公开兼容导出。
+- 两种标签的真实待答覆盖统一放在 `src/features/terminal/hooks/useDesktopPetETabNotifications.ts`，继续调用原 `desktopPetETabNotifications.ts` 纯函数。`useTerminalTabsController.tsx` 只接入 Hook 与待答会话可见性，不向普通 Hook 状态或 Replay 写入私有等待。
+- 新终端信息栏复用上游普通状态解析与共享后台清单，沿用 Pi 明确 `none` 的解析；不把它的等待计数当作宠物E真实待答或只读等待计数。
+- 便携打包的宠物资源来自 `ResourcesDir/pet-e`，保留 manifest、PE 架构、摘要和许可验证，全部先于旧输出清理。校验器诊断走 stderr，打包 stdout 只返回 ZIP 路径；主入口比较真实路径以兼容 Windows 大小写及 8.3 别名。
+- `scripts/helpers/petEPackageFixture.mjs` 供两份打包回归复用完整合成输入；`desktopPetETabNotifications.test.mjs` 覆盖真实 Hook 入口。新增用例均未运行，静态结果及既有架构欠项见 `.trellis/tasks/2026-11-18-v1.5.1-upstream-sync/verification.md`。
 
 ## v12：Pi 1.5.0 兼容与 V1.5.0 集成
 

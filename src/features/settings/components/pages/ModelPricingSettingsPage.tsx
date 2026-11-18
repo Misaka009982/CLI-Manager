@@ -68,6 +68,18 @@ const EMPTY_DRAFT: PriceDraft = {
 
 // 模型价格页样式：表格走苹果风「无斑马纹 + hairline 分隔 + 柔和悬浮」，全部映射主题 token。
 const modelPricingStyles = `
+.settings-scope .mp-segmented {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.settings-scope .mp-segmented .mantine-SegmentedControl-control {
+  flex: 0 0 auto;
+}
+.settings-scope .mp-segmented .mantine-SegmentedControl-label {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
 .mp-table { border-collapse: separate; border-spacing: 0; }
 .mp-table thead th {
   background: var(--surface-container-lowest) !important;
@@ -481,6 +493,15 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
         ),
       });
       if (result.candidates.length > 0) setFilter("candidates");
+      if (result.staleSources.length > 0) {
+        const sources = result.staleSources.join(", ");
+        toast.warning(text("部分价格源拉取失败", "Some price sources failed to refresh"), {
+          description: text(
+            `${sources} 暂时无法访问，已使用本地缓存的价格数据，可能不是最新。`,
+            `${sources} is unreachable; used locally cached prices, which may be outdated.`
+          ),
+        });
+      }
     } catch (err) {
       toast.error(text("远程价格同步失败", "Remote price sync failed"), { description: String(err) });
     } finally {
@@ -547,7 +568,7 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
               <StatChip icon={Sparkles} tone="primary" value={candidateTargetCount} label={text("候选", "Candidates")} />
             </Group>
             <Text size="sm" c="var(--text-muted)" style={{ maxWidth: 560 }}>
-              {text("历史统计和内置终端实时估算会优先使用这里的价格；ccusage 面板仍使用外部工具自身定价。", "History stats and built-in terminal estimates use these prices first; the ccusage panel still uses its own external pricing.")}
+              {text("历史统计和内置终端实时估算会优先使用这里的价格。", "History stats and built-in terminal estimates use these prices first.")}
             </Text>
             {lastSyncResult && (
               <Text size="xs" c="var(--text-muted)">

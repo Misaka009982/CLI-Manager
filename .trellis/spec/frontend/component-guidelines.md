@@ -1229,7 +1229,7 @@ const { suffixParts, leaf: displayNode } = collectCompactDirectoryChain(node);
 
 **What**: Stats and usage-analysis chart components should import semantic colors from `src/features/stats/api/statsPalette.ts` instead of hard-coding one-off hex/RGBA colors for token series, peak markers, cost fills, or chart tooltips.
 
-**Why**: The app supports multiple light/dark themes. Hard-coded high-saturation chart colors can clash with theme surfaces and make related charts disagree visually. A shared palette keeps History Stats and ccusage charts consistent while still deriving colors from theme tokens.
+**Why**: The app supports multiple light/dark themes. Hard-coded high-saturation chart colors can clash with theme surfaces and make related charts disagree visually. A shared palette keeps History Stats charts consistent while still deriving colors from theme tokens.
 
 **Example**:
 
@@ -2245,6 +2245,11 @@ switch / document switch still reload content and keep the viewport.
 The live statistics panel marks its scroll content with `data-stats-screenshot-scroll`; screenshot/refresh actions carry `data-stats-screenshot-exclude`. Export the currently enabled cards at the current panel width, including content below the viewport, without changing live layout or scroll position. Hidden cards and closed dialogs stay excluded.
 
 Snapshot computed styles (including inherited theme variables) and canvas pixels synchronously before asynchronous rendering. Expand only the offscreen scroll clone, and remove its inert/aria-hidden host in `finally`. Do not point the renderer at the terminal, the whole window or a different session after a tab switch. Use a proportional pixel budget rather than cropping.
+
+Two emission rules keep the image matching the live panel:
+
+- Never freeze a text leaf's measured `width`/`height`. Its used width is exactly "what the text happened to take", so a sub-pixel font-metric difference at raster time pushes the last word to a second line (the "N 条" pill broke into two rows). Skip `CONTENT_SIZED_PROPERTIES` when writing inline styles, and also pass `includeStyleProperties` to html-to-image minus those same properties — html-to-image's `cloneCSSStyle` re-copies every computed property and would otherwise put the frozen size straight back. Non-text nodes (icons, charts, canvases) still get explicit sizes and remain identical.
+- Never fade an SVG area fill with `<mask>`/`clipPath` references. html-to-image's `embedResources` resolves `url(#id)` as an external resource, rewrites the reference and the mask is lost at raster time, leaving solid or striped blocks. Use per-segment `linearGradient` fills with `gradientUnits="userSpaceOnUse"` instead; `fill="url(#id)"` is not scanned, so it survives serialization.
 
 Ordinary captures use at least a 2x pixel ratio and may follow high-density displays up to 3x. Dimension and total-pixel limits may proportionally reduce extreme long captures so the full panel remains present without exceeding the renderer budget.
 

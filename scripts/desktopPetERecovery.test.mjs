@@ -94,7 +94,7 @@ test("source contracts preserve tray/fullscreen tracking and the unified exit gu
 
   assert.match(petCoordinator, /const tracking = appReady && settingsLoaded && settings\.enabled/);
   assert.match(petCoordinator, /const visible = tracking && !\(settings\.autoHideFullscreen && terminalFullscreen\)/);
-  assert.match(petCoordinator, /setBackgroundTasks/);
+  assert.match(petCoordinator, /useDaemonTaskInventory\(tracking && isTauri\(\)\)/);
   assert.match(app, /requestExitGuardedByRunningTasks/);
   assert.match(app, /tray-quit-requested/);
   assert.match(app, /requestExitGuardedByRunningTasks\("window close"\)/);
@@ -121,5 +121,9 @@ test("shared action availability survives pet visibility changes", () => {
   assert.match(sessionCoordinator, /reason: "owning-session-unavailable"/);
   assert.match(petCoordinator, /autoHideFullscreen/);
   assert.match(terminalTabs, /pendingActions\.keys\(\)/);
-  assert.match(terminalTabs, /next\[sessionId\] = "attention"/);
+  assert.match(terminalTabs, /useDesktopPetETabNotifications\(/);
+  const tabNotificationHook = read("src/features/terminal/hooks/useDesktopPetETabNotifications.ts");
+  const tabNotificationProjection = read("src/features/terminal/lib/desktopPetETabNotifications.ts");
+  assert.match(tabNotificationHook, /withDesktopPetEPendingAttention/);
+  assert.match(tabNotificationProjection, /next\[sessionId\] = "attention"/);
 });

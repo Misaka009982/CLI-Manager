@@ -32,6 +32,34 @@ const preferencesPath = join(tempDir, "preferences.mjs");
 writeFileSync(preferencesPath, preferencesOutput, "utf8");
 const preferences = await import(pathToFileURL(preferencesPath).href);
 
+// 执行真实的私有导航迁移函数，仅隔离整份 store 的平台与持久化依赖。
+const appearanceSource = readFileSync(new URL("../src/shared/preferences/appearanceSettings.ts", import.meta.url), "utf8");
+const appearancePath = join(tempDir, "appearance.mjs");
+writeFileSync(appearancePath, ts.transpileModule(appearanceSource, {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+}).outputText, "utf8");
+const storeSource = readFileSync(new URL("../src/shared/preferences/settingsStore.ts", import.meta.url), "utf8");
+const storeAst = ts.createSourceFile("settingsStore.ts", storeSource, ts.ScriptTarget.Latest, true);
+const tabMigration = storeAst.statements.find((statement) => ts.isFunctionDeclaration(statement)
+  && statement.name?.text === "migrateLastSettingsTab");
+assert.ok(tabMigration, "导航迁移仍应由 settingsStore 加载入口调用");
+const tabMigrationPath = join(tempDir, "tabMigration.mjs");
+writeFileSync(tabMigrationPath, ts.transpileModule(`
+import { LAST_SETTINGS_TABS } from "./appearance.mjs";
+const DEFAULTS = { lastSettingsTab: "general" };
+${tabMigration.getText(storeAst)}
+export { migrateLastSettingsTab };
+`, { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } }).outputText, "utf8");
+const { migrateLastSettingsTab } = await import(pathToFileURL(tabMigrationPath).href);
+
+test("宠物E与上游信息栏标签经真实加载迁移保留，旧值和无效值仍正常处理", () => {
+  assert.match(storeSource, /entries\.lastSettingsTab = migrateLastSettingsTab\(entries\.lastSettingsTab\)/);
+  assert.equal(migrateLastSettingsTab("desktop-pet-e"), "desktop-pet-e");
+  assert.equal(migrateLastSettingsTab("terminal-status-bar"), "terminal-status-bar");
+  assert.equal(migrateLastSettingsTab("providers"), "native-providers");
+  for (const value of [undefined, null, "unknown", 42]) assert.equal(migrateLastSettingsTab(value), "general");
+});
+
 test("折叠偏好迁移独立保留默认值且不混入桥接设置", () => {
   for (const value of [undefined, null, "invalid", { petPicker: "yes" }]) {
     assert.deepEqual(preferences.migrateDesktopPetESettingsSectionsExpanded(value), { petPicker: false });

@@ -8,9 +8,9 @@ import {
   PointerSensor, useSensor, useSensors, type DragEndEvent, type DragOverEvent, type DragStartEvent,
 } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
-import { useTerminalStore, type TabNotificationState } from "../state";
+import { useTerminalStore } from "../state";
 import { useDesktopPetEAgentStore } from "../api/desktopPetEAgentStore";
-import { withDesktopPetEPendingAttention } from "../lib/desktopPetETabNotifications";
+import { useDesktopPetETabNotifications } from "./useDesktopPetETabNotifications";
 import { useSettingsStore } from "../../../shared/preferences/settingsStore";
 import { updateWorkspaceLayout } from "../../../shared/lib/workspaceLayout";
 import { useWorktreeStore } from "../../projects/api/worktreeStore";
@@ -42,7 +42,7 @@ import { resolveProviderSwitchAppType } from "../../providers/api/providerSwitch
 import { inferVendor } from "../../../shared/ui/VendorIcon";
 import { useAppPrompt } from "../../../shared/ui/useAppPrompt";
 import { useAppConfirm } from "../../../shared/ui/useAppConfirm";
-import { useHistoryStore } from "../../history/index";
+import { openHistoryMessage, useHistoryStore, type HistoryMessageTarget } from "../../history/index";
 import { useGitWorkspaceStore } from "../../git/api/gitWorkspaceStore";
 import { useSaveSessionToSidebar } from "../../projects/api/useSaveSessionToSidebar";
 import {
@@ -85,6 +85,7 @@ export function useTerminalTabsController({
   terminalScope = ALL_TERMINALS_SCOPE,
   onOpenProviderSettings,
   onOpenHistorySettings,
+  onActivateSession,
 }: TerminalTabsProps = {}) {
   const { t } = useI18n();
   const { prompt, promptDialog } = useAppPrompt();
@@ -101,9 +102,9 @@ export function useTerminalTabsController({
     }))
   );
   const pendingActions = useDesktopPetEAgentStore((state) => state.pendingActions);
-  const tabNotifications = useMemo(() => withDesktopPetEPendingAttention(
-    terminalTabNotifications, pendingActions,
-  ), [pendingActions, terminalTabNotifications]);
+  const { tabNotifications, hookNotifications } = useDesktopPetETabNotifications(
+    terminalTabNotifications, tabStatuses, pendingActions,
+  );
   const setActive = useTerminalStore((s) => s.setActive);
   const setActiveWorkspan = useTerminalStore((s) => s.setActiveWorkspan);
   const reorderWorkspans = useTerminalStore((s) => s.reorderWorkspans);
@@ -143,14 +144,6 @@ export function useTerminalTabsController({
   const terminalBackgroundEnabled = useSettingsStore((s) => s.terminalBackground.enabled);
   const paneMarkerSettings = useSettingsStore((s) => s.terminalPaneMarker);
   const [isAppFocused, setIsAppFocused] = useState(() => document.visibilityState !== "hidden" && document.hasFocus());
-  const hookNotifications = useMemo<Record<string, TabNotificationState>>(() => {
-    const next: Record<string, TabNotificationState> = {};
-    for (const [sessionId, status] of Object.entries(tabStatuses)) {
-      next[sessionId] = status.hook ?? "none";
-    }
-    return withDesktopPetEPendingAttention(next, pendingActions);
-  }, [pendingActions, tabStatuses]);
-
   useEffect(() => {
     const updateFocusState = () => {
       setIsAppFocused(document.visibilityState !== "hidden" && document.hasFocus());
@@ -1438,6 +1431,14 @@ export function useTerminalTabsController({
     });
   }, [activeSession, activeWorktree?.path, closeGitWorkspace, closeHistory, historyOpen, openHistory, projects, rejectUnsupportedCapability, terminalSidePanelSingleOpen]);
 
+  // 时间轴跳转：历史已打开但停留在终端页时，isOpen 不变不会触发自动切页，这里显式切到历史。
+  const handleOpenHistoryMessage = useCallback((target: HistoryMessageTarget) => {
+    closeGitWorkspace();
+    setActiveWorkspaceTab("history");
+    const fail = (description?: string) => toast.error(t("aiReplay.timeline.openInHistoryFailed"), { description });
+    void openHistoryMessage(target).then((found) => { if (!found) fail(); }, (err) => fail(String(err)));
+  }, [closeGitWorkspace, t]);
+
   const handleOpenSplitPicker = useCallback((sessionId: string, direction: TerminalPaneSplitDirection, anchor?: SplitPickerAnchor) => {
     if (guardTerminalLayoutChange()) return;
     clearSplitPickerOpenSchedule();
@@ -1692,9 +1693,7 @@ export function useTerminalTabsController({
     setActiveToolbarDragId(null);
   }, []);
 
-  const refreshBackgroundTasks = useCallback(async () => {
-    await refreshDaemonTaskInventory();
-  }, []);
+  const refreshBackgroundTasks = useCallback(refreshDaemonTaskInventory, []);
 
   const backgroundTasks = useMemo(() => {
     const openIds = new Set(sessions.map((session) => session.id));
@@ -1926,6 +1925,8 @@ export function useTerminalTabsController({
     setDiscardTarget,
     historyOpen,
     onOpenHistorySettings,
+    handleOpenHistoryMessage,
+    onActivateSession,
     gitWorkspaceOpen,
     gitWorkspaceHeight,
     beginGitWorkspaceResize,

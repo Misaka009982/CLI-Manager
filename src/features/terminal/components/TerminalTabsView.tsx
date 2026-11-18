@@ -8,6 +8,7 @@ import { SystemResourcesPanel } from "./SystemResourcesPanel";
 import { TerminalSidePanel } from "./TerminalSidePanel";
 import { ResizableTerminalPanelFrame } from "./ResizableTerminalPanelFrame";
 import { TerminalWorkspaceFrame } from "./TerminalWorkspaceFrame";
+import { TerminalStatusBar } from "./TerminalStatusBar";
 import { ProviderQuickSwitchPanel } from "./ProviderQuickSwitchPanel";
 import { WorktreeFinishDialog } from "../../projects/api/WorktreeFinishDialog";
 import { FileExplorerSidebar } from "../../files/api/FileExplorerSidebar";
@@ -28,6 +29,7 @@ import { SplitProjectPicker, TerminalCloseConfirmBubble } from "./TerminalTabDia
 
 export function TerminalTabsView({
   fullscreen,
+  onActivateSession,
   historyActive,
   terminalWellStyle,
   promptDialog,
@@ -52,6 +54,7 @@ export function TerminalTabsView({
   setDiscardTarget,
   historyOpen,
   onOpenHistorySettings,
+  handleOpenHistoryMessage,
   gitWorkspaceOpen,
   gitWorkspaceHeight,
   beginGitWorkspaceResize,
@@ -237,6 +240,7 @@ export function TerminalTabsView({
                   filesPanelContent={<FileExplorerSidebar mode="panel" onClosePanel={closeFilesPanel} />}
                   onTabChange={handleSidePanelTabChange}
                   onOpenProviderSettings={onOpenProviderSettings}
+                  onOpenHistoryMessage={handleOpenHistoryMessage}
                 />
               ) : null,
               !sidePanelMerged && gitOpen && panelGitSupported ? (
@@ -277,7 +281,7 @@ export function TerminalTabsView({
                   resizeTitle={t("terminal.panel.resizeReplayTitle")}
                 >
                   <Suspense fallback={null}>
-                    <SessionReplayPanel activeSessionId={panelSessionId} open={replayOpen} />
+                    <SessionReplayPanel activeSessionId={panelSessionId} open={replayOpen} onOpenHistoryMessage={handleOpenHistoryMessage} />
                   </Suspense>
                 </ResizableTerminalPanelFrame>
               ) : null,
@@ -516,6 +520,7 @@ export function TerminalTabsView({
           </TerminalWorkspaceFrame>
         </div>
       </div>
+      {!fullscreen && <TerminalStatusBar onActivateSession={onActivateSession} menuStyle={splitPickerMenuStyle} />}
     </div>
   );
 }

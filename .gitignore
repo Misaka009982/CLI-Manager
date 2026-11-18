@@ -34,6 +34,7 @@ data/
 
 # Tauri
 src-tauri/target/
+src-tauri/helpers/target/
 src-tauri/resources/pet-e/runtime/
 src-tauri/resources/pet-e/app/
 src-tauri/resources/pet-e/LICENSES/

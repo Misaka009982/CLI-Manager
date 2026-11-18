@@ -6,8 +6,6 @@ pub mod extensions;
 pub mod app_data;
 #[path = "../features/terminal/background.rs"]
 pub mod background;
-#[path = "../features/stats/ccusage.rs"]
-pub mod ccusage;
 #[path = "../features/terminal/suggestions.rs"]
 pub mod command_suggestion;
 #[path = "../features/app-data/repair/mod.rs"]
@@ -80,6 +78,8 @@ pub mod subagent_transcript;
 pub mod sync;
 #[path = "../features/notifications/system.rs"]
 pub mod system_notification;
+#[path = "../features/system/app_memory.rs"]
+pub mod app_memory;
 #[path = "../features/system/resources.rs"]
 pub mod system_resources;
 #[path = "../features/terminal/commands.rs"]

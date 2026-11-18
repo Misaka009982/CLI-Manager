@@ -1,4 +1,36 @@
 import { create } from "zustand";
+import {
+  TERMINAL_SETTINGS_SECTIONS_EXPANDED_DEFAULT,
+  SIDEBAR_SETTINGS_SECTIONS_EXPANDED_DEFAULT,
+  HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT,
+  migrateTerminalSettingsSectionsExpanded,
+  migrateSidebarSettingsSectionsExpanded,
+  migrateHookSettingsSectionsExpanded,
+  type TerminalSettingsSectionsExpanded,
+  type SidebarSettingsSectionsExpanded,
+  type HookSettingsSectionsExpanded,
+} from "./settingsSections";
+export {
+  TERMINAL_SETTINGS_SECTION_KEYS, TERMINAL_SETTINGS_SECTIONS_EXPANDED_DEFAULT,
+  SIDEBAR_SETTINGS_SECTION_KEYS, SIDEBAR_SETTINGS_SECTIONS_EXPANDED_DEFAULT,
+  HOOK_SETTINGS_SECTION_KEYS, HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT,
+  migrateTerminalSettingsSectionsExpanded, migrateSidebarSettingsSectionsExpanded,
+  migrateHookSettingsSectionsExpanded,
+} from "./settingsSections";
+export type {
+  TerminalSettingsSectionKey, TerminalSettingsSectionsExpanded,
+  SidebarSettingsSectionKey, SidebarSettingsSectionsExpanded,
+  HookSettingsSectionKey, HookSettingsSectionsExpanded,
+} from "./settingsSections";
+import {
+  LAST_SETTINGS_TABS, type ThemeMode, type LightThemePalette, type DarkThemePalette,
+  type TerminalThemeMode, type SidebarDensity, type ViewMode, type SettingsIconStyle,
+  type LastSettingsTab, type TerminalSidePanelSkin, type TerminalStatsCardKey,
+} from "./appearanceSettings";
+export type {
+  ThemeMode, LightThemePalette, DarkThemePalette, TerminalThemeMode, SidebarDensity,
+  ViewMode, SettingsIconStyle, TerminalSidePanelSkin, TerminalStatsCardKey,
+} from "./appearanceSettings";
 import { normalizeExternalTerminalProgram, type ExternalTerminalProgram } from "../lib/externalTerminalProgram";
 import { normalizeWebTerminalBatchKiB, type WebTerminalBatchKiB } from "../lib/webTerminalFrames";
 import { Store } from "@tauri-apps/plugin-store";
@@ -89,74 +121,17 @@ export {
   DESKTOP_PET_SIZE_STEP_PERCENT,
 } from "../lib/desktopPetSize";
 
-export type ThemeMode = "dark" | "light" | "system";
-export type LightThemePalette =
-  | "warm-paper"
-  | "cream-green"
-  | "ink-red"
-  | "emerald-mist"
-  | "saas-analytics-dashboard"
-  | "apple-pure"
-  | "apple-mist"
-  | "apple-warm"
-  | "apple-mono";
-export type DarkThemePalette =
-  | "night-indigo"
-  | "forest-night"
-  | "graphite-red"
-  | "investment-platform"
-  | "github-dark"
-  | "catppuccin-mocha"
-  | "terminal-green"
-  | "dracula-purple"
-  | "carbon-black";
-export type TerminalThemeMode = "system" | "independent";
-export type SidebarDensity = "compact" | "comfortable";
-export type ViewMode = "standard" | "compact";
 export type GitDiffViewMode = "split" | "unified";
 export type GitDiffOpenMode = "dialog" | "editor";
 export type CloseBehavior = "ask" | "minimize" | "exit";
 
-/** 设置页图标风格：refined 为自绘彩色圆角砖，classic 恢复 lucide 线性图标。 */
-export type SettingsIconStyle = "classic" | "refined";
 /** 退出时存在运行中任务的处理方式：询问 / 后台继续 / 最小化到托盘 / 丢弃任务并退出。 */
 export type ExitWithRunningTasksBehavior = "ask" | "background" | "minimize" | "discard";
 /** 启动检测到可恢复终端标签时的恢复方式：启动时弹窗询问 / 静默自动恢复。 */
 export type TerminalSessionRestoreMode = "ask" | "auto";
 export const LINUX_GRAPHICS_MODES = ["auto", "system", "disable-dmabuf", "disable-compositing"] as const;
 export type LinuxGraphicsMode = (typeof LINUX_GRAPHICS_MODES)[number];
-type LastSettingsTab =
-  | "general"
-  | "extensions"
-  | "desktop-pet"
-  | "desktop-pet-e"
-  | "developer"
-  | "sidebar"
-  | "terminal-theme"
-  | "shortcuts"
-  | "templates"
-  | "native-providers"
-  | "sponsors"
-  | "model-pricing"
-  | "cc-connect" // Legacy persisted ID for the Web remote-connections page.
-  | "ssh-hosts"
-  | "sync"
-  | "history-sources"
-  | "hooks"
-  | "statusline"
-  | "command-suggestions"
-  | "about";
 export type StatuslineEditorSource = "claude" | "codex";
-export type TerminalSidePanelSkin = "terminal" | "classic-terminal" | "warm-paper" | "sunrise" | "linen" | "latte";
-export type TerminalStatsCardKey =
-  | "session"
-  | "tokenUsage"
-  | "tokenTrend"
-  | "modelContext"
-  | "tools"
-  | "agentCapabilities"
-  | "latestChanges"
-  | "todayUsage";
 export type SystemResourceCardKey =
   | "system"
   | "cpu"
@@ -167,10 +142,6 @@ export type SystemResourceCardKey =
   | "processes";
 export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "files" | "systemResources" | "providers";
 export type TerminalPanelWidthSettings = Record<TerminalPanelWidthKey, number>;
-export type TerminalSettingsSectionKey = "behavior" | "paneMarker" | "shells" | "themes" | "previewTheme" | "background";
-export type TerminalSettingsSectionsExpanded = Record<TerminalSettingsSectionKey, boolean>;
-export type HookSettingsSectionKey = "toast" | "notifications" | "claude" | "codex" | "kimi" | "pi" | "grok";
-export type HookSettingsSectionsExpanded = Record<HookSettingsSectionKey, boolean>;
 export const UI_FONT_SIZE_MIN = 11;
 export const UI_FONT_SIZE_MAX = 18;
 export const UI_FONT_SIZE_DEFAULT = 13;
@@ -189,40 +160,6 @@ export const TERMINAL_PANEL_WIDTH_DEFAULTS: TerminalPanelWidthSettings = {
   files: 220,
   systemResources: 300,
   providers: 320,
-};
-export const TERMINAL_SETTINGS_SECTION_KEYS: readonly TerminalSettingsSectionKey[] = [
-  "behavior",
-  "paneMarker",
-  "shells",
-  "themes",
-  "previewTheme",
-  "background",
-];
-export const TERMINAL_SETTINGS_SECTIONS_EXPANDED_DEFAULT: TerminalSettingsSectionsExpanded = {
-  behavior: true,
-  paneMarker: false,
-  shells: false,
-  themes: false,
-  previewTheme: false,
-  background: false,
-};
-export const HOOK_SETTINGS_SECTION_KEYS: readonly HookSettingsSectionKey[] = [
-  "toast",
-  "notifications",
-  "claude",
-  "codex",
-  "kimi",
-  "pi",
-  "grok",
-];
-export const HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT: HookSettingsSectionsExpanded = {
-  toast: false,
-  notifications: false,
-  claude: false,
-  codex: false,
-  kimi: false,
-  pi: false,
-  grok: false,
 };
 export type ShortcutAction =
   | "newTerminal"
@@ -324,6 +261,45 @@ export type TerminalStatsCardVisibilitySettings = Record<TerminalStatsCardKey, b
 export type TerminalStatsCardOrderSettings = TerminalStatsCardKey[];
 export type SystemResourceCardVisibilitySettings = Record<SystemResourceCardKey, boolean>;
 export type SystemResourceCardOrderSettings = SystemResourceCardKey[];
+
+export type TerminalStatusBarItemKey =
+  | "todayTokens"
+  | "todayCost"
+  | "claudeTokens"
+  | "codexTokens"
+  | "aiRunning"
+  | "aiAttention"
+  | "activeTabAi"
+  | "cpu"
+  | "memory"
+  | "appMemory"
+  | "gpu"
+  | "vram"
+  | "netUp"
+  | "netDown"
+  | "diskRead"
+  | "diskWrite";
+export type TerminalStatusBarVisibilitySettings = Record<TerminalStatusBarItemKey, boolean>;
+export type TerminalStatusBarOrderSettings = TerminalStatusBarItemKey[];
+
+export const TERMINAL_STATUS_BAR_ITEM_KEYS: readonly TerminalStatusBarItemKey[] = [
+  "todayTokens",
+  "todayCost",
+  "claudeTokens",
+  "codexTokens",
+  "aiRunning",
+  "aiAttention",
+  "activeTabAi",
+  "cpu",
+  "memory",
+  "appMemory",
+  "gpu",
+  "vram",
+  "netUp",
+  "netDown",
+  "diskRead",
+  "diskWrite",
+];
 
 export const TERMINAL_STATS_CARD_KEYS: readonly TerminalStatsCardKey[] = [
   "session",
@@ -469,9 +445,11 @@ export interface Settings {
   systemResourceCardVisibility: SystemResourceCardVisibilitySettings;
   systemResourceCardOrder: SystemResourceCardOrderSettings;
   systemResourceMonitoringEnabled: boolean;
+  /** 终端底部信息栏总开关，默认关闭；关闭时不挂载也不轮询任何数据。 */
+  terminalStatusBarEnabled: boolean;
+  terminalStatusBarVisibility: TerminalStatusBarVisibilitySettings;
+  terminalStatusBarOrder: TerminalStatusBarOrderSettings;
   shellRuntimeMonitoringEnabled: boolean;
-  ccusageAnalyticsEnabled: boolean;
-  ccusageUseWsl: boolean;
   windowsConptyCompatibilityFixEnabled: boolean;
   hideCodexRuntimeCursor: boolean;
   terminalSessionRestoreEnabled: boolean;
@@ -486,6 +464,8 @@ export interface Settings {
   terminalShellProfiles: TerminalShellProfile[];
   /** 终端设置页各可折叠区块的展开状态记忆。 */
   terminalSettingsSectionsExpanded: TerminalSettingsSectionsExpanded;
+  /** 侧边栏设置页各可折叠区块的展开状态记忆。 */
+  sidebarSettingsSectionsExpanded: SidebarSettingsSectionsExpanded;
   terminalPaneMarker: TerminalPaneMarkerSettings;
   terminalInputSuggestionsEnabled: boolean;
   terminalInputSuggestionProvider: TerminalInputSuggestionProvider;
@@ -671,9 +651,27 @@ const DEFAULTS: Settings = {
   },
   systemResourceCardOrder: [...SYSTEM_RESOURCE_CARD_KEYS],
   systemResourceMonitoringEnabled: false,
+  terminalStatusBarEnabled: true,
+  terminalStatusBarVisibility: {
+    todayTokens: true,
+    todayCost: false,
+    claudeTokens: false,
+    codexTokens: false,
+    aiRunning: false,
+    aiAttention: false,
+    activeTabAi: false,
+    cpu: true,
+    memory: true,
+    appMemory: true,
+    gpu: false,
+    vram: false,
+    netUp: true,
+    netDown: true,
+    diskRead: true,
+    diskWrite: true,
+  },
+  terminalStatusBarOrder: [...TERMINAL_STATUS_BAR_ITEM_KEYS],
   shellRuntimeMonitoringEnabled: false,
-  ccusageAnalyticsEnabled: false,
-  ccusageUseWsl: false,
   windowsConptyCompatibilityFixEnabled: true,
   hideCodexRuntimeCursor: false,
   terminalSessionRestoreEnabled: true,
@@ -696,6 +694,7 @@ const DEFAULTS: Settings = {
   },
   terminalShellProfiles: [],
   terminalSettingsSectionsExpanded: { ...TERMINAL_SETTINGS_SECTIONS_EXPANDED_DEFAULT },
+  sidebarSettingsSectionsExpanded: { ...SIDEBAR_SETTINGS_SECTIONS_EXPANDED_DEFAULT },
   terminalPaneMarker: { ...DEFAULT_TERMINAL_PANE_MARKER_SETTINGS },
   terminalInputSuggestionsEnabled: true,
   terminalInputSuggestionProvider: "local",
@@ -791,28 +790,6 @@ const LEGACY_TERMINAL_THEME_MAP: Partial<Record<string, string>> = {
   cryptoWalletDark: "investmentPlatformDark",
 };
 
-const LAST_SETTINGS_TABS: readonly LastSettingsTab[] = [
-  "general",
-  "extensions",
-  "desktop-pet",
-  "desktop-pet-e",
-  "developer",
-  "sidebar",
-  "terminal-theme",
-  "shortcuts",
-  "templates",
-  "native-providers",
-  "sponsors",
-  "model-pricing",
-  "cc-connect",
-  "ssh-hosts",
-  "sync",
-  "history-sources",
-  "hooks",
-  "statusline",
-  "command-suggestions",
-  "about",
-];
 
 const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
@@ -1047,30 +1024,6 @@ export function migrateTerminalPanelWidths(value: unknown): TerminalPanelWidthSe
   };
 }
 
-export function migrateTerminalSettingsSectionsExpanded(value: unknown): TerminalSettingsSectionsExpanded {
-  const defaults = TERMINAL_SETTINGS_SECTIONS_EXPANDED_DEFAULT;
-  if (typeof value !== "object" || value === null) {
-    return { ...defaults };
-  }
-  const raw = value as Partial<Record<TerminalSettingsSectionKey, unknown>>;
-  return TERMINAL_SETTINGS_SECTION_KEYS.reduce<TerminalSettingsSectionsExpanded>((next, key) => {
-    next[key] = typeof raw[key] === "boolean" ? raw[key] : defaults[key];
-    return next;
-  }, { ...defaults });
-}
-
-export function migrateHookSettingsSectionsExpanded(value: unknown): HookSettingsSectionsExpanded {
-  const defaults = HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT;
-  if (typeof value !== "object" || value === null) {
-    return { ...defaults };
-  }
-  const raw = value as Partial<Record<HookSettingsSectionKey, unknown>>;
-  return HOOK_SETTINGS_SECTION_KEYS.reduce<HookSettingsSectionsExpanded>((next, key) => {
-    next[key] = typeof raw[key] === "boolean" ? raw[key] : defaults[key];
-    return next;
-  }, { ...defaults });
-}
-
 export function migrateTerminalStatsCardVisibility(value: unknown): TerminalStatsCardVisibilitySettings {
   const defaults = DEFAULTS.terminalStatsCardVisibility;
   if (typeof value !== "object" || value === null) {
@@ -1094,6 +1047,41 @@ export function migrateTerminalStatsCardOrder(value: unknown): TerminalStatsCard
   for (const item of value) {
     if (typeof item !== "string") continue;
     const key = item as TerminalStatsCardKey;
+    if (!validKeys.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(key);
+  }
+
+  for (const key of defaults) {
+    if (!seen.has(key)) ordered.push(key);
+  }
+
+  return ordered;
+}
+
+export function migrateTerminalStatusBarVisibility(value: unknown): TerminalStatusBarVisibilitySettings {
+  const defaults = DEFAULTS.terminalStatusBarVisibility;
+  if (typeof value !== "object" || value === null) {
+    return { ...defaults };
+  }
+  const raw = value as Partial<Record<TerminalStatusBarItemKey, unknown>>;
+  return TERMINAL_STATUS_BAR_ITEM_KEYS.reduce<TerminalStatusBarVisibilitySettings>((next, key) => {
+    next[key] = typeof raw[key] === "boolean" ? raw[key] : defaults[key];
+    return next;
+  }, { ...defaults });
+}
+
+export function migrateTerminalStatusBarOrder(value: unknown): TerminalStatusBarOrderSettings {
+  const defaults = DEFAULTS.terminalStatusBarOrder;
+  if (!Array.isArray(value)) return [...defaults];
+
+  const validKeys = new Set<TerminalStatusBarItemKey>(TERMINAL_STATUS_BAR_ITEM_KEYS);
+  const seen = new Set<TerminalStatusBarItemKey>();
+  const ordered: TerminalStatusBarItemKey[] = [];
+
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const key = item as TerminalStatusBarItemKey;
     if (!validKeys.has(key) || seen.has(key)) continue;
     seen.add(key);
     ordered.push(key);
@@ -1561,12 +1549,17 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.terminalStatsCardOrder = migrateTerminalStatsCardOrder(entries.terminalStatsCardOrder);
     entries.systemResourceCardVisibility = migrateSystemResourceCardVisibility(entries.systemResourceCardVisibility);
     entries.systemResourceCardOrder = migrateSystemResourceCardOrder(entries.systemResourceCardOrder);
+    entries.terminalStatusBarVisibility = migrateTerminalStatusBarVisibility(entries.terminalStatusBarVisibility);
+    entries.terminalStatusBarOrder = migrateTerminalStatusBarOrder(entries.terminalStatusBarOrder);
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
     entries.desktopPet = migrateDesktopPetSettings(entries.desktopPet);
     applyDesktopPetEPreferences(entries, persistSetting);
     entries.terminalShellProfiles = migrateTerminalShellProfiles(entries.terminalShellProfiles);
     entries.terminalSettingsSectionsExpanded = migrateTerminalSettingsSectionsExpanded(
       entries.terminalSettingsSectionsExpanded
+    );
+    entries.sidebarSettingsSectionsExpanded = migrateSidebarSettingsSectionsExpanded(
+      entries.sidebarSettingsSectionsExpanded
     );
     entries.terminalPaneMarker = sanitizeTerminalPaneMarkerSettings(entries.terminalPaneMarker);
 
@@ -1577,6 +1570,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.shellRuntimeMonitoringEnabled === "boolean"
         ? entries.shellRuntimeMonitoringEnabled
         : DEFAULTS.shellRuntimeMonitoringEnabled;
+    entries.terminalStatusBarEnabled =
+      typeof entries.terminalStatusBarEnabled === "boolean"
+        ? entries.terminalStatusBarEnabled
+        : DEFAULTS.terminalStatusBarEnabled;
     entries.systemResourceMonitoringEnabled =
       typeof entries.systemResourceMonitoringEnabled === "boolean"
         ? entries.systemResourceMonitoringEnabled
@@ -1617,14 +1614,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.backgroundIncludeFinishedTasks === "boolean"
         ? entries.backgroundIncludeFinishedTasks
         : DEFAULTS.backgroundIncludeFinishedTasks;
-    entries.ccusageAnalyticsEnabled =
-      typeof entries.ccusageAnalyticsEnabled === "boolean"
-        ? entries.ccusageAnalyticsEnabled
-        : DEFAULTS.ccusageAnalyticsEnabled;
-    entries.ccusageUseWsl =
-      typeof entries.ccusageUseWsl === "boolean"
-        ? entries.ccusageUseWsl
-        : DEFAULTS.ccusageUseWsl;
     entries.windowsConptyCompatibilityFixEnabled =
       typeof entries.windowsConptyCompatibilityFixEnabled === "boolean"
         ? entries.windowsConptyCompatibilityFixEnabled

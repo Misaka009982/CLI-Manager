@@ -1,7 +1,7 @@
 {
   "name": "cli-manager",
   "private": true,
-  "version": "1.5.0",
+  "version": "1.5.1",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "workspaces": [
@@ -15,7 +15,7 @@
     "build": "tsc && vite build",
     "build:pet-e": "npm --prefix pet-e run build",
     "test:codex-proxy:e2e": "node ./scripts/codexAppServerProxy.e2e.test.mjs",
-    "test:pet-e:contracts": "node --test scripts/desktopPetEActivation.test.mjs scripts/desktopPetEAgentBridge.test.mjs scripts/desktopPetEIntegration.test.mjs scripts/desktopPetEMutualExclusion.test.mjs scripts/desktopPetEProtocol.test.mjs scripts/desktopPetERecovery.test.mjs scripts/desktopPetESettings.test.mjs scripts/desktopPetEState.test.mjs scripts/desktopPetStatus.test.mjs scripts/desktopPetETerminalPrompt.test.mjs scripts/grokDesktopPetHook.test.mjs scripts/petEPackage.test.mjs scripts/piDesktopPetHook.test.mjs scripts/piCustomQuestion.test.mjs scripts/piSessionLifecycle.test.mjs scripts/piHookLifecycle.test.mjs pet-e/test/codex-pet.test.mjs pet-e/test/renderer.test.mjs pet-e/test/security.test.mjs",
+    "test:pet-e:contracts": "node --test scripts/desktopPetEActivation.test.mjs scripts/desktopPetEAgentBridge.test.mjs scripts/desktopPetEIntegration.test.mjs scripts/desktopPetEMutualExclusion.test.mjs scripts/desktopPetEProtocol.test.mjs scripts/desktopPetERecovery.test.mjs scripts/desktopPetESettings.test.mjs scripts/desktopPetEState.test.mjs scripts/desktopPetETabNotifications.test.mjs scripts/desktopPetStatus.test.mjs scripts/desktopPetETerminalPrompt.test.mjs scripts/grokDesktopPetHook.test.mjs scripts/petEPackage.test.mjs scripts/piDesktopPetHook.test.mjs scripts/piCustomQuestion.test.mjs scripts/piSessionLifecycle.test.mjs scripts/piHookLifecycle.test.mjs pet-e/test/codex-pet.test.mjs pet-e/test/renderer.test.mjs pet-e/test/security.test.mjs",
     "test:pet-e:integration": "node ./scripts/desktopPetEIntegration.test.mjs",
     "test:pet-e:package": "node ./scripts/petEPackage.test.mjs",
     "test:pet-e:recovery": "node ./scripts/desktopPetERecovery.test.mjs",
@@ -75,7 +75,6 @@
     "@xterm/xterm": "6.1.0-beta.288",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "echarts": "^6.1.0",
     "emoji-mart": "^5.6.0",
     "html-to-image": "^1.11.13",
     "ignore": "^7.0.6",
