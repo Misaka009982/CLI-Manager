@@ -7,5 +7,5 @@
   "base_commit": "6fe6a33fd42b5cecbf8e4b8b3efe4e44db25c201",
   "branch": "feat/folder-tree-sort",
   "commit": "19650f5c32437e716aecd5cd48d8fe0ccdfb8bac",
-  "notes": "三份方案落盘审阅后，用户确认实施、提交并普通快进推送 origin/master，记录于 V1.5.1 fork 小节且不升版本。目录继承、隔离偏好、菜单、真实回归夹具及静态验收已完成；功能提交和验收边界见 verification.md。仅单代理静态核查，未编译、运行测试、启动浏览器或安装依赖，独立复审和 GitNexus 不可用。主 worktree、旧未跟踪任务、后端、Pi/rpiv 和已安装副本保持原样；用户运行与实机清单见 verification.md。"
+  "notes": "三份方案落盘审阅后，用户确认实施、提交并普通快进推送 origin/master，记录于 V1.5.1 fork 小节且不升版本。目录继承、隔离偏好、菜单、真实回归夹具及静态验收已完成，含原生事件与自绘指针落点隔离；功能提交和验收边界见 verification.md。仅单代理静态核查，未编译、运行测试、启动浏览器或安装依赖，独立复审和 GitNexus 不可用。主 worktree、旧未跟踪任务、后端、Pi/rpiv 和已安装副本保持原样；用户运行与实机清单见 verification.md。"
 }

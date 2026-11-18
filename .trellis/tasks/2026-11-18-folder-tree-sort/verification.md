@@ -10,6 +10,7 @@
 本轮变更记入 V1.5.1 fork 小节，不提升 npm/Tauri/Cargo 版本，不创建 PR 或发布标签。
 实施、回归编写和静态核查完成；编译、测试、浏览器、安装和实机验收均未执行，留给用户。
 功能提交：`19650f5c32437e716aecd5cd48d8fe0ccdfb8bac`（`feat(files): 支持文件夹独立排序与继承偏好`）。
+提交后的最终路径追踪补齐了同任务的自绘指针落点守卫，未改写既有提交；完整交付以最终 HEAD 和 Git 回执为准。
 提交前远端 master 为起点 `6fe6a33f`，功能提交直接基于该起点；仅使用普通快进推送，实际远端结果以最终 Git 回执为准。
 主 worktree、旧未跟踪 `10-14-pi-question-adapters/`、Pi/rpiv 与已安装副本未改动。
 
@@ -38,7 +39,7 @@
 | Git 空白与未合并项 | `git diff --check` 通过，未合并项为空 | 不等于行为回归通过 |
 | 严格 UTF-8 | 31 份交付变更文本（含本记录和 task.json）严格解码通过，暂存与工作区一致；提交号补记仅涉及本记录和 task.json，另行静态复核 | 不修复无关旧历史 |
 | 冲突文本 | 本轮未引入冲突起止/分隔标记；功能清单唯一既有 `=======` 保留 | 不宣称全仓文本没有历史分隔符 |
-| 手写长度 | 23 份代码文件均 ≤2000 物理行、单行 ≤500 字符；最长 `settingsStore.ts` 1989 行，`FileExplorerSidebar.tsx` 1840 行 | 不是全仓严格架构检查 |
+| 手写长度 | 23 份代码文件均 ≤2000 物理行、单行 ≤500 字符；最长 `settingsStore.ts` 1989 行，`FileExplorerSidebar.tsx` 1842 行 | 不是全仓严格架构检查 |
 | JavaScript | 8 份变更 `.mjs` 的 `node --check` 通过，包括旧排序/路径菜单、新回归和两个夹具 helper | 没有执行脚本、导入测试依赖或启动服务器 |
 | 非 TSX 的 TypeScript | 9 份 `.ts` 经 Node 内置 `stripTypeScriptTypes` 的 strip 模式解析，无产物、无源码执行 | 不是 TypeScript 类型检查，也未解析 TSX |
 | 导入与层级 | 100 个字面量相对导入目标存在；本轮共享模块未新增 features/app 反向导入，命名导入人工核对 | 不是完整 AST 导入图或动态解析证明 |
@@ -54,7 +55,7 @@ Git 中文路径默认引号转义，文件清单检查使用本次命令的 `-c
 - `ce-simplify-code` 的复用、质量、效率检查在同一上下文执行；保留已有文件根和比较器、独立 helper、输入校验、队列恢复及可访问性守卫，未追加无关重构。
 - 当前 harness 没有子代理/原生独立 review 接口，跨模型宿主及提供方均无法按协议确认，独立模型审阅未运行、没有代码外发。
 - `ce-code-review` 完整独立派发流程不可用，按交付降级规则进行了单代理静态差异扫描，覆盖继承错层、路径身份、非法偏好、串行写失败、Portal 传播、焦点和旧回执。不计作独立复审通过。
-- 扫描期间补齐了箭头 dragover/drop 的根操作隔离、保存期间 Esc 焦点恢复、旧 Portal 接线断言和夹具目录必需字段；没有已确认的本轮阻塞缺陷残留。
+- 扫描期间补齐了箭头 dragover/drop 的根操作隔离、保存期间 Esc 焦点恢复、旧 Portal 接线断言和夹具目录必需字段。最终路径追踪发现自绘指针捕获不会经过目标控件的冒泡拦截，已在坐标落点查询排除箭头/目录排序弹层，并补充真实 DOM 的正反落点断言；没有已确认的本轮阻塞缺陷残留。
 - GitNexus runner 缺失，未安装/引导索引器，未执行图影响或 detect-changes，不把文字交叉引用当作图分析通过。
 - 未运行 `npm run build`、类型/Lint、严格架构检查或任何测试。当前 worktree 缺少 TypeScript/esbuild/Playwright 依赖；未改的 Rust broker 既有长度欠项保持原样，不宣称全仓零超限。
 
@@ -70,9 +71,9 @@ Git 中文路径默认引号转义，文件清单检查使用本次命令的 `-c
 
 - `folderTreeSort.test.mjs`：纯排序/继承/覆盖/同值固定/恢复、连续队列和失败、非法路径及记录；无需浏览器。
 - `folderTreeSortPreference.test.mjs`：从实际源码提取默认/load/update，运行完整偏好接线，只有 Tauri/KV 被隔离；检查 Worktree/Windows/WSL/SSH 身份、备份恢复、慢保存和未加载拒绝。
-- `folderTreeSortUi.test.mjs`：沿用 TypeScript AST/VM 提取真实保存及键盘回调，检查事件、默认行为、焦点导航、卸载守卫、行结构和双语；这是处理器隔离，不是 DOM 证据。
+- `folderTreeSortUi.test.mjs`：沿用 TypeScript AST/VM 提取真实保存及键盘回调，检查事件、默认行为、焦点导航、卸载守卫、行结构和双语；额外组合实际坐标查询和来源行投递，确认排序控件不移动文件、普通目录仍可投递。这是处理器隔离，不是 DOM 证据。
 - `folderTreeSort.browser.mjs`、`fixtures/folderTreeSort.tsx`：真实 FileNode/FileTreeRows、排序投影、FolderTreeSortMenu、Popover/ContextMenu Portal、实际 Settings 更新体和共用队列；只隔离平台/文件服务。不复制排序实现，节点缺失时报错。
-- 浏览器夹具覆盖双面板、紧凑链更换/中间级恢复、全局变化保留覆盖、键盘/触摸/右键/双击/拖放、失败重试、慢写后切根、重载、SSH、双语与窄布局；复用已有 `PLAYWRIGHT_MODULE`/Edge。要求已有 dist 样式包含本轮选择器，不自动构建应用、安装依赖或下载浏览器。
+- 浏览器夹具覆盖双面板、紧凑链更换/中间级恢复、全局变化保留覆盖、键盘/触摸/右键/双击、原生拖放和实际 `elementFromPoint` 指针落点、失败重试、慢写后切根、重载、SSH、双语与窄布局；复用已有 `PLAYWRIGHT_MODULE`/Edge。要求已有 dist 样式包含本轮选择器，不自动构建应用、安装依赖或下载浏览器。
 
 没有红/绿运行结果。纯逻辑最初先写用例，再写实现，但遵照本轮静态边界没有观察 red；后续回归同样仅编写和静态核对，不能用“用例存在”替代通过。
 

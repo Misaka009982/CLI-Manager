@@ -121,6 +121,12 @@ try {
     return ["dragover", "drop"].map(type => element.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer })));
   });
   assert.deepEqual(dropped, [false, false]);
+  const pointerTarget = locator => locator.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return window.folderSortFixture.pointerTarget(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  });
+  assert.equal(await pointerTarget(trigger("sidebar", "logs")), null, "指针捕获不会落入排序箭头");
+  assert.equal(await pointerTarget(row("sidebar", "logs").locator(".ui-file-tree-row-action").first()), "logs", "正常目录仍是指针落点");
   await trigger("sidebar", "logs").tap();
   menu = page.locator('#sidebar-menus [role="menu"]');
   await menu.waitFor();

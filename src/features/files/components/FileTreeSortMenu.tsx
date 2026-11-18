@@ -156,6 +156,7 @@ export function FileTreeSortMenu({ settings, onChange, portalContainer, disabled
         collisionPadding={8}
         portalContainer={portalContainer}
         role="menu"
+        data-folder-sort-control={folder ? "true" : undefined}
         aria-label={menuLabel}
         aria-busy={saving}
         className="workspace-layout-menu ui-glass w-60 max-w-[calc(100vw-16px)] p-1.5"

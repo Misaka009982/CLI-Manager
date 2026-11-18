@@ -1099,6 +1099,8 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
 
   const getPointerDropTargetPath = useCallback((x: number, y: number): string | null => {
     const element = document.elementFromPoint(x, y);
+    // 指针捕获在来源行，目标控件的冒泡拦截无法阻止坐标投递。
+    if (element?.closest("[data-folder-sort-control]")) return null;
     const target = element?.closest<HTMLElement>("[data-file-drop-target-path]");
     if (!target) return null;
     return target.dataset.fileDropTargetPath ?? "";

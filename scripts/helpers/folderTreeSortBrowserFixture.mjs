@@ -47,6 +47,7 @@ export function folderTreeSortBrowserPlugin(root) {
         pointer: ${callback("handleFilePointerDown")} };
     }`,
     `export function projectTree(tree, fileTreeSort, folderSortRules, sortScope) { return (${callback("sortedTree")})(); }`,
+    `export function pointerTarget(x, y) { return (${callback("getPointerDropTargetPath")})(x, y); }`,
     "export { FileTreeRows };",
   ].join("\n");
   const files = () => [

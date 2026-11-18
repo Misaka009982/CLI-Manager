@@ -7,7 +7,7 @@ import { FileTreeSortMenu } from "../../src/features/files/components/FileTreeSo
 import { fileTreeSortScope } from "../../src/features/files/lib/fileTreeSortScope";
 import { updateFileTreeSort } from "../../src/shared/preferences/fileTreeSortPreference";
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from "../../src/shared/ui/context-menu";
-import { FileTreeRows, createRowHandlers, projectTree } from "folder-sort-nodes";
+import { FileTreeRows, createRowHandlers, projectTree, pointerTarget } from "folder-sort-nodes";
 import { useFileExplorerStore, fileFixtureCalls, initialProject } from "folder-sort-files";
 import { useSettingsStore, fixtureStorage } from "folder-sort-settings";
 
@@ -97,6 +97,7 @@ function Harness() {
           scope: fileTreeSortScope(files.project), storage: fixtureStorage.snapshot() };
       },
       pause: fixtureStorage.pause, release: fixtureStorage.release, failNext: fixtureStorage.failNext,
+      pointerTarget,
       reload: () => useSettingsStore.getState().load(),
       chain(reset = false) { setEntries(reset ? baseTree : baseTree.map(entry => entry.path === "a"
         ? directory("a", [directory("a/b", [directory("a/b/d", [file("a/b/d/a.txt", 1), file("a/b/d/z.txt", 3)])])]) : entry)); },

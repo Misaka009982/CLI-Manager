@@ -114,6 +114,26 @@ test("真实文件行的激活区域和排序按钮并列，紧凑链及 SSH 只
   assert.match(wrapper, /updateFolderTreeSort\(scope, targetPath, null\)/);
 });
 
+test("指针捕获从来源行投递时，排序控件坐标不会落到父目录", () => {
+  let control = true;
+  const target = { dataset: { fileDropTargetPath: "logs" } };
+  const element = { closest: selector => selector === "[data-folder-sort-control]" ? (control ? {} : null) : target };
+  const lookup = evaluateExpression(variableExpression(sidebarPath, "getPointerDropTargetPath"), {
+    useCallback: callback => callback, document: { elementFromPoint: () => element },
+  });
+  const moves = [];
+  const drop = evaluateExpression(variableExpression(sidebarPath, "handlePointerDropOutsideTerminal"), {
+    useCallback: callback => callback, getPointerDropTargetPath: lookup,
+    moveDraggedEntry: (...args) => moves.push(args),
+  });
+  const source = { entries: [{ path: "a.txt" }], project: { id: "captured" } };
+  drop(source, { x: 1, y: 2 });
+  assert.deepEqual(moves, []);
+  control = false;
+  drop(source, { x: 1, y: 2 });
+  assert.deepEqual(moves, [[source.entries, "logs", source.project]]);
+});
+
 test("目录目标、来源和恢复文案覆盖中英文，顶部菜单保留全局入口", () => {
   for (const language of ["zh-CN", "en-US"]) {
     const messages = readSource(`src/shared/i18n/messages/files.${language}.ts`);
